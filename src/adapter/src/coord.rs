@@ -206,6 +206,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         transient_revision: u64,
         real_time_recency_ts: Timestamp,
     },
+    PeekStageReady {
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        stage: PeekStage,
+    },
 }
 
 #[derive(Derivative)]

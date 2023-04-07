@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -22,7 +23,7 @@ use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
 
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_client::controller::ComputeReplicaConfig;
+use mz_compute_client::controller::{ComputeInstanceSnapshot, ComputeReplicaConfig};
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
 };
@@ -80,7 +81,9 @@ use crate::catalog::{
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
-use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
+use crate::coord::dataflows::{
+    prep_relation_expr, prep_scalar_expr, DataflowBuilder, ExprPrepStyle,
+};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
@@ -1849,8 +1852,8 @@ impl Coordinator {
                     (tx, session, PeekStage::Optimize(next))
                 }
                 PeekStage::Optimize(stage) => {
-                    let next = return_if_err!(self.peek_stage_optimize(stage), tx, session);
-                    (tx, session, PeekStage::Timestamp(next))
+                    self.peek_stage_optimize(tx, session, stage);
+                    return;
                 }
                 PeekStage::Timestamp(stage) => {
                     match self.peek_stage_timestamp(tx, session, stage) {
@@ -1948,8 +1951,38 @@ impl Coordinator {
         })
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     fn peek_stage_optimize(
         &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        stage: PeekStageOptimize,
+    ) {
+        // Generate data structures that can be moved to another task where we will perform possibly
+        // expensive optimizations.
+        let catalog = self.owned_catalog();
+        let compute = self
+            .controller
+            .compute
+            .instance_snapshot(stage.cluster_id)
+            .expect("compute instance does not exist");
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        mz_ore::task::spawn_blocking(
+            || "optimize peek",
+            move || match Self::optimize_peek(catalog, compute, stage) {
+                Ok(stage) => {
+                    let stage = PeekStage::Timestamp(stage);
+                    // Ignore errors if the coordinator has shut down.
+                    let _ = internal_cmd_tx.send(Message::PeekStageReady { tx, session, stage });
+                }
+                Err(err) => tx.send(Err(err), session),
+            },
+        );
+    }
+
+    fn optimize_peek(
+        catalog: Arc<Catalog>,
+        compute: ComputeInstanceSnapshot,
         PeekStageOptimize {
             source,
             finishing,
@@ -1965,7 +1998,8 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
         }: PeekStageOptimize,
     ) -> Result<PeekStageTimestamp, AdapterError> {
-        let source = self.view_optimizer.optimize(source)?;
+        let optimizer = Optimizer::logical_optimizer();
+        let source = optimizer.optimize(source)?;
 
         // We create a dataflow and optimize it, to determine if we can avoid building it.
         // This can happen if the result optimizes to a constant, or to a `Get` expression
@@ -1978,7 +2012,7 @@ impl Coordinator {
             .collect();
         // The assembled dataflow contains a view and an index of that view.
         let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
-        let mut builder = self.dataflow_builder(cluster_id);
+        let mut builder = DataflowBuilder::new(catalog.state(), compute);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
         dataflow.export_index(
             index_id,

@@ -83,11 +83,7 @@ impl Coordinator {
             .compute
             .instance_snapshot(instance)
             .expect("compute instance does not exist");
-        DataflowBuilder {
-            catalog: self.catalog().state(),
-            compute,
-            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
-        }
+        DataflowBuilder::new(self.catalog().state(), compute)
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
@@ -271,15 +267,19 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
             .compute
             .instance_snapshot(instance)
             .expect("compute instance does not exist");
-        DataflowBuilder {
-            catalog: self.catalog,
-            compute,
-            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
-        }
+        DataflowBuilder::new(self.catalog, compute)
     }
 }
 
 impl<'a> DataflowBuilder<'a> {
+    pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
+        Self {
+            catalog,
+            compute,
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
     fn import_into_dataflow(

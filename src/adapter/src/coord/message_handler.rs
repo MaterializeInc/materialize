@@ -99,6 +99,9 @@ impl Coordinator {
                 )
                 .await;
             }
+            Message::PeekStageReady { tx, session, stage } => {
+                self.sequence_peek_stage(tx, session, stage).await;
+            }
         }
     }
 
