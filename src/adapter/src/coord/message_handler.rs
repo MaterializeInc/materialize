@@ -692,9 +692,9 @@ impl Coordinator {
             ),
             RealTimeRecencyContext::Peek {
                 tx,
+                dataflow,
                 finishing,
                 copy_to,
-                source,
                 session,
                 cluster_id,
                 when,
@@ -705,14 +705,16 @@ impl Coordinator {
                 source_ids,
                 id_bundle,
                 in_immediate_multi_stmt_txn,
+                key,
+                typ,
             } => {
                 self.sequence_peek_stage(
                     tx,
                     session,
                     PeekStage::Finish(PeekStageFinish {
+                        dataflow,
                         finishing,
                         copy_to,
-                        source,
                         cluster_id,
                         when,
                         target_replica,
@@ -723,6 +725,8 @@ impl Coordinator {
                         id_bundle,
                         in_immediate_multi_stmt_txn,
                         real_time_recency_ts: Some(real_time_recency_ts),
+                        key,
+                        typ,
                     }),
                 )
                 .await;
