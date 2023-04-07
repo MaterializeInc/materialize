@@ -642,15 +642,15 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
 
         // MzAclItem
         (MzAclItem, String) => Explicit: sql_impl_cast("(
-                SELECT 
+                SELECT
                     COALESCE(grantee_role.name, '')
-                    || '=' 
+                    || '='
                     || mz_internal.mz_aclitem_privileges($1)
                     || '/'
                     || grantor_role.name
-                FROM 
-                    (SELECT mz_internal.mz_aclitem_grantee($1) AS grantee_role_id), 
-                    (SELECT mz_internal.mz_aclitem_grantor($1) AS grantor_role_id) 
+                FROM
+                    (SELECT mz_internal.mz_aclitem_grantee($1) AS grantee_role_id),
+                    (SELECT mz_internal.mz_aclitem_grantor($1) AS grantor_role_id)
                 LEFT JOIN mz_roles AS grantee_role ON grantee_role_id = grantee_role.id
                 LEFT JOIN mz_roles AS grantor_role ON grantor_role_id = grantor_role.id
             )")
