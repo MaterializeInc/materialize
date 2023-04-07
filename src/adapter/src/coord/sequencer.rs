@@ -116,7 +116,7 @@ impl Coordinator {
             Plan::CreateRole(plan) => {
                 let res = self.sequence_create_role(&session, plan).await;
                 if res.is_ok() {
-                    self.maybe_send_rbac_notice(&mut session);
+                    self.maybe_send_rbac_notice(&session);
                 }
                 tx.send(res, session);
             }
@@ -282,7 +282,7 @@ impl Coordinator {
             Plan::AlterRole(plan) => {
                 let res = self.sequence_alter_role(&session, plan).await;
                 if res.is_ok() {
-                    self.maybe_send_rbac_notice(&mut session);
+                    self.maybe_send_rbac_notice(&session);
                 }
                 tx.send(res, session);
             }
