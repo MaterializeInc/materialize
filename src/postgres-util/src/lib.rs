@@ -83,6 +83,7 @@ use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode, SslMode};
 use tokio_postgres::tls::MakeTlsConnect;
@@ -408,6 +409,26 @@ pub enum TunnelConfig {
     },
 }
 
+/// Configurable timeouts that apply only when using [`Config::connect_replication`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplicationTimeouts {
+    pub connect_timeout: Option<Duration>,
+    pub keepalives_retries: Option<u32>,
+    pub keepalives_idle: Option<Duration>,
+    pub keepalives_interval: Option<Duration>,
+    pub tcp_user_timeout: Option<Duration>,
+}
+
+// Some of these defaults were recommended by @ph14
+// https://github.com/MaterializeInc/materialize/pull/18644#discussion_r1160071692
+pub const DEFAULT_REPLICATION_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_REPLICATION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+pub const DEFAULT_REPLICATION_KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
+pub const DEFAULT_REPLICATION_KEEPALIVE_RETRIES: u32 = 5;
+// This is meant to be DEFAULT_REPLICATION_KEEPALIVE_IDLE
+// + DEFAULT_REPLICATION_KEEPALIVE_RETRIES * DEFAULT_REPLICATION_KEEPALIVE_INTERVAL
+pub const DEFAULT_REPLICATION_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Configuration for PostgreSQL connections.
 ///
 /// This wraps [`tokio_postgres::Config`] to allow the configuration of a
@@ -416,17 +437,27 @@ pub enum TunnelConfig {
 pub struct Config {
     inner: tokio_postgres::Config,
     tunnel: TunnelConfig,
+    replication_timeouts: ReplicationTimeouts,
 }
 
 impl Config {
     pub fn new(inner: tokio_postgres::Config, tunnel: TunnelConfig) -> Result<Self, PostgresError> {
-        let config = Self { inner, tunnel };
+        let config = Self {
+            inner,
+            tunnel,
+            replication_timeouts: ReplicationTimeouts::default(),
+        };
 
         // Early validate that the configuration contains only a single TCP
         // server.
         config.address()?;
 
         Ok(config)
+    }
+
+    pub fn replication_timeouts(mut self, replication_timeouts: ReplicationTimeouts) -> Config {
+        self.replication_timeouts = replication_timeouts;
+        self
     }
 
     /// Connects to the configured PostgreSQL database.
@@ -439,8 +470,31 @@ impl Config {
         self.connect_internal("postgres_connect_replication", |config| {
             config
                 .replication_mode(ReplicationMode::Logical)
-                .connect_timeout(Duration::from_secs(30))
-                .keepalives_idle(Duration::from_secs(10 * 60));
+                .connect_timeout(
+                    self.replication_timeouts
+                        .connect_timeout
+                        .unwrap_or(DEFAULT_REPLICATION_CONNECT_TIMEOUT),
+                )
+                .keepalives_interval(
+                    self.replication_timeouts
+                        .keepalives_interval
+                        .unwrap_or(DEFAULT_REPLICATION_KEEPALIVE_INTERVAL),
+                )
+                .keepalives_idle(
+                    self.replication_timeouts
+                        .keepalives_idle
+                        .unwrap_or(DEFAULT_REPLICATION_KEEPALIVE_IDLE),
+                )
+                .keepalives_retries(
+                    self.replication_timeouts
+                        .keepalives_retries
+                        .unwrap_or(DEFAULT_REPLICATION_KEEPALIVE_RETRIES),
+                )
+                .tcp_user_timeout(
+                    self.replication_timeouts
+                        .tcp_user_timeout
+                        .unwrap_or(DEFAULT_REPLICATION_TCP_USER_TIMEOUT),
+                );
         })
         .await
     }
