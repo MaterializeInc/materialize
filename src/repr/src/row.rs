@@ -253,6 +253,13 @@ pub struct RowRef {
     data: [u8],
 }
 
+/// An iterator over the [`DatumKind`]s in a row.
+#[derive(Debug, Clone)]
+pub struct DatumKindIter<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct DatumListIter<'a> {
     data: &'a [u8],
@@ -302,6 +309,19 @@ impl Ord for DatumList<'_> {
 impl PartialOrd for DatumList<'_> {
     fn partial_cmp(&self, other: &DatumList) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+/// A sequence of DatumKinds
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+pub struct DatumKindList<'a> {
+    /// Points at the serialized datums
+    data: &'a [u8],
+}
+
+impl<'a> Debug for DatumKindList<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
     }
 }
 
@@ -418,6 +438,15 @@ fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
     bytes
 }
 
+/// Skip a byte slice starting at byte `offset`.
+///
+/// Updates `offset` to point to the first byte after the end of the read region.
+fn skip_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) {
+    let len = u64::from_le_bytes(read_byte_array(data, offset));
+    let len = usize::cast_from(len);
+    *offset += len;
+}
+
 /// Read a data whose length is encoded in the row before its contents.
 ///
 /// Updates `offset` to point to the first byte after the end of the read region.
@@ -427,19 +456,7 @@ fn read_untagged_bytes<'a>(data: &'a [u8], offset: &mut usize) -> &'a [u8] {
 /// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
 /// and it was only written with a `String` tag if it was indeed UTF-8.
 unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) -> Datum<'a> {
-    let len = match tag {
-        Tag::BytesTiny | Tag::StringTiny => usize::from(read_byte(data, offset)),
-        Tag::BytesShort | Tag::StringShort => {
-            usize::from(u16::from_le_bytes(read_byte_array(data, offset)))
-        }
-        Tag::BytesLong | Tag::StringLong => {
-            usize::cast_from(u32::from_le_bytes(read_byte_array(data, offset)))
-        }
-        Tag::BytesHuge | Tag::StringHuge => {
-            usize::cast_from(u64::from_le_bytes(read_byte_array(data, offset)))
-        }
-        _ => unreachable!(),
-    };
+    let len = read_lengthened_datum_len(data, offset, tag);
     let bytes = &data[*offset..(*offset + len)];
     *offset += len;
     match tag {
@@ -451,34 +468,275 @@ unsafe fn read_lengthed_datum<'a>(data: &'a [u8], offset: &mut usize, tag: Tag) 
     }
 }
 
+/// Read a datum kind whose length is encoded in the row before its contents.
+///
+/// Updates `offset` to point to the first byte after the end of the read region.
+///
+/// # Safety
+///
+/// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
+/// and it was only written with a `String` tag if it was indeed UTF-8.
+unsafe fn read_lengthed_datum_kind(data: &[u8], offset: &mut usize, tag: Tag) -> DatumKind {
+    let len = read_lengthened_datum_len(data, offset, tag);
+    *offset += len;
+    match tag {
+        Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => DatumKind::Bytes,
+        Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => DatumKind::String,
+        _ => unreachable!(),
+    }
+}
+
+/// Read the length of a datum whose length is incoded in the row before its contents.
+///
+/// # Safety
+///
+/// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
+/// and it was only written with a `String` tag if it was indeed UTF-8.
+unsafe fn read_lengthened_datum_len(data: &[u8], offset: &mut usize, tag: Tag) -> usize {
+    match tag {
+        Tag::BytesTiny | Tag::StringTiny => usize::from(read_byte(data, offset)),
+        Tag::BytesShort | Tag::StringShort => {
+            usize::from(u16::from_le_bytes(read_byte_array(data, offset)))
+        }
+        Tag::BytesLong | Tag::StringLong => {
+            usize::cast_from(u32::from_le_bytes(read_byte_array(data, offset)))
+        }
+        Tag::BytesHuge | Tag::StringHuge => {
+            usize::cast_from(u64::from_le_bytes(read_byte_array(data, offset)))
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Read a byte of data from `data`.
+///
+/// Updates `offset` to point to the first byte after the extracted byte.
 fn read_byte(data: &[u8], offset: &mut usize) -> u8 {
     let byte = data[*offset];
-    *offset += 1;
+    skip_byte(offset);
     byte
 }
 
+/// Skip a byte of data.
+///
+/// Updates `offset` to point to the first byte after the extracted byte.
+#[inline(always)]
+fn skip_byte(offset: &mut usize) {
+    *offset += 1;
+}
+
+/// Read a byte array from `data` at `offset`.
+///
+/// Updates `offset` to point at the first byte after the extracted array.
 fn read_byte_array<const N: usize>(data: &[u8], offset: &mut usize) -> [u8; N] {
     let mut raw = [0; N];
     raw.copy_from_slice(&data[*offset..*offset + N]);
-    *offset += N;
+    skip_byte_array::<N>(offset);
     raw
 }
 
+/// Skip over a byte array at `offset`.
+///
+/// Updates `offset` to point at the first byte after the extracted array.
+#[inline(always)]
+fn skip_byte_array<const N: usize>(offset: &mut usize) {
+    *offset += N;
+}
+
+/// Read a date from `data` at `offset`.
+///
+/// Updates `offset` to point at the first byte after the extracted date.
 fn read_date(data: &[u8], offset: &mut usize) -> Date {
     let days = i32::from_le_bytes(read_byte_array(data, offset));
     Date::from_pg_epoch(days).expect("unexpected date")
 }
 
+/// Skip over a date at `offset`.
+///
+/// Updates `offset` to point at the first byte after the extracted date.
+#[inline(always)]
+fn skip_date(offset: &mut usize) {
+    skip_byte_array::<{ size_of::<i32>() }>(offset);
+}
+
+/// Read a naive date from `data` at `offset`.
+///
+/// Updates `offset` to point at the first byte after the extracted naive date.
 fn read_naive_date(data: &[u8], offset: &mut usize) -> NaiveDate {
     let year = i32::from_le_bytes(read_byte_array(data, offset));
     let ordinal = u32::from_le_bytes(read_byte_array(data, offset));
     NaiveDate::from_yo_opt(year, ordinal).unwrap()
 }
 
+/// Skip over a naive date at `offset`.
+///
+/// Updates `offset` to point at the first byte after the extracted naive date.
+#[inline(always)]
+fn skip_naive_date(offset: &mut usize) {
+    skip_byte_array::<{ size_of::<i32>() }>(offset);
+    skip_byte_array::<{ size_of::<u32>() }>(offset);
+}
+
+/// Read a time from `data` at `offset`.
+///
+/// Updates `offset` to point at the first byte after the extracted time.
 fn read_time(data: &[u8], offset: &mut usize) -> NaiveTime {
     let secs = u32::from_le_bytes(read_byte_array(data, offset));
     let nanos = u32::from_le_bytes(read_byte_array(data, offset));
     NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos).unwrap()
+}
+
+/// Skip over a time at `offset`.
+///
+/// Updates `offset` to point at the first byte after the extracted time.
+#[inline(always)]
+fn skip_time(offset: &mut usize) {
+    skip_byte_array::<{ size_of::<u32>() }>(offset);
+    skip_byte_array::<{ size_of::<u32>() }>(offset);
+}
+
+/// Read a datum kind starting at byte `offset`.
+///
+/// Updates `offset` to point to the first byte after the end of the read region.
+///
+/// # Safety
+///
+/// This function is safe if a `Datum` was previously written at this offset by `push_datum`.
+/// Otherwise it could return invalid values, which is Undefined Behavior.
+unsafe fn read_datum_kind<'a>(data: &'a [u8], offset: &mut usize) -> DatumKind {
+    let tag = Tag::try_from_primitive(read_byte(data, offset)).expect("unknown row tag");
+    match tag {
+        Tag::Null => DatumKind::Null,
+        Tag::False => DatumKind::False,
+        Tag::True => DatumKind::True,
+        Tag::JsonNull => DatumKind::JsonNull,
+        Tag::Dummy => DatumKind::Dummy,
+        Tag::Int16 => {
+            skip_byte_array::<{ size_of::<i16>() }>(offset);
+            DatumKind::Int16
+        }
+        Tag::Int32 => {
+            skip_byte_array::<{ size_of::<i32>() }>(offset);
+            DatumKind::Int32
+        }
+        Tag::Int64 => {
+            skip_byte_array::<{ size_of::<i64>() }>(offset);
+            DatumKind::Int64
+        }
+        Tag::UInt8 => {
+            skip_byte_array::<{ size_of::<u8>() }>(offset);
+            DatumKind::UInt8
+        }
+        Tag::UInt16 => {
+            skip_byte_array::<{ size_of::<u16>() }>(offset);
+            DatumKind::UInt16
+        }
+        Tag::UInt32 => {
+            skip_byte_array::<{ size_of::<u32>() }>(offset);
+            DatumKind::UInt32
+        }
+        Tag::UInt64 => {
+            skip_byte_array::<{ size_of::<u64>() }>(offset);
+            DatumKind::UInt64
+        }
+        Tag::Float32 => {
+            skip_byte_array::<{ size_of::<u32>() }>(offset);
+            DatumKind::Float32
+        }
+        Tag::Float64 => {
+            skip_byte_array::<{ size_of::<u64>() }>(offset);
+            DatumKind::Float64
+        }
+        Tag::Date => {
+            skip_date(offset);
+            DatumKind::Date
+        }
+        Tag::Time => {
+            skip_time(offset);
+            DatumKind::Time
+        }
+        Tag::Timestamp => {
+            skip_naive_date(offset);
+            skip_time(offset);
+            DatumKind::Timestamp
+        }
+        Tag::TimestampTz => {
+            skip_naive_date(offset);
+            skip_time(offset);
+            DatumKind::TimestampTz
+        }
+        Tag::Interval => {
+            skip_byte_array::<{ size_of::<i32>() }>(offset);
+            skip_byte_array::<{ size_of::<i32>() }>(offset);
+            skip_byte_array::<{ size_of::<i64>() }>(offset);
+            DatumKind::Interval
+        }
+        Tag::BytesTiny
+        | Tag::BytesShort
+        | Tag::BytesLong
+        | Tag::BytesHuge
+        | Tag::StringTiny
+        | Tag::StringShort
+        | Tag::StringLong
+        | Tag::StringHuge => read_lengthed_datum_kind(data, offset, tag),
+        Tag::Uuid => {
+            skip_byte_array::<{ size_of::<Uuid>() }>(offset);
+            DatumKind::Uuid
+        }
+        Tag::Array => {
+            // See the comment in `Row::push_array` for details on the encoding
+            // of arrays.
+            let ndims = read_byte(data, offset);
+            let dims_size = usize::from(ndims) * size_of::<u64>() * 2;
+            *offset += dims_size;
+            skip_untagged_bytes(data, offset);
+            DatumKind::Array
+        }
+        Tag::List => {
+            skip_untagged_bytes(data, offset);
+            DatumKind::List
+        }
+        Tag::Dict => {
+            skip_untagged_bytes(data, offset);
+            DatumKind::Map
+        }
+        Tag::Numeric => {
+            let digits = read_byte(data, offset).into();
+            skip_byte(offset);
+            skip_byte(offset);
+
+            let lsu_u16_len = Numeric::digits_to_lsu_elements_len(digits);
+            let lsu_u8_len = lsu_u16_len * 2;
+            *offset += lsu_u8_len;
+            DatumKind::Numeric
+        }
+        Tag::MzTimestamp => {
+            skip_byte_array::<{ size_of::<Timestamp>() }>(offset);
+            DatumKind::MzTimestamp
+        }
+        Tag::Range => {
+            // See notes on `push_range_with` for details about encoding.
+            let flag_byte = read_byte(data, offset);
+            let flags = range::InternalFlags::from_bits(flag_byte)
+                .expect("range flags must be encoded validly");
+
+            if !flags.contains(range::InternalFlags::EMPTY) {
+                if !flags.contains(range::InternalFlags::LB_INFINITE) {
+                    let _ = read_datum_kind(data, offset);
+                };
+
+                if !flags.contains(range::InternalFlags::UB_INFINITE) {
+                    let _ = read_datum_kind(data, offset);
+                };
+            }
+            DatumKind::Range
+        }
+        Tag::MzAclItem => {
+            const N: usize = MzAclItem::binary_size();
+            skip_byte_array::<N>(offset);
+            DatumKind::MzAclItem
+        }
+    }
 }
 
 /// Read a datum starting at byte `offset`.
@@ -1583,6 +1841,14 @@ impl RowRef {
         }
     }
 
+    /// Iterator the `DatumKind` elements of the `Row`.
+    pub fn kind_iter(&self) -> DatumKindIter {
+        DatumKindIter {
+            data: &self.data,
+            offset: 0,
+        }
+    }
+
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
@@ -1681,6 +1947,44 @@ impl<'a> Iterator for DatumListIter<'a> {
             None
         } else {
             Some(unsafe { read_datum(self.data, &mut self.offset) })
+        }
+    }
+}
+
+impl<'a> DatumKindList<'a> {
+    pub fn empty() -> DatumKindList<'static> {
+        DatumKindList { data: &[] }
+    }
+
+    pub fn iter(&self) -> DatumKindIter<'a> {
+        DatumKindIter {
+            data: self.data,
+            offset: 0,
+        }
+    }
+
+    /// For debugging only
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
+}
+
+impl<'a> IntoIterator for &'a DatumKindList<'a> {
+    type Item = DatumKind;
+    type IntoIter = DatumKindIter<'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a> Iterator for DatumKindIter<'a> {
+    type Item = DatumKind;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.data.len() {
+            None
+        } else {
+            Some(unsafe { read_datum_kind(self.data, &mut self.offset) })
         }
     }
 }
@@ -1937,6 +2241,10 @@ mod tests {
             let datums3 = row.unpack();
             assert_eq!(datums, datums2);
             assert_eq!(datums, datums3);
+
+            let kinds = datums.iter().map(DatumKind::from).collect::<Vec<_>>();
+            let kinds2 = row.kind_iter().collect::<Vec<_>>();
+            assert_eq!(kinds, kinds2);
         }
 
         round_trip(vec![]);

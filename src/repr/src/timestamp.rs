@@ -30,6 +30,7 @@ use crate::adt::numeric::Numeric;
     Default,
     Arbitrary,
 )]
+#[repr(transparent)]
 pub struct Timestamp {
     /// note no `pub`.
     internal: u64,
@@ -277,11 +278,11 @@ impl mz_persist_types::Codec64 for Timestamp {
         u64::codec_name()
     }
 
-    fn encode(&self) -> [u8; 8] {
+    fn encode(&self) -> [u8; std::mem::size_of::<Self>()] {
         self.internal.encode()
     }
 
-    fn decode(buf: [u8; 8]) -> Self {
+    fn decode(buf: [u8; std::mem::size_of::<Self>()]) -> Self {
         Self {
             internal: u64::decode(buf),
         }
