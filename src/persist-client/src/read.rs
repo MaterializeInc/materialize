@@ -615,7 +615,13 @@ where
                     self.reader_id,
                     outstanding_seqno,
                     _seqno,
-                    self.lease_returner.leased_seqnos,
+                    self.lease_returner
+                        .leased_seqnos
+                        .lock()
+                        .expect("lock")
+                        .iter()
+                        .take(10)
+                        .collect::<Vec<_>>(),
                     // The Debug impl of backtrace is less aesthetic, but will put the trace
                     // on a single line and play more nicely with our Honeycomb quota
                     Backtrace::capture(),
