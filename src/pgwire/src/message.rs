@@ -319,7 +319,6 @@ impl ErrorResponse {
             AdapterError::BadItemInStorageCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Catalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::ModifyLinkedCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED

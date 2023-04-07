@@ -89,11 +89,6 @@ pub enum AdapterError {
     },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection,
-    /// An operation attempted to modify a linked cluster.
-    ModifyLinkedCluster {
-        cluster_name: String,
-        linked_object_name: String,
-    },
     /// An operation attempted to create an illegal item in a
     /// storage-only cluster
     BadItemInStorageCluster {
@@ -345,9 +340,6 @@ impl fmt::Display for AdapterError {
                     "cannot use wildcard expansions or NATURAL JOINs in a view that depends on \
                     system objects"
                 )
-            }
-            AdapterError::ModifyLinkedCluster { cluster_name, .. } => {
-                write!(f, "cannot modify linked cluster {}", cluster_name.quoted())
             }
             AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
             AdapterError::Catalog(e) => e.fmt(f),

@@ -629,8 +629,6 @@ impl Coordinator {
             config,
         }: CreateClusterReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.ensure_cluster_is_not_linked(cluster_id)?;
-
         // Choose default AZ if necessary
         let (compute, location) = match config {
             mz_sql::plan::ReplicaConfig::Unmanaged {
@@ -1105,16 +1103,18 @@ impl Coordinator {
         session: &Session,
         name: QualifiedItemName,
         view: View,
-        replace: Option<GlobalId>,
+        replace: Vec<GlobalId>,
         depends_on: Vec<GlobalId>,
     ) -> Result<Vec<catalog::Op>, AdapterError> {
         self.validate_timeline_context(view.expr.depends_on())?;
 
         let mut ops = vec![];
 
-        if let Some(id) = replace {
-            ops.extend(self.catalog().drop_items_ops(&[id], &mut BTreeSet::new()));
-        }
+        ops.extend(
+            replace
+                .into_iter()
+                .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
+        );
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
         let optimized_expr = self.view_optimizer.optimize(view.expr)?;
@@ -1166,12 +1166,10 @@ impl Coordinator {
             .catalog()
             .state()
             .is_system_schema_specifier(&name.qualifiers.schema_spec)
+            && !self.is_compute_cluster(cluster_id)
         {
-            self.ensure_cluster_is_not_linked(cluster_id)?;
-            if !self.is_compute_cluster(cluster_id) {
-                let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
-                return Err(AdapterError::BadItemInStorageCluster { cluster_name });
-            }
+            let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
+            return Err(AdapterError::BadItemInStorageCluster { cluster_name });
         }
 
         self.validate_timeline_context(depends_on.clone())?;
@@ -1213,12 +1211,11 @@ impl Coordinator {
         let as_of = self.least_valid_read(&id_bundle);
 
         let mut ops = Vec::new();
-        if let Some(drop_id) = replace {
-            ops.extend(
-                self.catalog()
-                    .drop_items_ops(&[drop_id], &mut BTreeSet::new()),
-            );
-        }
+        ops.extend(
+            replace
+                .into_iter()
+                .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
+        );
         ops.push(catalog::Op::CreateItem {
             id,
             oid,
@@ -1306,12 +1303,10 @@ impl Coordinator {
             .catalog()
             .state()
             .is_system_schema_specifier(&name.qualifiers.schema_spec)
+            && !self.is_compute_cluster(cluster_id)
         {
-            self.ensure_cluster_is_not_linked(cluster_id)?;
-            if !self.is_compute_cluster(cluster_id) {
-                let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
-                return Err(AdapterError::BadItemInStorageCluster { cluster_name });
-            }
+            let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
+            return Err(AdapterError::BadItemInStorageCluster { cluster_name });
         }
 
         let id = self.catalog_mut().allocate_user_id().await?;
@@ -1425,7 +1420,6 @@ impl Coordinator {
             }
         }
 
-        let mut seen = BTreeSet::new();
         for id in &plan.ids {
             match id {
                 ObjectId::Database(id) => {
@@ -1433,15 +1427,8 @@ impl Coordinator {
                     if name == session.vars().database() {
                         dropped_active_db = true;
                     }
-                    ops.extend_from_slice(&self.catalog().drop_database_ops(Some(*id), &mut seen));
                 }
-                ObjectId::Schema((database_id, schema_id)) => ops.extend_from_slice(
-                    &self
-                        .catalog()
-                        .drop_schema_ops(Some((*database_id, *schema_id)), &mut seen),
-                ),
                 ObjectId::Cluster(id) => {
-                    self.ensure_cluster_is_not_linked(*id)?;
                     if let Some(active_id) = self
                         .catalog()
                         .active_cluster(session)
@@ -1452,15 +1439,6 @@ impl Coordinator {
                             dropped_active_cluster = true;
                         }
                     }
-                    ops.extend_from_slice(&self.catalog().drop_cluster_ops(&[*id], &mut seen));
-                }
-                ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                    self.ensure_cluster_is_not_linked(*cluster_id)?;
-                    ops.extend_from_slice(
-                        &self
-                            .catalog()
-                            .drop_cluster_replica_ops(&[(*cluster_id, *replica_id)], &mut seen),
-                    );
                 }
                 ObjectId::Role(id) => {
                     let role = self.catalog().get_role(id);
@@ -1473,14 +1451,12 @@ impl Coordinator {
                             member_id: *id,
                         });
                     }
-                    ops.push(catalog::Op::DropObject(ObjectId::Role(*id)));
                 }
-                ObjectId::Item(id) => {
-                    ops.extend_from_slice(&self.catalog().drop_items_ops(&[*id], &mut seen));
-                }
+                _ => {}
             }
         }
 
+        ops.extend(plan.ids.into_iter().map(catalog::Op::DropObject));
         self.catalog_transact(Some(session), ops).await?;
 
         fail::fail_point!("after_sequencer_drop_replica");
@@ -3794,11 +3770,10 @@ impl Coordinator {
             }
             Some(linked_cluster) => {
                 for id in linked_cluster.replicas_by_id.keys() {
-                    let drop_ops = self.catalog().drop_cluster_replica_ops(
-                        &[(linked_cluster.id, *id)],
-                        &mut BTreeSet::new(),
-                    );
-                    ops.extend(drop_ops);
+                    ops.push(Op::DropObject(ObjectId::ClusterReplica((
+                        linked_cluster.id(),
+                        *id,
+                    ))));
                 }
                 let size = match config {
                     SourceSinkClusterConfig::Linked { size } => size.clone(),
@@ -3868,20 +3843,6 @@ impl Coordinator {
                 .map(|r| (cluster_id, r))
                 .collect();
             self.create_cluster_replicas(&replicas).await;
-        }
-    }
-    /// Returns an error if the given cluster is a linked cluster
-    fn ensure_cluster_is_not_linked(&self, cluster_id: ClusterId) -> Result<(), AdapterError> {
-        let cluster = self.catalog().get_cluster(cluster_id);
-        if let Some(linked_id) = cluster.linked_object_id {
-            let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
-            let linked_object_name = self.catalog().get_entry(&linked_id).name().to_string();
-            Err(AdapterError::ModifyLinkedCluster {
-                cluster_name,
-                linked_object_name,
-            })
-        } else {
-            Ok(())
         }
     }
 

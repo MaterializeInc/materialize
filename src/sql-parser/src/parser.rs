@@ -3264,8 +3264,8 @@ impl<'a> Parser<'a> {
                 );
                 Ok(Statement::DropObjects(DropObjectsStatement {
                     object_type: ObjectType::Schema,
-                    names: vec![name],
                     if_exists,
+                    names: vec![name],
                     cascade,
                 }))
             }
