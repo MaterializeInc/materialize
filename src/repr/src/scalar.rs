@@ -2011,6 +2011,29 @@ impl<'a> AsColumnType for JsonbRef<'a> {
     }
 }
 
+impl AsColumnType for MzAclItem {
+    fn as_column_type() -> ColumnType {
+        ScalarType::MzAclItem.nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for MzAclItem {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::MzAclItem(mz_acl_item)) => Ok(mz_acl_item),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::MzAclItem(self))
+    }
+}
+
 impl<'a> ScalarType {
     /// Returns the contained numeric maximum scale.
     ///

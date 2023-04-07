@@ -11,7 +11,7 @@ use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
-use std::ops::Deref;
+use std::ops::{BitOrAssign, Deref};
 use std::str;
 use std::str::FromStr;
 
@@ -64,6 +64,8 @@ mod format;
 pub(crate) mod impls;
 
 pub use impls::*;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::role_id::RoleId;
 
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
@@ -4154,7 +4156,10 @@ derive_unary!(
     RangeLowerInc,
     RangeUpperInc,
     RangeLowerInf,
-    RangeUpperInf
+    RangeUpperInf,
+    MzAclItemGrantor,
+    MzAclItemGrantee,
+    MzAclItemPrivileges
 );
 
 impl UnaryFunc {
@@ -4550,6 +4555,9 @@ impl Arbitrary for UnaryFunc {
             RangeUpperInc::arbitrary().prop_map_into().boxed(),
             RangeLowerInf::arbitrary().prop_map_into().boxed(),
             RangeUpperInf::arbitrary().prop_map_into().boxed(),
+            MzAclItemGrantor::arbitrary().prop_map_into().boxed(),
+            MzAclItemGrantee::arbitrary().prop_map_into().boxed(),
+            MzAclItemPrivileges::arbitrary().prop_map_into().boxed(),
         ])
     }
 }
@@ -4891,6 +4899,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::RangeUpperInc(_) => RangeUpperInc(()),
             UnaryFunc::RangeLowerInf(_) => RangeLowerInf(()),
             UnaryFunc::RangeUpperInf(_) => RangeUpperInf(()),
+            UnaryFunc::MzAclItemGrantor(_) => MzAclItemGrantor(()),
+            UnaryFunc::MzAclItemGrantee(_) => MzAclItemGrantee(()),
+            UnaryFunc::MzAclItemPrivileges(_) => MzAclItemPrivileges(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -5299,6 +5310,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 RangeUpperInc(_) => Ok(impls::RangeUpperInc.into()),
                 RangeLowerInf(_) => Ok(impls::RangeLowerInf.into()),
                 RangeUpperInf(_) => Ok(impls::RangeUpperInf.into()),
+                MzAclItemGrantor(_) => Ok(impls::MzAclItemGrantor.into()),
+                MzAclItemGrantee(_) => Ok(impls::MzAclItemGrantee.into()),
+                MzAclItemPrivileges(_) => Ok(impls::MzAclItemPrivileges.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
@@ -6515,6 +6529,35 @@ fn mz_render_typmod<'a>(
     Ok(Datum::String(temp_storage.push_string(s)))
 }
 
+fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
+    let grantee: RoleId = datums[0]
+        .unwrap_str()
+        .parse()
+        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string()))?;
+    let grantor: RoleId = datums[1]
+        .unwrap_str()
+        .parse()
+        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string()))?;
+    if grantor == RoleId::Public {
+        return Err(EvalError::InvalidRoleId(
+            "mz_aclitem grantor cannot be PUBLIC role".to_string(),
+        ));
+    }
+    let privileges = datums[2].unwrap_str();
+    let mut acl_mode = AclMode::empty();
+    for privilege in privileges.split(',') {
+        let privilege = AclMode::parse_single_privilege(privilege)
+            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
+        acl_mode.bitor_assign(privilege);
+    }
+
+    Ok(Datum::MzAclItem(MzAclItem {
+        grantee,
+        grantor,
+        acl_mode,
+    }))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum VariadicFunc {
     Coalesce,
@@ -6560,6 +6603,7 @@ pub enum VariadicFunc {
     RangeCreate {
         elem_type: ScalarType,
     },
+    MakeMzAclItem,
 }
 
 impl VariadicFunc {
@@ -6624,6 +6668,7 @@ impl VariadicFunc {
             VariadicFunc::And => and(datums, temp_storage, exprs),
             VariadicFunc::Or => or(datums, temp_storage, exprs),
             VariadicFunc::RangeCreate { .. } => eager!(create_range, temp_storage),
+            VariadicFunc::MakeMzAclItem => eager!(make_mz_acl_item),
         }
     }
 
@@ -6656,7 +6701,8 @@ impl VariadicFunc {
             | VariadicFunc::ErrorIfNull
             | VariadicFunc::DateBinTimestamp
             | VariadicFunc::DateBinTimestampTz
-            | VariadicFunc::RangeCreate { .. } => false,
+            | VariadicFunc::RangeCreate { .. }
+            | VariadicFunc::MakeMzAclItem => false,
         }
     }
 
@@ -6729,6 +6775,7 @@ impl VariadicFunc {
                 element_type: Box::new(elem_type.clone()),
             }
             .nullable(false),
+            MakeMzAclItem => ScalarType::MzAclItem.nullable(true),
         }
     }
 
@@ -6782,7 +6829,8 @@ impl VariadicFunc {
             | DateBinTimestampTz
             | RangeCreate { .. }
             | And
-            | Or => false,
+            | Or
+            | MakeMzAclItem => false,
             Coalesce
             | Greatest
             | Least
@@ -6874,6 +6922,7 @@ impl fmt::Display for VariadicFunc {
                 ScalarType::TimestampTz => "tstzrange",
                 _ => unreachable!(),
             }),
+            VariadicFunc::MakeMzAclItem => f.write_str("make_mz_aclitem"),
         }
     }
 }
@@ -6901,6 +6950,7 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::Replace).boxed(),
             Just(VariadicFunc::JsonbBuildArray).boxed(),
             Just(VariadicFunc::JsonbBuildObject).boxed(),
+            Just(VariadicFunc::MakeMzAclItem).boxed(),
             ScalarType::arbitrary()
                 .prop_map(|elem_type| VariadicFunc::ArrayCreate { elem_type })
                 .boxed(),
@@ -6968,6 +7018,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::And => And(()),
             VariadicFunc::Or => Or(()),
             VariadicFunc::RangeCreate { elem_type } => RangeCreate(elem_type.into_proto()),
+            VariadicFunc::MakeMzAclItem => MakeMzAclItem(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7016,6 +7067,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 RangeCreate(elem_type) => Ok(VariadicFunc::RangeCreate {
                     elem_type: elem_type.into_rust()?,
                 }),
+                MakeMzAclItem(()) => Ok(VariadicFunc::MakeMzAclItem),
             }
         } else {
             Err(TryFromProtoError::missing_field(

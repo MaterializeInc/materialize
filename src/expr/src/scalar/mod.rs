@@ -2203,6 +2203,8 @@ pub enum EvalError {
     },
     TypeFromOid(String),
     InvalidRange(InvalidRangeError),
+    InvalidRoleId(String),
+    InvalidPrivileges(String),
 }
 
 impl fmt::Display for EvalError {
@@ -2354,6 +2356,8 @@ impl fmt::Display for EvalError {
             }
             EvalError::TypeFromOid(msg) => write!(f, "{msg}"),
             EvalError::InvalidRange(e) => e.fmt(f),
+            EvalError::InvalidRoleId(msg) => write!(f, "{msg}"),
+            EvalError::InvalidPrivileges(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -2555,6 +2559,8 @@ impl RustType<ProtoEvalError> for EvalError {
             }
             EvalError::TypeFromOid(v) => TypeFromOid(v.clone()),
             EvalError::InvalidRange(error) => InvalidRange(error.into_proto()),
+            EvalError::InvalidRoleId(v) => InvalidRoleId(v.clone()),
+            EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.clone()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2651,6 +2657,8 @@ impl RustType<ProtoEvalError> for EvalError {
                 }),
                 TypeFromOid(v) => Ok(EvalError::TypeFromOid(v)),
                 InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
+                InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v)),
+                InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }
