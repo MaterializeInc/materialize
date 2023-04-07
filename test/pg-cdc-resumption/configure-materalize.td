@@ -12,7 +12,7 @@
 
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
-    HOST postgres,
+    HOST toxiproxy,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass

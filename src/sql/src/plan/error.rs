@@ -150,6 +150,10 @@ pub enum PlanError {
         name: String,
         item_type: CatalogItemType,
     },
+    ModifyLinkedCluster {
+        cluster_name: String,
+        linked_object_name: String,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -396,6 +400,7 @@ impl fmt::Display for PlanError {
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
+            Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
         }
     }
 }

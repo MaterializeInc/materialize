@@ -702,7 +702,7 @@ SELECT mz_roles.name
 ----
 joe
 
-statement error must be owner of DATABASE jdb
+statement error must be owner of SCHEMA jdb.public, DATABASE jdb
 DROP DATABASE jdb
 
 statement error must be owner of DATABASE jdb
@@ -835,7 +835,7 @@ SELECT mz_roles.name
 ----
 joe
 
-statement error must be owner of CLUSTER jclus
+statement error must be owner of CLUSTER REPLICA jclus.jr1, CLUSTER jclus
 DROP CLUSTER jclus
 
 statement error must be owner of CLUSTER jclus
@@ -1285,6 +1285,76 @@ simple conn=mz_system,user=mz_system
 ALTER TABLE t OWNER TO group2;
 ----
 COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP TABLE t;
+----
+COMPLETE 0
+
+# Test that ownership is checked with cascading deletes
+
+statement ok
+CREATE TABLE t (a INT);
+
+simple conn=joe,user=joe
+CREATE VIEW v AS SELECT * FROM t;
+----
+COMPLETE 0
+
+statement error must be owner of VIEW materialize.public.v
+DROP TABLE t CASCADE;
+
+simple conn=mz_system,user=mz_system
+ALTER VIEW v OWNER TO materialize;
+----
+COMPLETE 0
+
+statement ok
+DROP TABLE t CASCADE;
+
+statement ok
+CREATE VIEW v AS SELECT 1 AS a;
+
+simple conn=joe,user=joe
+CREATE INDEX i ON v(a);
+----
+COMPLETE 0
+
+statement error must be owner of INDEX materialize.public.i
+CREATE OR REPLACE VIEW v AS SELECT 2 AS a;
+
+simple conn=mz_system,user=mz_system
+ALTER INDEX i OWNER TO materialize;
+----
+COMPLETE 0
+
+statement ok
+CREATE OR REPLACE VIEW v AS SELECT 2 AS a;
+
+statement ok
+DROP VIEW v;
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT 1 AS a;
+
+simple conn=joe,user=joe
+CREATE INDEX i ON mv(a);
+----
+COMPLETE 0
+
+statement error must be owner of INDEX materialize.public.i
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT 2 AS a;
+
+simple conn=mz_system,user=mz_system
+ALTER INDEX i OWNER TO materialize;
+----
+COMPLETE 0
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT 2 AS a;
+
+statement ok
+DROP MATERIALIZED VIEW mv;
 
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system

@@ -33,7 +33,7 @@ use mz_timely_util::operator::CollectionExt;
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::render::upsert::UpsertKey;
 use crate::source::types::{DecodeResult, SourceOutput};
-use crate::source::{self, RawSourceCreationConfig};
+use crate::source::{self, RawSourceCreationConfig, SourceCreationParams};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
 ///
@@ -86,6 +86,14 @@ where
 
     let connection = description.desc.connection.clone();
     let source_name = format!("{}-{}", connection.name(), id);
+
+    let params = SourceCreationParams {
+        pg_replication_timeouts: storage_state
+            .dataflow_parameters
+            .pg_replication_timeouts
+            .clone(),
+    };
+
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         id,
@@ -109,6 +117,7 @@ where
         shared_remap_upper: Rc::clone(
             &storage_state.source_uppers[&description.remap_collection_id],
         ),
+        params,
     };
 
     // TODO(petrosagg): put the description as-is in the RawSourceCreationConfig instead of cloning

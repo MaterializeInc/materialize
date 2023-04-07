@@ -466,9 +466,9 @@ impl<'a> FromSql<'a> for Slt {
                         let t: mz_repr::Timestamp = s.parse()?;
                         Self(Value::MzTimestamp(t))
                     }
-                    oid::TYPE_MZ_ACL_ITEM_OID => {
-                        Self(Value::MzAclItem(MzAclItem::decode_binary(raw)?))
-                    }
+                    oid::TYPE_MZ_ACL_ITEM_OID => Self(Value::MzAclItem(MzAclItem::decode_binary(
+                        types::bytea_from_sql(raw),
+                    )?)),
                     _ => unreachable!(),
                 },
             },
@@ -483,7 +483,8 @@ impl<'a> FromSql<'a> for Slt {
             oid::TYPE_UINT2_OID
             | oid::TYPE_UINT4_OID
             | oid::TYPE_UINT8_OID
-            | oid::TYPE_MZ_TIMESTAMP_OID => return true,
+            | oid::TYPE_MZ_TIMESTAMP_OID
+            | oid::TYPE_MZ_ACL_ITEM_OID => return true,
             _ => {}
         }
         matches!(
