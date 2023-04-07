@@ -6031,6 +6031,15 @@ impl Catalog {
                 .system_config()
                 .enable_multi_worker_storage_persist_sink(),
             persist: self.persist_config(),
+            pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
+                connect_timeout: Some(self.system_config().pg_replication_connect_timeout()),
+                keepalives_retries: Some(self.system_config().pg_replication_keepalives_retries()),
+                keepalives_idle: Some(self.system_config().pg_replication_keepalives_idle()),
+                keepalives_interval: Some(
+                    self.system_config().pg_replication_keepalives_interval(),
+                ),
+                tcp_user_timeout: Some(self.system_config().pg_replication_tcp_user_timeout()),
+            },
         }
     }
 

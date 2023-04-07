@@ -17,4 +17,13 @@ package mz_storage_client.types.parameters;
 message ProtoStorageParameters {
     mz_persist_client.cfg.ProtoPersistParameters persist = 1;
     bool enable_multi_worker_storage_persist_sink = 2;
+    ProtoPgReplicationTimeouts pg_replication_timeouts = 3;
+}
+
+message ProtoPgReplicationTimeouts {
+    optional mz_proto.ProtoDuration connect_timeout = 1;
+    optional uint32 keepalives_retries = 2;
+    optional mz_proto.ProtoDuration keepalives_idle = 3;
+    optional mz_proto.ProtoDuration keepalives_interval = 4;
+    optional mz_proto.ProtoDuration tcp_user_timeout = 5;
 }
