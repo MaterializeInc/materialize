@@ -21,7 +21,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::warn;
 
-use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
+use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceSnapshot};
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
 };
@@ -50,13 +50,13 @@ use crate::util::{viewable_variables, ResultExt};
 use crate::{rbac, AdapterError};
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
-pub struct DataflowBuilder<'a, T> {
+pub struct DataflowBuilder<'a> {
     pub catalog: &'a CatalogState,
     /// A handle to the compute abstraction, which describes indexes by identifier.
     ///
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
-    pub compute: ComputeInstanceRef<'a, T>,
+    pub compute: ComputeInstanceSnapshot,
     recursion_guard: RecursionGuard,
 }
 
@@ -77,14 +77,11 @@ pub enum ExprPrepStyle<'a> {
 
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    pub fn dataflow_builder(
-        &self,
-        instance: ComputeInstanceId,
-    ) -> DataflowBuilder<mz_repr::Timestamp> {
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self
             .controller
             .compute
-            .instance_ref(instance)
+            .instance_snapshot(instance)
             .expect("compute instance does not exist");
         DataflowBuilder {
             catalog: self.catalog().state(),
@@ -268,14 +265,11 @@ impl Coordinator {
 
 impl CatalogTxn<'_, mz_repr::Timestamp> {
     /// Creates a new dataflow builder from an ongoing catalog transaction.
-    pub fn dataflow_builder(
-        &self,
-        instance: ComputeInstanceId,
-    ) -> DataflowBuilder<mz_repr::Timestamp> {
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self
             .dataflow_client
             .compute
-            .instance_ref(instance)
+            .instance_snapshot(instance)
             .expect("compute instance does not exist");
         DataflowBuilder {
             catalog: self.catalog,
@@ -285,7 +279,7 @@ impl CatalogTxn<'_, mz_repr::Timestamp> {
     }
 }
 
-impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
+impl<'a> DataflowBuilder<'a> {
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
     fn import_into_dataflow(
@@ -591,7 +585,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     }
 }
 
-impl<'a, T> CheckedRecursion for DataflowBuilder<'a, T> {
+impl<'a> CheckedRecursion for DataflowBuilder<'a> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }

@@ -216,6 +216,17 @@ impl<T> ComputeController<T> {
         })
     }
 
+    /// Return a reference-less snapshot to the indicated compute instance.
+    pub fn instance_snapshot(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
+        self.instance(id).map(|instance| ComputeInstanceSnapshot {
+            instance_id: id,
+            collections: BTreeSet::from_iter(instance.collections_iter().map(|(id, _state)| *id)),
+        })
+    }
+
     /// Return a read-only handle to the indicated collection.
     pub fn collection(
         &self,
@@ -634,6 +645,25 @@ impl<T> ComputeInstanceRef<'_, T> {
     /// Return a read-only handle to the indicated collection.
     pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.instance.collection(id)
+    }
+}
+
+/// A reference-less snapshot of a compute instance.
+#[derive(Debug, Clone)]
+pub struct ComputeInstanceSnapshot {
+    instance_id: ComputeInstanceId,
+    collections: BTreeSet<GlobalId>,
+}
+
+impl ComputeInstanceSnapshot {
+    /// Return the ID of this compute instance.
+    pub fn instance_id(&self) -> ComputeInstanceId {
+        self.instance_id
+    }
+
+    /// Reports whether the instance contains the indicated collection.
+    pub fn contains_collection(&self, id: &GlobalId) -> bool {
+        self.collections.contains(id)
     }
 }
 
