@@ -14,6 +14,7 @@ use std::fmt::Formatter;
 use itertools::Itertools;
 
 use mz_ore::str::StrExt;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier, SchemaSpecifier};
@@ -21,6 +22,7 @@ use mz_sql::plan::{AlterOwnerPlan, CreateMaterializedViewPlan, CreateViewPlan, P
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
 
+use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use crate::catalog::Catalog;
 use crate::command::Command;
 use crate::session::Session;
@@ -417,5 +419,60 @@ fn generate_required_ownership(plan: &Plan) -> Vec<Ownership> {
         Plan::AlterSecret(plan) => vec![Ownership(ObjectId::Item(plan.id))],
         Plan::RotateKeys(plan) => vec![Ownership(ObjectId::Item(plan.id))],
         Plan::AlterOwner(plan) => vec![Ownership(plan.id.clone())],
+    }
+}
+
+pub(crate) const fn all_object_privileges(object_type: ObjectType) -> AclMode {
+    match object_type {
+        ObjectType::Table => AclMode::INSERT
+            .union(AclMode::SELECT)
+            .union(AclMode::UPDATE)
+            .union(AclMode::DELETE),
+        ObjectType::View => AclMode::SELECT,
+        ObjectType::MaterializedView => AclMode::SELECT,
+        ObjectType::Source => AclMode::SELECT,
+        ObjectType::Sink => AclMode::empty(),
+        ObjectType::Index => AclMode::empty(),
+        ObjectType::Type => AclMode::USAGE,
+        ObjectType::Role => AclMode::empty(),
+        ObjectType::Cluster => AclMode::USAGE.union(AclMode::CREATE),
+        ObjectType::ClusterReplica => AclMode::empty(),
+        ObjectType::Secret => AclMode::USAGE,
+        ObjectType::Connection => AclMode::USAGE,
+        ObjectType::Database => AclMode::USAGE.union(AclMode::CREATE),
+        ObjectType::Schema => AclMode::USAGE.union(AclMode::CREATE),
+        ObjectType::Func => AclMode::empty(),
+    }
+}
+
+pub(crate) const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAclItem {
+    MzAclItem {
+        grantee: owner_id,
+        grantor: owner_id,
+        acl_mode: all_object_privileges(object_type),
+    }
+}
+
+pub(crate) const fn default_catalog_privilege(object_type: ObjectType) -> MzAclItem {
+    let acl_mode = match object_type {
+        ObjectType::Table
+        | ObjectType::View
+        | ObjectType::MaterializedView
+        | ObjectType::Source => AclMode::SELECT,
+        ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
+        ObjectType::Sink
+        | ObjectType::Index
+        | ObjectType::Role
+        | ObjectType::Cluster
+        | ObjectType::ClusterReplica
+        | ObjectType::Secret
+        | ObjectType::Connection
+        | ObjectType::Database
+        | ObjectType::Func => AclMode::empty(),
+    };
+    MzAclItem {
+        grantee: RoleId::Public,
+        grantor: MZ_SYSTEM_ROLE_ID,
+        acl_mode,
     }
 }

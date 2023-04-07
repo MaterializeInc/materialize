@@ -224,8 +224,8 @@ ORDER BY r.id;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
-    Project (#0..=#3, #5, #8)
-      Join on=(#0 = #7 AND #2 = #4) type=differential
+    Project (#0..=#3, #5, #9)
+      Join on=(#0 = #8 AND #2 = #4) type=differential
         ArrangeBy keys=[[#2]]
           Project (#0..=#3)
             Get mz_catalog.mz_cluster_replicas

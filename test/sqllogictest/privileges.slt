@@ -146,3 +146,163 @@ SELECT mz_internal.make_mz_aclitem('sd98fas9df8', 's1', 'CREATE')
 
 query error unrecognized privilege type: "asdfa ljefioj"
 SELECT mz_internal.make_mz_aclitem('u1', 's1', 'asdfa ljefioj')
+
+# Test default privileges
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE materialize CREATEDB CREATECLUSTER;
+----
+COMPLETE 0
+
+## Create some helper views
+
+statement ok
+CREATE VIEW database_privileges (name, privilege) AS SELECT name, unnest(privileges)::text FROM mz_databases;
+
+statement ok
+CREATE VIEW schema_privileges (name, privilege) AS SELECT name, unnest(privileges)::text FROM mz_schemas;
+
+statement ok
+CREATE VIEW cluster_privileges (name, privilege) AS SELECT name, unnest(privileges)::text FROM mz_clusters;
+
+statement ok
+CREATE VIEW item_privileges (name, type, privilege) AS SELECT name, type, unnest(privileges)::text FROM mz_objects;
+
+query TT
+SELECT * FROM database_privileges
+----
+materialize  =UC/mz_system
+materialize  mz_system=UC/mz_system
+
+query TT
+SELECT * FROM schema_privileges ORDER BY name
+----
+information_schema  =U/mz_system
+information_schema  mz_system=UC/mz_system
+mz_catalog          =U/mz_system
+mz_catalog          mz_system=UC/mz_system
+mz_internal         =U/mz_system
+mz_internal         mz_system=UC/mz_system
+pg_catalog          =U/mz_system
+pg_catalog          mz_system=UC/mz_system
+public              =UC/mz_system
+public              mz_system=UC/mz_system
+
+query TT
+SELECT * FROM cluster_privileges ORDER BY name
+----
+default           =UC/mz_system
+default           mz_system=UC/mz_system
+mz_introspection  =U/mz_system
+mz_introspection  mz_system=UC/mz_system
+mz_introspection  mz_introspection=UC/mz_system
+mz_system         mz_system=UC/mz_system
+
+# The materialize privilege comes from the views created above
+query T
+SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'view' OR type = 'materialized view' OR type = 'source'
+----
+=r/mz_system
+mz_system=r/mz_system
+materialize=r/materialize
+
+query T
+SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'table'
+----
+=r/mz_system
+mz_system=arwd/mz_system
+
+query T
+SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'type'
+----
+=U/mz_system
+mz_system=U/mz_system
+
+statement ok
+CREATE TABLE t (a INT);
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='t'
+----
+t  materialize=arwd/materialize
+
+statement ok
+CREATE VIEW v AS SELECT 1;
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='v'
+----
+v  materialize=r/materialize
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT 1;
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='mv'
+----
+mv  materialize=r/materialize
+
+statement ok
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='s'
+----
+s  materialize=r/materialize
+
+statement ok
+CREATE TYPE ty AS LIST (ELEMENT TYPE=bool);
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='ty'
+----
+ty  =U/materialize
+ty  materialize=U/materialize
+
+statement ok
+CREATE SECRET se AS decode('c2VjcmV0Cg==', 'base64');
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='se'
+----
+se  materialize=U/materialize
+
+statement ok
+CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='conn'
+----
+conn  materialize=U/materialize
+
+statement ok
+CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+
+query TT
+SELECT * FROM cluster_privileges WHERE name ='c'
+----
+c  materialize=UC/materialize
+
+statement ok
+CREATE DATABASE d;
+
+query TT
+SELECT * FROM database_privileges WHERE name ='d'
+----
+d  materialize=UC/materialize
+
+query TT
+SELECT * FROM schema_privileges WHERE name ='public' ORDER BY name
+----
+public  =UC/mz_system
+public  =UC/materialize
+public  mz_system=UC/mz_system
+public  materialize=UC/materialize
+
+statement ok
+CREATE SCHEMA sch;
+
+query TT
+SELECT * FROM schema_privileges WHERE name ='sch'
+----
+sch  materialize=UC/materialize

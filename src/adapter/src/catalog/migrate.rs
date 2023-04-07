@@ -17,7 +17,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, Value};
 use mz_storage_client::types::connections::ConnectionContext;
 
-use crate::catalog::{Catalog, SerializedCatalogItem};
+use crate::catalog::{storage, Catalog, SerializedCatalogItem};
 
 use super::storage::Transaction;
 use super::ConnCatalog;
@@ -36,7 +36,14 @@ where
 {
     let mut updated_items = BTreeMap::new();
     let items = tx.loaded_items();
-    for (id, name, SerializedCatalogItem::V1 { create_sql }, _owner_id) in items {
+    for storage::Item {
+        id,
+        name,
+        definition: SerializedCatalogItem::V1 { create_sql },
+        owner_id: _,
+        privileges: _,
+    } in items
+    {
         let mut stmt = mz_sql::parse::parse(&create_sql)?.into_element();
 
         f(tx, &cat, &mut stmt).await?;
