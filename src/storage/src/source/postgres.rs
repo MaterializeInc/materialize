@@ -298,7 +298,8 @@ impl SourceRender for PostgresSourceConnection {
                 .connection
                 .config(&*connection_context.secrets_reader)
                 .await
-                .expect("Postgres connection unexpectedly missing secrets");
+                .expect("Postgres connection unexpectedly missing secrets")
+                .replication_timeouts(config.params.pg_replication_timeouts);
 
             let mut source_tables = BTreeMap::new();
             let tables_iter = self.publication_details.tables.iter();

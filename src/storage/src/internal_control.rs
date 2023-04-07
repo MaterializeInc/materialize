@@ -29,6 +29,8 @@ pub struct DataflowParameters {
     /// implementation in storage ingestions. Is applied only
     /// when a cluster or dataflow is restarted.
     pub enable_multi_worker_storage_persist_sink: bool,
+    /// Configured PG replication timeouts,
+    pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
 }
 
 /// Internal commands that can be sent by individual operators/workers that will

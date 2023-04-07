@@ -508,6 +508,59 @@ const ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Controls the connect_timeout setting when connecting to PG via replication.
+const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_replication_connect_timeout"),
+    value: &mz_postgres_util::DEFAULT_REPLICATION_CONNECT_TIMEOUT,
+    description: "Sets the timeout applied to socket-level connection attempts for PG \
+    replication connections",
+    internal: true,
+    safe: true,
+};
+
+/// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
+/// when connecting to PG via replication.
+const PG_REPLICATION_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("pg_replication_keepalives_retries"),
+    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_RETRIES,
+    description:
+        "Sets the maximum number of TCP keepalive probes that will be sent before dropping \
+    a connection when connecting to PG via replication.",
+    internal: true,
+    safe: true,
+};
+
+/// Sets the amount of idle time before a keepalive packet is sent on the connection when connecting
+/// to PG via replication.
+const PG_REPLICATION_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_replication_keepalives_idle"),
+    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_IDLE,
+    description:
+        "Sets the amount of idle time before a keepalive packet is sent on the connection \
+    when connecting to PG via replication.",
+    internal: true,
+    safe: true,
+};
+
+/// Sets the time interval between TCP keepalive probes when connecting to PG via replication.
+const PG_REPLICATION_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_replication_keepalives_interval"),
+    value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_INTERVAL,
+    description: "Sets the time interval between TCP keepalive probes when connecting to PG via \
+    replication.",
+    internal: true,
+    safe: true,
+};
+
+/// Sets the TCP user timeout when connecting to PG via replication.
+const PG_REPLICATION_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("pg_replication_tcp_user_timeout"),
+    value: &mz_postgres_util::DEFAULT_REPLICATION_TCP_USER_TIMEOUT,
+    description: "Sets the TCP user timeout when connecting to PG via replication.",
+    internal: true,
+    safe: true,
+};
+
 /// Controls the connection timeout to Cockroach.
 ///
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
@@ -1360,6 +1413,11 @@ impl Default for SystemVars {
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+            .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
+            .with_var(&PG_REPLICATION_KEEPALIVES_IDLE)
+            .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
+            .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
+            .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
     }
 }
 
@@ -1597,6 +1655,31 @@ impl SystemVars {
     /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
     pub fn persist_compaction_minimum_timeout(&self) -> Duration {
         *self.expect_value(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
+    }
+
+    /// Returns the `pg_replication_connect_timeout` configuration parameter.
+    pub fn pg_replication_connect_timeout(&self) -> Duration {
+        *self.expect_value(&PG_REPLICATION_CONNECT_TIMEOUT)
+    }
+
+    /// Returns the `pg_replication_keepalives_retries` configuration parameter.
+    pub fn pg_replication_keepalives_retries(&self) -> u32 {
+        *self.expect_value(&PG_REPLICATION_KEEPALIVES_RETRIES)
+    }
+
+    /// Returns the `pg_replication_keepalives_idle` configuration parameter.
+    pub fn pg_replication_keepalives_idle(&self) -> Duration {
+        *self.expect_value(&PG_REPLICATION_KEEPALIVES_IDLE)
+    }
+
+    /// Returns the `pg_replication_keepalives_interval` configuration parameter.
+    pub fn pg_replication_keepalives_interval(&self) -> Duration {
+        *self.expect_value(&PG_REPLICATION_KEEPALIVES_INTERVAL)
+    }
+
+    /// Returns the `pg_replication_tcp_user_timeout` configuration parameter.
+    pub fn pg_replication_tcp_user_timeout(&self) -> Duration {
+        *self.expect_value(&PG_REPLICATION_TCP_USER_TIMEOUT)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -2608,7 +2691,13 @@ pub fn is_compute_config_var(name: &str) -> bool {
 
 /// Returns whether the named variable is a storage configuration parameter.
 pub fn is_storage_config_var(name: &str) -> bool {
-    name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name() || is_persist_config_var(name)
+    name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name()
+        || name == PG_REPLICATION_CONNECT_TIMEOUT.name()
+        || name == PG_REPLICATION_KEEPALIVES_IDLE.name()
+        || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
+        || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
+        || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+        || is_persist_config_var(name)
 }
 
 /// Returns whether the named variable is a persist configuration parameter.

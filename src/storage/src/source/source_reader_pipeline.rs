@@ -127,6 +127,14 @@ pub struct RawSourceCreationConfig {
     pub source_statistics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
     /// Enables reporting the remap operator's write frontier.
     pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
+    /// Configuration parameters, possibly from LaunchDarkly
+    pub params: SourceCreationParams,
+}
+
+#[derive(Clone)]
+pub struct SourceCreationParams {
+    /// Sets timeouts specific to PG replication streams
+    pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
 }
 
 /// Creates a source dataflow operator graph from a source connection. The type of SourceConnection
@@ -519,6 +527,7 @@ where
         persist_clients,
         source_statistics: _,
         shared_remap_upper,
+        params: _,
     } = config;
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
@@ -673,6 +682,7 @@ where
         persist_clients: _,
         source_statistics: _,
         shared_remap_upper: _,
+        params: _,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();

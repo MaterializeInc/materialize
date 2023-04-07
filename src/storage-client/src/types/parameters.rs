@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 use mz_persist_client::cfg::PersistParameters;
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -30,6 +30,7 @@ pub struct StorageParameters {
     pub enable_multi_worker_storage_persist_sink: bool,
     /// Persist client configuration.
     pub persist: PersistParameters,
+    pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
 }
 
 impl StorageParameters {
@@ -38,6 +39,7 @@ impl StorageParameters {
         self.enable_multi_worker_storage_persist_sink =
             other.enable_multi_worker_storage_persist_sink;
         self.persist.update(other.persist);
+        self.pg_replication_timeouts = other.pg_replication_timeouts;
     }
 }
 
@@ -46,6 +48,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
         ProtoStorageParameters {
             enable_multi_worker_storage_persist_sink: self.enable_multi_worker_storage_persist_sink,
             persist: Some(self.persist.into_proto()),
+            pg_replication_timeouts: Some(self.pg_replication_timeouts.into_proto()),
         }
     }
 
@@ -56,6 +59,31 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoStorageParameters::persist")?,
+            pg_replication_timeouts: proto
+                .pg_replication_timeouts
+                .into_rust_if_some("ProtoStorageParameters::pg_replication_timeouts")?,
+        })
+    }
+}
+
+impl RustType<ProtoPgReplicationTimeouts> for mz_postgres_util::ReplicationTimeouts {
+    fn into_proto(&self) -> ProtoPgReplicationTimeouts {
+        ProtoPgReplicationTimeouts {
+            connect_timeout: self.connect_timeout.into_proto(),
+            keepalives_retries: self.keepalives_retries,
+            keepalives_idle: self.keepalives_idle.into_proto(),
+            keepalives_interval: self.keepalives_interval.into_proto(),
+            tcp_user_timeout: self.tcp_user_timeout.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoPgReplicationTimeouts) -> Result<Self, TryFromProtoError> {
+        Ok(mz_postgres_util::ReplicationTimeouts {
+            connect_timeout: proto.connect_timeout.into_rust()?,
+            keepalives_retries: proto.keepalives_retries,
+            keepalives_idle: proto.keepalives_idle.into_rust()?,
+            keepalives_interval: proto.keepalives_interval.into_rust()?,
+            tcp_user_timeout: proto.tcp_user_timeout.into_rust()?,
         })
     }
 }
