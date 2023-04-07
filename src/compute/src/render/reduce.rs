@@ -34,7 +34,7 @@ use mz_compute_client::plan::reduce::{
 use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
-use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
+use mz_repr::{Datum, DatumKindList, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::reduce::ReduceExt;
@@ -399,14 +399,14 @@ where
                     return;
                 }
 
-                let mut accumulable = DatumList::empty().iter();
-                let mut hierarchical = DatumList::empty().iter();
-                let mut basic = DatumList::empty().iter();
+                let mut accumulable = DatumKindList::empty().iter();
+                let mut hierarchical = DatumKindList::empty().iter();
+                let mut basic = DatumKindList::empty().iter();
                 for ((reduction_type, row), _) in input.iter() {
                     match reduction_type {
-                        ReductionType::Accumulable => accumulable = row.iter(),
-                        ReductionType::Hierarchical => hierarchical = row.iter(),
-                        ReductionType::Basic => basic = row.iter(),
+                        ReductionType::Accumulable => accumulable = row.kind_iter(),
+                        ReductionType::Hierarchical => hierarchical = row.kind_iter(),
+                        ReductionType::Basic => basic = row.kind_iter(),
                     }
                 }
 
