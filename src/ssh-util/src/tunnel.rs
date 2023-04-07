@@ -157,7 +157,7 @@ async fn connect(
         .user(config.user.clone())
         .port(config.port)
         .keyfile(&path)
-        .connect_mux(config.host.clone())
+        .connect(config.host.clone())
         .await?;
 
     // Delete the private key for safety: since `ssh` still has an open
@@ -187,7 +187,7 @@ async fn connect(
         {
             Ok(_) => return Ok((session, local_port)),
             Err(err) => match err {
-                openssh::Error::SshMux(err)
+                openssh::Error::Ssh(err)
                     if err.to_string().contains("forwarding request failed") =>
                 {
                     info!("port {local_port} already in use; testing another port");
