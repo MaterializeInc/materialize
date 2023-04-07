@@ -75,7 +75,7 @@ class AlterIndex(Check):
                 ALTER INDEX alter_index_table_primary_idx OWNER TO materialize;
                 ALTER INDEX alter_index_source_primary_idx OWNER TO materialize;
                 """
-            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            if self.base_version >= MzVersion.parse("0.47.0")
             else ""
         )
         return [

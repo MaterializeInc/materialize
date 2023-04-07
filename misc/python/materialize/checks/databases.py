@@ -76,7 +76,7 @@ class CheckDatabaseDrop(Check):
                 $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
                 ALTER DATABASE to_be_dropped OWNER TO materialize;
                 """
-            if self.base_version >= MzVersion.parse("0.46.0-dev")
+            if self.base_version >= MzVersion.parse("0.47.0")
             else ""
         )
 
