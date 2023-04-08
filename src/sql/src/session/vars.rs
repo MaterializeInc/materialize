@@ -513,7 +513,7 @@ const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_connect_timeout"),
     value: &mz_postgres_util::DEFAULT_REPLICATION_CONNECT_TIMEOUT,
     description: "Sets the timeout applied to socket-level connection attempts for PG \
-    replication connections",
+    replication connections. (Materialize)",
     internal: true,
     safe: true,
 };
@@ -525,7 +525,7 @@ const PG_REPLICATION_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
     value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_RETRIES,
     description:
         "Sets the maximum number of TCP keepalive probes that will be sent before dropping \
-    a connection when connecting to PG via replication.",
+    a connection when connecting to PG via replication. (Materialize)",
     internal: true,
     safe: true,
 };
@@ -537,7 +537,7 @@ const PG_REPLICATION_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
     value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_IDLE,
     description:
         "Sets the amount of idle time before a keepalive packet is sent on the connection \
-    when connecting to PG via replication.",
+    when connecting to PG via replication. (Materialize)",
     internal: true,
     safe: true,
 };
@@ -547,7 +547,7 @@ const PG_REPLICATION_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_keepalives_interval"),
     value: &mz_postgres_util::DEFAULT_REPLICATION_KEEPALIVE_INTERVAL,
     description: "Sets the time interval between TCP keepalive probes when connecting to PG via \
-    replication.",
+    replication. (Materialize)",
     internal: true,
     safe: true,
 };
@@ -556,7 +556,7 @@ const PG_REPLICATION_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
 const PG_REPLICATION_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_tcp_user_timeout"),
     value: &mz_postgres_util::DEFAULT_REPLICATION_TCP_USER_TIMEOUT,
-    description: "Sets the TCP user timeout when connecting to PG via replication.",
+    description: "Sets the TCP user timeout when connecting to PG via replication. (Materialize)",
     internal: true,
     safe: true,
 };
