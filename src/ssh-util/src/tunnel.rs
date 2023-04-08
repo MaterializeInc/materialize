@@ -199,8 +199,8 @@ async fn connect(
         {
             Ok(_) => return Ok((session, local_port)),
             Err(err) => match err {
-                openssh::Error::SshMux(err)
-                    if err.to_string().contains("forwarding request failed") =>
+                openssh::Error::SshMux(openssh_mux_client::Error::RequestFailure(e))
+                    if &*e == "Port forwarding failed" =>
                 {
                     info!("port {local_port} already in use; testing another port");
                 }

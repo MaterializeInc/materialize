@@ -4669,6 +4669,7 @@ dependencies = [
  "anyhow",
  "mz-ore",
  "openssh",
+ "openssh-mux-client",
  "openssl",
  "rand",
  "scopeguard",
