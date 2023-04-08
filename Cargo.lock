@@ -1008,7 +1008,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "chrono"
 version = "0.4.24"
-source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#4e2c2b4ad23d6822445718ee536b45d5d649040f"
+source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#311d52eb91d360bf8877e37a074ec7693f797daa"
 dependencies = [
  "iana-time-zone",
  "num-integer",
@@ -4225,6 +4225,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-openssl",
+ "tokio-test",
  "tonic",
  "tracing",
  "tracing-opentelemetry",
@@ -7587,6 +7588,19 @@ dependencies = [
  "pin-project-lite",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "tokio-test"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53474327ae5e166530d17f2d956afcb4f8a004de581b3cae10f12006bc8163e3"
+dependencies = [
+ "async-stream",
+ "bytes",
+ "futures-core",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
