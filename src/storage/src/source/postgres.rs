@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
-use futures::{FutureExt, Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
@@ -36,6 +36,7 @@ use tracing::{info, warn};
 
 use mz_expr::MirScalarExpr;
 use mz_ore::display::DisplayExt;
+use mz_ore::future::TimeoutError;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
@@ -1015,10 +1016,14 @@ async fn produce_replication<'a>(
                 use LogicalReplicationMessage::*;
                 metrics.total.inc();
 
-                // Wait no longer than `FEEDBACK_INTERVAL` on the stream; if we exceed the deadline,
-                // we should let the upstream PG source know we're still here. This also gives us an
+                // Ensure no more than `FEEDBACK_INTERVAL` passes; if we exceed the deadline, we
+                // should let the upstream PG source know we're still here. This also gives us an
                 // opportunity to check that it's still alive.
-                let res = tokio::time::timeout(FEEDBACK_INTERVAL, stream.as_mut().next()).await;
+                let res = mz_ore::future::timeout(
+                    FEEDBACK_INTERVAL.saturating_sub(last_feedback.elapsed()),
+                    stream.as_mut().try_next(),
+                )
+                .await;
 
                 // The upstream will periodically request status updates by setting the keepalive's
                 // reply field to 1. However, we cannot rely on these messages arriving on time. For
@@ -1031,8 +1036,8 @@ async fn produce_replication<'a>(
                 // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
                 let mut needs_status_update = last_feedback.elapsed() > FEEDBACK_INTERVAL;
 
-                match res.ok().flatten() {
-                    Some(Ok(XLogData(xlog_data))) => match xlog_data.data() {
+                match res {
+                    Ok(Some(XLogData(xlog_data))) => match xlog_data.data() {
                         Begin(_) => {
                             last_data_message = Instant::now();
                             if !inserts.is_empty() || !deletes.is_empty() {
@@ -1228,7 +1233,7 @@ async fn produce_replication<'a>(
                             )))?;
                         }
                     },
-                    Some(Ok(PrimaryKeepAlive(keepalive))) => {
+                    Ok(Some(PrimaryKeepAlive(keepalive))) => {
                         needs_status_update = needs_status_update || keepalive.reply() == 1;
                         observed_wal_end = PgLsn::from(keepalive.wal_end());
 
@@ -1236,15 +1241,20 @@ async fn produce_replication<'a>(
                             break;
                         }
                     }
-                    Some(Err(err)) => {
-                        return Err(ReplicationError::from(err))?;
-                    }
-                    None => {
-                        break;
-                    }
                     // The enum is marked non_exhaustive, better be conservative
-                    _ => {
-                        return Err(Definite(anyhow!("Unexpected replication message")))?;
+                    Ok(Some(_)) => {
+                        return Err(Definite(anyhow!("Unexpected replication message")))?
+                    }
+                    Ok(None) => break,
+                    Err(TimeoutError::Inner(err)) => return Err(ReplicationError::from(err))?,
+                    Err(TimeoutError::DeadlineElapsed) => {
+                        // if we did timeout, skip message handling to let us continue polling, but do
+                        // ensure we perform a status update to heartbeat the upstream PG source.
+                        mz_ore::soft_assert!(
+                            needs_status_update,
+                            "if our request timed out, it must have been at least long enough to require \
+                             a status update"
+                        );
                     }
                 }
                 if needs_status_update {
