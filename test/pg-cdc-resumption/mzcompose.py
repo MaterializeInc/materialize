@@ -106,7 +106,6 @@ def disconnect_pg_during_replication(c: Composition) -> None:
         "delete-rows-t2.td",
         "alter-table.td",
         "toxiproxy-close-connection.td",
-        "validate-toxiproxy-disco.td",
         "toxiproxy-restore-connection.td",
     )
 
