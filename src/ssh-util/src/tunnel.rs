@@ -28,8 +28,22 @@ use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::keys::SshKeyPair;
 
+// TODO(benesch): allow configuring the following connection parameters via
+// server configuration parameters.
+
 /// How often to check whether the SSH session is still alive.
 const CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The timeout to use when establishing the connection to the SSH server.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The idle time after which the SSH control master process should send a
+/// keepalive packet to the SSH server to determine whether the server is
+/// still alive.
+///
+/// TCP idle timeouts of 30s are common in the wild. An idle timeout of 10s
+/// is comfortably beneath that threshold without being overly chatty.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
 
 /// Specifies an SSH tunnel.
 #[derive(PartialEq, Clone)]
@@ -157,6 +171,8 @@ async fn connect(
         .user(config.user.clone())
         .port(config.port)
         .keyfile(&path)
+        .server_alive_interval(KEEPALIVE_IDLE)
+        .connect_timeout(CONNECT_TIMEOUT)
         .connect_mux(config.host.clone())
         .await?;
 
