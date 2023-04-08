@@ -19,6 +19,7 @@
 //! the [`futures`](futures) crate.
 
 use std::any::Any;
+use std::error::Error;
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::marker::PhantomData;
@@ -30,6 +31,7 @@ use futures::future::{CatchUnwind, FutureExt};
 use futures::sink::Sink;
 use pin_project::pin_project;
 use tokio::task::futures::TaskLocalFuture;
+use tokio::time::{self, Duration, Instant};
 
 use crate::panic::CATCHING_UNWIND_ASYNC;
 use crate::task;
@@ -172,6 +174,117 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.project().inner.poll(cx)
+    }
+}
+
+/// The error returned by [`timeout`] and [`timeout_at`].
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum TimeoutError<E> {
+    /// The timeout deadline has elapsed.
+    DeadlineElapsed,
+    /// The underlying operation failed.
+    Inner(E),
+}
+
+impl<E> fmt::Display for TimeoutError<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TimeoutError::DeadlineElapsed => f.write_str("deadline has elapsed"),
+            e => e.fmt(f),
+        }
+    }
+}
+
+impl<E> Error for TimeoutError<E>
+where
+    E: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            TimeoutError::DeadlineElapsed => None,
+            TimeoutError::Inner(e) => Some(e),
+        }
+    }
+}
+
+/// Applies a maximum duration to a [`Result`]-returning future.
+///
+/// Whether the maximum duration was reached is indicated via the error type.
+/// Specifically:
+///
+///   * If `future` does not complete within `duration`, returns
+///     [`TimeoutError::DeadlineElapsed`].
+///   * If `future` completes with `Ok(t)`, returns `Ok(t)`.
+///   * If `future` completes with `Err(e)`, returns
+///     [`TimeoutError::Inner(e)`](TimeoutError::Inner).
+///
+/// Using this function can be considerably more readable than
+/// [`tokio::time::timeout`] when the inner future returns a `Result`.
+///
+/// # Examples
+///
+/// ```
+/// # use tokio::time::Duration;
+/// use mz_ore::future::TimeoutError;
+/// # tokio_test::block_on(async {
+/// let slow_op = async {
+///     tokio::time::sleep(Duration::from_secs(1)).await;
+///     Ok::<_, String>(())
+/// };
+/// let res = mz_ore::future::timeout(Duration::from_millis(1), slow_op).await;
+/// assert_eq!(res, Err(TimeoutError::DeadlineElapsed));
+/// # });
+/// ```
+pub async fn timeout<F, T, E>(duration: Duration, future: F) -> Result<T, TimeoutError<E>>
+where
+    F: Future<Output = Result<T, E>>,
+{
+    match time::timeout(duration, future).await {
+        Ok(Ok(t)) => Ok(t),
+        Ok(Err(e)) => Err(TimeoutError::Inner(e)),
+        Err(_) => Err(TimeoutError::DeadlineElapsed),
+    }
+}
+
+/// Applies a deadline to a [`Result`]-returning future.
+///
+/// Whether the deadline elapsed is indicated via the error type. Specifically:
+///
+///   * If `future` does not complete by `deadline`, returns
+///     [`TimeoutError::DeadlineElapsed`].
+///   * If `future` completes with `Ok(t)`, returns `Ok(t)`.
+///   * If `future` completes with `Err(e)`, returns
+///     [`TimeoutError::Inner(e)`](TimeoutError::Inner).
+///
+/// Using this function can be considerably more readable than
+/// [`tokio::time::timeout_at`] when the inner future returns a `Result`.
+///
+/// # Examples
+///
+/// ```
+/// # use tokio::time::{Duration, Instant};
+/// use mz_ore::future::TimeoutError;
+/// # tokio_test::block_on(async {
+/// let slow_op = async {
+///     tokio::time::sleep(Duration::from_secs(1)).await;
+///     Ok::<_, String>(())
+/// };
+/// let deadline = Instant::now() + Duration::from_millis(1);
+/// let res = mz_ore::future::timeout_at(deadline, slow_op).await;
+/// assert_eq!(res, Err(TimeoutError::DeadlineElapsed));
+/// # });
+/// ```
+pub async fn timeout_at<F, T, E>(deadline: Instant, future: F) -> Result<T, TimeoutError<E>>
+where
+    F: Future<Output = Result<T, E>>,
+{
+    match time::timeout_at(deadline, future).await {
+        Ok(Ok(t)) => Ok(t),
+        Ok(Err(e)) => Err(TimeoutError::Inner(e)),
+        Err(_) => Err(TimeoutError::DeadlineElapsed),
     }
 }
 
