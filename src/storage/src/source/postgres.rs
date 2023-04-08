@@ -758,16 +758,29 @@ impl RowSender {
     /// last message sent is marked as closing the `lsn` (which is the messages `offset` in the
     /// rest of the source pipeline.
     pub async fn close_lsn(&mut self, lsn: PgLsn) {
-        if let Some(buffered) = self.buffered_message.take() {
-            assert!(buffered.lsn <= lsn);
-            self.send_row_inner(
-                buffered.output_index,
-                buffered.row,
-                buffered.lsn,
-                buffered.diff,
-                true,
-            )
-            .await;
+        match self.buffered_message.take() {
+            Some(buffered) => {
+                assert!(buffered.lsn <= lsn);
+                self.send_row_inner(
+                    buffered.output_index,
+                    buffered.row,
+                    buffered.lsn,
+                    buffered.diff,
+                    true,
+                )
+                .await;
+            }
+            // We should still announce that we're running even if nothing else.
+            None => {
+                // If the channel is shutting down, so is the source.
+                let _ = self
+                    .sender
+                    .send(InternalMessage::Status(HealthStatusUpdate {
+                        update: HealthStatus::Running,
+                        should_halt: false,
+                    }))
+                    .await;
+            }
         }
     }
 
