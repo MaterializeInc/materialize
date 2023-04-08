@@ -433,7 +433,7 @@ mod tests {
             _ => {}
         };
         if test_type == TestType::Opt {
-            let ctx = &mz_transform::typecheck::empty_context();
+            let ctx = mz_transform::typecheck::empty_context();
             let log_optimizer = Optimizer::logical_cleanup_pass(&ctx);
             let phys_optimizer = Optimizer::physical_optimizer(&ctx);
             dataflow = dataflow
