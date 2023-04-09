@@ -75,7 +75,7 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", defa
 proc-macro2 = { version = "1.0.54", features = ["span-locations"] }
 prometheus = { version = "0.13.3", default-features = false, features = ["process"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-prost-reflect = { version = "0.9.2", default-features = false, features = ["serde"] }
+prost-reflect = { version = "0.11.2", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.2" }
 quote = { version = "1.0.26" }
 rand = { version = "0.8.5", features = ["small_rng"] }
@@ -172,7 +172,7 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", defa
 proc-macro2 = { version = "1.0.54", features = ["span-locations"] }
 prometheus = { version = "0.13.3", default-features = false, features = ["process"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-prost-reflect = { version = "0.9.2", default-features = false, features = ["serde"] }
+prost-reflect = { version = "0.11.2", default-features = false, features = ["serde"] }
 prost-types = { version = "0.11.2" }
 quote = { version = "1.0.26" }
 rand = { version = "0.8.5", features = ["small_rng"] }
