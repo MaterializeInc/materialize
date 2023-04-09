@@ -79,7 +79,19 @@ impl SshTunnelConfig {
         remote_host: &str,
         remote_port: u16,
     ) -> Result<SshTunnelHandle, anyhow::Error> {
-        let (mut session, local_port) = connect(self, remote_host, remote_port).await?;
+        let tunnel_id = format!(
+            "{}:{} via {}@{}:{}",
+            remote_host, remote_port, self.user, self.host, self.port,
+        );
+
+        info!(%tunnel_id, "connecting to ssh tunnel");
+        let (mut session, local_port) = match connect(self, remote_host, remote_port).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(%tunnel_id, "failed to connect to ssh tunnel: {:#}", e);
+                return Err(e);
+            }
+        };
         let local_port = Arc::new(AtomicU16::new(local_port));
 
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
@@ -88,26 +100,23 @@ impl SshTunnelConfig {
             let local_port = Arc::clone(&local_port);
             async move {
                 scopeguard::defer! {
-                    info!(
-                        "terminating ssh tunnel ({}:{} via {}@{}:{})",
-                        remote_host,
-                        remote_port,
-                        config.user,
-                        config.host,
-                        config.port,
-                    );
+                    info!(%tunnel_id, "terminating ssh tunnel");
                 }
                 loop {
                     time::sleep(CHECK_INTERVAL).await;
                     if let Err(e) = session.check().await {
-                        warn!("ssh tunnel unhealthy: {:#}", anyhow!(e));
+                        warn!(%tunnel_id, "ssh tunnel unhealthy: {:#}", anyhow!(e));
                         match connect(&config, &remote_host, remote_port).await {
                             Ok((s, lp)) => {
                                 session = s;
                                 local_port.store(lp, Ordering::SeqCst)
                             }
                             Err(e) => {
-                                warn!("reconnection to ssh tunnel failed: {:#}", anyhow!(e))
+                                warn!(
+                                    %tunnel_id,
+                                    "reconnection to ssh tunnel failed: {:#}",
+                                    anyhow!(e),
+                                )
                             }
                         };
                     }
