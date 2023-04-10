@@ -19,7 +19,7 @@ cluster                                 <VARIES>               "Sets the current
 cluster_replica                         ""                     "Sets a target cluster replica for SELECT queries (Materialize)."
 database                                materialize            "Sets the current database (CockroachDB)."
 DateStyle                               "ISO, MDY"             "Sets the display format for date and time values (PostgreSQL)."
-enable_server_rbac_checks               off                    "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
+enable_rbac_checks                      off                    "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 enable_session_rbac_checks              off                    "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 emit_timestamp_notice                   off                    "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize)."
 emit_trace_id_notice                    off                    "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."

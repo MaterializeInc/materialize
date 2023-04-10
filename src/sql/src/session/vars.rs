@@ -688,10 +688,9 @@ pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-pub const ENABLE_SERVER_RBAC_CHECKS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_server_rbac_checks"),
-    // TODO(jkosh44) Once RBAC is complete, change this to `true` and write a migration to update
-    //  it to false for existing users.
+pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_rbac_checks"),
+    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
     value: &false,
     description: "User facing global boolean flag indicating whether to apply RBAC checks before \
     executing statements (Materialize).",
@@ -1461,7 +1460,7 @@ impl Default for SystemVars {
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
-            .with_var(&ENABLE_SERVER_RBAC_CHECKS)
+            .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
             .with_var(&PG_REPLICATION_KEEPALIVES_IDLE)
@@ -1791,9 +1790,9 @@ impl SystemVars {
         *self.expect_value(&ENABLE_LD_RBAC_CHECKS)
     }
 
-    /// Returns the `enable_server_rbac_checks` configuration parameter.
-    pub fn enable_server_rbac_checks(&self) -> bool {
-        *self.expect_value(&ENABLE_SERVER_RBAC_CHECKS)
+    /// Returns the `enable_rbac_checks` configuration parameter.
+    pub fn enable_rbac_checks(&self) -> bool {
+        *self.expect_value(&ENABLE_RBAC_CHECKS)
     }
 
     /// Returns the `enable_auto_route_introspection_queries` configuration parameter.

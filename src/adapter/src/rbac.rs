@@ -268,7 +268,7 @@ pub fn check_plan(
 /// Returns true if RBAC is turned on for a session, false otherwise.
 pub fn is_rbac_enabled_for_session(system_vars: &SystemVars, session: &Session) -> bool {
     let ld_enabled = system_vars.enable_ld_rbac_checks();
-    let server_enabled = system_vars.enable_server_rbac_checks();
+    let server_enabled = system_vars.enable_rbac_checks();
     let session_enabled = session.vars().enable_session_rbac_checks();
 
     // The LD flag acts as a global off switch in case we need to turn the feature off for
@@ -281,7 +281,7 @@ pub fn is_rbac_enabled_for_session(system_vars: &SystemVars, session: &Session) 
 /// Returns true if RBAC is turned on for the system, false otherwise.
 pub fn is_rbac_enabled_for_system(system_vars: &SystemVars) -> bool {
     let ld_enabled = system_vars.enable_ld_rbac_checks();
-    let server_enabled = system_vars.enable_server_rbac_checks();
+    let server_enabled = system_vars.enable_rbac_checks();
 
     // The LD flag acts as a global off switch in case we need to turn the feature off for
     // everyone. Users will still need to turn one of the non-LD flags on to enable RBAC.

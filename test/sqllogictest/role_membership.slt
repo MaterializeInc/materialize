@@ -309,7 +309,7 @@ SELECT * FROM role_members
 # Disable RBAC checks
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_server_rbac_checks TO false;
+ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 

@@ -13,7 +13,7 @@ reset-server
 
 # Enable rbac checks.
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_server_rbac_checks TO true;
+ALTER SYSTEM SET enable_rbac_checks TO true;
 ----
 COMPLETE 0
 
@@ -1358,7 +1358,7 @@ DROP MATERIALIZED VIEW mv;
 
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_server_rbac_checks TO false;
+ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 
