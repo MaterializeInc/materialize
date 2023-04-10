@@ -390,7 +390,7 @@ Explained Query:
   Reduce::Hierarchical
     aggr_funcs=[min, max]
     skips=[0, 0]
-    buckets=[0, 0]
+    buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
     val_plan
       project=(#1, #1)
     key_plan
@@ -439,7 +439,7 @@ Explained Query:
       Reduce::Hierarchical
         aggr_funcs=[min, max]
         skips=[0, 0]
-        buckets=[0, 0]
+        buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
         val_plan
           project=(#0, #0)
         key_plan
@@ -557,7 +557,7 @@ Explained Query:
     hierarchical
       aggr_funcs=[min, max]
       skips=[2, 0]
-      buckets=[2, 0]
+      buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
     basic
       aggrs[0]=(1, string_agg(row(row((integer_to_text(#1) || "1"), ","))))
       aggrs[1]=(5, string_agg(row(row((integer_to_text(#1) || "2"), ","))))
@@ -619,7 +619,7 @@ Explained Query:
         hierarchical
           aggr_funcs=[min, max]
           skips=[2, 0]
-          buckets=[2, 0]
+          buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
         basic
           aggrs[0]=(1, string_agg(row(row((integer_to_text(#0) || "1"), ","))))
           aggrs[1]=(5, string_agg(row(row((integer_to_text(#0) || "2"), ","))))
