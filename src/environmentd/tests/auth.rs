@@ -119,7 +119,7 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 use uuid::Uuid;
 
-use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     ApiTokenArgs, ApiTokenResponse, Authentication as FronteggAuthentication,
     AuthenticationConfig as FronteggConfig, Claims, RefreshToken, REFRESH_SUFFIX,
@@ -829,7 +829,7 @@ fn test_auth_expiry() {
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
     let config = util::Config::default()
-        .with_tls(TlsMode::Require, server_cert, server_key)
+        .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth);
     let server = util::start_server(config).unwrap();
 
@@ -982,7 +982,7 @@ fn test_auth_base() {
     // Test connecting to a server that requires TLS and uses Materialize Cloud for
     // authentication.
     let config = util::Config::default()
-        .with_tls(TlsMode::Require, &server_cert, &server_key)
+        .with_tls(&server_cert, &server_key)
         .with_frontegg(&frontegg_auth);
     let server = util::start_server(config).unwrap();
     run_tests(
@@ -1368,7 +1368,7 @@ fn test_auth_base() {
     drop(server);
 
     // Test TLS modes with a server that requires TLS.
-    let config = util::Config::default().with_tls(TlsMode::Require, &server_cert, &server_key);
+    let config = util::Config::default().with_tls(&server_cert, &server_key);
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
@@ -1480,7 +1480,7 @@ fn test_auth_intermediate_ca() {
 
     // When the server presents only its own certificate, without the
     // intermediary, the client should fail to verify the chain.
-    let config = util::Config::default().with_tls(TlsMode::Require, &server_cert, &server_key);
+    let config = util::Config::default().with_tls(&server_cert, &server_key);
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
@@ -1512,7 +1512,7 @@ fn test_auth_intermediate_ca() {
     // When the server is configured to present the entire certificate chain,
     // the client should be able to verify the chain even though it only knows
     // about the root CA.
-    let config = util::Config::default().with_tls(TlsMode::Require, server_cert_chain, &server_key);
+    let config = util::Config::default().with_tls(server_cert_chain, &server_key);
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
@@ -1615,7 +1615,7 @@ fn test_auth_admin() {
 
     {
         let config = util::Config::default()
-            .with_tls(TlsMode::Require, &server_cert, &server_key)
+            .with_tls(&server_cert, &server_key)
             .with_frontegg(&frontegg_auth);
         let server = util::start_server(config).unwrap();
 
@@ -1652,7 +1652,7 @@ fn test_auth_admin() {
 
     {
         let config = util::Config::default()
-            .with_tls(TlsMode::Require, &server_cert, &server_key)
+            .with_tls(&server_cert, &server_key)
             .with_frontegg(&frontegg_auth);
         let server = util::start_server(config).unwrap();
 
@@ -1689,7 +1689,7 @@ fn test_auth_admin() {
 
     {
         let config = util::Config::default()
-            .with_tls(TlsMode::Require, &server_cert, &server_key)
+            .with_tls(&server_cert, &server_key)
             .with_frontegg(&frontegg_auth);
         let server = util::start_server(config).unwrap();
 
