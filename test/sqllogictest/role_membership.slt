@@ -312,3 +312,8 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0

@@ -678,13 +678,33 @@ static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = Serve
     safe: false,
 };
 
+pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_ld_rbac_checks"),
+    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
+    value: &false,
+    description:
+        "LD facing global boolean flag that allows turning RBAC off for everyone (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_rbac_checks"),
-    // TODO(jkosh44) Once RBAC is complete, change this to `true` and write a migration to update
-    //  it to false for existing users.
+    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
     value: &false,
-    description: "Boolean flag indicating whether to apply RBAC checks before executing statements (Materialize).",
-    internal: true,
+    description: "User facing global boolean flag indicating whether to apply RBAC checks before \
+    executing statements (Materialize).",
+    internal: false,
+    safe: true,
+};
+
+pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_session_rbac_checks"),
+    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
+    value: &false,
+    description: "User facing session boolean flag indicating whether to apply RBAC checks before \
+    executing statements (Materialize).",
+    internal: false,
     safe: true,
 };
 
@@ -810,6 +830,7 @@ pub struct SessionVars {
     emit_timestamp_notice: SessionVar<bool>,
     emit_trace_id_notice: SessionVar<bool>,
     auto_route_introspection_queries: SessionVar<bool>,
+    enable_session_rbac_checks: SessionVar<bool>,
     // Inputs to computed variables.
     build_info: &'static BuildInfo,
     user: User,
@@ -845,6 +866,7 @@ impl SessionVars {
             emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
             emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
             auto_route_introspection_queries: SessionVar::new(&AUTO_ROUTE_INTROSPECTION_QUERIES),
+            enable_session_rbac_checks: SessionVar::new(&ENABLE_SESSION_RBAC_CHECKS),
             build_info,
             user,
         }
@@ -880,6 +902,7 @@ impl SessionVars {
             &self.emit_timestamp_notice,
             &self.emit_trace_id_notice,
             &self.auto_route_introspection_queries,
+            &self.enable_session_rbac_checks,
             self.build_info,
             &self.user,
         ];
@@ -973,6 +996,8 @@ impl SessionVars {
             Ok(&self.auto_route_introspection_queries)
         } else if name == IS_SUPERUSER_NAME {
             Ok(&self.user)
+        } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
+            Ok(&self.enable_session_rbac_checks)
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1111,6 +1136,8 @@ impl SessionVars {
             self.auto_route_introspection_queries.set(input, local)
         } else if name == IS_SUPERUSER_NAME {
             Err(VarError::ReadOnlyParameter(self.user.name()))
+        } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
+            self.enable_session_rbac_checks.set(input, local)
         } else {
             Err(VarError::UnknownParameter(name.into()))
         }
@@ -1159,6 +1186,8 @@ impl SessionVars {
             self.emit_trace_id_notice.reset(local);
         } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
             self.auto_route_introspection_queries.reset(local);
+        } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
+            self.enable_session_rbac_checks.reset(local);
         } else if name == CLIENT_ENCODING.name
             || name == DATE_STYLE.name
             || name == FAILPOINTS.name
@@ -1206,6 +1235,7 @@ impl SessionVars {
             emit_timestamp_notice,
             emit_trace_id_notice,
             auto_route_introspection_queries,
+            enable_session_rbac_checks,
             build_info: _,
             user: _,
         } = self;
@@ -1225,6 +1255,7 @@ impl SessionVars {
         emit_timestamp_notice.end_transaction(action);
         emit_trace_id_notice.end_transaction(action);
         auto_route_introspection_queries.end_transaction(action);
+        enable_session_rbac_checks.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
@@ -1354,6 +1385,11 @@ impl SessionVars {
         *self.auto_route_introspection_queries.value()
     }
 
+    /// Returns the value of `enable_session_rbac_checks` configuration parameter.
+    pub fn enable_session_rbac_checks(&self) -> bool {
+        *self.enable_session_rbac_checks.value()
+    }
+
     /// Returns the value of `is_superuser` configuration parameter.
     pub fn is_superuser(&self) -> bool {
         self.user.is_superuser()
@@ -1423,6 +1459,7 @@ impl Default for SystemVars {
             .with_var(&METRICS_RETENTION)
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
+            .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
@@ -1746,6 +1783,11 @@ impl SystemVars {
             .expect("var known to exist")
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
+    }
+
+    /// Returns the `enable_ld_rbac_checks` configuration parameter.
+    pub fn enable_ld_rbac_checks(&self) -> bool {
+        *self.expect_value(&ENABLE_LD_RBAC_CHECKS)
     }
 
     /// Returns the `enable_rbac_checks` configuration parameter.

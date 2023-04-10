@@ -700,6 +700,8 @@
     unmaterializable: true
   - signature: 'mz_row_size(expr: Record) -> int'
     description: Returns the number of bytes used to store a row.
+  - signature: 'is_rbac_enabled() -> boolean'
+    description: Reports whether RBAC is enabled for the current session.
 
 - type: PostgreSQL compatibility
   description: |

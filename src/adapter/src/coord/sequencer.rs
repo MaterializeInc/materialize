@@ -115,10 +115,8 @@ impl Coordinator {
             }
             Plan::CreateRole(plan) => {
                 let res = self.sequence_create_role(&session, plan).await;
-                if res.is_ok() && !self.catalog().system_config().enable_rbac_checks() {
-                    // Notice is intentionally sent here and not in sequence_create_role so that
-                    // no notice is sent during startup.
-                    session.add_notice(AdapterNotice::RbacDisabled);
+                if res.is_ok() {
+                    self.maybe_send_rbac_notice(&session);
                 }
                 tx.send(res, session);
             }
@@ -283,8 +281,8 @@ impl Coordinator {
             }
             Plan::AlterRole(plan) => {
                 let res = self.sequence_alter_role(&session, plan).await;
-                if res.is_ok() && !self.catalog().system_config().enable_rbac_checks() {
-                    session.add_notice(AdapterNotice::RbacDisabled);
+                if res.is_ok() {
+                    self.maybe_send_rbac_notice(&session);
                 }
                 tx.send(res, session);
             }
@@ -468,5 +466,15 @@ impl Coordinator {
         }
         self.transient_id_counter += 1;
         Ok(GlobalId::Transient(id))
+    }
+
+    fn maybe_send_rbac_notice(&self, session: &Session) {
+        if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session) {
+            if !self.catalog.system_config().enable_ld_rbac_checks() {
+                session.add_notice(AdapterNotice::RbacSystemDisabled);
+            } else {
+                session.add_notice(AdapterNotice::RbacUserDisabled);
+            }
+        }
     }
 }

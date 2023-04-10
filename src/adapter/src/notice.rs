@@ -78,7 +78,8 @@ pub enum AdapterNotice {
         name: String,
         reason: String,
     },
-    RbacDisabled,
+    RbacSystemDisabled,
+    RbacUserDisabled,
     RoleMembershipAlreadyExists {
         role_name: String,
         member_name: String,
@@ -104,7 +105,8 @@ impl AdapterNotice {
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
             AdapterNotice::ClusterReplicaStatusChanged { status, .. } if *status == ClusterStatus::NotReady => Some("The cluster replica may be restarting or going offline.".into()),
-            AdapterNotice::RbacDisabled => Some("To enable RBAC run `ALTER SYSTEM SET enable_rbac_checks TO true` as a superuser.".into()),
+            AdapterNotice::RbacSystemDisabled => Some("To enable RBAC please reach out to support with a request to turn RBAC on.".into()),
+            AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
             _ => None
         }
     }
@@ -189,10 +191,18 @@ impl fmt::Display for AdapterNotice {
             AdapterNotice::BadStartupSetting { name, reason } => {
                 write!(f, "startup setting {name} not set: {reason}")
             }
-            AdapterNotice::RbacDisabled => {
+            AdapterNotice::RbacSystemDisabled => {
                 write!(
                     f,
-                    "RBAC is disabled so no role attributes will be considered when executing statements"
+                    "RBAC is disabled so no role attributes or object ownership will be considered \
+                    when executing statements"
+                )
+            }
+            AdapterNotice::RbacUserDisabled => {
+                write!(
+                    f,
+                    "RBAC is disabled so no role attributes or object ownership will be considered \
+                    when executing statements"
                 )
             }
             AdapterNotice::RoleMembershipAlreadyExists {

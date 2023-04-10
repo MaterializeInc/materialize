@@ -60,11 +60,11 @@ use mz_sql::plan::{
     ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::user::SYSTEM_USER;
+use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    TRANSACTION_ISOLATION_VAR_NAME,
+    ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
 };
-use mz_sql::session::vars::{Var, ENABLE_RBAC_CHECKS};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -892,7 +892,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self, tx))]
     pub(super) async fn sequence_create_sink(
         &mut self,
-        mut session: Session,
+        session: Session,
         plan: CreateSinkPlan,
         depends_on: Vec<GlobalId>,
         tx: ClientTransmitter<ExecuteResponse>,

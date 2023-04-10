@@ -18,6 +18,7 @@ use mz_repr::role_id::RoleId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql::plan::{AlterOwnerPlan, CreateMaterializedViewPlan, CreateViewPlan, Plan};
+use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
 
 use crate::catalog::Catalog;
@@ -134,7 +135,11 @@ impl UnauthorizedError {
 ///
 /// Note: The session and role ID are stored in the command itself.
 pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), UnauthorizedError> {
-    if !catalog.system_config().enable_rbac_checks() {
+    if let Some(session) = cmd.session() {
+        if !is_rbac_enabled_for_session(catalog.system_config(), session) {
+            return Ok(());
+        }
+    } else if !is_rbac_enabled_for_system(catalog.system_config()) {
         return Ok(());
     }
 
@@ -177,7 +182,7 @@ pub fn check_plan(
         return Err(AdapterError::ConcurrentRoleDrop(role_id.clone()));
     };
 
-    if !catalog.system_vars().enable_rbac_checks() {
+    if !is_rbac_enabled_for_session(catalog.system_vars(), session) {
         return Ok(());
     }
 
@@ -258,6 +263,30 @@ pub fn check_plan(
     }
 
     Ok(())
+}
+
+/// Returns true if RBAC is turned on for a session, false otherwise.
+pub fn is_rbac_enabled_for_session(system_vars: &SystemVars, session: &Session) -> bool {
+    let ld_enabled = system_vars.enable_ld_rbac_checks();
+    let server_enabled = system_vars.enable_rbac_checks();
+    let session_enabled = session.vars().enable_session_rbac_checks();
+
+    // The LD flag acts as a global off switch in case we need to turn the feature off for
+    // everyone. Users will still need to turn one of the non-LD flags on to enable RBAC.
+    // The session flag allows users to turn RBAC on for just their session while the server flag
+    // allows users to turn RBAC on for everyone.
+    ld_enabled && (server_enabled || session_enabled)
+}
+
+/// Returns true if RBAC is turned on for the system, false otherwise.
+pub fn is_rbac_enabled_for_system(system_vars: &SystemVars) -> bool {
+    let ld_enabled = system_vars.enable_ld_rbac_checks();
+    let server_enabled = system_vars.enable_rbac_checks();
+
+    // The LD flag acts as a global off switch in case we need to turn the feature off for
+    // everyone. Users will still need to turn one of the non-LD flags on to enable RBAC.
+    // The server flag allows users to turn RBAC on for everyone.
+    ld_enabled && server_enabled
 }
 
 /// Generates the attributes required to execute a given plan.
