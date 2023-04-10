@@ -495,16 +495,31 @@ following SQL commands and options to existing commands:
 
 ## Rollout Plan
 
-- There will be a boolean system variable called `RBAC_CHECKS_ENABLED` that can be toggled by any superuser. The flag
-  will determine whether the Coordinator checks role privileges before executing commands.
-- Existing environments will default to `false`, however new environments will default to `true`.
-- All new SQL commands will be available to all users. The SQL commands will update user privileges, but emit a notice
-  if `RBAC_CHECK_ENABLED` is disabled.
-- Organizations can set up all the existing roles with their desired privileges and then toggle `RBAC_CHECKS_ENABLED` on
-  and off to test that roles are set up properly.
-- A user role called `mz_default_owner` will be created in all existing deployments. A migrations will
-  assign `mz_default_owner` as the owner of all existing objects. Superusers will be able to re-assign ownership for all
-  of these objects.
+A user role called `mz_default_owner` will be created in all existing deployments. A migrations
+will assign `mz_default_owner` as the owner of all existing unowned objects. Superusers will be
+able to re-assign ownership for all of these objects.
+
+As we develop RBAC we will roll out the following three parameters:
+
+  - A system parameter called "enable_ld_rbac_checks". This parameter will only be able to be set
+  by Launch Darkly, no users can toggle this parameter. When this is off, then no user can enable
+  RBAC. When this is on, then a user can enable RBAC through one of the other parameters. This acts
+  as a global off switch for RBAC in case we ever need to ensure that RBAC is off for a customer.
+  - A system parameter called "enable_rbac_checks". This parameter can be set by any
+  superuser. When this is on, then RBAC is enabled for all users, as long as
+  "enable_ld_rbac_checks" is also on.
+  - A session parameter called "enable_session_rbac_checks". This parameter is session local and
+  can be set by any user. When this is on, then RBAC is enabled for the current session, as long as
+  "enable_ld_rbac_checks" is also on. The intention is that this can be used to test RBAC in a
+  single session, without having to turn it on for everyone.
+
+They will all default to false initially. Once we have finished implementing everything, we will
+update them to true for certain candidate customers. Once we are confident in our implementation,
+we will remove "enable_ld_rbac_checks" and "enable_session_rbac_checks", and change the default of
+"enable_rbac_checks" to true.
+
+All new SQL commands will be available to all users. The SQL commands will update user privileges,
+but emit a notice if RBAC is disabled.
 
 ## Testing Plan
 
