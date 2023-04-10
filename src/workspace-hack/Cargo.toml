@@ -28,7 +28,7 @@ bytes = { version = "1.3.0" }
 chrono = { git = "https://github.com/chronotope/chrono.git", branch = "0.4.x", default-features = false, features = ["alloc", "clock", "serde"] }
 clap = { version = "3.2.20", features = ["derive", "env", "wrap_help"] }
 criterion = { version = "0.4.0", features = ["async_tokio", "html_reports"] }
-crossbeam-channel = { version = "0.5.6" }
+crossbeam-channel = { version = "0.5.8" }
 crossbeam-deque = { version = "0.8.2" }
 crossbeam-epoch = { version = "0.9.13" }
 crossbeam-utils = { version = "0.8.7" }
@@ -125,7 +125,7 @@ cc = { version = "1.0.78", default-features = false, features = ["parallel"] }
 chrono = { git = "https://github.com/chronotope/chrono.git", branch = "0.4.x", default-features = false, features = ["alloc", "clock", "serde"] }
 clap = { version = "3.2.20", features = ["derive", "env", "wrap_help"] }
 criterion = { version = "0.4.0", features = ["async_tokio", "html_reports"] }
-crossbeam-channel = { version = "0.5.6" }
+crossbeam-channel = { version = "0.5.8" }
 crossbeam-deque = { version = "0.8.2" }
 crossbeam-epoch = { version = "0.9.13" }
 crossbeam-utils = { version = "0.8.7" }
