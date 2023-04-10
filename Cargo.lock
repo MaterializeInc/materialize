@@ -4216,6 +4216,7 @@ dependencies = [
  "paste",
  "pin-project",
  "prometheus",
+ "proptest",
  "scopeguard",
  "sentry",
  "sentry-tracing",
