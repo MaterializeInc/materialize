@@ -1019,6 +1019,14 @@ async fn produce_replication<'a>(
         // creating two independent slots so that we can use the secondary to check without
         // interrupting the stream on the first one
         loop {
+            // If either inserts or deletes have values, we have mishandled ingesting data and risk
+            // double-counting values.
+            if !inserts.is_empty() || !deletes.is_empty() {
+                return Err(Definite(anyhow!(
+                    "tried to reconnect to PG replication stream with uncommitted data",
+                )))?;
+            }
+
             let client = client_config
                 .clone()
                 .connect_replication()
@@ -1261,10 +1269,15 @@ async fn produce_replication<'a>(
                     },
                     Ok(Some(PrimaryKeepAlive(keepalive))) => {
                         needs_status_update = needs_status_update || keepalive.reply() == 1;
-                        observed_wal_end = PgLsn::from(keepalive.wal_end());
+                        // Irrespective of the WAL lag, we do not want to reconnect if we have
+                        // pending writes, nor do we want to consider fast-forwarding the WAL. If
+                        // the WAL lag is intense enough, we'll receive a TCP error.
+                        if inserts.is_empty() && deletes.is_empty() {
+                            observed_wal_end = PgLsn::from(keepalive.wal_end());
 
-                        if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD {
-                            break;
+                            if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD {
+                                break;
+                            }
                         }
                     }
                     // The enum is marked non_exhaustive, better be conservative
