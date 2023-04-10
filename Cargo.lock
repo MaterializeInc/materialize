@@ -539,9 +539,8 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-http"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29dcab29afbea7726f5c10c7be0c38666d7eb07db551580b3b26ed7cfb5d1935"
+version = "0.53.2"
+source = "git+https://github.com/parker-timmerman/smithy-rs.git?branch=v0.53.2#2865b0455f363646976cdcd419baa4701b24e3e8"
 dependencies = [
  "aws-smithy-eventstream",
  "aws-smithy-types",
