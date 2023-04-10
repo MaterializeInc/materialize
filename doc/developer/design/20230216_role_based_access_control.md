@@ -310,15 +310,16 @@ useful. We remove privileges that don't make sense.
 
 Below is a summary of the default privileges of all builtin objects:
 
-- The `mz_system` role will have `UC` privileges on the `mz_system` cluster.
 - The `mz_introspection` role will have `UC` privileges on the `mz_introspection` cluster.
-- The `mz_system` role will have `UC` privileges on the `default` cluster.
-- The `mz_system` role will have `UC` privileges on the `materialize` database.
-- The `mz_system` role will have `UC` privileges on the `materialize.public` schema.
 - The `PUBLIC` pseudo-role will have `U` privileges on the `mz_introspection` cluster.
+- The `PUBLIC` psuedo-role will have `UC` privileges on the `default` cluster.
+- The `PUBLIC` psuedo-role will have `UC` privileges on the default `materialize` database.
+- The `PUBLIC` psuedo-role will have `UC` privileges on all `public` schemas (the default schema
+  created in every database).
 - The `PUBLIC` pseudo-role will have `U` privileges on all catalog schemas.
-- The `PUBLIC` pseudo-role will have `r` privileges on all objects within all catalog schemas.
-- The `PUBLIC` psuedo-role will have `U` privileges on all type.
+- The `PUBLIC` pseudo-role will have `r` privileges on all applicable objects within all catalog
+  schemas.
+- The `PUBLIC` psuedo-role will have `U` privileges on all types.
 
 Here is a summary of all the privileges, attributes, and ownership needed to perform certain actions:
 
