@@ -210,6 +210,91 @@ impl std::fmt::Debug for BytesStats {
     }
 }
 
+/// The length to truncate `Vec<u8>` and `String` stats to.
+//
+// Ideally, this would be in LaunchDarkly, but the plumbing is tough.
+pub const TRUNCATE_LEN: usize = 100;
+
+/// Whether a truncated value should be a lower or upper bound on the original.
+pub enum TruncateBound {
+    /// Truncate such that the result is <= the original.
+    Lower,
+    /// Truncate such that the result is >= the original.
+    Upper,
+}
+
+/// Truncates a u8 slice to the given maximum byte length.
+///
+/// If `bound` is Lower, the returned value will sort <= the original value, and
+/// if `bound` is Upper, it will sort >= the original value.
+///
+/// Lower bounds will always return Some. Upper bounds might return None if the
+/// part that fits in `max_len` is entirely made of `u8::MAX`.
+pub fn truncate_bytes(x: &[u8], max_len: usize, bound: TruncateBound) -> Option<Vec<u8>> {
+    if x.len() <= max_len {
+        return Some(x.to_owned());
+    }
+    match bound {
+        // Any truncation is a lower bound.
+        TruncateBound::Lower => Some(x[..max_len].to_owned()),
+        TruncateBound::Upper => {
+            for idx in (0..max_len).rev() {
+                if x[idx] < u8::MAX {
+                    let mut ret = x[..=idx].to_owned();
+                    ret[idx] += 1;
+                    return Some(ret);
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Truncates a string to the given maximum byte length.
+///
+/// The returned value is a valid utf-8 string. If `bound` is Lower, it will
+/// sort <= the original string, and if `bound` is Upper, it will sort >= the
+/// original string.
+///
+/// Lower bounds will always return Some. Upper bounds might return None if the
+/// part that fits in `max_len` is entirely made of `char::MAX` (so in practice,
+/// probably ~never).
+pub fn truncate_string(x: &str, max_len: usize, bound: TruncateBound) -> Option<String> {
+    if x.len() <= max_len {
+        return Some(x.to_owned());
+    }
+    // For the output to be valid utf-8, we have to truncate along a char
+    // boundary.
+    let truncation_idx = x
+        .char_indices()
+        .map(|(idx, c)| idx + c.len_utf8())
+        .take_while(|char_end| *char_end <= max_len)
+        .last()
+        .unwrap_or(0);
+    let truncated = &x[..truncation_idx];
+    match bound {
+        // Any truncation is a lower bound.
+        TruncateBound::Lower => Some(truncated.to_owned()),
+        TruncateBound::Upper => {
+            // See if we can find a char that's not already the max. If so, take
+            // the last of these and increment it.
+            for (idx, c) in truncated.char_indices().rev() {
+                if let Ok(new_last_char) = char::try_from(u32::from(c) + 1) {
+                    // NB: It's technically possible for `new_last_char` to be
+                    // more bytes than `c`, which means we could go over
+                    // max_len. It isn't a hard requirement for the initial
+                    // caller of this, so don't bother with the complexity yet.
+                    let mut ret = String::with_capacity(idx + new_last_char.len_utf8());
+                    ret.push_str(&truncated[..idx]);
+                    ret.push(new_last_char);
+                    return Some(ret);
+                }
+            }
+            None
+        }
+    }
+}
+
 mod impls {
     use std::any::Any;
     use std::collections::BTreeMap;
@@ -224,9 +309,10 @@ mod impls {
 
     use crate::columnar::Data;
     use crate::stats::{
-        proto_bytes_stats, proto_dyn_stats, proto_primitive_stats, BytesStats, ColumnStats,
-        DynStats, JsonStats, OptionStats, PrimitiveStats, ProtoBytesStats, ProtoDynStats,
-        ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats, StructStats,
+        proto_bytes_stats, proto_dyn_stats, proto_primitive_stats, truncate_bytes, truncate_string,
+        BytesStats, ColumnStats, DynStats, JsonStats, OptionStats, PrimitiveStats, ProtoBytesStats,
+        ProtoDynStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats,
+        StructStats, TruncateBound, TRUNCATE_LEN,
     };
 
     impl<T> DynStats for PrimitiveStats<T>
@@ -414,24 +500,26 @@ mod impls {
     impl From<&BinaryArray<i32>> for PrimitiveStats<Vec<u8>> {
         fn from(value: &BinaryArray<i32>) -> Self {
             assert!(value.validity().is_none());
-            let lower = arrow2::compute::aggregate::min_binary(value)
-                .unwrap_or_default()
-                .to_owned();
-            let upper = arrow2::compute::aggregate::max_binary(value)
-                .unwrap_or_default()
-                .to_owned();
+            let lower = arrow2::compute::aggregate::min_binary(value).unwrap_or_default();
+            let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
+                .expect("lower bound should always truncate");
+            let upper = arrow2::compute::aggregate::max_binary(value).unwrap_or_default();
+            let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
+                // TODO(mfp): Instead, truncate this column's stats entirely.
+                .unwrap_or_else(|| upper.to_owned());
             PrimitiveStats { lower, upper }
         }
     }
 
     impl From<&BinaryArray<i32>> for OptionStats<PrimitiveStats<Vec<u8>>> {
         fn from(value: &BinaryArray<i32>) -> Self {
-            let lower = arrow2::compute::aggregate::min_binary(value)
-                .unwrap_or_default()
-                .to_owned();
-            let upper = arrow2::compute::aggregate::max_binary(value)
-                .unwrap_or_default()
-                .to_owned();
+            let lower = arrow2::compute::aggregate::min_binary(value).unwrap_or_default();
+            let lower = truncate_bytes(lower, TRUNCATE_LEN, TruncateBound::Lower)
+                .expect("lower bound should always truncate");
+            let upper = arrow2::compute::aggregate::max_binary(value).unwrap_or_default();
+            let upper = truncate_bytes(upper, TRUNCATE_LEN, TruncateBound::Upper)
+                // TODO(mfp): Instead, truncate this column's stats entirely.
+                .unwrap_or_else(|| upper.to_owned());
             let none = value.validity().map_or(0, |x| x.unset_bits());
             OptionStats {
                 none,
@@ -459,24 +547,26 @@ mod impls {
     impl From<&Utf8Array<i32>> for PrimitiveStats<String> {
         fn from(value: &Utf8Array<i32>) -> Self {
             assert!(value.validity().is_none());
-            let lower = arrow2::compute::aggregate::min_string(value)
-                .unwrap_or_default()
-                .to_owned();
-            let upper = arrow2::compute::aggregate::max_string(value)
-                .unwrap_or_default()
-                .to_owned();
+            let lower = arrow2::compute::aggregate::min_string(value).unwrap_or_default();
+            let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
+                .expect("lower bound should always truncate");
+            let upper = arrow2::compute::aggregate::max_string(value).unwrap_or_default();
+            let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
+                // TODO(mfp): Instead, truncate this column's stats entirely.
+                .unwrap_or_else(|| upper.to_owned());
             PrimitiveStats { lower, upper }
         }
     }
 
     impl From<&Utf8Array<i32>> for OptionStats<PrimitiveStats<String>> {
         fn from(value: &Utf8Array<i32>) -> Self {
-            let lower = arrow2::compute::aggregate::min_string(value)
-                .unwrap_or_default()
-                .to_owned();
-            let upper = arrow2::compute::aggregate::max_string(value)
-                .unwrap_or_default()
-                .to_owned();
+            let lower = arrow2::compute::aggregate::min_string(value).unwrap_or_default();
+            let lower = truncate_string(lower, TRUNCATE_LEN, TruncateBound::Lower)
+                .expect("lower bound should always truncate");
+            let upper = arrow2::compute::aggregate::max_string(value).unwrap_or_default();
+            let upper = truncate_string(upper, TRUNCATE_LEN, TruncateBound::Upper)
+                // TODO(mfp): Instead, truncate this column's stats entirely.
+                .unwrap_or_else(|| upper.to_owned());
             let none = value.validity().map_or(0, |x| x.unset_bits());
             OptionStats {
                 none,
@@ -718,4 +808,76 @@ mod impls {
     primitive_stats_rust_type!(f64, LowerF64, UpperF64);
     primitive_stats_rust_type!(Vec<u8>, LowerBytes, UpperBytes);
     primitive_stats_rust_type!(String, LowerString, UpperString);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_bytes() {
+        #[track_caller]
+        fn testcase(x: &[u8], max_len: usize, upper_should_exist: bool) {
+            let lower = truncate_bytes(x, max_len, TruncateBound::Lower)
+                .expect("lower should always exist");
+            assert!(lower.len() <= max_len);
+            assert!(lower.as_slice() <= x);
+            let upper = truncate_bytes(x, max_len, TruncateBound::Upper);
+            assert_eq!(upper_should_exist, upper.is_some());
+            if let Some(upper) = upper {
+                assert!(upper.len() <= max_len);
+                assert!(upper.as_slice() >= x);
+            }
+        }
+
+        testcase(&[], 0, true);
+        testcase(&[], 1, true);
+        testcase(&[1], 0, false);
+        testcase(&[1], 1, true);
+        testcase(&[1], 2, true);
+        testcase(&[1, 2], 1, true);
+        testcase(&[1, 255], 2, true);
+        testcase(&[255, 255], 2, true);
+        testcase(&[255, 255, 255], 2, false);
+    }
+
+    #[test]
+    fn test_truncate_string() {
+        #[track_caller]
+        fn testcase(x: &str, max_len: usize, upper_should_exist: bool) {
+            let lower = truncate_string(x, max_len, TruncateBound::Lower)
+                .expect("lower should always exist");
+            let upper = truncate_string(x, max_len, TruncateBound::Upper);
+            assert!(lower.len() <= max_len);
+            assert!(lower.as_str() <= x);
+            assert_eq!(upper_should_exist, upper.is_some());
+            if let Some(upper) = upper {
+                assert!(upper.len() <= max_len);
+                assert!(upper.as_str() >= x);
+            }
+        }
+
+        testcase("", 0, true);
+        testcase("1", 0, false);
+        testcase("1", 1, true);
+        testcase("12", 1, true);
+        testcase("⛄", 0, false);
+        testcase("⛄", 1, false);
+        testcase("⛄", 3, true);
+        testcase("\u{10FFFF}", 3, false);
+        testcase("\u{10FFFF}", 4, true);
+        testcase("\u{10FFFF}", 5, true);
+        testcase("⛄⛄", 3, true);
+        testcase("⛄⛄", 4, true);
+        testcase("⛄\u{10FFFF}", 6, true);
+        testcase("⛄\u{10FFFF}", 7, true);
+        testcase("\u{10FFFF}\u{10FFFF}", 7, false);
+        testcase("\u{10FFFF}\u{10FFFF}", 8, true);
+
+        // Just because I find this to be delightful.
+        assert_eq!(
+            truncate_string("⛄⛄", 3, TruncateBound::Upper),
+            Some("⛅".to_string())
+        );
+    }
 }
