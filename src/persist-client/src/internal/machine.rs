@@ -20,7 +20,7 @@ use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
@@ -81,25 +81,11 @@ where
     }
 
     pub fn shard_id(&self) -> ShardId {
-        self.applier.state().shard_id()
-    }
-
-    pub async fn fetch_upper(&mut self) -> &Antichain<T> {
-        self.applier.fetch_and_update_state().await;
-        self.upper()
-    }
-
-    pub fn upper(&self) -> &Antichain<T> {
-        self.applier.state().upper()
+        self.applier.shard_id
     }
 
     pub fn seqno(&self) -> SeqNo {
-        self.applier.state().seqno()
-    }
-
-    #[cfg(test)]
-    pub fn seqno_since(&self) -> SeqNo {
-        self.applier.state().seqno_since()
+        self.applier.seqno()
     }
 
     pub async fn add_rollup_for_current_seqno(&mut self) -> RoutineMaintenance {
@@ -147,7 +133,7 @@ where
         heartbeat_timestamp_ms: u64,
     ) -> (LeasedReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let (_seqno, reader_state, maintenance) = self
+        let (_seqno, (reader_state, seqno_since), maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
                 state.register_leased_reader(
                     &cfg.hostname,
@@ -159,18 +145,6 @@ where
                 )
             })
             .await;
-
-        if !self.applier.state().collections.is_tombstone()
-            && !self
-                .applier
-                .state()
-                .collections
-                .leased_readers
-                .contains_key(reader_id)
-        {
-            error!("Reader {reader_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
-                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
-        }
         // Usually, the reader gets an initial seqno hold of the seqno at which
         // it was registered. However, on a tombstone shard the seqno hold
         // happens to get computed as the tombstone seqno + 1
@@ -180,10 +154,10 @@ where
         // hold is >= the seqno_since, so validate that instead of anything more
         // specific.
         debug_assert!(
-            reader_state.seqno >= self.applier.state().seqno_since(),
+            reader_state.seqno >= seqno_since,
             "{} vs {}",
             reader_state.seqno,
-            self.applier.state().seqno_since()
+            seqno_since,
         );
         (reader_state, maintenance)
     }
@@ -221,17 +195,6 @@ where
                 )
             })
             .await;
-        if !self.applier.state().collections.is_tombstone()
-            && !self
-                .applier
-                .state()
-                .collections
-                .writers
-                .contains_key(writer_id)
-        {
-            error!("Writer {writer_id} was registered at timestamp {heartbeat_timestamp_ms} but immediately expired.\
-                    This implies {lease_duration:?} passed between the call and its completion, which should be rare.");
-        }
         (shard_upper, writer_state, maintenance)
     }
 
@@ -261,13 +224,12 @@ where
                     // side-channel that didn't update our local cache of the
                     // machine state. So, fetch the latest state and try again
                     // if we indeed get something different.
-                    self.applier.fetch_and_update_state().await;
-                    let current_upper = self.upper();
+                    let current_upper = self.applier.clone_upper();
 
                     // We tried to to a compare_and_append with the wrong
                     // expected upper, that won't work.
-                    if current_upper != batch.desc.lower() {
-                        return Err(Upper(current_upper.clone()));
+                    if &current_upper != batch.desc.lower() {
+                        return Err(Upper(current_upper));
                     } else {
                         // The upper stored in state was outdated. Retry after
                         // updating.
@@ -661,7 +623,7 @@ where
     }
 
     pub async fn maybe_become_tombstone(&mut self) -> Option<RoutineMaintenance> {
-        if !self.applier.state().upper().is_empty() || !self.applier.state().since().is_empty() {
+        if !self.applier.since_upper_both_empty() {
             return None;
         }
 
@@ -747,7 +709,7 @@ where
                     retry.sleep().await
                 }
             });
-            self.applier.fetch_and_update_state().await;
+            self.applier.fetch_and_update_state(None).await;
         }
     }
 
@@ -1139,8 +1101,8 @@ pub mod datadriven {
     ) -> Result<String, anyhow::Error> {
         Ok(format!(
             "since={:?} upper={:?}\n",
-            datadriven.machine.applier.state().since().elements(),
-            datadriven.machine.applier.state().upper().elements()
+            datadriven.machine.applier.since().elements(),
+            datadriven.machine.applier.clone_upper().elements()
         ))
     }
 
@@ -1651,7 +1613,7 @@ pub mod datadriven {
         Ok(format!(
             "{} {:?}\n",
             datadriven.machine.seqno(),
-            datadriven.machine.upper().elements(),
+            datadriven.machine.applier.clone_upper().elements(),
         ))
     }
 
@@ -1686,7 +1648,11 @@ pub mod datadriven {
             let () = maintenance
                 .perform(&datadriven.machine, &datadriven.gc)
                 .await;
-            let () = datadriven.machine.applier.fetch_and_update_state().await;
+            let () = datadriven
+                .machine
+                .applier
+                .fetch_and_update_state(None)
+                .await;
             write!(s, "{} ok\n", datadriven.machine.seqno());
         }
         Ok(s)

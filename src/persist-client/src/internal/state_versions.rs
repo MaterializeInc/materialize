@@ -371,60 +371,8 @@ impl StateVersions {
                 }
             };
 
-            let rollup_seqno = state.seqno();
-            let diffs = live_diffs
-                .iter()
-                .filter(|x| x.seqno > rollup_seqno)
-                // Note: `x.data` is a `Bytes`, so cloning just increments a ref count
-                .map(|x| VersionedData {
-                    seqno: x.seqno,
-                    data: x.data.clone(),
-                });
-            state.apply_encoded_diffs(&self.cfg, &self.metrics, diffs);
+            state.apply_encoded_diffs(&self.cfg, &self.metrics, &live_diffs);
             return state;
-        }
-    }
-
-    /// Updates the provided state to current.
-    ///
-    /// This method differs from [Self::fetch_current_state] in that it
-    /// optimistically fetches only the diffs since state.seqno and only falls
-    /// back to fetching all of them when necessary.
-    pub async fn fetch_and_update_to_current<K, V, T, D>(
-        &self,
-        state: &mut TypedState<K, V, T, D>,
-    ) -> Result<(), Box<CodecMismatch>>
-    where
-        K: Debug + Codec,
-        V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
-    {
-        let path = state.shard_id.to_string();
-        let diffs_to_current =
-            retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
-                self.consensus
-                    .scan(&path, state.seqno.next(), SCAN_ALL)
-                    .await
-            })
-            .instrument(debug_span!("fetch_state::scan"))
-            .await;
-        let seqno_before = state.seqno;
-        let diffs_apply = diffs_to_current
-            .first()
-            .map_or(true, |x| x.seqno == seqno_before.next());
-        if diffs_apply {
-            self.metrics.state.update_state_fast_path.inc();
-            state.apply_encoded_diffs(&self.cfg, &self.metrics, diffs_to_current);
-            Ok(())
-        } else {
-            self.metrics.state.update_state_slow_path.inc();
-            let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&state.shard_id).await;
-            *state = self
-                .fetch_current_state(&state.shard_id, recent_live_diffs.0)
-                .await
-                .check_codecs(&state.shard_id)?;
-            Ok(())
         }
     }
 
@@ -583,6 +531,23 @@ impl StateVersions {
             ),
             Err(err) => panic!("unparseable state diff rollup key: {}", err),
         }
+    }
+
+    /// Fetches all live diffs greater than the given SeqNo.
+    ///
+    /// TODO: Apply a limit to this scan. This could additionally be used as an internal
+    /// call within `fetch_recent_live_diffs`.
+    pub async fn fetch_all_live_diffs_gt_seqno<K, V, T, D>(
+        &self,
+        shard_id: &ShardId,
+        seqno: SeqNo,
+    ) -> Vec<VersionedData> {
+        let path = shard_id.to_string();
+        retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+            self.consensus.scan(&path, seqno.next(), SCAN_ALL).await
+        })
+        .instrument(debug_span!("fetch_state::scan"))
+        .await
     }
 
     /// Truncates any diffs in consensus less than the given seqno.
@@ -983,7 +948,7 @@ impl<K, V, T: Timestamp + Lattice + Codec64, D> TypedStateVersionsIter<K, V, T, 
         };
         let diff_seqno = diff.seqno;
         self.state
-            .apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(diff));
+            .apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(&diff));
         assert_eq!(self.state.seqno, diff_seqno);
         Some(&self.state)
     }
