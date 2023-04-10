@@ -637,4 +637,4 @@ steps:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
       env:
-        BUILDKITE_TAG: "$BUILDKITE_TAG"
+        BUILDKITE_TAG: "89fc884ef5178a429c7a1103a6ae8512b3e50130"
