@@ -110,7 +110,7 @@ use uuid::Uuid;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_environmentd::{TlsConfig, TlsMode, BUILD_INFO};
+use mz_environmentd::{TlsConfig, BUILD_INFO};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
 };
@@ -594,13 +594,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         }
         None
     } else {
-        let mode = match args.tls_mode.as_str() {
-            "require" => TlsMode::Require,
-            _ => unreachable!(),
-        };
         let cert = args.tls_cert.unwrap();
         let key = args.tls_key.unwrap();
-        Some(TlsConfig { mode, cert, key })
+        Some(TlsConfig { cert, key })
     };
     let frontegg = match (
         args.frontegg_tenant,

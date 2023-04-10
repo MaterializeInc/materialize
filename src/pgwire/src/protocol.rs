@@ -69,7 +69,7 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 /// Parameters for the [`run`] function.
 pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
-    pub tls_mode: TlsMode,
+    pub tls_mode: Option<TlsMode>,
     /// A client for the adapter.
     pub adapter_client: mz_adapter::ConnClient,
     /// The connection to the client.
@@ -143,10 +143,12 @@ where
     // The match here explicitly spells out all cases to be resilient to
     // future changes to TlsMode.
     match (tls_mode, conn.inner()) {
-        (TlsMode::Disable, Conn::Unencrypted(_)) => (),
-        (TlsMode::Disable, Conn::Ssl(_)) => unreachable!(),
-        (TlsMode::Enable, Conn::Ssl(_)) => (),
-        (TlsMode::Enable, Conn::Unencrypted(_)) => {
+        (None, Conn::Unencrypted(_)) => (),
+        (None, Conn::Ssl(_)) => unreachable!(),
+        (Some(TlsMode::Allow), Conn::Unencrypted(_)) => (),
+        (Some(TlsMode::Allow), Conn::Ssl(_)) => (),
+        (Some(TlsMode::Require), Conn::Ssl(_)) => (),
+        (Some(TlsMode::Require), Conn::Unencrypted(_)) => {
             return conn
                 .send(ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,

@@ -59,12 +59,13 @@ pub struct TlsConfig {
     pub mode: TlsMode,
 }
 
-/// Specifies how strictly to enforce TLS encryption and authentication.
+/// Specifies how strictly to enforce TLS encryption.
 #[derive(Debug, Clone, Copy)]
 pub enum TlsMode {
-    Disable,
-    /// Clients must negotiate TLS encryption.
-    Enable,
+    /// Allow TLS encryption.
+    Allow,
+    /// Require that clients negotiate TLS encryption.
+    Require,
 }
 
 /// A server that communicates with clients via the pgwire protocol.
@@ -123,7 +124,7 @@ impl Server {
                     Some(FrontendStartupMessage::Startup { version, params }) => {
                         let mut conn = FramedConn::new(conn_id, conn);
                         protocol::run(protocol::RunParams {
-                            tls_mode: tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable),
+                            tls_mode: tls.as_ref().map(|tls| tls.mode),
                             adapter_client,
                             conn: &mut conn,
                             version,

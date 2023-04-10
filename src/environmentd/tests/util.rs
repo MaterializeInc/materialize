@@ -97,7 +97,7 @@ use tokio_postgres::Client;
 use tower_http::cors::AllowOrigin;
 
 use mz_controller::ControllerConfig;
-use mz_environmentd::{TlsMode, WebSocketAuth, WebSocketResponse};
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
@@ -165,14 +165,8 @@ impl Config {
         self
     }
 
-    pub fn with_tls(
-        mut self,
-        mode: TlsMode,
-        cert_path: impl Into<PathBuf>,
-        key_path: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn with_tls(mut self, cert_path: impl Into<PathBuf>, key_path: impl Into<PathBuf>) -> Self {
         self.tls = Some(mz_environmentd::TlsConfig {
-            mode,
             cert: cert_path.into(),
             key: key_path.into(),
         });
