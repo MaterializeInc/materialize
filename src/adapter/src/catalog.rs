@@ -256,12 +256,11 @@ impl CatalogState {
         for object_id in object_ids {
             match object_id {
                 ObjectId::Cluster(id) => {
-                    dependents.extend_from_slice(&self.cluster_dependents(id, seen))
+                    dependents.extend_from_slice(&self.cluster_dependents(id, seen));
                 }
-                id @ ObjectId::ClusterReplica(_) => {
-                    seen.insert(id.clone());
-                    dependents.push(id);
-                }
+                ObjectId::ClusterReplica((cluster_id, replica_id)) => dependents.extend_from_slice(
+                    &self.cluster_replica_dependents(cluster_id, replica_id, seen),
+                ),
                 ObjectId::Database(id) => {
                     dependents.extend_from_slice(&self.database_dependents(id, seen))
                 }
@@ -302,9 +301,33 @@ impl CatalogState {
                 dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
             }
             for replica_id in cluster.replicas().values() {
-                seen.insert(ObjectId::ClusterReplica((cluster_id, *replica_id)));
-                dependents.push(ObjectId::ClusterReplica((cluster_id, *replica_id)));
+                dependents.extend_from_slice(&self.cluster_replica_dependents(
+                    cluster_id,
+                    *replica_id,
+                    seen,
+                ));
             }
+            dependents.push(object_id);
+        }
+        dependents
+    }
+
+    /// Returns all the IDs of all objects that depend on `replica_id`, including `replica_id`
+    /// itself.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// objects.
+    fn cluster_replica_dependents(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        seen: &mut BTreeSet<ObjectId>,
+    ) -> Vec<ObjectId> {
+        let mut dependents = Vec::new();
+        let object_id = ObjectId::ClusterReplica((cluster_id, replica_id));
+        if !seen.contains(&object_id) {
+            seen.insert(object_id.clone());
             dependents.push(object_id);
         }
         dependents
@@ -4191,6 +4214,16 @@ impl Catalog {
         self.state.object_dependents(object_ids, &mut seen)
     }
 
+    pub(crate) fn cluster_replica_dependents(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> Vec<ObjectId> {
+        let mut seen = BTreeSet::new();
+        self.state
+            .cluster_replica_dependents(cluster_id, replica_id, &mut seen)
+    }
+
     pub(crate) fn item_dependents(&self, item_id: GlobalId) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.item_dependents(item_id, &mut seen)
@@ -5263,7 +5296,10 @@ impl Catalog {
                             .replica_id_by_name
                             .remove(&replica.name)
                             .expect("catalog out of sync");
-                        assert!(cluster.replica_id_by_name.len() == cluster.replicas_by_id.len());
+                        assert_eq!(
+                            cluster.replica_id_by_name.len(),
+                            cluster.replicas_by_id.len()
+                        );
                     }
                     ObjectId::Item(id) => {
                         let entry = state.get_entry(&id);
