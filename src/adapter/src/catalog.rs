@@ -2138,8 +2138,8 @@ impl CatalogItem {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
             CatalogItem::Source(source) => source.custom_logical_compaction_window,
             CatalogItem::Index(index) => index.custom_logical_compaction_window,
-            CatalogItem::MaterializedView(_) |
-            CatalogItem::Log(_)
+            CatalogItem::MaterializedView(_)
+            | CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
@@ -2151,12 +2151,10 @@ impl CatalogItem {
 
     pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
         let custom_logical_compaction_window = match self {
-            CatalogItem::Table(_) |
-            CatalogItem::Source(_) |
-            CatalogItem::Index(_) |
-            CatalogItem::MaterializedView(_) => {
-                self.custom_logical_compaction_window()
-            },
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -2430,18 +2428,32 @@ impl CatalogItemRebuilder {
                 .expect("invalid create sql persisted to catalog")
                 .into_element();
             mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
-            Self::Object{id, sql: create_stmt.to_ast_string_stable(), is_retained_metrics_object: entry.item().is_retained_metrics_object(), custom_logical_compaction_window: entry.item().custom_logical_compaction_window()}
+            Self::Object {
+                id,
+                sql: create_stmt.to_ast_string_stable(),
+                is_retained_metrics_object: entry.item().is_retained_metrics_object(),
+                custom_logical_compaction_window: entry.item().custom_logical_compaction_window(),
+            }
         }
     }
 
     fn build(self, catalog: &Catalog) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
-            Self::Object{id, sql, is_retained_metrics_object, custom_logical_compaction_window} => catalog
-                .parse_item(id, sql.clone(), None, is_retained_metrics_object, custom_logical_compaction_window)
-                .unwrap_or_else(|error| {
-                    panic!("invalid persisted create sql ({error:?}): {sql}")
-                }),
+            Self::Object {
+                id,
+                sql,
+                is_retained_metrics_object,
+                custom_logical_compaction_window,
+            } => catalog
+                .parse_item(
+                    id,
+                    sql.clone(),
+                    None,
+                    is_retained_metrics_object,
+                    custom_logical_compaction_window,
+                )
+                .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
     }
 }
