@@ -34,11 +34,11 @@ use internal::SegmentedReader;
 /// memory fragmentation) if you try to allocate a single very large chunk. Depending on the
 /// application, you probably don't need a contiguous chunk of memory, just a way to store and
 /// iterate over a collection of bytes.
-/// 
-/// Note: [`SegmentedBytes`] is generic over a `const N: usize`. Internally we use a 
+///
+/// Note: [`SegmentedBytes`] is generic over a `const N: usize`. Internally we use a
 /// [`smallvec::SmallVec`] to store our [`Bytes`] segments, and `N` is how many `Bytes` we'll
 /// store inline before spilling to the heap. We default `N = 1`, so in the case of a single
-/// `Bytes` segment, we avoid one layer of indirection. 
+/// `Bytes` segment, we avoid one layer of indirection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentedBytes<const N: usize = 1> {
     /// Collection of non-contiguous segments.
@@ -313,12 +313,9 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
-    use bytes::{
-        Buf,
-        Bytes,
-    };
-    use std::io::{Read, Seek, SeekFrom};
+    use bytes::{Buf, Bytes};
     use proptest::prelude::*;
+    use std::io::{Read, Seek, SeekFrom};
 
     use super::SegmentedBytes;
 
