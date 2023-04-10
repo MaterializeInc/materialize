@@ -3770,10 +3770,12 @@ impl Coordinator {
             }
             Some(linked_cluster) => {
                 for id in linked_cluster.replicas_by_id.keys() {
-                    ops.push(Op::DropObject(ObjectId::ClusterReplica((
-                        linked_cluster.id(),
-                        *id,
-                    ))));
+                    ops.extend(
+                        self.catalog()
+                            .cluster_replica_dependents(linked_cluster.id(), *id)
+                            .into_iter()
+                            .map(catalog::Op::DropObject),
+                    );
                 }
                 let size = match config {
                     SourceSinkClusterConfig::Linked { size } => size.clone(),
