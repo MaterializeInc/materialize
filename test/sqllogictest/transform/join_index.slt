@@ -668,7 +668,7 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 14 }
           Get materialize.public.big // { arity: 14 }
         ArrangeBy keys=[[#1]] // { arity: 15 }
-          ReadExistingIndex materialize.public.big lookup_value=(42)
+          ReadExistingIndex materialize.public.big lookup_value=(42) // { arity: 15 }
         ArrangeBy keys=[[#2]] // { arity: 14 }
           Get materialize.public.big // { arity: 14 }
 
@@ -719,7 +719,7 @@ Explained Query:
         Get l0 // { arity: 15 }
   With
     cte l0 =
-      ReadExistingIndex materialize.public.big lookup_value=(5)
+      ReadExistingIndex materialize.public.big lookup_value=(5) // { arity: 15 }
 
 Used Indexes:
   - materialize.public.big_idx_a

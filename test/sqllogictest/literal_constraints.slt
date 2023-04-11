@@ -122,7 +122,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)] // { arity: 1 }
         Project () // { arity: 0 }
-          ReadExistingIndex materialize.public.t1 lookup_values=[(2, "l2"); (3, "l3")]
+          ReadExistingIndex materialize.public.t1 lookup_values=[(2, "l2"); (3, "l3")] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.idx_t1_a_b
@@ -698,7 +698,7 @@ Explained Query:
         implementation
           %0:t1[#0]KAe » %1:t2[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadExistingIndex materialize.public.t1 lookup_values=[("l2"); ("l3")]
+          ReadExistingIndex materialize.public.t1 lookup_values=[("l2"); ("l3")] // { arity: 3 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
           Get materialize.public.t2 // { arity: 3 }
 
@@ -733,7 +733,7 @@ Explained Query:
         implementation
           %0:t1[#0]KAe » %1:t2[#0]KAe
         ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadExistingIndex materialize.public.t1 lookup_value=("l2")
+          ReadExistingIndex materialize.public.t1 lookup_value=("l2") // { arity: 3 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
           Get materialize.public.t2 // { arity: 3 }
 
@@ -769,10 +769,10 @@ Explained Query:
       %0:t1[×]e » %1:t2[×]e
     ArrangeBy keys=[[]] // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
-        ReadExistingIndex materialize.public.t1 lookup_value=(2, "l2")
+        ReadExistingIndex materialize.public.t1 lookup_value=(2, "l2") // { arity: 4 }
     ArrangeBy keys=[[]] // { arity: 1 }
       Project (#2) // { arity: 1 }
-        ReadExistingIndex materialize.public.t2 lookup_value=(2)
+        ReadExistingIndex materialize.public.t2 lookup_value=(2) // { arity: 4 }
 
 Used Indexes:
   - materialize.public.idx_t1_a_b
@@ -1133,10 +1133,12 @@ SELECT * FROM t3 WHERE t3.c0 = 0.8::INT OR t3.c0 = -0.1;
 1
 
 # Check the nullability- and unique key inference:
-# The `Project` on top of the `ReadExistingIndex` should have
+# The `ReadExistingIndex` should have
 # - non-nullable first 3 columns
+# - non-nullable last 3 columns
 # - the unique keys on #1 and #2 should remain
-# - (It would be great to have a key that includes all columns, but our key inference is not smart enough currently.)
+# - (It would be great to have a key that includes the first 3 columns, but our key inference is not smart enough
+#   currently.)
 
 statement ok
 CREATE TABLE t4 (a int, b int unique, c int unique, d int, unique (a, b, c));
@@ -1164,7 +1166,7 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum((((#0 * #1) * #2) * #3))] // { arity: 1, types: "(bigint?)", keys: "([])" }
         Project (#0..=#3) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
-          ReadExistingIndex materialize.public.t4 lookup_values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]
+          ReadExistingIndex materialize.public.t4 lookup_values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
 
 Used Indexes:
   - materialize.public.idx_t4_a_b_c
