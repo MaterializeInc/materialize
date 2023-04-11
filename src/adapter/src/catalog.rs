@@ -2156,12 +2156,41 @@ impl CatalogItem {
         }
     }
 
-    pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
-        let custom_logical_compaction_window = match self {
+    /// The custom compaction window, if any has been set.
+    // Note[btv]: As of 2023-04-10, this is only set
+    // for objects with `is_retained_metrics_object`. That
+    // may not always be true in the future, if we enable user-settable
+    // compaction windows.
+    pub fn custom_logical_compaction_window(&self) -> Option<Duration> {
+        match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
             CatalogItem::Source(source) => source.custom_logical_compaction_window,
             CatalogItem::Index(index) => index.custom_logical_compaction_window,
-            CatalogItem::MaterializedView(_) => None,
+            CatalogItem::MaterializedView(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    /// The initial compaction window, for objects that have one; that is,
+    /// tables, sources, indexes, and MVs.
+    ///
+    /// If `custom_logical_compaction_window()` returns something, use
+    /// that.  Otherwise, use a sensible default (currently 1s).
+    ///
+    /// For objects that do not have the concept of compaction window,
+    /// return nothing.
+    pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
+        let custom_logical_compaction_window = match self {
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -2412,7 +2441,12 @@ pub struct SystemObjectMapping {
 #[derive(Debug)]
 pub enum CatalogItemRebuilder {
     SystemSource(CatalogItem),
-    Object(GlobalId, String),
+    Object {
+        id: GlobalId,
+        sql: String,
+        is_retained_metrics_object: bool,
+        custom_logical_compaction_window: Option<Duration>,
+    },
 }
 
 impl CatalogItemRebuilder {
@@ -2430,18 +2464,32 @@ impl CatalogItemRebuilder {
                 .expect("invalid create sql persisted to catalog")
                 .into_element();
             mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
-            Self::Object(id, create_stmt.to_ast_string_stable())
+            Self::Object {
+                id,
+                sql: create_stmt.to_ast_string_stable(),
+                is_retained_metrics_object: entry.item().is_retained_metrics_object(),
+                custom_logical_compaction_window: entry.item().custom_logical_compaction_window(),
+            }
         }
     }
 
     fn build(self, catalog: &Catalog) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
-            Self::Object(id, create_sql) => catalog
-                .parse_item(id, create_sql.clone(), None)
-                .unwrap_or_else(|error| {
-                    panic!("invalid persisted create sql ({error:?}): {create_sql}")
-                }),
+            Self::Object {
+                id,
+                sql,
+                is_retained_metrics_object,
+                custom_logical_compaction_window,
+            } => catalog
+                .parse_item(
+                    id,
+                    sql.clone(),
+                    None,
+                    is_retained_metrics_object,
+                    custom_logical_compaction_window,
+                )
+                .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
     }
 }
@@ -2725,6 +2773,8 @@ impl Catalog {
                             id,
                             view.sql.into(),
                             None,
+                            false,
+                            None
                         )
                         .unwrap_or_else(|e| {
                             panic!(
@@ -2865,6 +2915,8 @@ impl Catalog {
                             id,
                             index.sql.into(),
                             None,
+                            index.is_retained_metrics_object,
+                            if index.is_retained_metrics_object { Some(catalog.state.system_config().metrics_retention())} else { None },
                         )
                         .unwrap_or_else(|e| {
                             panic!(
@@ -2876,14 +2928,9 @@ impl Catalog {
                                 index.name, e
                             )
                         });
-                    let CatalogItem::Index(catalog_index) = &mut item else {
+                    let CatalogItem::Index(_) = &mut item else {
                         panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                     };
-                    if index.is_retained_metrics_object {
-                        catalog_index.is_retained_metrics_object = true;
-                        catalog_index.custom_logical_compaction_window =
-                            Some(catalog.state.system_config().metrics_retention());
-                    }
 
                     let oid = catalog.allocate_oid()?;
                     catalog
@@ -5839,7 +5886,9 @@ impl Catalog {
         id: GlobalId,
         SerializedCatalogItem::V1 { create_sql }: SerializedCatalogItem,
     ) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()))
+        // TODO - The `None` needs to be changed if we ever allow custom
+        // logical compaction windows in user-defined objects.
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()), false, None)
     }
 
     // Parses the given SQL string into a `CatalogItem`.
@@ -5849,6 +5898,8 @@ impl Catalog {
         id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
+        is_retained_metrics_object: bool,
+        custom_logical_compaction_window: Option<Duration>,
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
         enable_features_required_for_catalog_open(&mut session_catalog);
@@ -5864,8 +5915,8 @@ impl Catalog {
                 defaults: table.defaults,
                 conn_id: None,
                 depends_on,
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
+                custom_logical_compaction_window,
+                is_retained_metrics_object,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
@@ -5896,8 +5947,8 @@ impl Catalog {
                 desc: source.desc,
                 timeline,
                 depends_on,
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
+                custom_logical_compaction_window,
+                is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer = Optimizer::logical_optimizer();
@@ -5932,8 +5983,8 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
                 cluster_id: index.cluster_id,
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
+                custom_logical_compaction_window,
+                is_retained_metrics_object,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
