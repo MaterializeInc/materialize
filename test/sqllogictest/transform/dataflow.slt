@@ -55,7 +55,7 @@ EXPLAIN WITH(arity, join_impls) VIEW foo3
 ----
 materialize.public.foo3:
   Project (#0) // { arity: 1 }
-    ReadExistingIndex materialize.public.foo2 lookup_value=(6)
+    ReadExistingIndex materialize.public.foo2 lookup_value=(6) // { arity: 2 }
 
 Used Indexes:
   - materialize.public.foo2_primary_idx

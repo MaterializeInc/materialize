@@ -550,6 +550,7 @@ impl MirRelationExpr {
                 ..
             } => {
                 Self::fmt_indexed_filter(f, ctx, id, Some(literal_constraints.clone()))?;
+                self.fmt_attributes(f, ctx)?;
             }
             Reduce {
                 group_key,
@@ -698,12 +699,12 @@ impl MirRelationExpr {
                 humanized_index
             )?;
             if constants.len() == 1 {
-                writeln!(f, "value={}", constants.get(0).unwrap())?;
+                write!(f, "value={}", constants.get(0).unwrap())?;
             } else {
-                writeln!(f, "values=[{}]", separated("; ", constants))?;
+                write!(f, "values=[{}]", separated("; ", constants))?;
             }
         } else {
-            writeln!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
+            write!(f, "{}ReadExistingIndex {}", ctx.as_mut(), humanized_index)?;
         }
         Ok(())
     }
