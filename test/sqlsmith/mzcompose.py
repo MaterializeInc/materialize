@@ -69,6 +69,8 @@ known_errors = [
     "violates not-null constraint",
     "division by zero",
     "operator does not exist",  # For list types
+    "couldn't parse role id",
+    "unrecognized privilege type:",
     "length must be nonnegative",
     "is only defined for finite arguments",
     "more than one record produced in subquery",
