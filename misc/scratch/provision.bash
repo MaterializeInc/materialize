@@ -19,7 +19,6 @@ apt-get update
 apt-get install -y \
     cmake \
     g++ \
-    postgresql \
     python3-venv \
     unzip
 
@@ -58,15 +57,6 @@ rm -r aws awscliv2.zip
 
 # Allow the Ubuntu user to access the Docker daemon.
 adduser ubuntu docker
-
-# Configure PostgreSQL for passwordless use by the `ubuntu` user. Both stash and
-# persist are backed by postgres when doing local development, so seems
-# reasonable to have around. Set it up so it's easy to connect to and export the
-# MZDEV_POSTGRES env var with connection details.
-apt-get install -y postgresql
-sudo -u postgres createuser ubuntu
-sudo -u postgres createdb ubuntu -O ubuntu
-echo "export MZDEV_POSTGRES=postgresql://ubuntu@%2Fvar%2Frun%2Fpostgresql" >> /home/ubuntu/.bashrc
 
 # Install tools for Kubernetes testing and debugging
 ## kubectl
