@@ -30,9 +30,9 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
-    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedName,
-    UnresolvedSchemaName, Value,
+    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata,
+    SubscribeEnvelope, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -2078,6 +2078,7 @@ pub struct SubscribeStatement<T: AstInfo> {
     pub options: Vec<SubscribeOption<T>>,
     pub as_of: Option<AsOf<T>>,
     pub up_to: Option<Expr<T>>,
+    pub envelope: Option<SubscribeEnvelope>,
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {

@@ -21,6 +21,7 @@ use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
+use mz_sql_parser::ast::SubscribeEnvelope;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -32,6 +33,7 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedItemName};
+use crate::normalize;
 use crate::plan::query::{plan_up_to, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
@@ -421,28 +423,23 @@ pub fn plan_subscribe(
         options,
         as_of,
         up_to,
+        envelope,
     }: SubscribeStatement<Aug>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
-    let from = match relation {
+    let (from, desc) = match relation {
         SubscribeRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
-            match entry.item_type() {
-                CatalogItemType::Table
-                | CatalogItemType::Source
-                | CatalogItemType::View
-                | CatalogItemType::MaterializedView => SubscribeFrom::Id(entry.id()),
-                CatalogItemType::Func
-                | CatalogItemType::Index
-                | CatalogItemType::Sink
-                | CatalogItemType::Type
-                | CatalogItemType::Secret
-                | CatalogItemType::Connection => sql_bail!(
+            let desc = match entry.desc(&scx.catalog.resolve_full_name(entry.name())) {
+                Ok(desc) => desc,
+                Err(..) => sql_bail!(
                     "'{}' cannot be subscribed to because it is a {}",
                     name.full_name_str(),
                     entry.item_type(),
                 ),
-            }
+            };
+
+            (SubscribeFrom::Id(entry.id()), desc.into_owned())
         }
         SubscribeRelation::Query(query) => {
             // There's no way to apply finishing operations to a `SUBSCRIBE`
@@ -457,15 +454,51 @@ pub fn plan_subscribe(
                 QueryLifetime::OneShot(scx.pcx()?),
             )?;
             assert!(query.finishing.is_trivial(query.desc.arity()));
-            SubscribeFrom::Query {
-                expr: query.expr,
-                desc: query.desc,
-            }
+            let desc = query.desc.clone();
+            (
+                SubscribeFrom::Query {
+                    expr: query.expr,
+                    desc: query.desc,
+                },
+                desc,
+            )
         }
     };
 
     let when = query::plan_as_of(scx, as_of)?;
     let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
+
+    let key_indices = envelope
+        .map(|env| match env {
+            SubscribeEnvelope::Upsert { key_columns } => {
+                scx.require_envelope_upsert_in_subscribe()?;
+                let key_columns = key_columns
+                    .into_iter()
+                    .map(normalize::column_name)
+                    .collect::<Vec<_>>();
+                let mut uniq = BTreeSet::new();
+                for col in key_columns.iter() {
+                    if !uniq.insert(col) {
+                        sql_bail!("Repeated column name in subscribe envelope key: {}", col);
+                    }
+                }
+                let indices = key_columns
+                    .iter()
+                    .map(|col| -> anyhow::Result<usize> {
+                        let name_idx = desc
+                            .get_by_name(col)
+                            .map(|(idx, _type)| idx)
+                            .ok_or_else(|| sql_err!("No such column: {}", col))?;
+                        if desc.get_unambiguous_name(name_idx).is_none() {
+                            anyhow::bail!("Ambiguous column: {}", col);
+                        }
+                        Ok(name_idx)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(indices)
+            }
+        })
+        .transpose()?;
 
     let SubscribeOptionExtracted {
         progress, snapshot, ..
@@ -477,6 +510,7 @@ pub fn plan_subscribe(
         with_snapshot: snapshot.unwrap_or(true),
         copy_to,
         emit_progress: progress.unwrap_or(false),
+        key_indices,
     }))
 }
 

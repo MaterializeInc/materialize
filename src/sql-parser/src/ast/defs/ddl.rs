@@ -455,6 +455,25 @@ impl AstDisplay for Envelope {
 }
 impl_display!(Envelope);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SubscribeEnvelope {
+    Upsert { key_columns: Vec<Ident> },
+}
+
+impl AstDisplay for SubscribeEnvelope {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Upsert { key_columns } => {
+                f.write_str("ENVELOPE UPSERT");
+                f.write_str(" KEY (");
+                f.write_node(&display::comma_separated(&key_columns));
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display!(SubscribeEnvelope);
+
 impl<T: AstInfo> AstDisplay for Format<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {

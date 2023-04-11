@@ -2222,6 +2222,7 @@ impl Coordinator {
             copy_to,
             emit_progress,
             up_to,
+            key_indices,
         } = plan;
 
         // If our query only depends on system tables, then we optionally run it on the
@@ -2351,6 +2352,7 @@ impl Coordinator {
             depends_on: uses.into_iter().collect(),
             start_time: self.now(),
             dropping: false,
+            key_indices,
         };
         active_subscribe.initialize();
         self.add_active_subscribe(sink_id, active_subscribe).await;

@@ -5653,12 +5653,25 @@ impl<'a> Parser<'a> {
         };
         let as_of = self.parse_optional_as_of()?;
         let up_to = self.parse_optional_up_to()?;
+        let envelope = if self.parse_keyword(ENVELOPE) {
+            Some(self.parse_subscribe_envelope()?)
+        } else {
+            None
+        };
         Ok(Statement::Subscribe(SubscribeStatement {
             relation,
             options,
             as_of,
             up_to,
+            envelope,
         }))
+    }
+
+    fn parse_subscribe_envelope(&mut self) -> Result<SubscribeEnvelope, ParserError> {
+        self.expect_keyword(UPSERT)?;
+        self.expect_keyword(KEY)?;
+        let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
+        Ok(SubscribeEnvelope::Upsert { key_columns })
     }
 
     fn parse_subscribe_option(&mut self) -> Result<SubscribeOption<Raw>, ParserError> {

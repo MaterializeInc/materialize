@@ -732,6 +732,14 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_envelope_upsert_in_subscribe"),
+    value: &false,
+    description: "Feature flag indicating whether `ENVELOPE UPSERT` can be used in subscribed queries (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1467,6 +1475,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
+            .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
     }
 }
 
@@ -1800,6 +1809,10 @@ impl SystemVars {
     /// Note: this is generally intended to be set via LaunchDarkly
     pub fn enable_auto_route_introspection_queries(&self) -> bool {
         *self.expect_value(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
+    }
+    /// Returns the `enable_envelope_upsert_in_subscribe` configuration parameter.
+    pub fn enable_envelope_upsert_in_subscribe(&self) -> bool {
+        *self.expect_value(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
     }
 }
 

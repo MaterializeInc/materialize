@@ -11,6 +11,8 @@
 
 use std::collections::BTreeSet;
 
+use itertools::Itertools;
+use mz_expr::{compare_columns, ColumnOrder};
 use mz_ore::now::EpochMillis;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -49,6 +51,8 @@ pub struct ActiveSubscribe {
     pub start_time: EpochMillis,
     /// Whether we are already in the process of dropping the resources related to this subscribe.
     pub dropping: bool,
+    /// If non empty, sort by these columns per timestamp to support envelopes
+    pub key_indices: Option<Vec<usize>>,
 }
 
 impl ActiveSubscribe {
@@ -94,8 +98,30 @@ impl ActiveSubscribe {
                     Ok(mut rows) => {
                         // Sort results by time. We use stable sort here because it will produce deterministic
                         // results since the cursor will always produce rows in the same order.
-                        // TODO: Is sorting necessary?
-                        rows.sort_by_key(|(time, _, _)| *time);
+                        // TODO: Is sorting by time necessary?
+                        if let Some(key_indices) = &self.key_indices {
+                            let order_by = &key_indices
+                                .iter()
+                                .map(|idx| ColumnOrder {
+                                    column: *idx,
+                                    desc: false,
+                                    nulls_last: true,
+                                })
+                                .collect_vec();
+                            let mut left_datum_vec = mz_repr::DatumVec::new();
+                            let mut right_datum_vec = mz_repr::DatumVec::new();
+                            rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
+                                left_time.cmp(right_time).then_with(|| {
+                                    let left_datums = left_datum_vec.borrow_with(left_row);
+                                    let right_datums = right_datum_vec.borrow_with(right_row);
+                                    compare_columns(order_by, &left_datums, &right_datums, || {
+                                        left_row.cmp(right_row).then(left_diff.cmp(right_diff))
+                                    })
+                                })
+                            });
+                        } else {
+                            rows.sort_by_key(|(time, _, _)| *time);
+                        }
 
                         let rows = rows
                             .into_iter()

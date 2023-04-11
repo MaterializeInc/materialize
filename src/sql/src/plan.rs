@@ -598,6 +598,7 @@ pub struct SubscribePlan {
     pub up_to: Option<MirScalarExpr>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
+    pub key_indices: Option<Vec<usize>>,
 }
 
 #[derive(Debug)]
