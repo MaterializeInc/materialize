@@ -377,7 +377,28 @@ impl MirRelationExpr {
         use MirRelationExpr::*;
 
         match self {
-            Constant { typ, .. } | Get { typ, .. } => typ.column_types.clone(),
+            Constant { rows, typ } => {
+                let mut col_types = typ.column_types.clone();
+                let mut seen_null = vec![false; typ.arity()];
+                if let Ok(rows) = rows {
+                    for (row, _diff) in rows {
+                        for (datum, i) in row.iter().zip_eq(0..typ.arity()) {
+                            if datum.is_null() {
+                                seen_null[i] = true;
+                            }
+                        }
+                    }
+                }
+                for (&seen_null, i) in seen_null.iter().zip_eq(0..typ.arity()) {
+                    if !seen_null {
+                        col_types[i].nullable = false;
+                    } else {
+                        assert!(col_types[i].nullable);
+                    }
+                }
+                col_types
+            }
+            Get { typ, .. } => typ.column_types.clone(),
             Project { outputs, .. } => {
                 let input = input_types.next().unwrap();
                 outputs.iter().map(|&i| input[i].clone()).collect()
@@ -428,9 +449,26 @@ impl MirRelationExpr {
                 }
                 result
             }
-            // Iterating and cloning types inside the flat_map() avoids allocating Vec<>,
-            // as clones are directly added to column_types Vec<>.
-            Join { .. } => input_types.flat_map(|cols| cols.to_owned()).collect(),
+            Join { equivalences, .. } => {
+                // Concatenate input column types
+                let mut types = input_types.flat_map(|cols| cols.to_owned()).collect_vec();
+                // In an equivalence class, if any column is non-null, then make all non-null
+                for equivalence in equivalences {
+                    let col_inds = equivalence
+                        .iter()
+                        .filter_map(|expr| match expr {
+                            MirScalarExpr::Column(col) => Some(*col),
+                            _ => None,
+                        })
+                        .collect_vec();
+                    if col_inds.iter().any(|i| !types.get(*i).unwrap().nullable) {
+                        for i in col_inds {
+                            types.get_mut(i).unwrap().nullable = false;
+                        }
+                    }
+                }
+                types
+            }
             Reduce {
                 group_key,
                 aggregates,

@@ -54,6 +54,7 @@ Explained Query:
 EOF
 
 # Constant + reduce
+# Nullability should be correctly inferred on the Constant
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR
 (SELECT 1 as a, 'hello' as b, null::date as c)
@@ -67,7 +68,7 @@ Explained Query:
         Project (#1, #2, #0) // { types: "(bigint?, text?, date?)" }
           Reduce group_by=[#2] aggregates=[sum(#0), max(#1)] // { types: "(date?, bigint?, text?)" }
             Get materialize.public.t // { types: "(integer?, text?, date?)" }
-      Constant // { types: "(bigint?, text?, date?)" }
+      Constant // { types: "(bigint, text, date?)" }
         - (1, "hello", null)
 
 EOF
@@ -85,7 +86,7 @@ Explained Query:
         Union // { types: "()" }
           Negate // { types: "()" }
             Project () // { types: "()" }
-              Join on=(#0 = #1) type=differential // { types: "(integer?, integer)" }
+              Join on=(#0 = #1) type=differential // { types: "(integer, integer)" }
                 ArrangeBy keys=[[#0]] // { types: "(integer?)" }
                   Get materialize.public.u // { types: "(integer?)" }
                 ArrangeBy keys=[[#0]] // { types: "(integer)" }

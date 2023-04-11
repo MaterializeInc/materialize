@@ -439,7 +439,7 @@ FROM
 Explained Query:
   Return
     Project (#0..=#2, #4)
-      Filter ((#0 != #4) OR ((#4) IS NOT NULL AND (#0) IS NULL))
+      Filter (#0 != #4)
         Join on=(#0 = #3) type=differential
           ArrangeBy keys=[[#0]]
             Get l2
