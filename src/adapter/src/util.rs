@@ -384,6 +384,12 @@ impl ShouldHalt for InstanceMissing {
     }
 }
 
+impl ShouldHalt for oneshot::error::RecvError {
+    fn should_halt(&self) -> bool {
+        false
+    }
+}
+
 /// Returns the viewable session and system variables.
 pub(crate) fn viewable_variables<'a>(
     catalog: &'a CatalogState,

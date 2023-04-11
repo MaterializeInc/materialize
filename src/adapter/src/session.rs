@@ -39,6 +39,7 @@ use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
+use crate::coord::{leadership_check_channel, LeadershipCheckRx, LeadershipCheckTx};
 pub use mz_sql::session::vars::{
     EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
@@ -199,6 +200,7 @@ impl<T: TimestampManipulation> Session<T> {
                     write_lock_guard: None,
                     access,
                     id,
+                    leadership_check: None,
                 });
             }
             TransactionStatus::Started(mut txn)
@@ -233,6 +235,7 @@ impl<T: TimestampManipulation> Session<T> {
                 write_lock_guard: None,
                 access: None,
                 id,
+                leadership_check: None,
             };
             match stmts {
                 1 => self.transaction = TransactionStatus::Started(txn),
@@ -286,17 +289,52 @@ impl<T: TimestampManipulation> Session<T> {
     /// Adds operations to the current transaction. An error is produced if
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
-    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
+    pub fn add_transaction_ops(
+        &mut self,
+        add_ops: TransactionOps<T>,
+        coord_leadership_check_tx: &mpsc::UnboundedSender<LeadershipCheckTx>,
+    ) -> Result<(), AdapterError> {
+        let isolation_level = *self.vars().transaction_isolation();
         match &mut self.transaction {
-            TransactionStatus::Started(Transaction { ops, access, .. })
-            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
-            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
+            TransactionStatus::Started(Transaction {
+                ops,
+                access,
+                leadership_check,
+                ..
+            })
+            | TransactionStatus::InTransaction(Transaction {
+                ops,
+                access,
+                leadership_check,
+                ..
+            })
+            | TransactionStatus::InTransactionImplicit(Transaction {
+                ops,
+                access,
+                leadership_check,
+                ..
+            }) => {
                 match ops {
                     TransactionOps::None => {
                         if matches!(access, Some(TransactionAccessMode::ReadOnly))
                             && matches!(add_ops, TransactionOps::Writes(_))
                         {
                             return Err(AdapterError::ReadOnlyTransaction);
+                        }
+                        if matches!(
+                            &add_ops,
+                            TransactionOps::Peeks(TimestampContext::TimelineTimestamp(_, _))
+                        ) && isolation_level == IsolationLevel::StrictSerializable
+                        {
+                            assert!(
+                                leadership_check.is_none(),
+                                "prematurely set leadership_check"
+                            );
+                            let (leadership_check_tx, leadership_check_rx) =
+                                leadership_check_channel();
+                            // TODO(jkosh44)
+                            let _ = coord_leadership_check_tx.send(leadership_check_tx);
+                            *leadership_check = Some(leadership_check_rx);
                         }
                         *ops = add_ops;
                     }
@@ -311,7 +349,20 @@ impl<T: TimestampManipulation> Session<T> {
                                     assert_eq!(*txn_ts, add_ts);
                                 }
                                 (TimestampContext::NoTimestamp, add_timestamp_context) => {
-                                    *txn_timestamp_context = add_timestamp_context
+                                    *txn_timestamp_context = add_timestamp_context;
+                                    if self.vars.transaction_isolation()
+                                        == &IsolationLevel::StrictSerializable
+                                    {
+                                        let (leadership_check_tx, leadership_check_rx) =
+                                            leadership_check_channel();
+                                        // TODO(jkosh44)
+                                        let _ = coord_leadership_check_tx.send(leadership_check_tx);
+                                        assert!(
+                                            leadership_check.is_none(),
+                                            "prematurely set leadership_check"
+                                        );
+                                        *leadership_check = Some(leadership_check_rx);
+                                    }
                                 }
                                 (_, TimestampContext::NoTimestamp) => {}
                             };
@@ -450,6 +501,7 @@ impl<T: TimestampManipulation> Session<T> {
                 write_lock_guard: _,
                 access: _,
                 id: _,
+                leadership_check: _,
             }) => Some(timestamp_context.clone()),
             _ => None,
         }
@@ -465,6 +517,7 @@ impl<T: TimestampManipulation> Session<T> {
                 write_lock_guard: _,
                 access: _,
                 id: _,
+                leadership_check: _,
             })
         )
     }
@@ -799,15 +852,19 @@ pub enum TransactionStatus<T> {
 
 impl<T> TransactionStatus<T> {
     /// Extracts the inner transaction ops and write lock guard if not failed.
-    pub fn into_ops_and_lock_guard(
+    pub fn into_ops_leadership_and_lock_guard(
         self,
-    ) -> (Option<TransactionOps<T>>, Option<OwnedMutexGuard<()>>) {
+    ) -> (
+        Option<TransactionOps<T>>,
+        Option<LeadershipCheckRx>,
+        Option<OwnedMutexGuard<()>>,
+    ) {
         match self {
-            TransactionStatus::Default | TransactionStatus::Failed(_) => (None, None),
+            TransactionStatus::Default | TransactionStatus::Failed(_) => (None, None, None),
             TransactionStatus::Started(txn)
             | TransactionStatus::InTransaction(txn)
             | TransactionStatus::InTransactionImplicit(txn) => {
-                (Some(txn.ops), txn.write_lock_guard)
+                (Some(txn.ops), txn.leadership_check, txn.write_lock_guard)
             }
         }
     }
@@ -910,6 +967,8 @@ pub struct Transaction<T> {
     write_lock_guard: Option<OwnedMutexGuard<()>>,
     /// Access mode (read only, read write).
     access: Option<TransactionAccessMode>,
+    /// TODO(jkosh44)
+    leadership_check: Option<LeadershipCheckRx>,
 }
 
 impl<T> Transaction<T> {

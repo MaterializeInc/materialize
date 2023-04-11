@@ -83,9 +83,9 @@ use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
 use crate::coord::{
-    introspection, peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageTimestamp,
-    PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext, SinkConnectionReady,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    introspection, peek, Coordinator, LeadershipCheckRx, Message, PeekStage, PeekStageFinish,
+    PeekStageTimestamp, PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
+    SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -1655,10 +1655,10 @@ impl Coordinator {
         let result = self.sequence_end_transaction_inner(&mut session, action);
 
         let (response, action) = match result {
-            Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
+            Ok((Some(TransactionOps::Writes(writes)), _, _)) if writes.is_empty() => {
                 (response, action)
             }
-            Ok((Some(TransactionOps::Writes(writes)), write_lock_guard)) => {
+            Ok((Some(TransactionOps::Writes(writes)), _, write_lock_guard)) => {
                 self.submit_write(PendingWriteTxn::User {
                     writes,
                     write_lock_guard,
@@ -1671,12 +1671,20 @@ impl Coordinator {
                 });
                 return;
             }
-            Ok((Some(TransactionOps::Peeks(timestamp_context)), _))
+            Ok((Some(TransactionOps::Peeks(timestamp_context)), leadership_check_rx, _))
                 if session.vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
-                self.strict_serializable_reads_tx
-                    .send(PendingReadTxn::Read {
+                let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
+                // TODO(jkosh44)
+                task::spawn(|| "leadership_check", async move {
+                    // Wait for leadership check to finish.
+                    let _ = leadership_check_rx
+                        .expect("must exist for strict serializable")
+                        .await_confirmation()
+                        .await;
+                    // Further linearize read.
+                    let _ = strict_serializable_reads_tx.send(PendingReadTxn::Read {
                         txn: PendingTxn {
                             client_transmitter: tx,
                             response,
@@ -1684,11 +1692,11 @@ impl Coordinator {
                             action,
                         },
                         timestamp_context,
-                    })
-                    .expect("sending to strict_serializable_reads_tx cannot fail");
+                    });
+                });
                 return;
             }
-            Ok((_, _)) => (response, action),
+            Ok((_, _, _)) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
         session.vars_mut().end_transaction(action);
@@ -1702,6 +1710,7 @@ impl Coordinator {
     ) -> Result<
         (
             Option<TransactionOps<Timestamp>>,
+            Option<LeadershipCheckRx>,
             Option<OwnedMutexGuard<()>>,
         ),
         AdapterError,
@@ -1709,7 +1718,9 @@ impl Coordinator {
         let txn = self.clear_transaction(session);
 
         if let EndTransactionAction::Commit = action {
-            if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
+            if let (Some(mut ops), leadership_check, write_lock_guard) =
+                txn.into_ops_leadership_and_lock_guard()
+            {
                 if let TransactionOps::Writes(writes) = &mut ops {
                     for WriteOp { id, .. } in &mut writes.iter() {
                         // Re-verify this id exists.
@@ -1721,11 +1732,11 @@ impl Coordinator {
                     // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                     writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
                 }
-                return Ok((Some(ops), write_lock_guard));
+                return Ok((Some(ops), leadership_check, write_lock_guard));
             }
         }
 
-        Ok((None, None))
+        Ok((None, None, None))
     }
 
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
@@ -1987,8 +1998,10 @@ impl Coordinator {
         if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
             || when == QueryWhen::Immediately
         {
-            session
-                .add_transaction_ops(TransactionOps::Peeks(peek_plan.timestamp_context.clone()))?;
+            session.add_transaction_ops(
+                TransactionOps::Peeks(peek_plan.timestamp_context.clone()),
+                &self.leadership_check_tx,
+            )?;
         }
 
         let timestamp = peek_plan.timestamp_context.timestamp().cloned();
@@ -2253,7 +2266,7 @@ impl Coordinator {
         if when == QueryWhen::Immediately {
             // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
             // only operation.
-            session.add_transaction_ops(TransactionOps::Subscribe)?;
+            session.add_transaction_ops(TransactionOps::Subscribe, &self.leadership_check_tx)?;
         }
 
         // Determine the frontier of updates to subscribe *from*.
@@ -2803,10 +2816,15 @@ impl Coordinator {
             returning = plan.returning.len(),
         );
 
-        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
-            id: plan.id,
-            rows: plan.updates,
-        }]))?;
+        // TODO(jkosh44) THis is wrong
+        let (tx, _) = mpsc::unbounded_channel();
+        session.add_transaction_ops(
+            TransactionOps::Writes(vec![WriteOp {
+                id: plan.id,
+                rows: plan.updates,
+            }]),
+            &tx,
+        )?;
         if !plan.returning.is_empty() {
             let finishing = RowSetFinishing {
                 order_by: Vec::new(),

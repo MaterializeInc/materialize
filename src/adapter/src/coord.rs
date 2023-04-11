@@ -198,6 +198,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     RemovePendingPeeks {
         conn_id: ConnectionId,
     },
+    LeadershipCheck(Vec<LeadershipCheckTx>),
     LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsage),
@@ -448,6 +449,40 @@ impl PendingReadTxn {
     }
 }
 
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct LeadershipCheckTx {
+    #[derivative(Debug = "ignore")]
+    tx: oneshot::Sender<()>,
+}
+
+impl LeadershipCheckTx {
+    fn confirm_leadership(self) {
+        // It's not an error if the transaction has hung up.
+        let _ = self.tx.send(());
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct LeadershipCheckRx {
+    #[derivative(Debug = "ignore")]
+    rx: oneshot::Receiver<()>,
+}
+
+impl LeadershipCheckRx {
+    async fn await_confirmation(self) {
+        self.rx
+            .await
+            .unwrap_or_terminate("unable to confirm leadership");
+    }
+}
+
+pub fn leadership_check_channel() -> (LeadershipCheckTx, LeadershipCheckRx) {
+    let (tx, rx) = oneshot::channel();
+    (LeadershipCheckTx { tx }, LeadershipCheckRx { rx })
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
     /// The controller for the storage and compute layers.
@@ -465,6 +500,9 @@ pub struct Coordinator {
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
+
+    /// Channel for requesting leadership checks.
+    leadership_check_tx: mpsc::UnboundedSender<LeadershipCheckTx>,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
@@ -1211,6 +1249,7 @@ impl Coordinator {
     async fn serve(
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
+        mut leadership_check_rx: mpsc::UnboundedReceiver<LeadershipCheckTx>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
@@ -1260,6 +1299,15 @@ impl Coordinator {
                     None => break,
                     Some(m) => Message::Command(m),
                 },
+                // `recv()` on `UnboundedReceiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
+                Some(leadership_check) = leadership_check_rx.recv() => {
+                    let mut leadership_checks = vec![leadership_check];
+                    while let Ok(leadership_check) = leadership_check_rx.try_recv() {
+                        leadership_checks.push(leadership_check);
+                    }
+                    Message::LeadershipCheck(leadership_checks)
+                }
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
                 // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 Some(pending_read_txn) = strict_serializable_reads_rx.recv() => {
@@ -1371,6 +1419,7 @@ pub async fn serve(
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
+    let (leadership_check_tx, leadership_check_rx) = mpsc::unbounded_channel();
 
     // Validate and process availability zones.
     if !availability_zones.iter().all_unique() {
@@ -1464,6 +1513,7 @@ pub async fn serve(
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog: Arc::new(catalog),
                 internal_cmd_tx,
+                leadership_check_tx,
                 strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
@@ -1505,7 +1555,12 @@ pub async fn serve(
                 .send(bootstrap)
                 .expect("bootstrap_rx is not dropped until it receives this message");
             if ok {
-                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
+                handle.block_on(coord.serve(
+                    internal_cmd_rx,
+                    leadership_check_rx,
+                    strict_serializable_reads_rx,
+                    cmd_rx,
+                ));
             }
         })
         .expect("failed to create coordinator thread");

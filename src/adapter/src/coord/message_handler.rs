@@ -32,8 +32,8 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
-    SinkConnectionReady,
+    Coordinator, CreateSourceStatementReady, LeadershipCheckTx, Message, PendingReadTxn,
+    RealTimeRecencyContext, SinkConnectionReady,
 };
 use crate::util::ResultExt;
 use crate::{catalog, AdapterError, AdapterNotice};
@@ -77,6 +77,9 @@ impl Coordinator {
             // path that responds to the client (e.g. reporting an error).
             Message::RemovePendingPeeks { conn_id } => {
                 self.cancel_pending_peeks(&conn_id);
+            }
+            Message::LeadershipCheck(leadership_checks) => {
+                self.message_leadership_check(leadership_checks).await;
             }
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
@@ -594,11 +597,27 @@ impl Coordinator {
         }
     }
 
+    /// In order to protect against split brain linearizablility violations, at some point
+    /// inbetween the start and end of a linearizable transaction, we must confirm that we are
+    /// still the leader. This functions performs that check and informs any transactions waiting
+    /// on that information.
     #[tracing::instrument(level = "debug", skip_all)]
+    async fn message_leadership_check(&self, leadership_checks: Vec<LeadershipCheckTx>) {
+        self.catalog()
+            .confirm_leadership()
+            .await
+            .unwrap_or_terminate("unable to confirm leadership");
+
+        for leadership_check in leadership_checks {
+            leadership_check.confirm_leadership();
+        }
+    }
+
     /// Linearizes sending the results of a read transaction by,
     ///   1. Holding back any results that were executed at some point in the future, until the
     ///   containing timeline has advanced to that point in the future.
     ///   2. Confirming that we are still the current leader before sending results to the client.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingReadTxn>) {
         let mut shortest_wait = Duration::from_millis(0);
         let mut ready_txns = Vec::new();
@@ -624,26 +643,22 @@ impl Coordinator {
             }
         }
 
-        if !ready_txns.is_empty() {
-            self.catalog_mut()
-                .confirm_leadership()
-                .await
-                .unwrap_or_terminate("unable to confirm leadership");
-            for ready_txn in ready_txns {
-                ready_txn.finish();
-            }
+        for ready_txn in ready_txns {
+            ready_txn.finish();
         }
 
         if !deferred_txns.is_empty() {
             // Cap wait time to 1s.
             let remaining_ms = std::cmp::min(shortest_wait, Duration::from_millis(1_000));
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
             task::spawn(|| "deferred_read_txns", async move {
                 tokio::time::sleep(remaining_ms).await;
-                // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::LinearizeReads(deferred_txns));
-                if let Err(e) = result {
-                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                for deferred_txn in deferred_txns {
+                    // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
+                    let result = strict_serializable_reads_tx.send(deferred_txn);
+                    if let Err(e) = result {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
                 }
             });
         }
