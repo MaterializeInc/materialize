@@ -208,9 +208,13 @@ impl Coordinator {
     /// invariants such as ensuring that the `as_of` frontier is in advance of
     /// the various `since` frontiers of participating data inputs.
     ///
-    /// In particular, there are requirement on the `as_of` field for the dataflow
+    /// In particular, there are requirements on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
+    ///
+    /// Additionally, this method requires that the `until` field of the dataflow
+    /// has been set, so that any plan improvements based on its difference to `as_of`
+    /// can be carried out.
     ///
     /// This method will return an error if the finalization fails. DO NOT call this
     /// method for DDL. Instead, use the non-fallible version [`Self::must_finalize_dataflow`].
