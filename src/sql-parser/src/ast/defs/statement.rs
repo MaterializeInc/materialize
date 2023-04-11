@@ -2098,6 +2098,10 @@ impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
             f.write_str(" UP TO ");
             f.write_node(up_to);
         }
+        if let Some(envelope) = &self.envelope {
+            f.write_str(" ");
+            f.write_str(envelope);
+        }
     }
 }
 impl_display_t!(SubscribeStatement);

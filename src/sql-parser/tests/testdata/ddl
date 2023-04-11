@@ -817,6 +817,20 @@ SUBSCRIBE foo.bar UP TO now() + INTERVAL '1' DAY
 Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), envelope: None })
 
 parse-statement
+SUBSCRIBE foo.bar ENVELOPE UPSERT KEY (a)
+----
+SUBSCRIBE foo.bar ENVELOPE UPSERT KEY (a)
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, envelope: Some(Upsert { key_columns: [Ident("a")] }) })
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE UPSERT KEY (a, b, c, d, e)
+----
+SUBSCRIBE foo.bar ENVELOPE UPSERT KEY (a, b, c, d, e)
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, envelope: Some(Upsert { key_columns: [Ident("a"), Ident("b"), Ident("c"), Ident("d"), Ident("e")] }) })
+
+parse-statement
 CREATE TABLE public.customer (
         customer_id integer DEFAULT nextval(public.customer_customer_id_seq),
         store_id smallint NOT NULL,
