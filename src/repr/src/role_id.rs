@@ -17,7 +17,6 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-
 use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.role_id.rs"));
@@ -111,29 +110,30 @@ impl FromStr for RoleId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let err = || anyhow!("couldn't parse role id '{s}'");
         match s.chars().next() {
             Some(SYSTEM_CHAR) => {
                 if s.len() < 2 {
-                    return Err(anyhow!("couldn't parse role id {}", s));
+                    return Err(err());
                 }
-                let val: u64 = s[1..].parse()?;
+                let val: u64 = s[1..].parse().map_err(|_| err())?;
                 Ok(Self::System(val))
             }
             Some(USER_CHAR) => {
                 if s.len() < 2 {
-                    return Err(anyhow!("couldn't parse role id {}", s));
+                    return Err(err());
                 }
-                let val: u64 = s[1..].parse()?;
+                let val: u64 = s[1..].parse().map_err(|_| err())?;
                 Ok(Self::User(val))
             }
             Some(PUBLIC_CHAR) => {
                 if s.len() == 1 {
                     Ok(Self::Public)
                 } else {
-                    Err(anyhow!("couldn't parse role id {s}"))
+                    Err(err())
                 }
             }
-            _ => Err(anyhow!("couldn't parse role id {s}")),
+            _ => Err(err()),
         }
     }
 }
