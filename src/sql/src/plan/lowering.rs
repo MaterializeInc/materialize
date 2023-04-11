@@ -704,6 +704,7 @@ impl HirRelationExpr {
                     order_key,
                     limit,
                     offset,
+                    expected_group_size,
                 } => {
                     // TopK is uncomplicated, except that we must group by the columns of `get_outer` as well.
                     let input = input.applied_to(id_gen, get_outer.clone(), col_map, cte_map)?;
@@ -718,7 +719,13 @@ impl HirRelationExpr {
                             nulls_last: column_order.nulls_last,
                         })
                         .collect();
-                    input.top_k(applied_group_key, applied_order_key, limit, offset)
+                    input.top_k(
+                        applied_group_key,
+                        applied_order_key,
+                        limit,
+                        offset,
+                        expected_group_size,
+                    )
                 }
                 Negate { input } => {
                     // Negate is uncomplicated.

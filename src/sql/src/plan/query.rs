@@ -110,7 +110,7 @@ pub fn plan_root_query(
 ) -> Result<PlannedQuery<HirRelationExpr>, PlanError> {
     transform_ast::transform(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
+    let (mut expr, scope, mut finishing, _) = plan_query(&mut qcx, &query)?;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -1021,14 +1021,14 @@ fn check_col_index(name: &str, e: &Expr<Aug>, max: usize) -> Result<Option<usize
 fn plan_query(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
-) -> Result<(HirRelationExpr, Scope, RowSetFinishing), PlanError> {
+) -> Result<(HirRelationExpr, Scope, RowSetFinishing, Option<u64>), PlanError> {
     qcx.checked_recur_mut(|qcx| plan_query_inner(qcx, q))
 }
 
 fn plan_query_inner(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
-) -> Result<(HirRelationExpr, Scope, RowSetFinishing), PlanError> {
+) -> Result<(HirRelationExpr, Scope, RowSetFinishing, Option<u64>), PlanError> {
     // Plan CTEs and introduce bindings to `qcx.ctes`. Returns shadowed bindings
     // for the identifiers, so that they can be re-installed before returning.
     let cte_bindings = plan_ctes(qcx, q)?;
@@ -1054,8 +1054,14 @@ fn plan_query_inner(
         _ => sql_bail!("OFFSET must be an integer constant"),
     };
 
-    let (mut result, scope, finishing) = match &q.body {
+    let (mut result, scope, finishing, expected_group_size) = match &q.body {
         SetExpr::Select(s) => {
+            // Extract query options.
+            let SelectOptionExtracted {
+                expected_group_size,
+                seen: _,
+            } = SelectOptionExtracted::try_from(s.options.clone())?;
+
             let plan = plan_view_select(qcx, *s.clone(), q.order_by.clone())?;
             let finishing = RowSetFinishing {
                 order_by: plan.order_by,
@@ -1063,7 +1069,7 @@ fn plan_query_inner(
                 limit,
                 offset,
             };
-            Ok::<_, PlanError>((plan.expr, plan.scope, finishing))
+            Ok::<_, PlanError>((plan.expr, plan.scope, finishing, expected_group_size))
         }
         _ => {
             let (expr, scope) = plan_set_expr(qcx, &q.body)?;
@@ -1084,7 +1090,7 @@ fn plan_query_inner(
                 project: (0..ecx.relation_type.arity()).collect(),
                 offset,
             };
-            Ok((expr.map(map_exprs), scope, finishing))
+            Ok((expr.map(map_exprs), scope, finishing, None))
         }
     }?;
 
@@ -1124,7 +1130,7 @@ fn plan_query_inner(
         }
     }
 
-    Ok((result, scope, finishing))
+    Ok((result, scope, finishing, expected_group_size))
 }
 
 /// Creates plans for CTEs and introduces them to `qcx.ctes`.
@@ -1243,7 +1249,8 @@ pub fn plan_nested_query(
     qcx: &mut QueryContext,
     q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    let (mut expr, scope, finishing) = qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
+    let (mut expr, scope, finishing, expected_group_size) =
+        qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
     if finishing.limit.is_some() || finishing.offset > 0 {
         expr = HirRelationExpr::TopK {
             input: Box::new(expr),
@@ -1251,6 +1258,7 @@ pub fn plan_nested_query(
             order_key: finishing.order_by,
             limit: finishing.limit,
             offset: finishing.offset,
+            expected_group_size,
         };
     }
     Ok((expr.project(finishing.project), scope))
@@ -2041,6 +2049,7 @@ fn plan_view_select(
                     group_key: distinct_key,
                     limit: Some(1),
                     offset: 0,
+                    expected_group_size,
                 }
             }
         }
@@ -3783,7 +3792,7 @@ where
     }
 
     let mut qcx = ecx.derived_query_context();
-    let (mut expr, _scope, finishing) = plan_query(&mut qcx, query)?;
+    let (mut expr, _scope, finishing, expected_group_size) = plan_query(&mut qcx, query)?;
     if finishing.limit.is_some() || finishing.offset > 0 {
         expr = HirRelationExpr::TopK {
             input: Box::new(expr),
@@ -3791,6 +3800,7 @@ where
             order_key: finishing.order_by.clone(),
             limit: finishing.limit,
             offset: finishing.offset,
+            expected_group_size,
         };
     }
 

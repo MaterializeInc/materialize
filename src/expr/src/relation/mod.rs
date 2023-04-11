@@ -242,6 +242,9 @@ pub enum MirRelationExpr {
         /// True iff the input is known to monotonically increase (only addition of records).
         #[serde(default)]
         monotonic: bool,
+        /// User-supplied hint: how many rows will have the same group key.
+        #[serde(default)]
+        expected_group_size: Option<u64>,
     },
     /// Return a dataflow where the row counts are negated
     ///
@@ -1254,6 +1257,7 @@ impl MirRelationExpr {
         order_key: Vec<ColumnOrder>,
         limit: Option<usize>,
         offset: usize,
+        expected_group_size: Option<u64>,
     ) -> Self {
         MirRelationExpr::TopK {
             input: Box::new(self),
@@ -1261,6 +1265,7 @@ impl MirRelationExpr {
             order_key,
             limit,
             offset,
+            expected_group_size,
             monotonic: false,
         }
     }

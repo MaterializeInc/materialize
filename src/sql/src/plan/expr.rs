@@ -166,6 +166,8 @@ pub enum HirRelationExpr {
         limit: Option<usize>,
         /// Number of records to skip
         offset: usize,
+        /// User-supplied hint: how many rows will have the same group key.
+        expected_group_size: Option<u64>,
     },
     Negate {
         input: Box<HirRelationExpr>,
@@ -1211,6 +1213,7 @@ impl HirRelationExpr {
         order_key: Vec<ColumnOrder>,
         limit: Option<usize>,
         offset: usize,
+        expected_group_size: Option<u64>,
     ) -> Self {
         HirRelationExpr::TopK {
             input: Box::new(self),
@@ -1218,6 +1221,7 @@ impl HirRelationExpr {
             order_key,
             limit,
             offset,
+            expected_group_size,
         }
     }
 
@@ -1640,6 +1644,7 @@ impl HirRelationExpr {
                     order_key: finishing.order_by,
                     limit: finishing.limit,
                     offset: finishing.offset,
+                    expected_group_size: None,
                 }),
                 outputs: finishing.project,
             }
@@ -1716,6 +1721,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input }
             | Threshold { input } => {
@@ -1798,6 +1804,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input }
             | Threshold { input } => {
@@ -1880,6 +1887,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input }
             | Threshold { input } => {
@@ -1963,6 +1971,7 @@ impl VisitChildren<Self> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input }
             | Threshold { input } => {
@@ -2043,6 +2052,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input: _ }
             | Threshold { input: _ }
@@ -2113,6 +2123,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input: _ }
             | Threshold { input: _ }
@@ -2184,6 +2195,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input: _ }
             | Threshold { input: _ }
@@ -2256,6 +2268,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 order_key: _,
                 limit: _,
                 offset: _,
+                expected_group_size: _,
             }
             | Negate { input: _ }
             | Threshold { input: _ }

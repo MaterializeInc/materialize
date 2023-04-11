@@ -74,7 +74,7 @@ use mz_expr::MirScalarExpr;
 use mz_ore::{cast::CastFrom, soft_assert_or_log};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
-use super::AvailableCollections;
+use super::{bucketing_of_expected_group_size, AvailableCollections};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -680,24 +680,8 @@ impl ReducePlan {
                     let monotonic = MonotonicPlan { aggr_funcs, skips };
                     ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
                 } else {
-                    let mut buckets = vec![];
-                    let mut current = 16;
-
-                    // Plan for 4B records in the expected case if the user
-                    // didn't specify a group size.
-                    let limit = expected_group_size.unwrap_or(4_000_000_000);
-
-                    // Distribute buckets in powers of 16, so that we can strike
-                    // a balance between how many inputs each layer gets from
-                    // the preceding layer, while also limiting the number of
-                    // layers.
-                    while current < u64::cast_from(limit) {
-                        buckets.push(current);
-                        current = current.saturating_mul(16);
-                    }
-                    // We need to store the bucket numbers in decreasing order.
-                    buckets.reverse();
-
+                    let buckets =
+                        bucketing_of_expected_group_size(expected_group_size.map(u64::cast_from));
                     let bucketed = BucketedPlan {
                         aggr_funcs,
                         skips,

@@ -274,6 +274,7 @@ impl ProjectionLifting {
                     limit,
                     offset,
                     monotonic: _,
+                    expected_group_size,
                 } => {
                     self.action(input, gets)?;
                     if let MirRelationExpr::Project {
@@ -294,6 +295,7 @@ impl ProjectionLifting {
                                 order_key.clone(),
                                 limit.clone(),
                                 offset.clone(),
+                                expected_group_size.clone(),
                             )
                             .project(outputs.clone());
                     }
