@@ -2133,6 +2133,11 @@ impl CatalogItem {
         }
     }
 
+    /// The custom compaction window, if any has been set.
+    /// Note[btv]: As of 2023-04-10, this is only set
+    /// for objects with `is_retained_metrics_object`. That
+    /// may not always be true in the future, if we enable user-settable
+    /// compaction windows.
     pub fn custom_logical_compaction_window(&self) -> Option<Duration> {
         match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
@@ -2149,6 +2154,14 @@ impl CatalogItem {
         }
     }
 
+    /// The initial compaction window, for objects that have one; that is,
+    /// tables, sources, indexes, and MVs.
+    ///
+    /// If `custom_logical_compaction_window()` returns something, use
+    /// that.  Otherwise, use a sensible default (currently 1s).
+    ///
+    /// For objects that do not have the concept of compaction window,
+    /// return nothing.
     pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
         let custom_logical_compaction_window = match self {
             CatalogItem::Table(_)
