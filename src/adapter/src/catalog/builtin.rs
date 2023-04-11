@@ -1692,7 +1692,8 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
         .with_column("processes", ScalarType::UInt64.nullable(false))
         .with_column("workers", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(false)),
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(false))
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: true,
 });
 
@@ -1821,7 +1822,8 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: true,
 });
 
@@ -2808,7 +2810,8 @@ SELECT
     r.id AS replica_id,
     m.process_id,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
+    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
+    m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent
 FROM
     mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
