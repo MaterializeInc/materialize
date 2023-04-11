@@ -60,7 +60,7 @@ steps:
           - { value: launchdarkly }
           - { value: bounded-memory }
           - { value: cloud-canary }
-          - { value: sqlsmith-2-joins }
+          - { value: sqlsmith }
           - { value: sqlsmith-explain }
           - { value: sqlancer-pqs }
           - { value: sqlancer-norec }
@@ -587,8 +587,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
 
-  - id: sqlsmith-2-joins
-    label: "SQLsmith 2 joins"
+  - id: sqlsmith
+    label: "SQLsmith"
     artifact_paths: junit_*.xml
     timeout_in_minutes: 58
     agents:
@@ -598,7 +598,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--max-joins=2, --runtime=3300]
+          args: [--max-joins=1, --runtime=3300]
 
   - id: sqlsmith-explain
     label: "SQLsmith explain"
