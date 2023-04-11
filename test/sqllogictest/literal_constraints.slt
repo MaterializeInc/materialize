@@ -16,7 +16,7 @@ statement ok
 CREATE INDEX idx_t1_a_b ON t1(a,b)
 
 statement ok
-INSERT INTO t1 VALUES (0, 'nnn'), (1, 'l1'), (1, 'a'), (2, 'l2'), (3, 'l3'), (1234, 'xxx'), (3456, 'yyy'), (12345, 'zzz')
+INSERT INTO t1 VALUES (0, 'nnn'), (1, 'l1'), (1, 'a'), (2, 'l2'), (3, 'l3'), (1234, 'xxx'), (3456, 'yyy'), (12345, 'zzz'), (null, 'nnn')
 
 # A very large IN list shouldn't cause a stack overflow or other issue in the optimizer, see
 # https://github.com/MaterializeInc/materialize/issues/6247
@@ -191,6 +191,27 @@ Used Indexes:
   - materialize.public.idx_t1_a_b
 
 EOF
+
+# `a = NULL` should NOT find the NULL in the table.
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) SELECT * FROM t1
+WHERE a = NULL OR a = 2
+----
+Explained Query (fast path):
+  Filter (null OR (#0 = 2))
+    ReadExistingIndex materialize.public.idx_t1_a_b
+
+Used Indexes:
+  - materialize.public.idx_t1_a_b
+
+EOF
+
+query IT rowsort
+SELECT * FROM t1
+WHERE a = NULL OR a = 2
+----
+2  l2
 
 # Filter predicate occurring also as an output column
 
@@ -1110,3 +1131,42 @@ SELECT * FROM t3 WHERE t3.c0 = 0.8::INT OR t3.c0 = -0.1;
 ----
 -0.1
 1
+
+# Check the nullability- and unique key inference:
+# The `Project` on top of the `ReadExistingIndex` should have
+# - non-nullable first 3 columns
+# - the unique keys on #1 and #2 should remain
+# - (It would be great to have a key that includes all columns, but our key inference is not smart enough currently.)
+
+statement ok
+CREATE TABLE t4 (a int, b int unique, c int unique, d int, unique (a, b, c));
+
+statement ok
+CREATE INDEX idx_t4_a_b_c ON t4(a, b, c)
+
+query T multiline
+EXPLAIN WITH(arity, join_impls, types, keys)
+SELECT sum(a*b*c*d) FROM t4
+WHERE (a,b,c) IN ((15, 16, 17), (25, 26, 111), (35, 36, 111));
+----
+Explained Query:
+  Return // { arity: 1, types: "(bigint?)", keys: "([])" }
+    Union // { arity: 1, types: "(bigint?)", keys: "([])" }
+      Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
+      Map (null) // { arity: 1, types: "(bigint?)", keys: "()" }
+        Union // { arity: 0, types: "()", keys: "()" }
+          Negate // { arity: 0, types: "()", keys: "()" }
+            Project () // { arity: 0, types: "()", keys: "([])" }
+              Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
+          Constant // { arity: 0, types: "()", keys: "([])" }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum((((#0 * #1) * #2) * #3))] // { arity: 1, types: "(bigint?)", keys: "([])" }
+        Project (#0..=#3) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
+          ReadExistingIndex materialize.public.t4 lookup_values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]
+
+Used Indexes:
+  - materialize.public.idx_t4_a_b_c
+
+EOF

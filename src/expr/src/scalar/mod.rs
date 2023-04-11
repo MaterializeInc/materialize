@@ -326,11 +326,16 @@ impl MirScalarExpr {
         }
     }
 
-    /// For a given `expr`, if `self` is `<expr> = <literal>` or `<literal> = <expr>` then
-    /// return `(<literal>, false)`. In addition to just trying to match `<expr>` as it is, it also
-    /// tries to remove an invertible function call (such as a cast). If the match match succeeds
-    /// with the inversion, then it returns `(<inverted-literal>, true)`. For more details on the
-    /// inversion, see `invert_casts_on_expr_eq_literal_inner`.
+    /// Try to match a literal equality involving the given expression on one side.
+    /// Return the (non-null) literal and a bool that indicates whether an inversion was needed.
+    ///
+    /// More specifically:
+    /// If `self` is an equality with a `null` literal on any side, then the match fails!
+    /// Otherwise: for a given `expr`, if `self` is `<expr> = <literal>` or `<literal> = <expr>`
+    /// then return `Some((<literal>, false))`. In addition to just trying to match `<expr>` as it
+    /// is, we also try to remove an invertible function call (such as a cast). If the match
+    /// succeeds with the inversion, then return `Some((<inverted-literal>, true))`. For more
+    /// details on the inversion, see `invert_casts_on_expr_eq_literal_inner`.
     pub fn expr_eq_literal(&self, expr: &MirScalarExpr) -> Option<(Row, bool)> {
         if let MirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
@@ -338,6 +343,9 @@ impl MirScalarExpr {
             expr2,
         } = self
         {
+            if expr1.is_literal_null() || expr2.is_literal_null() {
+                return None;
+            }
             if let Some(Ok(lit)) = expr1.as_literal_owned() {
                 return Self::expr_eq_literal_inner(expr, lit, expr1, expr2);
             }
@@ -428,10 +436,10 @@ impl MirScalarExpr {
     /// `<literal> = <expr>`, it tries to simplify the equality by applying the inverse function of
     /// the outermost function call of `<expr>` (if exists):
     ///
-    /// `<literal> = func(<inner_expr>)`, where f is invertible
+    /// `<literal> = func(<inner_expr>)`, where `func` is invertible
     ///  -->
     /// `<func^-1(literal)> = <inner_expr>`
-    /// (if func^-1(literal) doesn't error out)
+    /// if `func^-1(literal)` doesn't error out, and both `func` and `func^-1` preserve uniqueness.
     ///
     /// The return value is the `<inner_expr>` and the literal value that we get by applying the
     /// inverse function.
