@@ -71,6 +71,7 @@ known_errors = [
     "zero raised to a negative power is undefined",
     "operator does not exist",  # For list types
     "couldn't parse role id",
+    "invalid digit found in string",  # expected, see https://github.com/MaterializeInc/materialize/issues/18706
     "unrecognized privilege type:",
     "length must be nonnegative",
     "is only defined for finite arguments",
