@@ -39,20 +39,20 @@ use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_types::codec_impls::{TodoSchema, UnitSchema};
-use mz_persist_types::columnar::{DataType, PartEncoder, Schema};
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::{DataType, PartDecoder, PartEncoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
-    ColumnName, ColumnType, Datum, DatumEncoderT, Diff, GlobalId, RelationDesc, RelationType, Row,
-    RowEncoder, ScalarType,
+    ColumnName, ColumnType, Datum, DatumDecoderT, DatumEncoderT, Diff, GlobalId, RelationDesc,
+    RelationType, Row, RowArena, RowDecoder, RowEncoder, ScalarType,
 };
 use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::{KafkaConnection, PostgresConnection};
-use crate::types::errors::DataflowError;
+use crate::types::errors::{DataflowError, ProtoDataflowError};
 use crate::types::instances::StorageInstanceId;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
@@ -2435,6 +2435,13 @@ impl RustType<ProtoTestScriptSourceConnection> for TestScriptSourceConnection {
 #[repr(transparent)]
 pub struct SourceData(pub Result<Row, DataflowError>);
 
+#[cfg(test)]
+impl Default for SourceData {
+    fn default() -> Self {
+        SourceData(Ok(Row::default()))
+    }
+}
+
 impl Deref for SourceData {
     type Target = Result<Row, DataflowError>;
 
@@ -2517,7 +2524,7 @@ impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
 
                 // Prepend a fake datum for every Ok column.
                 let ok_datums =
-                    std::iter::repeat(Datum::Null).take(self.wrapped.col_encoders().len());
+                    std::iter::repeat(Datum::Null).take(self.wrapped.col_encoders().len() - 1);
                 let err_datum = Datum::Bytes(&err);
                 let datums = ok_datums.chain(std::iter::once(err_datum));
                 for (encoder, datum) in self.wrapped.col_encoders().iter_mut().zip(datums) {
@@ -2528,22 +2535,75 @@ impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
     }
 }
 
-pub(crate) const SOURCE_DATA_ERROR: &str = "mz_internal_super_secret_source_data_errors";
-fn fake_relation_desc(desc: &RelationDesc) -> RelationDesc {
-    let names = desc.iter_names().cloned();
-    let typs = desc.iter_types().map(|x| {
-        // TODO(mfp): This makes them all nullable so we can set them all to
-        // Null if the overall Result is an Err.
-        let mut x = x.clone();
-        x.nullable = true;
-        x
-    });
-    let names = names.chain(std::iter::once(ColumnName::from(SOURCE_DATA_ERROR)));
-    let typs = typs.chain(std::iter::once(ColumnType {
-        scalar_type: ScalarType::Bytes,
-        nullable: true,
-    }));
-    RelationDesc::new(RelationType::new(typs.collect()), names)
+/// An implementation of [PartDecoder] for [SourceData].
+///
+/// This mostly delegates the encoding logic to [RowDecoder], but flatmaps in
+/// an Err column.
+#[derive(Debug)]
+pub struct SourceDataDecoder<'a> {
+    wrapped: RowDecoder<'a>,
+}
+
+impl<'a> PartDecoder<'a, SourceData> for SourceDataDecoder<'a> {
+    fn decode(&self, idx: usize, val: &mut SourceData) {
+        let decoders = self.wrapped.col_decoders();
+        let err_decoder_idx = decoders.len() - 1;
+        let ok_decoders = &decoders[..err_decoder_idx];
+        let err_decoder = &decoders[err_decoder_idx];
+        let arena = RowArena::default();
+        let err = arena.make_datum(|packer| err_decoder.decode(idx, packer));
+        match err {
+            Datum::Bytes(buf) => {
+                let err = ProtoDataflowError::decode(buf)
+                    .expect("proto should be valid")
+                    .into_rust()
+                    .expect("error should be valid");
+                val.0 = Err(err);
+            }
+            Datum::Null => {
+                let mut packer = match val.0.as_mut() {
+                    Ok(x) => x.packer(),
+                    Err(_) => {
+                        val.0 = Ok(Row::default());
+                        val.0.as_mut().unwrap().packer()
+                    }
+                };
+                for decoder in ok_decoders.iter() {
+                    decoder.decode(idx, &mut packer);
+                }
+            }
+            _ => panic!("unexpected err datum: {}", err),
+        }
+    }
+}
+
+/// Newtype wrapper for a modified version of the real RelationDesc that
+/// accounts for the SourceData nullability hack.
+#[derive(Debug)]
+pub struct RelationDescHack(pub(crate) RelationDesc);
+
+impl RelationDescHack {
+    pub(crate) const SOURCE_DATA_ERROR: &str = "mz_internal_super_secret_source_data_errors";
+
+    /// Returns a modified version of the given RelationDesc that accounts for the
+    /// SourceData nullability hack. Exposed for PersistSourceDataStatsImpl, which
+    /// maybe just wants to live here instead.
+    pub fn new(desc: &RelationDesc) -> Self {
+        let names = desc.iter_names().cloned();
+        let typs = desc.iter_types().map(|x| {
+            // TODO(mfp): This makes them all nullable so we can set them all to
+            // Null if the overall Result is an Err.
+            let mut x = x.clone();
+            x.nullable = true;
+            x
+        });
+        let names = names.chain(std::iter::once(ColumnName::from(Self::SOURCE_DATA_ERROR)));
+        let typs = typs.chain(std::iter::once(ColumnType {
+            scalar_type: ScalarType::Bytes,
+            nullable: true,
+        }));
+        RelationDescHack(RelationDesc::new(RelationType::new(typs.collect()), names))
+    }
 }
 
 // TODO(mfp): This implements Schema for SourceData by flatmap-ing the Ok Row's
@@ -2558,19 +2618,22 @@ fn fake_relation_desc(desc: &RelationDesc) -> RelationDesc {
 impl Schema<SourceData> for RelationDesc {
     type Encoder<'a> = SourceDataEncoder<'a>;
 
-    type Decoder<'a> = TodoSchema<SourceData>;
+    type Decoder<'a> = SourceDataDecoder<'a>;
 
     fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
         // Constructing the fake RelationDesc is wasteful, but this only gets
         // called when the feature flag is on.
-        Schema::<Row>::columns(&fake_relation_desc(self))
+        Schema::<Row>::columns(&RelationDescHack::new(self).0)
     }
 
     fn decoder<'a>(
         &self,
-        _cols: mz_persist_types::part::ColumnsRef<'a>,
+        cols: mz_persist_types::part::ColumnsRef<'a>,
     ) -> Result<Self::Decoder<'a>, String> {
-        panic!("TODO")
+        // Constructing the fake RelationDesc is wasteful, but this only gets
+        // called when the feature flag is on.
+        let wrapped = Schema::<Row>::decoder(&RelationDescHack::new(self).0, cols)?;
+        Ok(SourceDataDecoder { wrapped })
     }
 
     fn encoder<'a>(
@@ -2579,7 +2642,7 @@ impl Schema<SourceData> for RelationDesc {
     ) -> Result<Self::Encoder<'a>, String> {
         // Constructing the fake RelationDesc is wasteful, but this only gets
         // called when the feature flag is on.
-        let wrapped = Schema::<Row>::encoder(&fake_relation_desc(self), cols)?;
+        let wrapped = Schema::<Row>::encoder(&RelationDescHack::new(self).0, cols)?;
         Ok(SourceDataEncoder { wrapped })
     }
 }
@@ -2591,15 +2654,140 @@ pub struct SourceToken {
     pub(crate) _activator: Rc<ActivateOnDrop<()>>,
 }
 
-#[test]
-fn test_timeline_parsing() {
-    assert_eq!(Ok(Timeline::EpochMilliseconds), "M".parse());
-    assert_eq!(Ok(Timeline::External("JOE".to_string())), "E.JOE".parse());
-    assert_eq!(Ok(Timeline::User("MIKE".to_string())), "U.MIKE".parse());
+#[cfg(test)]
+mod tests {
+    use mz_persist_client::stats::PartStats;
+    use mz_persist_types::part::PartBuilder;
+    use mz_repr::stats::PersistSourceDataStats;
+    use mz_repr::{DatumToPersist, DatumToPersistFn, RowArena};
+    use proptest::prelude::*;
 
-    assert!("Materialize".parse::<Timeline>().is_err());
-    assert!("Ejoe".parse::<Timeline>().is_err());
-    assert!("Umike".parse::<Timeline>().is_err());
-    assert!("Dance".parse::<Timeline>().is_err());
-    assert!("".parse::<Timeline>().is_err());
+    use crate::source::persist_source::PersistSourceDataStatsImpl;
+    use crate::types::errors::EnvelopeError;
+
+    use super::*;
+
+    #[test]
+    fn test_timeline_parsing() {
+        assert_eq!(Ok(Timeline::EpochMilliseconds), "M".parse());
+        assert_eq!(Ok(Timeline::External("JOE".to_string())), "E.JOE".parse());
+        assert_eq!(Ok(Timeline::User("MIKE".to_string())), "U.MIKE".parse());
+
+        assert!("Materialize".parse::<Timeline>().is_err());
+        assert!("Ejoe".parse::<Timeline>().is_err());
+        assert!("Umike".parse::<Timeline>().is_err());
+        assert!("Dance".parse::<Timeline>().is_err());
+        assert!("".parse::<Timeline>().is_err());
+    }
+
+    fn scalar_type_columnar_roundtrip(scalar_type: ScalarType) {
+        use mz_persist_types::columnar::validate_roundtrip;
+        let mut rows = Vec::new();
+        for datum in scalar_type.interesting_datums() {
+            rows.push(SourceData(Ok(Row::pack(std::iter::once(datum)))));
+        }
+        rows.push(SourceData(
+            Err(EnvelopeError::Debezium("foo".into()).into()),
+        ));
+
+        // Non-nullable version of the column.
+        let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
+        for row in rows.iter() {
+            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
+        }
+
+        // Nullable version of the column.
+        let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
+        rows.push(SourceData(Ok(Row::pack(std::iter::once(Datum::Null)))));
+        for row in rows.iter() {
+            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn all_scalar_types_columnar_roundtrip() {
+        mz_ore::test::init_logging();
+        proptest!(|(scalar_type in any::<ScalarType>())| {
+            // The proptest! macro interferes with rustfmt.
+            scalar_type_columnar_roundtrip(scalar_type)
+        });
+    }
+
+    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
+        struct ValidateStatsSome<'a>(PersistSourceDataStatsImpl<'a>, &'a RowArena, Datum<'a>);
+        impl<'a> DatumToPersistFn<()> for ValidateStatsSome<'a> {
+            fn call<T: DatumToPersist>(self) -> () {
+                let ValidateStatsSome(stats, arena, datum) = self;
+                if let Some(lower) = stats.col_min(0, arena) {
+                    assert!(lower <= datum, "{} vs {} stats={:?}", lower, datum, stats);
+                }
+                if let Some(upper) = stats.col_max(0, arena) {
+                    assert!(upper >= datum, "{} vs {}", upper, datum);
+                }
+                assert_eq!(stats.col_null_count(0), Some(0));
+            }
+        }
+
+        struct ValidateStatsNone<'a>(PersistSourceDataStatsImpl<'a>, &'a RowArena);
+        impl<'a> DatumToPersistFn<()> for ValidateStatsNone<'a> {
+            fn call<T: DatumToPersist>(self) -> () {
+                let ValidateStatsNone(stats, arena) = self;
+                assert_eq!(stats.col_min(0, arena), None);
+                assert_eq!(stats.col_max(0, arena), None);
+                assert_eq!(stats.col_null_count(0), Some(1));
+            }
+        }
+
+        fn validate_stats(column_type: &ColumnType, datum: Datum<'_>) -> Result<(), String> {
+            let schema = RelationDesc::empty().with_column("col", column_type.clone());
+            let row = SourceData(Ok(Row::pack(std::iter::once(datum))));
+
+            let mut part = PartBuilder::new::<SourceData, _, _, _>(&schema, &UnitSchema);
+            {
+                let part_mut = part.get_mut();
+                <RelationDesc as Schema<SourceData>>::encoder(&schema, part_mut.key)?.encode(&row);
+                part_mut.ts.push(1);
+                part_mut.diff.push(1);
+            }
+            let part = part.finish()?;
+            let stats = part.key_stats::<SourceData, _>(&schema)?;
+
+            let schema_hack = RelationDescHack::new(&schema);
+            let stats = PersistSourceDataStatsImpl {
+                stats: &PartStats { key: stats },
+                desc: &schema_hack,
+            };
+            let arena = RowArena::default();
+            if datum.is_null() {
+                column_type.to_persist(ValidateStatsNone(stats, &arena));
+            } else {
+                column_type.to_persist(ValidateStatsSome(stats, &arena, datum));
+            }
+            Ok(())
+        }
+
+        // Non-nullable version of the column.
+        let column_type = scalar_type.clone().nullable(false);
+        for datum in scalar_type.interesting_datums() {
+            assert_eq!(validate_stats(&column_type, datum), Ok(()));
+        }
+
+        // Nullable version of the column.
+        let column_type = scalar_type.clone().nullable(true);
+        for datum in scalar_type.interesting_datums() {
+            assert_eq!(validate_stats(&column_type, datum), Ok(()));
+        }
+        assert_eq!(validate_stats(&column_type, Datum::Null), Ok(()));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn all_scalar_types_stats_roundtrip() {
+        mz_ore::test::init_logging();
+        proptest!(|(scalar_type in any::<ScalarType>())| {
+            // The proptest! macro interferes with rustfmt.
+            scalar_type_stats_roundtrip(scalar_type)
+        });
+    }
 }
