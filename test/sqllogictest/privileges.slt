@@ -135,3 +135,14 @@ query T
 SELECT mz_internal.make_mz_aclitem('u3251', 's345', 'CREATE')::text
 ----
 u3251=C/s345
+
+# Test parsing errors
+
+query error couldn't parse role id 'uasdf7890ad'
+SELECT mz_internal.make_mz_aclitem('u1', 'uasdf7890ad', 'CREATE')
+
+query error couldn't parse role id 'sd98fas9df8'
+SELECT mz_internal.make_mz_aclitem('sd98fas9df8', 's1', 'CREATE')
+
+query error unrecognized privilege type: "asdfa ljefioj"
+SELECT mz_internal.make_mz_aclitem('u1', 's1', 'asdfa ljefioj')
