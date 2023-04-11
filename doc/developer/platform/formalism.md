@@ -741,11 +741,13 @@ The dataflow remains active until a corresponding `DROP INDEX` command is receiv
 
 The Adapter layer provides interactive transactions through the `BEGIN`, `COMMIT`, and `ROLLBACK` commands.
 There are various restrictions on these transactions, primarily because the Storage and Compute layers require you to durably write before you can read from them.
-This makes read-after-write transactions challenging to perform efficiently, and they are not currently supported.
+This makes write-then-read transactions challenging to perform efficiently, and they are not currently supported.
+Read-only transactions are implemented by performing all reads at a single timestamp.
+Write-only transactions are implemented by buffering all writes and then applying them during commit at a single timestamp.
 Read-then-write transactions are implemented by performing all reads at some timestamp greater than or equal to all previous timestamps and then writing at a strictly later timestamp.
-Other read-only transactions may co-occur with a read-then-write transaction (logically preceding the transaction, as its writes are only visible at its write timestamp).
-Other write-only transactions may precede or follow a read-then-write transaction, but may not occur *between* the read and write times of that transaction.
-Multiple read-then-write transactions may not co-occur (their [read, write) half-open timestamp intervals must be disjoint).
+Read-then-write transactions are implemented by performing all reads at some timestamp greater than or equal to all previous timestamps and then writing at a strictly later timestamp.
+Read-then-write transactions are only considered valid and applied if there are no updates to the query inputs at a time greater than the read timestamp and not greater than the write timestamp.
+Read-then-write transactions are ordered using the write timestamp in the total order of all transactions.
 
 It is possible that multiple read-then-write transactions on disjoint collections could be made concurrent, but the technical requirements are open at the moment.
 
@@ -760,4 +762,4 @@ These lower layers should provide similar "transactional" interfaces that valida
 
 As Materialize runs, the Adapter may see fit to "allow compaction" of collections Materialize maintains.
 It does so by downgrading its held read capabilities for the collection (identifier by `GlobalId`).
-Downgraded capabilities restrict the ability of Adapter to form commands to Storage and Compute, and may force the timestamp oracle's timestamps forward.
+Downgraded capabilities restrict the ability of Adapter to form commands to Storage and Compute, and may force the timestamp oracle's timestamps forward or delay a query response.
