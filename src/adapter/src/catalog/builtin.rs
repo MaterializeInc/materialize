@@ -2070,36 +2070,39 @@ channel_addresses(id, worker_id, address, from_index, to_index) AS (
      INNER JOIN mz_internal.mz_dataflow_addresses_per_worker mda
      USING (id, worker_id)
 ),
-operator_addresses(channel_id, worker_id, from_address, to_address) AS (
-     SELECT id AS channel_id, worker_id,
+channel_operator_addresses(id, worker_id, from_address, to_address) AS (
+     SELECT id, worker_id,
             address || from_index AS from_address,
             address || to_index AS to_address
      FROM channel_addresses
+),
+operator_addresses(id, worker_id, address) AS (
+     SELECT id, worker_id, address
+     FROM mz_internal.mz_dataflow_addresses_per_worker mda
+     INNER JOIN mz_internal.mz_dataflow_operators_per_worker mdo
+     USING (id, worker_id)
 )
-SELECT channel_id AS id,
-       oa.worker_id,
+SELECT coa.id,
+       coa.worker_id,
        from_ops.id AS from_operator_id,
-       to_ops.id AS to_operator_id
-FROM operator_addresses oa
-     INNER JOIN mz_internal.mz_dataflow_addresses_per_worker mda_from
-         ON oa.from_address = mda_from.address AND
-            oa.worker_id = mda_from.worker_id
-     INNER JOIN mz_internal.mz_dataflow_operators_per_worker from_ops
-         ON mda_from.id = from_ops.id AND
-            oa.worker_id = from_ops.worker_id
-     INNER JOIN mz_internal.mz_dataflow_addresses_per_worker mda_to
-         ON oa.to_address = mda_to.address AND
-            oa.worker_id = mda_to.worker_id
-     INNER JOIN mz_internal.mz_dataflow_operators_per_worker to_ops
-         ON mda_to.id = to_ops.id AND
-            oa.worker_id = to_ops.worker_id",
+       coa.from_address AS from_operator_address,
+       to_ops.id AS to_operator_id,
+       coa.to_address AS to_operator_address
+FROM channel_operator_addresses coa
+     LEFT OUTER JOIN operator_addresses from_ops
+          ON coa.from_address = from_ops.address AND
+             coa.worker_id = from_ops.worker_id
+     LEFT OUTER JOIN operator_addresses to_ops
+          ON coa.to_address = to_ops.address AND
+             coa.worker_id = to_ops.worker_id
+",
 };
 
 pub const MZ_DATAFLOW_CHANNEL_OPERATORS: BuiltinView = BuiltinView {
     name: "mz_dataflow_channel_operators",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_dataflow_channel_operators AS
-SELECT id, from_operator_id, to_operator_id
+SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
 FROM mz_internal.mz_dataflow_channel_operators_per_worker
 WHERE worker_id = 0",
 };
