@@ -1008,7 +1008,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "chrono"
 version = "0.4.24"
-source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#311d52eb91d360bf8877e37a074ec7693f797daa"
+source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#5bc022ca811a81d0dd79e3254214ae05a74898b6"
 dependencies = [
  "iana-time-zone",
  "num-integer",
@@ -4555,6 +4555,22 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "proc-macro2",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-rocksdb"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "mz-ore",
+ "mz-persist-types",
+ "rocksdb",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
  "workspace-hack",
 ]
 
