@@ -1945,6 +1945,26 @@ impl<T> CollectionPlan for Plan<T> {
     }
 }
 
+/// Returns bucket sizes, descending, suitable for hierarchical decomposition of an operator, based
+/// on the expected number of rows that will have the same group key.
+fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64> {
+    let mut buckets = vec![];
+    let mut current = 16;
+
+    // Plan for 4B records in the expected case if the user didn't specify a group size.
+    let limit = expected_group_size.unwrap_or(4_000_000_000);
+
+    // Distribute buckets in powers of 16, so that we can strike a balance between how many inputs
+    // each layer gets from the preceding layer, while also limiting the number of layers.
+    while current < limit {
+        buckets.push(current);
+        current = current.saturating_mul(16);
+    }
+
+    buckets.reverse();
+    buckets
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

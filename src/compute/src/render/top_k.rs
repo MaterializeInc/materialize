@@ -148,7 +148,7 @@ where
                     offset,
                     limit,
                     arity,
-                    expected_group_size,
+                    buckets,
                 }) => {
                     let (oks, errs) = build_topk(
                         ok_input,
@@ -157,7 +157,7 @@ where
                         offset,
                         limit,
                         arity,
-                        expected_group_size,
+                        buckets,
                         &self.debug_name,
                     );
                     err_collection = err_collection.concat(&errs);
@@ -178,7 +178,7 @@ where
             offset: usize,
             limit: Option<usize>,
             arity: usize,
-            expected_group_size: Option<u64>,
+            buckets: Vec<u64>,
             debug_name: &str,
         ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
         where
@@ -204,30 +204,18 @@ where
             let mut validating = true;
             let mut err_collection: Option<Collection<G, _, _>> = None;
 
-            // This sequence of numbers defines the shifts that happen to the 64 bit hash
-            // of the record, and has the properties that 1. there are not too many of them,
-            // and 2. each has a modest difference to the next.
-            //
-            // These two properties mean that there should be no reductions on groups that
-            // are substantially larger than `offset + limit` (the largest factor should be
-            // bounded by two raised to the difference between subsequent numbers);
             if let Some(limit) = limit {
-                for log_modulus in
-                    [60, 56, 52, 48, 44, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4u64].iter()
-                {
-                    // Avoid building stages larger than the expected group size, if we were given
-                    // that hint.
-                    if expected_group_size.map_or(false, |g| g <= 1 << log_modulus) {
-                        continue;
-                    }
-
+                // These bucket values define the shifts that happen to the 64 bit hash of the
+                // record, and should have the properties that 1. there are not too many of them,
+                // and 2. each has a modest difference to the next.
+                for bucket in buckets.into_iter() {
                     // here we do not apply `offset`, but instead restrict ourself with a limit
                     // that includes the offset. We cannot apply `offset` until we perform the
                     // final, complete reduction.
                     let (oks, errs) = build_topk_stage(
                         collection,
                         order_key.clone(),
-                        1u64 << log_modulus,
+                        bucket,
                         0,
                         Some(offset + limit),
                         arity,
@@ -258,10 +246,10 @@ where
             )
         }
 
-        // To provide a robust incremental orderby-limit experience, we want to avoid grouping
-        // *all* records (or even large groups) and then applying the ordering and limit. Instead,
-        // a more robust approach forms groups of bounded size (here, 16) and applies the offset
-        // and limit to each, and then increases the sizes of the groups.
+        // To provide a robust incremental orderby-limit experience, we want to avoid grouping *all*
+        // records (or even large groups) and then applying the ordering and limit. Instead, a more
+        // robust approach forms groups of bounded size and applies the offset and limit to each,
+        // and then increases the sizes of the groups.
 
         // Builds a "stage", which uses a finer grouping than is required to reduce the volume of
         // updates, and to reduce the amount of work on the critical path for updates. The cost is

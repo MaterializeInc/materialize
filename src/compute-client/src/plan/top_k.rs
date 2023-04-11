@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use mz_expr::ColumnOrder;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
+use super::bucketing_of_expected_group_size;
+
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.top_k.rs"));
 
 /// A plan encapsulating different variants to compute a TopK operation.
@@ -84,7 +86,7 @@ impl TopKPlan {
                 offset,
                 limit,
                 arity,
-                expected_group_size,
+                buckets: bucketing_of_expected_group_size(expected_group_size),
             })
         }
     }
@@ -205,8 +207,8 @@ pub struct BasicTopKPlan {
     pub offset: usize,
     /// The number of columns in the input and output.
     pub arity: usize,
-    /// Hint: how many rows will have the same group key.
-    pub expected_group_size: Option<u64>,
+    /// Bucket sizes for hierarchical stages of TopK.  Should be decreasing.
+    pub buckets: Vec<u64>,
 }
 
 impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
@@ -217,7 +219,7 @@ impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
             limit: self.limit.into_proto(),
             offset: self.offset.into_proto(),
             arity: self.arity.into_proto(),
-            expected_group_size: self.expected_group_size.into_proto(),
+            buckets: self.buckets.into_proto(),
         }
     }
 
@@ -228,7 +230,7 @@ impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
             limit: proto.limit.into_rust()?,
             offset: proto.offset.into_rust()?,
             arity: proto.arity.into_rust()?,
-            expected_group_size: proto.expected_group_size.into_rust()?,
+            buckets: proto.buckets.into_rust()?,
         })
     }
 }

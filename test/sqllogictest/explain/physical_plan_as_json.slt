@@ -456,7 +456,15 @@ SELECT * FROM ov
               "limit": 5,
               "offset": 0,
               "arity": 2,
-              "expected_group_size": null
+              "buckets": [
+                268435456,
+                16777216,
+                1048576,
+                65536,
+                4096,
+                256,
+                16
+              ]
             }
           }
         }
@@ -700,7 +708,15 @@ VIEW ov
               "limit": 5,
               "offset": 0,
               "arity": 2,
-              "expected_group_size": null
+              "buckets": [
+                268435456,
+                16777216,
+                1048576,
+                65536,
+                4096,
+                256,
+                16
+              ]
             }
           }
         }
