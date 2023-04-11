@@ -1084,6 +1084,8 @@ impl CatalogState {
                     u64::cast_from(process_id).into(),
                     (*cpu_nano_cores).into(),
                     (*memory_bytes).into(),
+                    // TODO(guswynn): disk usage will be filled in later.
+                    Datum::Null,
                 ])
             },
         );
@@ -1120,6 +1122,8 @@ impl CatalogState {
                         u64::cast_from(*workers).into(),
                         cpu_limit.as_nanocpus().into(),
                         memory_bytes.into(),
+                        // TODO(guswynn): disk size will be filled in later.
+                        Datum::Null,
                     ]);
                     BuiltinTableUpdate { id, row, diff: 1 }
                 },
