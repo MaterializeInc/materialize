@@ -2134,10 +2134,10 @@ impl CatalogItem {
     }
 
     /// The custom compaction window, if any has been set.
-    /// Note[btv]: As of 2023-04-10, this is only set
-    /// for objects with `is_retained_metrics_object`. That
-    /// may not always be true in the future, if we enable user-settable
-    /// compaction windows.
+    // Note[btv]: As of 2023-04-10, this is only set
+    // for objects with `is_retained_metrics_object`. That
+    // may not always be true in the future, if we enable user-settable
+    // compaction windows.
     pub fn custom_logical_compaction_window(&self) -> Option<Duration> {
         match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
