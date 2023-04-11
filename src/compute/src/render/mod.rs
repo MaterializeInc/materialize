@@ -102,7 +102,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -123,12 +123,14 @@ use timely::PartialOrder;
 
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
+use mz_expr::CollectionPlan;
 use mz_expr::Id;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::source::persist_source::FlowControl;
 use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::{self, ProbeNotify};
 
 use crate::arrangement::manager::TraceBundle;
@@ -298,7 +300,19 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                     // Build declared objects.
                     for object in dataflow.objects_to_build {
-                        let bundle = context.render_recursive_plan(0, object.plan);
+                        // This token is wired up on every feedback edge and will stop iteration
+                        // when dropped.
+                        let object_token = Rc::new(());
+                        let weak_token = Rc::downgrade(&object_token);
+
+                        let mut needed_tokens: Vec<Rc<dyn std::any::Any>> = vec![object_token];
+                        for id in object.plan.depends_on() {
+                            if let Some(token) = tokens.get(&id) {
+                                needed_tokens.push(Rc::clone(&token));
+                            }
+                        }
+                        let bundle = context.render_recursive_plan(weak_token, 0, object.plan);
+                        tokens.insert(object.id, Rc::new(needed_tokens));
                         context.insert_id(Id::Global(object.id), bundle);
                     }
 
@@ -480,6 +494,9 @@ where
                 needed_tokens.push(Rc::clone(token));
             }
         }
+        if let Some(token) = tokens.get(&idx_id) {
+            needed_tokens.push(Rc::clone(token));
+        }
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
             panic!(
                 "Arrangement alarmingly absent! id: {:?}",
@@ -544,6 +561,9 @@ where
             if let Some(token) = tokens.get(&import_id) {
                 needed_tokens.push(Rc::clone(token));
             }
+        }
+        if let Some(token) = tokens.get(&idx_id) {
+            needed_tokens.push(Rc::clone(token));
         }
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
             panic!(
@@ -610,7 +630,12 @@ where
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionBundle<G, Row> {
+    pub fn render_recursive_plan(
+        &mut self,
+        token: Weak<()>,
+        level: usize,
+        plan: Plan,
+    ) -> CollectionBundle<G, Row> {
         if let Plan::LetRec { ids, values, body } = plan {
             // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
@@ -634,7 +659,7 @@ where
             }
             // Now render each of the bindings.
             for (id, value) in ids.iter().zip(values.into_iter()) {
-                let bundle = self.render_recursive_plan(level + 1, value);
+                let bundle = self.render_recursive_plan(Weak::clone(&token), level + 1, value);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, err) = bundle.collection.clone().unwrap();
@@ -642,7 +667,10 @@ where
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
                 use crate::typedefs::RowKeySpine;
-                oks_v.set(&oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation"));
+                oks_v.set(
+                    &oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation")
+                        .fused(Weak::clone(&token)),
+                );
                 // Set err variable to the distinct elements of `err`.
                 // Distinctness is important, as we otherwise might add the same error each iteration,
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
@@ -654,7 +682,8 @@ where
                             "Distinct recursive err",
                             move |_k, _s, t| t.push(((), 1)),
                         )
-                        .as_collection(|k, _| k.clone()),
+                        .as_collection(|k, _| k.clone())
+                        .fused(Weak::clone(&token)),
                 );
             }
             // Now extract each of the bindings into the outer scope.
@@ -670,7 +699,7 @@ where
                 );
             }
 
-            self.render_recursive_plan(level, *body)
+            self.render_recursive_plan(token, level, *body)
         } else {
             self.render_plan(plan)
         }

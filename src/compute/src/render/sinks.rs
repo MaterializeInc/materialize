@@ -49,6 +49,9 @@ where
                 needed_tokens.push(Rc::clone(token))
             }
         }
+        if let Some(token) = tokens.get(&sink.from) {
+            needed_tokens.push(Rc::clone(token))
+        }
 
         // TODO[btv] - We should determine the key and permutation to use during planning,
         // rather than at runtime.

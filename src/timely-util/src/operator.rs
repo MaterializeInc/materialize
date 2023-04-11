@@ -10,6 +10,7 @@
 //! Common operator transformations on timely streams and differential collections.
 
 use std::future::Future;
+use std::rc::Weak;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
@@ -207,6 +208,10 @@ where
         E: Data,
         IE: Fn(D1, R) -> (E, R) + 'static,
         R: num_traits::sign::Signed;
+
+    /// Wraps the collection with a passthrough operator that will be shut down when the provided
+    /// token cannot be upgraded anymore.
+    fn fused(&self, token: Weak<()>) -> Collection<G, D1, R>;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -478,6 +483,27 @@ where
                 })
             });
         (oks.as_collection(), errs.as_collection())
+    }
+
+    fn fused(&self, token: Weak<()>) -> Collection<G, D1, R> {
+        let mut builder = OperatorBuilderRc::new("Fused".to_owned(), self.scope());
+
+        let mut input = builder.new_input(&self.inner, Pipeline);
+        let (mut output, stream) = builder.new_output();
+
+        let mut vector = Default::default();
+        builder.build(move |_capability| {
+            move |_frontier| {
+                let mut output = output.activate();
+                while let Some((cap, data)) = input.next() {
+                    if token.upgrade().is_some() {
+                        data.swap(&mut vector);
+                        output.session(&cap).give_container(&mut vector);
+                    }
+                }
+            }
+        });
+        stream.as_collection()
     }
 }
 
