@@ -751,35 +751,35 @@ SUBSCRIBE foo.bar
 ----
 SUBSCRIBE foo.bar
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, envelope: None })
 
 parse-statement
 SUBSCRIBE TO foo.bar
 ----
 SUBSCRIBE foo.bar
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, envelope: None })
 
 parse-statement
 SUBSCRIBE foo.bar AS OF 123
 ----
 SUBSCRIBE foo.bar AS OF 123
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Value(Number("123")))), up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Value(Number("123")))), up_to: None, envelope: None })
 
 parse-statement
 SUBSCRIBE foo.bar AS OF now()
 ----
 SUBSCRIBE foo.bar AS OF now()
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, envelope: None })
 
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 ----
 SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, envelope: None })
 
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
@@ -793,28 +793,28 @@ SUBSCRIBE foo.bar WITH (SNAPSHOT false)
 ----
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false)
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: Some(Value(Boolean(false))) }], as_of: None, up_to: None })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: Some(Value(Boolean(false))) }], as_of: None, up_to: None, envelope: None })
 
 parse-statement
 SUBSCRIBE (SELECT * FROM a)
 ----
 SUBSCRIBE (SELECT * FROM a)
 =>
-Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None })
+Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None, envelope: None })
 
 parse-statement
 SUBSCRIBE foo.bar AS OF now() UP TO now() + interval '1' day
 ----
 SUBSCRIBE foo.bar AS OF now() UP TO now() + INTERVAL '1' DAY
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }) })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), envelope: None })
 
 parse-statement
 SUBSCRIBE foo.bar UP TO now() + interval '1' day
 ----
 SUBSCRIBE foo.bar UP TO now() + INTERVAL '1' DAY
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }) })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), envelope: None })
 
 parse-statement
 CREATE TABLE public.customer (
