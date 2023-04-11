@@ -22,6 +22,19 @@ use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.desc.rs"));
 
+/// Describes a schema in a PostgreSQL database.
+///
+/// <https://www.postgresql.org/docs/current/catalog-pg-namespace.html>
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PostgresSchemaDesc {
+    /// The OID of the schema.
+    pub oid: Oid,
+    /// The name of the schema.
+    pub name: String,
+    /// Owner of the namespace
+    pub owner: Oid,
+}
+
 /// Describes a table in a PostgreSQL database.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresTableDesc {

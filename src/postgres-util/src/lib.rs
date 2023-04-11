@@ -79,6 +79,7 @@
 
 use std::time::Duration;
 
+use desc::PostgresSchemaDesc;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
@@ -87,6 +88,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode, SslMode};
 use tokio_postgres::tls::MakeTlsConnect;
+use tokio_postgres::types::Oid;
 use tokio_postgres::Client;
 use tracing::warn;
 
@@ -186,6 +188,22 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Pos
     }
 
     Ok(tls_connector)
+}
+
+pub async fn get_schemas(config: &Config) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
+    let client = config.connect("postgres_schemas").await?;
+
+    Ok(client
+        .query("SELECT oid, nspname, nspowner FROM pg_namespace", &[])
+        .await?
+        .into_iter()
+        .map(|row| {
+            let oid: Oid = row.get("oid");
+            let name: String = row.get("nspname");
+            let owner: Oid = row.get("nspowner");
+            PostgresSchemaDesc { oid, name, owner }
+        })
+        .collect::<Vec<_>>())
 }
 
 /// Fetches table schema information from an upstream Postgres source for
