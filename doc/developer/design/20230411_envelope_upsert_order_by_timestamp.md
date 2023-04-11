@@ -54,7 +54,7 @@ Here's an example of the upsert behavior where the source consists of a key, val
                   | Err(key3, some_error2) |
                   +------------------------+
 ```
-Note: As shown in the example above, the errors are still implicitly ordered by offset as we do not persist any extra metadata separately. A later error with the same key will always overwrite a previous one.
+Note: As shown in the example above, the errors are still implicitly ordered by offset as we do not persist any extra metadata for them separately. A later error with the same key will always overwrite a previous one.
 
 # Rollout
 This feature will be rolled out behind the unsafe flag.
@@ -83,6 +83,9 @@ If users actually are using this custom order by, it’s likely they are **not**
 # Conclusion and alternatives
 
 An alternative could be waiting for `TRANSFORM USING` which has a much broader scope and could cover this particular scenario. In the meantime, having a smaller scoped custom order by could be useful for interested users.
+
+# Unresolved questions
+- In case the order by value of two entries are same, should it chose one of them deterministically? For eg, say we already have (key1, value1, ts=100) and have incoming (key1, value2, ts=100). Should we override `value1` with `value2` or not?
 
 # Future work
 
