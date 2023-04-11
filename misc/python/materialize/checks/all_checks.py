@@ -40,6 +40,7 @@ from materialize.checks.numeric_types import *  # noqa: F401 F403
 from materialize.checks.owners import *  # noqa: F401 F403
 from materialize.checks.peek_cancellation import *  # noqa: F401 F403
 from materialize.checks.pg_cdc import *  # noqa: F401 F403
+from materialize.checks.range import *  # noqa: F401 F403
 from materialize.checks.regex import *  # noqa: F401 F403
 from materialize.checks.rename_index import *  # noqa: F401 F403
 from materialize.checks.rename_source import *  # noqa: F401 F403
