@@ -52,6 +52,10 @@ impl CheckedRecursion for RedundantJoin {
 }
 
 impl crate::Transform for RedundantJoin {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -103,13 +107,36 @@ impl RedundantJoin {
                     Ok(result)
                 }
 
-                MirRelationExpr::LetRec { .. } => {
-                    // TODO
-                    Err(crate::TransformError::LetRecUnsupported)?
+                MirRelationExpr::LetRec { ids, values, body } => {
+                    // As a first approximation, we naively extend the `lets`
+                    // context with the empty vec![] for each id.
+                    for id in ids.iter() {
+                        let prov_old = lets.insert(Id::Local(*id), vec![]);
+                        assert!(prov_old.is_none());
+                    }
+
+                    // In other words, we don't attempt to derive additional
+                    // provenance information for a binding from its `value`.
+                    //
+                    // We descend into the values and the body with the naively
+                    // extended context.
+                    for value in values.iter_mut() {
+                        self.action(value, lets)?;
+                    }
+                    let result = self.action(body, lets)?;
+
+                    // Remove the lets entries for all ids.
+                    for id in ids.iter() {
+                        lets.remove(&Id::Local(*id));
+                    }
+
+                    Ok(result)
                 }
 
                 MirRelationExpr::Get { id, typ } => {
-                    // Extract the value provenance, or an empty list if unavailable.
+                    // Extract the value provenance, or an empty list if
+                    // unavailable (this should only be the case for GlobalId
+                    // references).
                     let mut val_info = lets.get(id).cloned().unwrap_or_default();
                     // Add information about being exactly this let binding too.
                     val_info.push(ProvInfo::make_leaf(*id, typ.arity()));
