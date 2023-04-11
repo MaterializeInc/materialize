@@ -466,7 +466,7 @@ impl AstDisplay for SubscribeEnvelope {
             Self::Upsert { key_columns } => {
                 f.write_str("ENVELOPE UPSERT");
                 f.write_str(" KEY (");
-                f.write_node(&display::comma_separated(&key_columns));
+                f.write_node(&display::comma_separated(key_columns));
                 f.write_str(")");
             }
         }
