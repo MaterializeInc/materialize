@@ -57,7 +57,7 @@ Here's an example of the upsert behavior where the source consists of a key, val
 Note: As shown in the example above, the errors are still implicitly ordered by offset as we do not persist any extra metadata for them separately. A later error with the same key will always overwrite a previous one.
 
 # Rollout
-This feature will be rolled out behind the unsafe flag.
+This feature will be rolled out behind the unsafe flag, then upgraded to only being available behind a LaunchDarkly flag.
 
 ## Testing and Observability
 
