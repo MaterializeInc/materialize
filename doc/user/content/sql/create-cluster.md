@@ -74,10 +74,14 @@ _replica_name_ | A name for a cluster replica.
 {{% replica-options %}}
 
 {{< note >}}
-If you do not specify an availability zone, Materialize will automatically assign the availability zone with the least existing replicas for the associated cluster to increase the cluster's tolerance to availability zone failure.
+If you do not specify an availability zone, Materialize will automatically
+assign the availability zone with the least existing replicas for the
+associated cluster to increase the cluster's tolerance to availability zone
+failure.
 
-To view all replica availability zones, use
-the [`select * from mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas) command.
+To check the availability zone associated with each replica in a cluster, use
+the [`mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
+system table.
 {{< /note >}}
 
 ## Details
