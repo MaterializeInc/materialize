@@ -3,7 +3,7 @@
 
 # Summary
 
-- Support user specified order by in Kafka upsert sources in a limited capacity. If users want to specify custom ordering which is semantically meaningful to them, there's currently no easy way to do that. They could potentially use `ENVELOPE NONE` along with `DISTINCT ON` to get similar results, but it's cumbersome and lacks the automatic compaction on keys with normal `ENVELOPE UPSERT`.
+- Support user specified order by in Kafka upsert sources in a limited capacity. If users want to specify custom ordering which is semantically meaningful to them, there's currently no easy way to do that. They could potentially use `ENVELOPE NONE` along with a `DISTINCT ON` view to get similar results, but it's cumbersome and lacks the automatic compaction on keys with normal `ENVELOPE UPSERT`.
 - Currently, will limit the scope to allow only `ORDER BY` the `TIMESTAMP` metadata field behind an unsafe flag. Depending upon user feedback this can later be expanded to support expressions and extractions from other columns like `HEADERS`.
 
 # Scope
