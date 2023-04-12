@@ -79,11 +79,11 @@ mod app_password;
 mod auth;
 mod client;
 mod error;
-mod unverified_auth;
+mod unvalidated_auth;
 
 pub use crate::app_password::{AppPassword, AppPasswordParseError};
 pub use auth::{Authentication, AuthenticationConfig, Claims, REFRESH_SUFFIX};
 pub use client::tokens::{ApiTokenArgs, ApiTokenResponse, RefreshToken};
 pub use client::Client;
 pub use error::Error;
-pub use unverified_auth::{UnverifiedAuthentication, UnverifiedAuthenticationConfig};
+pub use unvalidated_auth::{UnvalidatedAuthentication, UnvalidatedAuthenticationConfig};

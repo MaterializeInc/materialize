@@ -5,26 +5,26 @@ use tokio::sync::Mutex;
 use crate::{ApiTokenResponse, AppPassword, Client, Error, REFRESH_SUFFIX};
 use chrono::{DateTime, Duration, Utc};
 
-pub struct UnverifiedAuthenticationConfig {
+pub struct UnvalidatedAuthenticationConfig {
     pub admin_api_token_url: String,
     pub app_password: AppPassword,
 }
 
-pub struct UnverifiedAuthentication {
+pub struct UnvalidatedAuthentication {
     pub admin_api_token_url: String,
     pub client: Client,
     pub auth: Mutex<Option<ApiTokenResponse>>,
     pub app_password: AppPassword,
 }
 
-impl UnverifiedAuthentication {
-    /// Creates a new frontegg authentication without signature verification
+impl UnvalidatedAuthentication {
+    /// Creates a new frontegg authentication without signature validation
     /// and handles the access token for a unique `app_password`.
-    /// `UnverifiedAuthentication` should be NEVER used on the server side.
+    /// `UnvalidatedAuthentication` should be NEVER used on the server side.
     /// It should only be used in the client side. E.g.: Front-end apps, CLI, etc.
-    /// Unverified authentication avoids carrying certs to verify the tokens.
-    pub fn new(config: UnverifiedAuthenticationConfig, client: Client) -> Self {
-        UnverifiedAuthentication {
+    /// Unvalidated authentication avoids carrying certs to validate the tokens.
+    pub fn new(config: UnvalidatedAuthenticationConfig, client: Client) -> Self {
+        UnvalidatedAuthentication {
             admin_api_token_url: config.admin_api_token_url,
             client,
             auth: None.into(),
