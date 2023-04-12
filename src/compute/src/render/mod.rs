@@ -123,7 +123,6 @@ use timely::PartialOrder;
 
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
-use mz_expr::CollectionPlan;
 use mz_expr::Id;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
@@ -167,14 +166,14 @@ pub fn build_compute_dataflow<A: Allocate>(
         }
     });
 
-    // Determine indexes to export
+    // Determine indexes to export, and their dependencies.
     let indexes = dataflow
         .index_exports
         .iter()
         .map(|(idx_id, (idx, _typ))| (*idx_id, dataflow.depends_on(idx.on_id), idx.clone()))
         .collect::<Vec<_>>();
 
-    // Determine sinks to export
+    // Determine sinks to export, and their dependencies.
     let sinks = dataflow
         .sink_exports
         .iter()
@@ -305,23 +304,17 @@ pub fn build_compute_dataflow<A: Allocate>(
                         let object_token = Rc::new(());
                         let weak_token = Rc::downgrade(&object_token);
 
-                        let mut needed_tokens: Vec<Rc<dyn std::any::Any>> = vec![object_token];
-                        for id in object.plan.depends_on() {
-                            if let Some(token) = tokens.get(&id) {
-                                needed_tokens.push(Rc::clone(&token));
-                            }
-                        }
                         let bundle = context.render_recursive_plan(weak_token, 0, object.plan);
-                        tokens.insert(object.id, Rc::new(needed_tokens));
+                        tokens.insert(object.id, object_token);
                         context.insert_id(Id::Global(object.id), bundle);
                     }
 
                     // Export declared indexes.
-                    for (idx_id, imports, idx) in indexes {
+                    for (idx_id, dependencies, idx) in indexes {
                         context.export_index_iterative(
                             compute_state,
                             &mut tokens,
-                            imports,
+                            dependencies,
                             idx_id,
                             &idx,
                             output_probes.clone(),
@@ -329,11 +322,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                     }
 
                     // Export declared sinks.
-                    for (sink_id, imports, sink) in sinks {
+                    for (sink_id, dependencies, sink) in sinks {
                         context.export_sink(
                             compute_state,
                             &mut tokens,
-                            imports,
+                            dependencies,
                             sink_id,
                             &sink,
                             output_probes.clone(),
@@ -366,11 +359,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                 }
 
                 // Export declared indexes.
-                for (idx_id, imports, idx) in indexes {
+                for (idx_id, dependencies, idx) in indexes {
                     context.export_index(
                         compute_state,
                         &mut tokens,
-                        imports,
+                        dependencies,
                         idx_id,
                         &idx,
                         output_probes.clone(),
@@ -378,11 +371,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                 }
 
                 // Export declared sinks.
-                for (sink_id, imports, sink) in sinks {
+                for (sink_id, dependencies, sink) in sinks {
                     context.export_sink(
                         compute_state,
                         &mut tokens,
-                        imports,
+                        dependencies,
                         sink_id,
                         &sink,
                         output_probes.clone(),
@@ -482,20 +475,17 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
+        dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
+        for dep_id in dependency_ids {
+            if let Some(token) = tokens.get(&dep_id) {
                 needed_tokens.push(Rc::clone(token));
             }
-        }
-        if let Some(token) = tokens.get(&idx_id) {
-            needed_tokens.push(Rc::clone(token));
         }
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
             panic!(
@@ -550,20 +540,17 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
+        dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
+        for dep_id in dependency_ids {
+            if let Some(token) = tokens.get(&dep_id) {
                 needed_tokens.push(Rc::clone(token));
             }
-        }
-        if let Some(token) = tokens.get(&idx_id) {
-            needed_tokens.push(Rc::clone(token));
         }
         let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
             panic!(

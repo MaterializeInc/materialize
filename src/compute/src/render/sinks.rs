@@ -37,20 +37,17 @@ where
         &mut self,
         compute_state: &mut crate::compute_state::ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
+        dependency_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
+        for dep_id in dependency_ids {
+            if let Some(token) = tokens.get(&dep_id) {
                 needed_tokens.push(Rc::clone(token))
             }
-        }
-        if let Some(token) = tokens.get(&sink.from) {
-            needed_tokens.push(Rc::clone(token))
         }
 
         // TODO[btv] - We should determine the key and permutation to use during planning,
