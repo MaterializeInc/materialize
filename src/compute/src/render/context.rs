@@ -10,7 +10,9 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
+use std::any::Any;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
@@ -89,6 +91,8 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
+
+    pub token: Rc<dyn Any>,
 }
 
 impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
@@ -114,6 +118,7 @@ where
             as_of_frontier,
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
+            token: Rc::new(()),
         }
     }
 }

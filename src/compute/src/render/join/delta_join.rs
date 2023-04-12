@@ -12,7 +12,9 @@
 //! Consult [DeltaJoinPlan] documentation for details.
 
 #![allow(clippy::op_ref)]
+use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::{Rc, Weak};
 
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -143,6 +145,7 @@ where
                                 as_of,
                                 source_relation,
                                 initial_closure,
+                                Rc::downgrade(&self.token),
                             );
                             region_errs.push(err_stream);
                             update_stream
@@ -154,6 +157,7 @@ where
                                 as_of,
                                 source_relation,
                                 initial_closure,
+                                Rc::downgrade(&self.token),
                             );
                             region_errs.push(err_stream);
                             update_stream
@@ -198,6 +202,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
+                                            Rc::downgrade(&self.token),
                                         )
                                     } else {
                                         build_halfjoin(
@@ -207,6 +212,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
+                                            Rc::downgrade(&self.token),
                                         )
                                     }
                                 }
@@ -219,6 +225,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
+                                            Rc::downgrade(&self.token),
                                         )
                                     } else {
                                         build_halfjoin(
@@ -228,6 +235,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
+                                            Rc::downgrade(&self.token),
                                         )
                                     }
                                 }
@@ -314,6 +322,7 @@ fn build_halfjoin<G, Tr, CF>(
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
+    token: Weak<dyn Any>,
 ) -> (
     Collection<G, (Row, G::Timestamp), Diff>,
     Collection<G, DataflowError, Diff>,
@@ -364,6 +373,8 @@ where
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+                token.upgrade()?;
+
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
@@ -396,6 +407,8 @@ where
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+                token.upgrade()?;
+
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
                 let row = closure
@@ -420,6 +433,7 @@ fn build_update_stream<G, Tr>(
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
+    token: Weak<dyn Any>,
 ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
@@ -443,6 +457,11 @@ where
             .unary_fallible(Pipeline, "UpdateStream", move |_, _| {
                 let mut datums = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {
+                    if token.upgrade().is_none() {
+                        input.for_each(|_, _| ());
+                        return;
+                    }
+
                     input.for_each(|time, data| {
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);

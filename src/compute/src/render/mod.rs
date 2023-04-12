@@ -474,7 +474,7 @@ where
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
-        let mut needed_tokens = Vec::new();
+        let mut needed_tokens = vec![Rc::clone(&self.token)];
         for import_id in import_ids {
             if let Some(token) = tokens.get(&import_id) {
                 needed_tokens.push(Rc::clone(token));
@@ -539,7 +539,7 @@ where
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
-        let mut needed_tokens = Vec::new();
+        let mut needed_tokens = vec![Rc::clone(&self.token)];
         for import_id in import_ids {
             if let Some(token) = tokens.get(&import_id) {
                 needed_tokens.push(Rc::clone(token));

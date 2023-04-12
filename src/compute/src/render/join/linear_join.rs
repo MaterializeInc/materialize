@@ -11,6 +11,10 @@
 //!
 //! Consult [LinearJoinPlan] documentation for details.
 
+use std::any::Any;
+use std::rc::Rc;
+use std::rc::Weak;
+
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -123,6 +127,7 @@ where
                     inputs[stage_plan.lookup_relation].enter_region(inner),
                     stage_plan,
                     &mut errors,
+                    Rc::downgrade(&self.token),
                 );
                 // Update joined results and capture any errors.
                 joined = JoinedFlavor::Collection(stream);
@@ -179,6 +184,7 @@ fn differential_join<G, T>(
         lookup_relation: _,
     }: LinearStagePlan,
     errors: &mut Vec<Collection<G, DataflowError, Diff>>,
+    token: Weak<dyn Any>,
 ) -> Collection<G, Row, Diff>
 where
     G: Scope,
@@ -223,13 +229,13 @@ where
         }
         JoinedFlavor::Local(local) => match arrangement {
             ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(local, oks, closure);
+                let (oks, errs2) = differential_join_inner(local, oks, closure, token);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
             }
             ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(local, oks, closure);
+                let (oks, errs2) = differential_join_inner(local, oks, closure, token);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
@@ -237,13 +243,13 @@ where
         },
         JoinedFlavor::Trace(trace) => match arrangement {
             ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(trace, oks, closure);
+                let (oks, errs2) = differential_join_inner(trace, oks, closure, token);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
             }
             ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(trace, oks, closure);
+                let (oks, errs2) = differential_join_inner(trace, oks, closure, token);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
@@ -262,6 +268,7 @@ fn differential_join_inner<G, T, J, Tr2>(
     prev_keyed: J,
     next_input: Arranged<G, Tr2>,
     closure: JoinClosure,
+    token: Weak<dyn Any>,
 ) -> (
     Collection<G, Row, Diff>,
     Option<Collection<G, DataflowError, Diff>>,
@@ -284,6 +291,8 @@ where
     if closure.could_error() {
         let (oks, err) = prev_keyed
             .join_core(&next_input, move |key, old, new| {
+                token.upgrade()?;
+
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow_with_many(&[key, old, new]);
                 closure
