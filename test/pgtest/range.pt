@@ -82,6 +82,9 @@ Execute
 Parse {"query": "SELECT a t, array_agg(v ORDER BY v) FROM ( SELECT DISTINCT a FROM int4range_values WHERE a IS NOT NULL ) int4range_values(a), int4range_test_values WHERE a -|- v GROUP BY a ORDER BY a;"}
 Bind
 Execute
+Parse {"query": "SELECT DISTINCT l.v, r.v, l.v < r.v, l.v <= r.v, l.v > r.v, l.v >= r.v, l.v = r.v, l.v <> r.v FROM int4range_test_values AS l, int4range_test_values AS r;"}
+Bind
+Execute
 Sync
 ----
 
@@ -172,6 +175,58 @@ ParseComplete
 BindComplete
 DataRow {"fields":["[1,)","{(,1),[-1,1)}"]}
 CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+DataRow {"fields":["empty","empty","f","t","f","t","t","f"]}
+DataRow {"fields":["empty","(,)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["(,)","(,)","f","t","f","t","t","f"]}
+DataRow {"fields":["empty","(,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["empty","[0,)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,1)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["(,1)","(,)","t","t","f","f","f","t"]}
+DataRow {"fields":["[0,)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["[0,)","(,)","f","f","t","t","f","t"]}
+DataRow {"fields":["(,)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["(,)","[0,)","t","t","f","f","f","t"]}
+DataRow {"fields":["empty","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["empty","[-99,-50)","t","t","f","f","f","t"]}
+DataRow {"fields":["empty","[-1,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["[50,99)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["[50,99)","(,)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","(,)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-1,1)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["[-1,1)","(,)","f","f","t","t","f","t"]}
+DataRow {"fields":["(,1)","(,1)","f","t","f","t","t","f"]}
+DataRow {"fields":["(,1)","[0,)","t","t","f","f","f","t"]}
+DataRow {"fields":["[0,)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[0,)","[0,)","f","t","f","t","t","f"]}
+DataRow {"fields":["(,)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,)","[-99,-50)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,)","[-1,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["[50,99)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[50,99)","[0,)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","[0,)","t","t","f","f","f","t"]}
+DataRow {"fields":["[-1,1)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-1,1)","[0,)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,1)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,1)","[-99,-50)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,1)","[-1,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["[0,)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["[0,)","[-99,-50)","f","f","t","t","f","t"]}
+DataRow {"fields":["[0,)","[-1,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[50,99)","[50,99)","f","t","f","t","t","f"]}
+DataRow {"fields":["[50,99)","[-99,-50)","f","f","t","t","f","t"]}
+DataRow {"fields":["[50,99)","[-1,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["[-99,-50)","[-99,-50)","f","t","f","t","t","f"]}
+DataRow {"fields":["[-99,-50)","[-1,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["[-1,1)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["[-1,1)","[-99,-50)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-1,1)","[-1,1)","f","t","f","t","t","f"]}
+CommandComplete {"tag":"SELECT 49"}
 ReadyForQuery {"status":"I"}
 
 send
@@ -197,6 +252,9 @@ Parse {"query": "SELECT a t, array_agg(v ORDER BY v) FROM ( SELECT DISTINCT a FR
 Bind
 Execute
 Parse {"query": "SELECT a t, array_agg(v ORDER BY v) FROM ( SELECT DISTINCT a FROM numrange_values WHERE a IS NOT NULL ) numrange_values(a), numrange_test_values WHERE a -|- v GROUP BY a ORDER BY a;"}
+Bind
+Execute
+Parse {"query": "SELECT DISTINCT l.v, r.v, l.v < r.v, l.v <= r.v, l.v > r.v, l.v >= r.v, l.v = r.v, l.v <> r.v FROM numrange_test_values AS l, numrange_test_values AS r;"}
 Bind
 Execute
 Sync
@@ -296,6 +354,58 @@ ParseComplete
 BindComplete
 DataRow {"fields":["[1,)","{(,1),[-1,1)}"]}
 CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+DataRow {"fields":["empty","empty","f","t","f","t","t","f"]}
+DataRow {"fields":["empty","(,)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["(,)","(,)","f","t","f","t","t","f"]}
+DataRow {"fields":["empty","(,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["empty","(-1,)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,1)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["(,1)","(,)","t","t","f","f","f","t"]}
+DataRow {"fields":["(-1,)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["(-1,)","(,)","f","f","t","t","f","t"]}
+DataRow {"fields":["(,)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["(,)","(-1,)","t","t","f","f","f","t"]}
+DataRow {"fields":["empty","[-1,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["empty","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["empty","[-99,-50)","t","t","f","f","f","t"]}
+DataRow {"fields":["[-1,1)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["[-1,1)","(,)","f","f","t","t","f","t"]}
+DataRow {"fields":["[50,99)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["[50,99)","(,)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","empty","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","(,)","f","f","t","t","f","t"]}
+DataRow {"fields":["(,1)","(,1)","f","t","f","t","t","f"]}
+DataRow {"fields":["(,1)","(-1,)","t","t","f","f","f","t"]}
+DataRow {"fields":["(-1,)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["(-1,)","(-1,)","f","t","f","t","t","f"]}
+DataRow {"fields":["(,)","[-1,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,)","[-99,-50)","t","t","f","f","f","t"]}
+DataRow {"fields":["[-1,1)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-1,1)","(-1,)","t","t","f","f","f","t"]}
+DataRow {"fields":["[50,99)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[50,99)","(-1,)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","(,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","(-1,)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,1)","[-1,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,1)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["(,1)","[-99,-50)","t","t","f","f","f","t"]}
+DataRow {"fields":["(-1,)","[-1,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["(-1,)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["(-1,)","[-99,-50)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-1,1)","[-1,1)","f","t","f","t","t","f"]}
+DataRow {"fields":["[-1,1)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["[-1,1)","[-99,-50)","f","f","t","t","f","t"]}
+DataRow {"fields":["[50,99)","[-1,1)","f","f","t","t","f","t"]}
+DataRow {"fields":["[50,99)","[50,99)","f","t","f","t","t","f"]}
+DataRow {"fields":["[50,99)","[-99,-50)","f","f","t","t","f","t"]}
+DataRow {"fields":["[-99,-50)","[-1,1)","t","t","f","f","f","t"]}
+DataRow {"fields":["[-99,-50)","[50,99)","t","t","f","f","f","t"]}
+DataRow {"fields":["[-99,-50)","[-99,-50)","f","t","f","t","t","f"]}
+CommandComplete {"tag":"SELECT 49"}
 ReadyForQuery {"status":"I"}
 
 # test range binary encodings
