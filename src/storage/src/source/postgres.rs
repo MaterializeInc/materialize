@@ -270,9 +270,16 @@ impl SourceRender for PostgresSourceConnection {
         connection_context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     ) -> (
-        Collection<G, Result<SourceMessage<(), Row>, SourceReaderError>, Diff>,
+        Collection<
+            G,
+            (
+                usize,
+                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
+            ),
+            Diff,
+        >,
         Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusUpdate>,
+        Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -429,10 +436,10 @@ impl SourceRender for PostgresSourceConnection {
                             if end {
                                 reader.data_capability.downgrade(&next_ts);
                             }
-                            data_output.give(&cap, (msg, *cap.time(), diff)).await;
+                            data_output.give(&cap, ((output, msg), *cap.time(), diff)).await;
                         }
                         Some(InternalMessage::Status(update)) => {
-                            health_output.give(&health_capability, update).await;
+                            health_output.give(&health_capability, (update.output_index, update)).await;
                         }
                         Some(InternalMessage::Err(err)) => {
                             mz_ore::soft_assert!(
@@ -447,7 +454,7 @@ impl SourceRender for PostgresSourceConnection {
                             let next_ts = non_definite_ts + 1;
                             reader.data_capability.downgrade(&next_ts);
                             reader.upper_capability.downgrade(&next_ts);
-                            data_output.give(&cap, (Err(err), *cap.time(), 1)).await;
+                            data_output.give(&cap, ((0, Err(err)), *cap.time(), 1)).await;
                         }
                         None => return,
                     },

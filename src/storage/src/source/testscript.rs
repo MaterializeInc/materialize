@@ -55,9 +55,16 @@ impl SourceRender for TestScriptSourceConnection {
         _connection_context: ConnectionContext,
         _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     ) -> (
-        Collection<G, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>, Diff>,
+        Collection<
+            G,
+            (
+                usize,
+                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
+            ),
+            Diff,
+        >,
         Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusUpdate>,
+        Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name, scope.clone());
@@ -82,7 +89,7 @@ impl SourceRender for TestScriptSourceConnection {
                             headers: None,
                         });
                         let ts = MzOffset::from(offset);
-                        data_output.give(&cap.delayed(&ts), (msg, ts, 1)).await;
+                        data_output.give(&cap.delayed(&ts), ((0, msg), ts, 1)).await;
                         cap.downgrade(&(ts + 1));
                     }
                     ScriptCommand::Terminate => return,
@@ -92,7 +99,7 @@ impl SourceRender for TestScriptSourceConnection {
             futures::future::pending::<()>().await;
         });
 
-        let status = [HealthStatusUpdate::status(0, HealthStatus::Running)].to_stream(scope);
+        let status = [(0, HealthStatusUpdate::status(0, HealthStatus::Running))].to_stream(scope);
         (
             stream.as_collection(),
             None,

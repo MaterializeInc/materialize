@@ -113,9 +113,16 @@ impl SourceRender for KafkaSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<PartitionId, MzOffset>>>
             + 'static,
     ) -> (
-        Collection<G, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>, Diff>,
+        Collection<
+            G,
+            (
+                usize,
+                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
+            ),
+            Diff,
+        >,
         Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusUpdate>,
+        Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -206,7 +213,7 @@ impl SourceRender for KafkaSourceConnection {
                         },
                         should_halt: true,
                     };
-                    health_output.give(&health_cap, update).await;
+                    health_output.give(&health_cap, (0, update)).await;
                     // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
                     // Returning would incorrectly present to the remap operator as progress to the
                     // empty frontier which would be incorrectly recorded to the remap shard.
@@ -448,7 +455,7 @@ impl SourceRender for KafkaSourceConnection {
                                 0,
                                 HealthStatus::StalledWithError { error, hint: None },
                             );
-                            health_output.give(&health_cap, status).await;
+                            health_output.give(&health_cap, (0, status)).await;
                         }
                         Ok(message) => {
                             let (message, ts) =
@@ -456,7 +463,7 @@ impl SourceRender for KafkaSourceConnection {
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid];
-                                data_output.give(part_cap, (Ok(msg), time, diff)).await;
+                                data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
                             }
                         }
                     }
@@ -476,7 +483,7 @@ impl SourceRender for KafkaSourceConnection {
                             Ok(Some((msg, time, diff))) => {
                                 let pid = time.partition().unwrap();
                                 let part_cap = &reader.partition_capabilities[pid];
-                                data_output.give(part_cap, (Ok(msg), time, diff)).await;
+                                data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
                             }
                             Ok(None) => continue,
                             Err(err) => {
@@ -495,7 +502,7 @@ impl SourceRender for KafkaSourceConnection {
                                     hint: None,
                                 };
                                 health_output
-                                    .give(&health_cap, HealthStatusUpdate::status(0, status))
+                                    .give(&health_cap, (0, HealthStatusUpdate::status(0, status)))
                                     .await;
                             }
                         }
@@ -515,7 +522,7 @@ impl SourceRender for KafkaSourceConnection {
                 let status = reader.health_status.lock().unwrap().take();
                 if let Some(status) = status {
                     health_output
-                        .give(&health_cap, HealthStatusUpdate::status(0, status))
+                        .give(&health_cap, (0, HealthStatusUpdate::status(0, status)))
                         .await;
                 }
 
