@@ -8,7 +8,7 @@
 
 # Scope
 
-The scope will be limited to only allow `ORDER BY TIMESTAMP` (default ordering `ASC`).
+The scope will be limited to only allow `ORDER BY TIMESTAMP` (ascending order).
 
 - For kafka upsert style topics, value = NULL is taken to mean that it’s a delete tombstone and that the corresponding key should be removed. If we want to keep the same behavior it would make sense to limit the `ORDER BY` columns to only the metadata columns.
 - Limiting it to only `TIMESTAMP` because
