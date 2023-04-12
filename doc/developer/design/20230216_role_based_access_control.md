@@ -360,20 +360,24 @@ within that view.
 
 We will add the following SQL commands:
 
-- `GRANT <privilege> ON <object> TO [ GROUP ] <role>`
+- `GRANT <privilege> ON <object-type> <object> TO [ GROUP ] <role>`
     - Gives `<privilege>` on `<object>` to `<role>`.
     - Only the owner of `<object>` can grant privileges on it.
         - Note: PostgreSQL allows other roles to grant privileges with the `WITH GRANT OPTION` option.
     - `GROUP` is ignored.
-- `GRANT ALL [ PRIVILEGES ] ON <object> TO [ GROUP ] <role>`
+    - For tables, views, materialized, and source, the object type can be omitted. 
+    - For views, materialized views, and sources, the object type must be `TABLE` if not omitted.
+- `GRANT ALL [ PRIVILEGES ] ON <object-type> <object> TO [ GROUP ] <role>`
     - Same as grant above, but for all privileges.
     - `PRIVILEGES` is ignored.
-- `REVOKE <privilege> ON <object> FROM [ GROUP ] <role>`
+- `REVOKE <privilege> ON <object-type> <object> FROM [ GROUP ] <role>`
     - Revokes `<privilege>` on `<object>` from `<role>`.
     - Only the owner of `<object>` can revoke privileges from it.
         - Note: PostgreSQL allows other roles to revoke privileges with the `WITH GRANT OPTION` option.
     - `GROUP` is ignored.
-- `REVOKE ALL [ PRIVILEGES ] ON <object> FROM [ GROUP ] <role>`
+    - For tables, views, materialized, and source, the object type can be omitted. 
+    - For views, materialized views, and sources, the object type must be `TABLE` if not omitted.
+- `REVOKE ALL [ PRIVILEGES ] ON <object-type> <object> FROM [ GROUP ] <role>`
     - Same as revoke above but for all privileges.
     - `PRIVILEGES` is ignored.
 
