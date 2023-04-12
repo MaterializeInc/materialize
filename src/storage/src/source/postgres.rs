@@ -38,7 +38,7 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{info, warn};
 
 use mz_expr::MirScalarExpr;
-use mz_ore::display::DisplayExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::future::TimeoutError;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -65,17 +65,17 @@ static FEEDBACK_INTERVAL: Duration = Duration::from_secs(30);
 /// The amount of time we should wait after the last received message before worrying about WAL lag
 static WAL_LAG_GRACE_PERIOD: Duration = Duration::from_secs(30);
 
-trait ErrorExt {
+trait PgErrorExt {
     fn is_definite(&self) -> bool;
 }
 
-impl ErrorExt for tokio::time::error::Elapsed {
+impl PgErrorExt for tokio::time::error::Elapsed {
     fn is_definite(&self) -> bool {
         false
     }
 }
 
-impl ErrorExt for DbError {
+impl PgErrorExt for DbError {
     fn is_definite(&self) -> bool {
         let class = match self.code().code().get(0..2) {
             None => return false,
@@ -93,7 +93,7 @@ impl ErrorExt for DbError {
     }
 }
 
-impl ErrorExt for tokio_postgres::Error {
+impl PgErrorExt for tokio_postgres::Error {
     fn is_definite(&self) -> bool {
         match self.source() {
             Some(err) => match err.downcast_ref::<DbError>() {
@@ -111,7 +111,7 @@ impl ErrorExt for tokio_postgres::Error {
     }
 }
 
-impl ErrorExt for std::io::Error {
+impl PgErrorExt for std::io::Error {
     fn is_definite(&self) -> bool {
         match self.source() {
             Some(err) => match err.downcast_ref::<tokio_postgres::Error>() {
@@ -144,7 +144,7 @@ enum ReplicationError {
     Irrecoverable(anyhow::Error),
 }
 
-impl<E: ErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
+impl<E: PgErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
     fn from(err: E) -> Self {
         if err.is_definite() {
             Self::Definite(err.into())
@@ -467,7 +467,7 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     .sender
                     .send(InternalMessage::Status(HealthStatusUpdate {
                         update: HealthStatus::StalledWithError {
-                            error: e.to_string_alt(),
+                            error: e.to_string_with_causes(),
                             hint: None,
                         },
                         should_halt: false,
@@ -486,7 +486,7 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     .sender
                     .send(InternalMessage::Status(HealthStatusUpdate {
                         update: HealthStatus::StalledWithError {
-                            error: e.to_string_alt(),
+                            error: e.to_string_with_causes(),
                             hint: None,
                         },
                         // TODO: In the future we probably want to handle this more gracefully,

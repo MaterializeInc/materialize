@@ -708,3 +708,32 @@ pub fn values_from_row(row: Row, typ: &RelationType) -> Vec<Option<Value>> {
         .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies that we correctly print the chain of parsing errors, all the way through the stack.
+    #[test]
+    fn decode_text_error_smoke_test() {
+        let bool_array = Value::Array {
+            dims: vec![ArrayDimension {
+                lower_bound: 0,
+                length: 1,
+            }],
+            elements: vec![Some(Value::Bool(true))],
+        };
+
+        let mut buf = BytesMut::new();
+        bool_array.encode_text(&mut buf);
+        let buf = buf.to_vec();
+
+        let int_array_tpe = Type::Array(Box::new(Type::Int4));
+        let decoded_int_array = Value::decode_text(&int_array_tpe, &buf);
+
+        assert_eq!(
+            decoded_int_array.map_err(|e| e.to_string()).unwrap_err(),
+            "invalid input syntax for type array: invalid input syntax for type integer: invalid digit found in string: \"t\": \"{t}\"".to_string()
+        );
+    }
+}

@@ -51,7 +51,7 @@ pub fn adjust_rlimits() {
         // cause the call to setrlimit below to fail.
         let res = sysctl::Ctl::new("kern.maxfilesperproc")
             .and_then(|ctl| ctl.value())
-            .map_err_to_string()
+            .map_err_to_string_with_causes()
             .and_then(|v| match v {
                 sysctl::CtlValue::Int(v) => u64::try_from(v)
                     .map_err(|_| format!("kern.maxfilesperproc unexpectedly negative: {}", v)),
