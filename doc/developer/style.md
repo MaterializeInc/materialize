@@ -281,6 +281,38 @@ do not produce useful backtraces and instead just point to the line in libtest t
 that the test didn't return an error. Panics will produce useful backtraces that include
 the line where the panic occurred. This is especially useful for debugging flaky tests in CI.
 
+### Errors
+
+#### Prefer structured errors over strings
+
+You should prefer structured error enums over strings. We currently have a
+number of places where we use `anyhow!("my error message")`, but we are trying
+to migrate away from that. Using [`thiserror`] makes it easy to write
+structured error enums.
+
+If you write your own error enums, make sure to implement the standard
+[`Error`] trait and to properly implement `source()`. This makes sure that we
+can get the chain of causing/underlying errors so that they can be reported
+correctly when needed. With [`thiserror`] this will happen automatically when
+you use the `#[from]` attribute.
+
+Generally, the `Display` impl of your error type should _not_ print the chain
+of errors but only print itself and rely on callers to print the error chain
+when needed. There could be exceptions when your error type is wrapping another
+error type or is compositionally including one or multiple other errors, but
+those should be very rare!
+
+#### Printing errors
+
+As mentioned above, the `Display` impl of an error should not print the chain
+of source errors. Whenever you _do_ need to print an error with its chain of
+errors, say when tracing/logging or surfacing an error to users, you should
+make that explicit. There are the `ResultExt` and `ErrorExt` traits that
+provide `map_err_to_string_with_causes`/`err_to_string_with_causes` (for
+results) and `display_with_causes`/`to_string_with_causes` (for errors), that
+do this for you.
+
+
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rust-api]: https://rust-lang.github.io/api-guidelines/
@@ -289,3 +321,5 @@ the line where the panic occurred. This is especially useful for debugging flaky
 [`Handle`]: https://docs.rs/tokio/latest/tokio/runtime/struct.Handle.html
 [`Arc<Runtime>`]: https://docs.rs/tokio/latest/tokio/runtime/struct.Runtime.html
 [`tokio-console`]: /doc/developer/guide-tokio-console.md
+[`thiserror`]: https://github.com/dtolnay/thiserror
+[`Error`]: https://doc.rust-lang.org/stable/std/error/trait.Error.html
