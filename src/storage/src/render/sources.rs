@@ -18,7 +18,8 @@ use std::sync::Arc;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{self, Exchange, OkErr};
-use timely::dataflow::Scope;
+use timely::dataflow::scopes::{Child, Scope};
+use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
 
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
@@ -32,7 +33,7 @@ use mz_timely_util::operator::CollectionExt;
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::render::upsert::UpsertKey;
-use crate::source::types::{DecodeResult, SourceOutput};
+use crate::source::types::{DecodeResult, HealthStatusUpdate, SourceOutput};
 use crate::source::{self, RawSourceCreationConfig, SourceCreationParams};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
@@ -58,23 +59,22 @@ pub enum SourceType<G: Scope> {
 ///
 /// This function is intended to implement the recipe described here:
 /// <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-storage.md#source-ingestion>
-pub fn render_source<RootG, G>(
-    root_scope: &mut RootG,
-    scope: &mut G,
+pub fn render_source<'g, G: Scope<Timestamp = ()>>(
+    scope: &mut Child<'g, G, mz_repr::Timestamp>,
     dataflow_debug_name: &String,
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<G::Timestamp>,
+    resume_upper: Antichain<mz_repr::Timestamp>,
     source_resume_upper: Vec<Row>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
-    Vec<(Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)>,
+    Vec<(
+        Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
+        Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
+        Stream<G, (usize, HealthStatusUpdate)>,
+    )>,
     Rc<dyn Any>,
-)
-where
-    RootG: Scope<Timestamp = ()>,
-    G: Scope<Timestamp = Timestamp>,
-{
+) {
     // Tokens that we should return from the method.
     let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
 
@@ -124,72 +124,62 @@ where
     // a million fields
     let resumption_calculator = description.clone();
 
-    let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
-
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let (streams, capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
             let (streams, cap) = source::create_raw_source(
-                root_scope,
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
-                internal_cmd_tx,
             );
             let streams: Vec<_> = streams
                 .into_iter()
-                .map(|(ok, err)| (SourceType::Delimited(ok), err))
+                .map(|(ok, err, health)| (SourceType::Delimited(ok), err, health))
                 .collect();
             (streams, cap)
         }
         GenericSourceConnection::Postgres(connection) => {
             let (streams, cap) = source::create_raw_source(
-                root_scope,
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
-                internal_cmd_tx,
             );
             let streams: Vec<_> = streams
                 .into_iter()
-                .map(|(ok, err)| (SourceType::Row(ok), err))
+                .map(|(ok, err, health)| (SourceType::Row(ok), err, health))
                 .collect();
             (streams, cap)
         }
         GenericSourceConnection::LoadGenerator(connection) => {
             let (streams, cap) = source::create_raw_source(
-                root_scope,
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
-                internal_cmd_tx,
             );
             let streams: Vec<_> = streams
                 .into_iter()
-                .map(|(ok, err)| (SourceType::Row(ok), err))
+                .map(|(ok, err, health)| (SourceType::Row(ok), err, health))
                 .collect();
             (streams, cap)
         }
         GenericSourceConnection::TestScript(connection) => {
             let (streams, cap) = source::create_raw_source(
-                root_scope,
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
-                internal_cmd_tx,
             );
             let streams: Vec<_> = streams
                 .into_iter()
-                .map(|(ok, err)| (SourceType::Delimited(ok), err))
+                .map(|(ok, err, health)| (SourceType::Delimited(ok), err, health))
                 .collect();
             (streams, cap)
         }
@@ -200,7 +190,7 @@ where
     needed_tokens.push(source_token);
 
     let mut outputs = vec![];
-    for (ok_source, err_source) in streams {
+    for (ok_source, err_source, health) in streams {
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
@@ -217,7 +207,7 @@ where
             storage_state,
         );
         needed_tokens.extend(extra_tokens);
-        outputs.push((ok, err));
+        outputs.push((ok, err, health));
     }
     (outputs, Rc::new(needed_tokens))
 }
