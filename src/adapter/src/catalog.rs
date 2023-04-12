@@ -8030,8 +8030,8 @@ mod tests {
                         item,
                         name: QualifiedItemName {
                             qualifiers: ItemQualifiers {
-                                database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::new(1)),
-                                schema_spec: SchemaSpecifier::Id(SchemaId::new(3)),
+                                database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::User(1)),
+                                schema_spec: SchemaSpecifier::Id(SchemaId::User(3)),
                             },
                             item: "v".to_string(),
                         },

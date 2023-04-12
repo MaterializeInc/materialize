@@ -275,9 +275,9 @@ impl AstDisplay for ResolvedDatabaseSpecifier {
     }
 }
 
-impl From<u64> for ResolvedDatabaseSpecifier {
-    fn from(id: u64) -> Self {
-        Self::Id(DatabaseId(id))
+impl From<DatabaseId> for ResolvedDatabaseSpecifier {
+    fn from(id: DatabaseId) -> Self {
+        Self::Id(id)
     }
 }
 
@@ -320,7 +320,7 @@ impl From<u64> for SchemaSpecifier {
         if id == Self::TEMPORARY_SCHEMA_ID {
             Self::Temporary
         } else {
-            Self::Id(SchemaId(id))
+            Self::Id(SchemaId::User(id))
         }
     }
 }
@@ -328,7 +328,7 @@ impl From<u64> for SchemaSpecifier {
 impl From<&SchemaSpecifier> for SchemaId {
     fn from(schema_spec: &SchemaSpecifier) -> Self {
         match schema_spec {
-            SchemaSpecifier::Temporary => SchemaId(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
             SchemaSpecifier::Id(id) => id.clone(),
         }
     }
@@ -337,21 +337,9 @@ impl From<&SchemaSpecifier> for SchemaId {
 impl From<SchemaSpecifier> for SchemaId {
     fn from(schema_spec: SchemaSpecifier) -> Self {
         match schema_spec {
-            SchemaSpecifier::Temporary => SchemaId(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
             SchemaSpecifier::Id(id) => id,
         }
-    }
-}
-
-impl From<&SchemaSpecifier> for u64 {
-    fn from(schema_spec: &SchemaSpecifier) -> Self {
-        SchemaId::from(schema_spec).0
-    }
-}
-
-impl From<SchemaSpecifier> for u64 {
-    fn from(schema_spec: SchemaSpecifier) -> Self {
-        SchemaId::from(schema_spec).0
     }
 }
 
@@ -632,19 +620,42 @@ impl AstInfo for Aug {
 
 /// The identifier for a schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct SchemaId(pub u64);
+#[serde(into = "SchemaIdJson")]
+#[serde(try_from = "SchemaIdJson")]
+pub enum SchemaId {
+    User(u64),
+    System(u64),
+}
 
-impl SchemaId {
-    /// Constructs a new schema identifier. It is the caller's responsibility
-    /// to provide a unique `id`.
-    pub fn new(id: u64) -> Self {
-        SchemaId(id)
+/// A type that specifies how we serialize and deserialize a [`SchemaId`].
+///
+/// Note: JSON maps require their keys to be strings, and we use [`SchemaId`] as the key
+/// in some maps, so we need to serialize them as plain strings, which is what this type
+/// does.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+struct SchemaIdJson(String);
+
+impl From<SchemaId> for SchemaIdJson {
+    fn from(id: SchemaId) -> SchemaIdJson {
+        SchemaIdJson(id.to_string())
+    }
+}
+
+impl TryFrom<SchemaIdJson> for SchemaId {
+    type Error = PlanError;
+
+    fn try_from(value: SchemaIdJson) -> Result<Self, Self::Error> {
+        SchemaId::from_str(&value.0)
     }
 }
 
 impl fmt::Display for SchemaId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            SchemaId::System(id) => write!(f, "s{}", id),
+            SchemaId::User(id) => write!(f, "u{}", id),
+        }
     }
 }
 
@@ -652,26 +663,62 @@ impl FromStr for SchemaId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: u64 = s.parse()?;
-        Ok(SchemaId(val))
+        if s.len() < 2 {
+            return Err(PlanError::Unstructured(format!(
+                "couldn't parse SchemaId {}",
+                s
+            )));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next() {
+            Some('s') => Ok(SchemaId::System(val)),
+            Some('u') => Ok(SchemaId::User(val)),
+            _ => Err(PlanError::Unstructured(format!(
+                "couldn't parse SchemaId {}",
+                s
+            ))),
+        }
     }
 }
 
 /// The identifier for a database.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct DatabaseId(pub u64);
+#[serde(into = "DatabaseIdJson")]
+#[serde(try_from = "DatabaseIdJson")]
+pub enum DatabaseId {
+    User(u64),
+    System(u64),
+}
 
-impl DatabaseId {
-    /// Constructs a new database identifier. It is the caller's responsibility
-    /// to provide a unique `id`.
-    pub fn new(id: u64) -> Self {
-        DatabaseId(id)
+/// A type that specifies how we serialize and deserialize a [`DatabaseId`].
+///
+/// Note: JSON maps require their keys to be strings, and we use [`DatabaseId`] as the key
+/// in some maps, so we need to serialize them as plain strings, which is what this type
+/// does.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+struct DatabaseIdJson(String);
+
+impl From<DatabaseId> for DatabaseIdJson {
+    fn from(id: DatabaseId) -> DatabaseIdJson {
+        DatabaseIdJson(id.to_string())
+    }
+}
+
+impl TryFrom<DatabaseIdJson> for DatabaseId {
+    type Error = PlanError;
+
+    fn try_from(value: DatabaseIdJson) -> Result<Self, Self::Error> {
+        DatabaseId::from_str(&value.0)
     }
 }
 
 impl fmt::Display for DatabaseId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            DatabaseId::System(id) => write!(f, "s{}", id),
+            DatabaseId::User(id) => write!(f, "u{}", id),
+        }
     }
 }
 
@@ -679,8 +726,21 @@ impl FromStr for DatabaseId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: u64 = s.parse()?;
-        Ok(DatabaseId(val))
+        if s.len() < 2 {
+            return Err(PlanError::Unstructured(format!(
+                "couldn't parse DatabaseId {}",
+                s
+            )));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next() {
+            Some('s') => Ok(DatabaseId::System(val)),
+            Some('u') => Ok(DatabaseId::User(val)),
+            _ => Err(PlanError::Unstructured(format!(
+                "couldn't parse DatabaseId {}",
+                s
+            ))),
+        }
     }
 }
 
