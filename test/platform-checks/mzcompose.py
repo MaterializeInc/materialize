@@ -36,7 +36,7 @@ SERVICES = [
     ),  # Started by some Scenarios, defined here only for the teardown
     Materialized(external_cockroach=True),
     TestdriveService(
-        default_timeout="300s",
+        default_timeout="3s",
         no_reset=True,
         seed=1,
         entrypoint_extra=[
