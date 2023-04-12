@@ -40,8 +40,7 @@ impl UnverifiedAuthentication {
 
         match &*auth {
             Some(auth) => {
-                let expire_at =
-                    DateTime::parse_from_str(&auth.expires, "%a, %d %b %Y %H:%M:%S %Z").unwrap();
+                let expire_at = DateTime::parse_from_rfc2822(&auth.expires).unwrap();
                 // Refresh twice as frequently as we need to, to be safe.
                 let expire_at = expire_at.sub(Duration::seconds(auth.expires_in / 2));
                 let current_time = Utc::now();
