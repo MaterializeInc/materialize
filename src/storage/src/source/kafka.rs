@@ -203,7 +203,6 @@ impl SourceRender for KafkaSourceConnection {
                 Ok(consumer) => Arc::new(consumer),
                 Err(e) => {
                     let update = HealthStatusUpdate {
-                        output_index: 0,
                         update: HealthStatus::StalledWithError {
                             error: format!(
                                 "failed creating kafka consumer: {}",
@@ -451,10 +450,11 @@ impl SourceRender for KafkaSourceConnection {
                                 "kafka error when polling consumer for source: {} topic: {} : {}",
                                 reader.source_name, reader.topic_name, e
                             );
-                            let status = HealthStatusUpdate::status(
-                                0,
-                                HealthStatus::StalledWithError { error, hint: None },
-                            );
+                            let status =
+                                HealthStatusUpdate::status(HealthStatus::StalledWithError {
+                                    error,
+                                    hint: None,
+                                });
                             health_output.give(&health_cap, (0, status)).await;
                         }
                         Ok(message) => {
@@ -502,7 +502,7 @@ impl SourceRender for KafkaSourceConnection {
                                     hint: None,
                                 };
                                 health_output
-                                    .give(&health_cap, (0, HealthStatusUpdate::status(0, status)))
+                                    .give(&health_cap, (0, HealthStatusUpdate::status(status)))
                                     .await;
                             }
                         }
@@ -522,7 +522,7 @@ impl SourceRender for KafkaSourceConnection {
                 let status = reader.health_status.lock().unwrap().take();
                 if let Some(status) = status {
                     health_output
-                        .give(&health_cap, (0, HealthStatusUpdate::status(0, status)))
+                        .give(&health_cap, (0, HealthStatusUpdate::status(status)))
                         .await;
                 }
 
@@ -836,7 +836,6 @@ fn construct_source_message(
         panic!("got negative offset ({}) from otherwise non-error'd kafka message", msg.offset());
     };
     let msg = SourceMessage {
-        output: 0,
         upstream_time_millis: msg.timestamp().to_millis(),
         key: msg.key().map(|k| k.to_vec()),
         value: msg.payload().map(|p| p.to_vec()),

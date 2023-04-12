@@ -189,7 +189,6 @@ enum InternalMessage {
     /// A value meant for a subsource.
     Value {
         lsn: PgLsn,
-        output: usize,
         /// Errors sent here are meant to express a subsource error that occurred in the process of
         /// decoding values, i.e. it is in lieu of a value. This contrasts with
         /// `InternalEssage::Err`, which signals an error in the source itself, e.g. a programming
@@ -201,7 +200,7 @@ enum InternalMessage {
 
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
-    receiver_stream: Receiver<InternalMessage>,
+    receiver_stream: Receiver<(usize, InternalMessage)>,
 
     /// The lsn we last emitted data at. Used to fabricate timestamps for errors. This should
     /// ideally go away and only emit errors that we can associate with source timestamps
@@ -254,7 +253,7 @@ struct PostgresTaskInfo {
     /// we have a durable signal that it should never produce any data.
     source_tables: BTreeMap<u32, SourceTable>,
     row_sender: RowSender,
-    sender: Sender<InternalMessage>,
+    sender: Sender<(usize, InternalMessage)>,
     resume_lsn: Arc<AtomicU64>,
 }
 
@@ -403,14 +402,13 @@ impl SourceRender for PostgresSourceConnection {
             loop {
                 tokio::select! {
                     message = reader.receiver_stream.recv() => match message {
-                        Some(InternalMessage::Value {
+                        Some((output_index, InternalMessage::Value {
                             lsn,
-                            output,
                             value,
                             end,
-                        }) => {
+                        })) => {
                             mz_ore::soft_assert!(
-                                output != 0,
+                                output_index != 0,
                                 "InternalMessage::Value is meant only for subsources"
                             );
 
@@ -418,7 +416,6 @@ impl SourceRender for PostgresSourceConnection {
                             let (msg, diff) = match value {
                                 Ok((row, diff)) => (
                                     Ok(SourceMessage {
-                                        output,
                                         upstream_time_millis: None,
                                         key: (),
                                         value: row,
@@ -426,7 +423,7 @@ impl SourceRender for PostgresSourceConnection {
                                     }),
                                     diff,
                                 ),
-                                Err(err) => (Err(SourceReaderError::other_definite(output, err)), 1),
+                                Err(err) => (Err(SourceReaderError::other_definite(err)), 1),
                             };
 
                             let ts = lsn.into();
@@ -436,14 +433,14 @@ impl SourceRender for PostgresSourceConnection {
                             if end {
                                 reader.data_capability.downgrade(&next_ts);
                             }
-                            data_output.give(&cap, ((output, msg), *cap.time(), diff)).await;
+                            data_output.give(&cap, ((output_index, msg), *cap.time(), diff)).await;
                         }
-                        Some(InternalMessage::Status(update)) => {
-                            health_output.give(&health_capability, (update.output_index, update)).await;
+                        Some((output_index, InternalMessage::Status(update))) => {
+                            health_output.give(&health_capability, (output_index, update)).await;
                         }
-                        Some(InternalMessage::Err(err)) => {
+                        Some((output_index, InternalMessage::Err(err))) => {
                             mz_ore::soft_assert!(
-                                err.output == 0,
+                                output_index == 0,
                                 "InternalMessage::Err is meant only for the primary source"
                             );
 
@@ -454,7 +451,7 @@ impl SourceRender for PostgresSourceConnection {
                             let next_ts = non_definite_ts + 1;
                             reader.data_capability.downgrade(&next_ts);
                             reader.upper_capability.downgrade(&next_ts);
-                            data_output.give(&cap, ((0, Err(err)), *cap.time(), 1)).await;
+                            data_output.give(&cap, ((output_index, Err(err)), *cap.time(), 1)).await;
                         }
                         None => return,
                     },
@@ -497,11 +494,13 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
         // Signal that the primary source is running.
         let _ = task_info
             .sender
-            .send(InternalMessage::Status(HealthStatusUpdate {
-                output_index: 0,
-                update: HealthStatus::Running,
-                should_halt: false,
-            }))
+            .send((
+                0,
+                InternalMessage::Status(HealthStatusUpdate {
+                    update: HealthStatus::Running,
+                    should_halt: false,
+                }),
+            ))
             .await;
 
         match postgres_replication_loop_inner(&mut task_info).await {
@@ -518,14 +517,16 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     // If the channel is shutting down, so is the source.
                     let _ = task_info
                         .sender
-                        .send(InternalMessage::Status(HealthStatusUpdate {
+                        .send((
                             output_index,
-                            update: HealthStatus::StalledWithError {
-                                error: e.to_string_with_causes(),
-                                hint: None,
-                            },
-                            should_halt: false,
-                        }))
+                            InternalMessage::Status(HealthStatusUpdate {
+                                update: HealthStatus::StalledWithError {
+                                    error: e.to_string_with_causes(),
+                                    hint: None,
+                                },
+                                should_halt: false,
+                            }),
+                        ))
                         .await;
                 }
             }
@@ -543,20 +544,22 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     // If the channel is shutting down, so is the source.
                     let _ = task_info
                         .sender
-                        .send(InternalMessage::Status(HealthStatusUpdate {
+                        .send((
                             output_index,
-                            update: HealthStatus::StalledWithError {
-                                error: e.to_string_with_causes(),
-                                hint: None,
-                            },
-                            // TODO: In the future we probably want to handle this more gracefully,
-                            // but for now halting is the easiest way to dump the data in the pipe.
-                            // The restarted clusterd instance will restart the snapshot fresh, which will
-                            // avoid any inconsistencies. Note that if the same lsn is chosen in the
-                            // next snapshotting, the remapped timestamp chosen will be the same for
-                            // both instances of clusterd.
-                            should_halt: true,
-                        }))
+                            InternalMessage::Status(HealthStatusUpdate {
+                                update: HealthStatus::StalledWithError {
+                                    error: e.to_string_with_causes(),
+                                    hint: None,
+                                },
+                                // TODO: In the future we probably want to handle this more gracefully,
+                                // but for now halting is the easiest way to dump the data in the pipe.
+                                // The restarted clusterd instance will restart the snapshot fresh, which will
+                                // avoid any inconsistencies. Note that if the same lsn is chosen in the
+                                // next snapshotting, the remapped timestamp chosen will be the same for
+                                // both instances of clusterd.
+                                should_halt: true,
+                            }),
+                        ))
                         .await;
                 }
 
@@ -594,10 +597,12 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                 let _ = task_info
                     .row_sender
                     .sender
-                    .send(InternalMessage::Err(SourceReaderError {
-                        output: 0,
-                        inner: SourceErrorDetails::Initialization(e.to_string()),
-                    }))
+                    .send((
+                        0,
+                        InternalMessage::Err(SourceReaderError {
+                            inner: SourceErrorDetails::Initialization(e.to_string()),
+                        }),
+                    ))
                     .await;
                 return;
             }
@@ -881,13 +886,13 @@ struct RowMessage {
 /// before dropping the `RowSender` or moving onto a new lsn.
 /// Internally, this type uses asserts to uphold the first requirement.
 struct RowSender {
-    sender: Sender<InternalMessage>,
+    sender: Sender<(usize, InternalMessage)>,
     buffered_message: Option<RowMessage>,
 }
 
 impl RowSender {
     /// Create a new `RowSender`.
-    pub fn new(sender: Sender<InternalMessage>) -> Self {
+    pub fn new(sender: Sender<(usize, InternalMessage)>) -> Self {
         Self {
             sender,
             buffered_message: None,
@@ -929,11 +934,13 @@ impl RowSender {
                 // If the channel is shutting down, so is the source.
                 let _ = self
                     .sender
-                    .send(InternalMessage::Status(HealthStatusUpdate {
-                        output_index: 0,
-                        update: HealthStatus::Running,
-                        should_halt: false,
-                    }))
+                    .send((
+                        0,
+                        InternalMessage::Status(HealthStatusUpdate {
+                            update: HealthStatus::Running,
+                            should_halt: false,
+                        }),
+                    ))
                     .await;
             }
         }
@@ -946,15 +953,10 @@ impl RowSender {
         value: Result<(Row, Diff), anyhow::Error>,
         end: bool,
     ) {
-        let message = InternalMessage::Value {
-            lsn,
-            output,
-            value,
-            end,
-        };
+        let message = InternalMessage::Value { lsn, value, end };
         // a closed receiver means the source has been shutdown (dropped or the process is dying),
         // so just continue on without activation
-        let _ = self.sender.send(message).await;
+        let _ = self.sender.send((output, message)).await;
     }
 }
 

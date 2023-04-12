@@ -88,7 +88,6 @@ pub trait SourceRender {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HealthStatusUpdate {
-    pub output_index: usize,
     pub update: HealthStatus,
     pub should_halt: bool,
 }
@@ -128,14 +127,9 @@ impl HealthStatus {
 }
 
 impl HealthStatusUpdate {
-    /// Generates a [`HealthStatusUpdate`] with `update`, which should be output to the
-    /// health stream at `output_index`.
-    ///
-    /// `output_index` should be 0 for any primary sources, but can be other values for to provide
-    /// updates about subsources.
-    pub(crate) fn status(output_index: usize, update: HealthStatus) -> Self {
+    /// Generates a non-halting [`HealthStatusUpdate`] with `update`.
+    pub(crate) fn status(update: HealthStatus) -> Self {
         HealthStatusUpdate {
-            output_index,
             update,
             should_halt: false,
         }
@@ -146,9 +140,6 @@ impl HealthStatusUpdate {
 /// conversion to Message.
 #[derive(Debug, Clone)]
 pub struct SourceMessage<Key, Value> {
-    /// The output stream this message belongs to. Later in the pipeline the stream is partitioned
-    /// based on this value and is fed to the appropriate source exports
-    pub output: usize,
     /// The time that an external system first observed the message
     ///
     /// Milliseconds since the unix epoch
@@ -227,11 +218,6 @@ pub struct DecodeResult {
 /// A structured error for `SourceReader::get_next_message` implementors.
 #[derive(Debug, Clone)]
 pub struct SourceReaderError {
-    /// The target output for this error.
-    ///
-    /// This should be 0 to output an error for the primary source; however, you will need to
-    /// determine a numbering scheme to output errors for subsources.
-    pub output: usize,
     pub inner: SourceErrorDetails,
 }
 
@@ -239,9 +225,8 @@ impl SourceReaderError {
     /// This is an unclassified but definite error. This is typically only appropriate
     /// when the error is permanently fatal for the source... some critical invariant
     /// is violated or data is corrupted, for example.
-    pub fn other_definite(output: usize, e: anyhow::Error) -> SourceReaderError {
+    pub fn other_definite(e: anyhow::Error) -> SourceReaderError {
         SourceReaderError {
-            output,
             inner: SourceErrorDetails::Other(format!("{}", e)),
         }
     }
