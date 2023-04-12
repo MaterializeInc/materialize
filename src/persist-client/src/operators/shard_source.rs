@@ -19,6 +19,7 @@ use std::time::Instant;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use differential_dataflow::operators::arrange::ShutdownButton;
 use futures::StreamExt;
 use futures_util::future::Either;
 use mz_ore::cast::CastFrom;
@@ -123,12 +124,13 @@ where
         Arc::clone(&val_schema),
         should_fetch_part,
     );
-    let (parts, completed_fetches_stream) = shard_source_fetch(
+    let (parts, completed_fetches_stream, fetch_shutdown) = shard_source_fetch(
         &descs, name, clients, location, shard_id, key_schema, val_schema,
     );
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
 
-    (parts, descs_token)
+    let token = Rc::new((descs_token, fetch_shutdown.press_on_drop()));
+    (parts, token)
 }
 
 /// Flow control configuration.
@@ -542,6 +544,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
 ) -> (
     Stream<G, FetchedPart<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
+    ShutdownButton<()>,
 )
 where
     K: Debug + Codec,
@@ -559,22 +562,7 @@ where
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
 
-    // NB: we intentionally do _not_ pass along the shutdown button here so that
-    // we can be assured we always emit the full contents of a batch. If we used
-    // the shutdown token, on Drop, it is possible we'd only partially emit the
-    // contents of a batch which could lead to downstream operators seeing records
-    // and collections that never existed, which may break their invariants.
-    //
-    // The downside of this approach is that we may be left doing (considerable)
-    // work if the dataflow is dropped but we have a large numbers of parts left
-    // in the batch to fetch and yield.
-    //
-    // This also means that a pre-requisite to this operator is for the input to
-    // atomically provide the parts for each batch.
-    //
-    // Note that this requirement would not be necessary if we were emitting
-    // fully consolidated data: https://github.com/MaterializeInc/materialize/issues/16860#issuecomment-1366094925
-    let _shutdown_button = builder.build(move |_capabilities| async move {
+    let shutdown_button = builder.build(move |_capabilities| async move {
         let fetcher = {
             let client = clients
                 .open(location.clone())
@@ -610,5 +598,5 @@ where
         }
     });
 
-    (fetched_stream, completed_fetches_stream)
+    (fetched_stream, completed_fetches_stream, shutdown_button)
 }
