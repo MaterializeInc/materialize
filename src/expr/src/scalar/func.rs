@@ -2034,13 +2034,13 @@ impl BinaryFunc {
         a_expr: &'a MirScalarExpr,
         b_expr: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
+        let a = a_expr.eval(datums, temp_storage)?;
+        let b = b_expr.eval(datums, temp_storage)?;
+        if self.propagates_nulls() && (a.is_null() || b.is_null()) {
+            return Ok(Datum::Null);
+        }
         macro_rules! eager {
             ($func:expr $(, $args:expr)*) => {{
-                let a = a_expr.eval(datums, temp_storage)?;
-                let b = b_expr.eval(datums, temp_storage)?;
-                if self.propagates_nulls() && (a.is_null() || b.is_null()) {
-                    return Ok(Datum::Null);
-                }
                 $func(a, b $(, $args)*)
             }}
         }
