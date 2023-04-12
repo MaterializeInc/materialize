@@ -133,7 +133,6 @@ impl SourceRender for LoadGeneratorSourceConnection {
                 let message = (
                     output,
                     Ok(SourceMessage {
-                        output,
                         upstream_time_millis: None,
                         key: (),
                         value,
@@ -151,7 +150,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             }
         });
 
-        let status = [(0, HealthStatusUpdate::status(0, HealthStatus::Running))].to_stream(scope);
+        let status = [(0, HealthStatusUpdate::status(HealthStatus::Running))].to_stream(scope);
         (
             stream.as_collection(),
             None,

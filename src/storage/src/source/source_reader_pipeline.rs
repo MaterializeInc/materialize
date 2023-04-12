@@ -315,16 +315,11 @@ where
             };
             for ((output_index, message), _, _) in data.iter() {
                 let status = match message {
-                    Ok(source_message) => {
-                        HealthStatusUpdate::status(source_message.output, HealthStatus::Running)
-                    }
-                    Err(ref error) => HealthStatusUpdate::status(
-                        error.output,
-                        HealthStatus::StalledWithError {
-                            error: error.inner.to_string(),
-                            hint: None,
-                        },
-                    ),
+                    Ok(_) => HealthStatusUpdate::status(HealthStatus::Running),
+                    Err(ref error) => HealthStatusUpdate::status(HealthStatus::StalledWithError {
+                        error: error.inner.to_string(),
+                        hint: None,
+                    }),
                 };
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
@@ -438,7 +433,6 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
                     let HealthStatusUpdate {
                         update,
                         should_halt,
-                        output_index: _,
                     } = health_event;
                     if should_halt {
                         halt_with = Some(update.clone());
@@ -1101,7 +1095,7 @@ async fn handle_message<K, V, T, D>(
                 )),
             )
         }
-        Err(SourceReaderError { output: _, inner }) => {
+        Err(SourceReaderError { inner }) => {
             let err = SourceError {
                 source_id,
                 error: inner,

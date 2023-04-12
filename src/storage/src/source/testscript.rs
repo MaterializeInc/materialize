@@ -81,14 +81,15 @@ impl SourceRender for TestScriptSourceConnection {
                     ScriptCommand::Emit { key, value, offset } => {
                         // For now we only support `Finalized` messages
                         let msg = Ok(SourceMessage {
-                            // For now, we only support single-output, single partition
-                            output: 0,
                             upstream_time_millis: None,
                             key: key.map(|k| k.into_bytes()),
                             value: Some(value.into_bytes()),
                             headers: None,
                         });
                         let ts = MzOffset::from(offset);
+
+                        // For now, we only support single-output, single partition, so output
+                        // to the 0th output.
                         data_output.give(&cap.delayed(&ts), ((0, msg), ts, 1)).await;
                         cap.downgrade(&(ts + 1));
                     }
@@ -99,7 +100,7 @@ impl SourceRender for TestScriptSourceConnection {
             futures::future::pending::<()>().await;
         });
 
-        let status = [(0, HealthStatusUpdate::status(0, HealthStatus::Running))].to_stream(scope);
+        let status = [(0, HealthStatusUpdate::status(HealthStatus::Running))].to_stream(scope);
         (
             stream.as_collection(),
             None,
