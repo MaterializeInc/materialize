@@ -72,9 +72,16 @@ pub trait SourceRender {
         connection_context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
     ) -> (
-        Collection<G, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>, Diff>,
+        Collection<
+            G,
+            (
+                usize,
+                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
+            ),
+            Diff,
+        >,
         Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusUpdate>,
+        Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     );
 }

@@ -229,8 +229,8 @@ where
     );
 
     let health_streams: Vec<_> = health_stream
-        .partition(partition_count, |(worker_idx, update)| {
-            (u64::cast_from(update.output_index), (worker_idx, update))
+        .partition(partition_count, |(worker_idx, (output_index, update))| {
+            (u64::cast_from(output_index), (worker_idx, update))
         });
 
     let (remap_stream, remap_token) =
@@ -264,9 +264,16 @@ fn source_render_operator<G, C>(
     connection_context: ConnectionContext,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
 ) -> (
-    Collection<G, Result<SourceMessage<C::Key, C::Value>, SourceReaderError>, Diff>,
+    Collection<
+        G,
+        (
+            usize,
+            Result<SourceMessage<C::Key, C::Value>, SourceReaderError>,
+        ),
+        Diff,
+    >,
     Stream<G, Infallible>,
-    Stream<G, (WorkerId, HealthStatusUpdate)>,
+    Stream<G, (WorkerId, (usize, HealthStatusUpdate))>,
     Rc<dyn Any>,
 )
 where
@@ -291,7 +298,10 @@ where
     let mut data_input = builder.new_input(&data.inner, Pipeline);
     let (mut data_output, data) = builder.new_output();
     let (mut _progress_output, derived_progress) = builder.new_output();
-    let (mut health_output, derived_health) = builder.new_output();
+    let (mut health_output, derived_health): (
+        _,
+        timely::dataflow::StreamCore<G, Vec<(usize, HealthStatusUpdate)>>,
+    ) = builder.new_output();
 
     builder.build(move |mut caps| async move {
         let health_cap = caps.pop().unwrap();
@@ -303,7 +313,7 @@ where
             let AsyncEvent::Data(cap, data) = event else {
                 continue;
             };
-            for (message, _, _) in data.iter() {
+            for ((output_index, message), _, _) in data.iter() {
                 let status = match message {
                     Ok(source_message) => {
                         HealthStatusUpdate::status(source_message.output, HealthStatus::Running)
@@ -317,9 +327,9 @@ where
                     ),
                 };
 
-                let statuses: &mut Vec<_> = statuses_by_idx.entry(status.output_index).or_default();
+                let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
                 if statuses.last() != Some(&status) {
-                    statuses.push(status);
+                    statuses.push(status)
                 }
 
                 match message {
@@ -333,8 +343,15 @@ where
                 }
             }
             data_output.give_container(&cap, data).await;
-            for (_, statuses) in statuses_by_idx.iter_mut() {
-                health_output.give_container(&health_cap, statuses).await;
+            let mut status_buf = vec![];
+            for (output, statuses) in statuses_by_idx.iter() {
+                status_buf.clear();
+                for status in statuses {
+                    status_buf.push((*output, status.clone()));
+                }
+                health_output
+                    .give_container(&health_cap, &mut status_buf)
+                    .await;
             }
         }
     });
@@ -678,7 +695,14 @@ fn reclock_operator<G, K, V, FromTime, D>(
     config: RawSourceCreationConfig,
     mut timestamper: ReclockFollower<FromTime, mz_repr::Timestamp>,
     mut source_rx: UnboundedReceiver<
-        Event<FromTime, (Result<SourceMessage<K, V>, SourceReaderError>, FromTime, D)>,
+        Event<
+            FromTime,
+            (
+                (usize, Result<SourceMessage<K, V>, SourceReaderError>),
+                FromTime,
+                D,
+            ),
+        >,
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
 ) -> (
@@ -741,7 +765,7 @@ where
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
-        type Batch<K, V, T, D> = Vec<(Result<SourceMessage<K, V>, SourceReaderError>, T, D)>;
+        type Batch<K, V, T, D> = Vec<((usize, Result<SourceMessage<K, V>, SourceReaderError>), T, D)>;
         let mut untimestamped_batches: Vec<(FromTime, Batch<K, V, FromTime, D>)> = Vec::new();
 
         // Stash of reclock updates that are still beyond the upper frontier
@@ -1021,7 +1045,7 @@ where
 /// TODO: This function is a bit of a mess rn but hopefully this function makes
 /// the existing mess more obvious and points towards ways to improve it.
 async fn handle_message<K, V, T, D>(
-    message: Result<SourceMessage<K, V>, SourceReaderError>,
+    (output_index, message): (usize, Result<SourceMessage<K, V>, SourceReaderError>),
     time: T,
     diff: D,
     bytes_read: &mut usize,
@@ -1066,7 +1090,7 @@ async fn handle_message<K, V, T, D>(
             }
 
             (
-                message.output,
+                output_index,
                 Ok(SourceOutput::new(
                     message.key,
                     message.value,
@@ -1077,12 +1101,12 @@ async fn handle_message<K, V, T, D>(
                 )),
             )
         }
-        Err(SourceReaderError { output, inner }) => {
+        Err(SourceReaderError { output: _, inner }) => {
             let err = SourceError {
                 source_id,
                 error: inner,
             };
-            (output, Err(err))
+            (output_index, Err(err))
         }
     };
 

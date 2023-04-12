@@ -78,9 +78,16 @@ impl SourceRender for LoadGeneratorSourceConnection {
         _connection_context: ConnectionContext,
         _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     ) -> (
-        Collection<G, Result<SourceMessage<(), Row>, SourceReaderError>, Diff>,
+        Collection<
+            G,
+            (
+                usize,
+                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
+            ),
+            Diff,
+        >,
         Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusUpdate>,
+        Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name, scope.clone());
@@ -123,13 +130,16 @@ impl SourceRender for LoadGeneratorSourceConnection {
             let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
 
             while let Some((output, typ, value, diff)) = rows.next() {
-                let message = Ok(SourceMessage {
+                let message = (
                     output,
-                    upstream_time_millis: None,
-                    key: (),
-                    value,
-                    headers: None,
-                });
+                    Ok(SourceMessage {
+                        output,
+                        upstream_time_millis: None,
+                        key: (),
+                        value,
+                        headers: None,
+                    }),
+                );
 
                 data_output.give(&cap, (message, offset, diff)).await;
 
@@ -141,7 +151,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             }
         });
 
-        let status = [HealthStatusUpdate::status(0, HealthStatus::Running)].to_stream(scope);
+        let status = [(0, HealthStatusUpdate::status(0, HealthStatus::Running))].to_stream(scope);
         (
             stream.as_collection(),
             None,
