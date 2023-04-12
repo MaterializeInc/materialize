@@ -230,7 +230,7 @@ impl HirRelationExpr {
                     write!(f, " offset={}", offset)?
                 }
                 if let Some(expected_group_size) = expected_group_size {
-                    write!(f, " expected_group_size={}", expected_group_size)?;
+                    write!(f, " exp_group_size={}", expected_group_size)?;
                 }
                 writeln!(f)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
