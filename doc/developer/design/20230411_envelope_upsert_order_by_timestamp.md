@@ -15,7 +15,7 @@ The scope will be limited to only allow `ORDER BY TIMESTAMP` (ascending order).
     - `OFFSET` is already default. We can make it explicit though if we want
     - `PARTITION`, `KEY`, `TOPIC`, would not make a good order by clause
     - `HEADERS` by itself would not also make a good order by clause (it’s a json blob), but later we can probably allow expressions so that values could be extracted from it.
-- Limiting to only `ASC` as default, because for compaction it makes sense to take semantically the _latest_ value of something, which implies an `ASC` order by
+- Limiting to only ascending order because no users have expressed a need for descending.
 
 # Explanation
 
