@@ -33,9 +33,10 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | Field               | Type         | Meaning                                              |
 | ------------------- | ------------ | --------                                             |
 | `replica_id`        | [`text`]     | The ID of a cluster replica.                         |
-| `process_id`        | [`bigint`]   | An identifier of a compute process within a replica. |
-| `cpu_nano_cores`    | [`bigint`]   | Approximate CPU usage, in billionths of a vCPU core. |
-| `memory_bytes`      | [`bigint`]   | Approximate RAM usage, in bytes.                     |
+| `process_id`        | [`uint8`]    | An identifier of a compute process within a replica. |
+| `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core. |
+| `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                     |
+| `disk_bytes`        | [`uint8`]    | Currently null. Reserved for later use.              |
 
 ### `mz_cluster_replica_sizes`
 
@@ -54,6 +55,7 @@ them for any kind of capacity planning.
 | `workers`        | [`uint8`] | The number of Timely Dataflow workers per process.            |
 | `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
 | `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
+| `disk_bytes`     | [`uint8`] | Currently null. Reserved for later use.                       |
 
 
 ### `mz_cluster_links`
@@ -100,6 +102,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`     | [`uint8`] | An identifier of a compute process within a replica.       |
 | `cpu_percent`    | [`uint8`] | Approximate CPU usage, in percent of the total allocation. |
 | `memory_percent` | [`uint8`] | Approximate RAM usage, in percent of the total allocation. |
+| `disk_percent`   | [`uint8`] | Currently null. Reserved for later use.                    |
 
 ### `mz_cluster_replica_frontiers`
 
