@@ -6908,22 +6908,37 @@ impl VariadicFunc {
         temp_storage: &'a RowArena,
         exprs: &'a [MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
+        match self {
+            VariadicFunc::Coalesce => return coalesce(datums, temp_storage, exprs),
+            VariadicFunc::Greatest => return greatest(datums, temp_storage, exprs),
+            VariadicFunc::And => return and(datums, temp_storage, exprs),
+            VariadicFunc::Or => return or(datums, temp_storage, exprs),
+            VariadicFunc::ErrorIfNull => return error_if_null(datums, temp_storage, exprs),
+            VariadicFunc::Least => return least(datums, temp_storage, exprs),
+            _ => {}
+        };
+
+        let ds = exprs
+            .iter()
+            .map(|e| e.eval(datums, temp_storage))
+            .collect::<Result<Vec<_>, _>>()?;
+        if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
+            return Ok(Datum::Null);
+        }
+
         macro_rules! eager {
             ($func:expr $(, $args:expr)*) => {{
-                let ds = exprs.iter()
-                    .map(|e| e.eval(datums, temp_storage))
-                    .collect::<Result<Vec<_>, _>>()?;
-                if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
-                    return Ok(Datum::Null);
-                }
                 $func(&ds $(, $args)*)
             }}
         }
 
         match self {
-            VariadicFunc::Coalesce => coalesce(datums, temp_storage, exprs),
-            VariadicFunc::Greatest => greatest(datums, temp_storage, exprs),
-            VariadicFunc::Least => least(datums, temp_storage, exprs),
+            VariadicFunc::Coalesce
+            | VariadicFunc::Greatest
+            | VariadicFunc::And
+            | VariadicFunc::Or
+            | VariadicFunc::ErrorIfNull
+            | VariadicFunc::Least => unreachable!(),
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
             VariadicFunc::MakeTimestamp => eager!(make_timestamp),
             VariadicFunc::PadLeading => eager!(pad_leading, temp_storage),
@@ -6950,7 +6965,6 @@ impl VariadicFunc {
             VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
             VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
             VariadicFunc::HmacBytes => eager!(hmac_bytes, temp_storage),
-            VariadicFunc::ErrorIfNull => error_if_null(datums, temp_storage, exprs),
             VariadicFunc::DateBinTimestamp => eager!(|d: &[Datum]| date_bin(
                 d[0].unwrap_interval(),
                 d[1].unwrap_timestamp(),
@@ -6961,8 +6975,6 @@ impl VariadicFunc {
                 d[1].unwrap_timestamptz(),
                 d[2].unwrap_timestamptz(),
             )),
-            VariadicFunc::And => and(datums, temp_storage, exprs),
-            VariadicFunc::Or => or(datums, temp_storage, exprs),
             VariadicFunc::RangeCreate { .. } => eager!(create_range, temp_storage),
             VariadicFunc::MakeMzAclItem => eager!(make_mz_acl_item),
             VariadicFunc::ArrayPosition => eager!(array_position),
