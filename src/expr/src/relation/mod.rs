@@ -221,7 +221,7 @@ pub enum MirRelationExpr {
         monotonic: bool,
         /// User hint: expected number of values per group key. Used to optimize physical rendering.
         #[serde(default)]
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     },
     /// Groups and orders within each group, limiting output.
     ///
@@ -1234,7 +1234,7 @@ impl MirRelationExpr {
         self,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     ) -> Self {
         MirRelationExpr::Reduce {
             input: Box::new(self),
