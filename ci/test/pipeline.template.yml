@@ -163,7 +163,7 @@ steps:
 
   - id: testdrive
     label: Testdrive %n
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
     parallelism: 4
@@ -175,11 +175,11 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-2]
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: kafka-persistence
     label: Kafka persistence
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
@@ -187,11 +187,11 @@ steps:
           composition: persistence
           run: kafka-sources
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: table-persistence
     label: Table persistence
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
@@ -199,11 +199,11 @@ steps:
           composition: persistence
           run: user-tables
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: cluster-tests
     label: Cluster tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 20
     artifact_paths: junit_*.xml
     inputs: [test/cluster]
@@ -211,11 +211,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: cluster-isolation
     label: Cluster isolation test
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     inputs: [test/cluster-isolation]
     artifact_paths: junit_*.xml
@@ -223,11 +223,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: replica-isolation
     label: Replica isolation
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 20
     inputs: [test/replica-isolation]
     artifact_paths: junit_*.xml
@@ -235,11 +235,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: replica-isolation
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: kafka-ssl
     label: Kafka SSL smoke test
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/kafka-ssl/smoketest.td]
     artifact_paths: junit_*.xml
@@ -247,11 +247,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: kafka-ssl
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: kafka-sasl-plain
     label: Kafka SASL PLAIN smoke test
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/kafka-sasl-plain/smoketest.td]
     artifact_paths: junit_*.xml
@@ -259,11 +259,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: kafka-sasl-plain
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: sqllogictest-fast
     label: Fast SQL logic tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/sqllogictest]
     artifact_paths: junit_*.xml
@@ -271,11 +271,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: chbench-demo
     label: chbench smoke test
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -283,22 +283,22 @@ steps:
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: restarts
     label: Restart test
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: legacy-upgrade
     label: Legacy upgrade tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     inputs: [doc/user/content/releases]
@@ -306,33 +306,33 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: upgrade
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: metabase-demo
     label: Metabase smoke test
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: metabase
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: dbt-materialize
     label: dbt-materialize tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: debezium-postgres
     label: Debezium Postgres tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/debezium]
     artifact_paths: junit_*.xml
@@ -341,11 +341,11 @@ steps:
           composition: debezium
           run: postgres
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: debezium-sql-server
     label: Debezium SQL Server tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/debezium]
     artifact_paths: junit_*.xml
@@ -354,11 +354,11 @@ steps:
           composition: debezium
           run: sql-server
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: debezium-mysql
     label: Debezium MySQL tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/debezium]
     artifact_paths: junit_*.xml
@@ -367,11 +367,11 @@ steps:
           composition: debezium
           run: mysql
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: pg-cdc
     label: Postgres CDC tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/pg-cdc]
     artifact_paths: junit_*.xml
@@ -379,11 +379,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: pg-cdc-resumption
     label: Postgres CDC resumption tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/pg-cdc-resumption]
     artifact_paths: junit_*.xml
@@ -391,11 +391,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc-resumption
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: ssh-connection
     label: SSH connection tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     inputs: [test/ssh-connection]
     artifact_paths: junit_*.xml
@@ -403,27 +403,27 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: ssh-connection
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: kafka-resumption
     label: Kafka resumption tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-resumption
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     inputs: [misc/python/materialize/zippy]
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -431,18 +431,18 @@ steps:
 
   - id: kafka-exactly-once
     label: Kafka exactly-once tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-exactly-once
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: persist-maelstrom
     label: Maelstrom coverage of persist
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     inputs: [test/persist]
     artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
@@ -451,17 +451,17 @@ steps:
           composition: persist
           args: [--consensus=mem, --blob=mem]
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     coverage: skip # TODO(def-): Should we support coverage for persist-maelstrom?
 
   - id: checks-drop-create-default-replica
     label: "Checks + DROP/CREATE replica"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -469,12 +469,12 @@ steps:
 
   - id: checks-restart-clusterd-compute
     label: "Checks + restart clusterd compute"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -482,12 +482,12 @@ steps:
 
   - id: checks-restart-entire-mz
     label: "Checks + restart of the entire Mz"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -495,12 +495,12 @@ steps:
 
   - id: checks-restart-environmentd-clusterd-storage
     label: "Checks + restart of environmentd & storage clusterd"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -508,12 +508,12 @@ steps:
 
   - id: checks-kill-clusterd-storage
     label: "Checks + kill storage clusterd"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -521,12 +521,12 @@ steps:
 
   - id: checks-restart-source-postgres
     label: "Checks + restart source Postgres"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -534,7 +534,7 @@ steps:
 
   - id: cloudtest
     label: Cloudtest
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     parallelism: 3
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
@@ -548,10 +548,10 @@ steps:
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
     artifact_paths: junit_*.xml
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
@@ -559,17 +559,17 @@ steps:
   - id: storage-usage
     label: "Storage Usage Table Test"
     artifact_paths: junit_*.xml
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: storage-usage
 
   - id: lang-csharp
     label: ":csharp: tests"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     inputs: [test/lang/csharp]
     artifact_paths: junit_*.xml
@@ -577,11 +577,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: csharp
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: lang-js
     label: ":js: tests"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     inputs: [test/lang/js]
     artifact_paths: junit_*.xml
@@ -589,11 +589,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: js
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: lang-java
     label: ":java: tests"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     inputs: [test/lang/java]
     artifact_paths: junit_*.xml
@@ -601,11 +601,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: java
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: lang-python
     label: ":python: tests"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     inputs: [test/lang/python]
     artifact_paths: junit_*.xml
@@ -613,11 +613,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: python
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:

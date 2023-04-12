@@ -13,7 +13,7 @@ steps:
     timeout_in_minutes: 600
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
