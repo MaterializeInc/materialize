@@ -12,8 +12,8 @@ The scope will be limited to only allow `ORDER BY TIMESTAMP` (ascending order).
 
 - For kafka upsert style topics, value = NULL is taken to mean that it’s a delete tombstone and that the corresponding key should be removed. If we want to keep the same behavior it would make sense to limit the `ORDER BY` columns to only the metadata columns.
 - Limiting it to only `TIMESTAMP` because
-    - `OFFSET` is already default. We can make it explicit though if we want
-    - `PARTITION`, `KEY`, `TOPIC`, would not make a good order by clause
+    - `OFFSET` is already default. We can make it explicit though if we want.
+    - `PARTITION`, `KEY`, `TOPIC`, would not make a good order by clause.
     - `HEADERS` by itself would not also make a good order by clause (it’s a json blob), but later we can probably allow expressions so that values could be extracted from it.
 - Limiting to only ascending order because no users have expressed a need for descending.
 
@@ -89,4 +89,6 @@ An alternative could be waiting for `TRANSFORM USING` which has a much broader s
 
 # Future work
 
-Depends upon user feedback to see how this should be expanded. Later, we can possibly support user provided columns for the ordering, but we will have to figure out the behavior for tombstones.
+Depending upon user feedback this feature can be expanded to support more use cases.
+- Support extracting custom fields from the HEADERS metadata column and use it to order by.
+- Support user provided columns for the ordering, but we will have to figure out the behavior for tombstones which is not resolved.
