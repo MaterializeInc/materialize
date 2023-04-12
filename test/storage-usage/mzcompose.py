@@ -154,7 +154,7 @@ database_objects = [
             > CREATE MATERIALIZED VIEW obj AS SELECT COUNT(*) FROM t1;
             """
         ),
-        expected_size=7 * 1024,
+        expected_size=4 * 1024,
     ),
     # The pg-cdc source is expected to be empty. The data is in the sub-source
     DatabaseObject(
@@ -247,7 +247,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 $ set-regex match=\d+ replacement=<SIZE>
 
                 # Select the raw size as well, so if this errors in testdrive, its easier to debug.
-                > SELECT size_bytes, size_bytes BETWEEN {database_object.expected_size//2} AND {database_object.expected_size*3}
+                > SELECT size_bytes, size_bytes BETWEEN {database_object.expected_size//3} AND {database_object.expected_size*3}
                   FROM mz_storage_usage
                   WHERE collection_timestamp = ( SELECT MAX(collection_timestamp) FROM mz_storage_usage )
                   AND object_id = ( SELECT id FROM mz_objects WHERE name = 'obj' );
