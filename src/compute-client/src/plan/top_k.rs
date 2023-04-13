@@ -92,27 +92,35 @@ impl TopKPlan {
             })
         }
     }
-    /// Informs the plan that it will apply to a single time, and therefore
-    /// may upgrade from a basic topk plan to a monotonic plan with mandatory
-    /// consolidation.
-    pub fn flag_snapshot(&mut self) {
-        if let TopKPlan::Basic(plan) = self {
-            if plan.offset == 0 {
-                *self = if plan.limit == Some(1) {
-                    TopKPlan::MonotonicTop1(MonotonicTop1Plan {
-                        group_key: plan.group_key.clone(),
-                        order_key: plan.order_key.clone(),
-                        must_consolidate: true,
-                    })
-                } else {
-                    TopKPlan::MonotonicTopK(MonotonicTopKPlan {
-                        group_key: plan.group_key.clone(),
-                        order_key: plan.order_key.clone(),
-                        limit: plan.limit,
-                        arity: plan.arity,
-                        must_consolidate: true,
-                    })
+
+    /// Upgrades from a basic topk plan to a monotonic plan, if necessary, and
+    /// sets consolidation requirements.
+    pub fn as_monotonic(&mut self, must_consolidate: bool) {
+        match self {
+            TopKPlan::Basic(plan) => {
+                if plan.offset == 0 {
+                    *self = if plan.limit == Some(1) {
+                        TopKPlan::MonotonicTop1(MonotonicTop1Plan {
+                            group_key: plan.group_key.clone(),
+                            order_key: plan.order_key.clone(),
+                            must_consolidate,
+                        })
+                    } else {
+                        TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                            group_key: plan.group_key.clone(),
+                            order_key: plan.order_key.clone(),
+                            limit: plan.limit,
+                            arity: plan.arity,
+                            must_consolidate,
+                        })
+                    }
                 }
+            }
+            TopKPlan::MonotonicTop1(plan) => {
+                plan.must_consolidate = must_consolidate;
+            }
+            TopKPlan::MonotonicTopK(plan) => {
+                plan.must_consolidate = must_consolidate;
             }
         }
     }

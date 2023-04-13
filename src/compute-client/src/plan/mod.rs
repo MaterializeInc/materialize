@@ -1708,14 +1708,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
             while let Some(expression) = todo.pop() {
                 match expression {
                     Plan::Reduce { plan, .. } => {
-                        use crate::plan::reduce::CollationPlan;
                         // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
                         match plan {
-                            ReducePlan::Collation(CollationPlan { hierarchical, .. }) => {
-                                hierarchical.as_mut().map(|plan| plan.flag_snapshot());
+                            ReducePlan::Collation(collation) => {
+                                collation.as_monotonic(true);
                             }
                             ReducePlan::Hierarchical(hierarchical) => {
-                                hierarchical.flag_snapshot();
+                                hierarchical.as_monotonic(true);
                             }
                             _ => {
                                 // Nothing to do for other plans, and doing nothing is safe for future variants.
@@ -1724,7 +1723,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         todo.extend(expression.children_mut());
                     }
                     Plan::TopK { top_k_plan, .. } => {
-                        top_k_plan.flag_snapshot();
+                        top_k_plan.as_monotonic(true);
                         todo.extend(expression.children_mut());
                     }
                     Plan::LetRec { body, .. } => {

@@ -322,15 +322,19 @@ pub enum HierarchicalPlan {
 }
 
 impl HierarchicalPlan {
-    /// Informs the plan that it will apply to a single time, and therefore
-    /// may upgrade from a bucketed plan to a monotonic plan with mandatory
-    /// consolidation.
-    pub fn flag_snapshot(&mut self) {
-        if let HierarchicalPlan::Bucketed(bucketed) = self {
-            // Convert to a monotonic plan with mandatory consolidation.
-            // TODO: ideally we would not have the `clone()` but ownership
-            // seems fraught here as we are behind a `&mut self` reference.
-            *self = HierarchicalPlan::Monotonic(bucketed.clone().into_monotonic(true));
+    /// Upgrades from a bucketed plan to a monotonic plan, if necessary,
+    /// and sets consolidation requirements.
+    pub fn as_monotonic(&mut self, must_consolidate: bool) {
+        match self {
+            HierarchicalPlan::Bucketed(bucketed) => {
+                // TODO: ideally we would not have the `clone()` but ownership
+                // seems fraught here as we are behind a `&mut self` reference.
+                *self =
+                    HierarchicalPlan::Monotonic(bucketed.clone().into_monotonic(must_consolidate));
+            }
+            HierarchicalPlan::Monotonic(monotonic) => {
+                monotonic.must_consolidate = must_consolidate;
+            }
         }
     }
 }
@@ -548,6 +552,16 @@ pub struct CollationPlan {
     /// We keep a map from output position -> reduction type
     /// to easily merge results back into the requested order.
     pub aggregate_types: Vec<ReductionType>,
+}
+
+impl CollationPlan {
+    /// Upgrades the hierarchical component of the collation plan to monotonic, if necessary,
+    /// and sets consolidation requirements.
+    pub fn as_monotonic(&mut self, must_consolidate: bool) {
+        self.hierarchical
+            .as_mut()
+            .map(|plan| plan.as_monotonic(must_consolidate));
+    }
 }
 
 impl RustType<ProtoCollationPlan> for CollationPlan {
