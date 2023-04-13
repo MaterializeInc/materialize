@@ -423,25 +423,28 @@ fn generate_required_ownership(plan: &Plan) -> Vec<Ownership> {
 }
 
 pub(crate) const fn all_object_privileges(object_type: ObjectType) -> AclMode {
+    const TABLE_ACL_MODE: AclMode = AclMode::INSERT
+        .union(AclMode::SELECT)
+        .union(AclMode::UPDATE)
+        .union(AclMode::DELETE);
+    const USAGE_CREATE_ACL_MODE: AclMode = AclMode::USAGE.union(AclMode::CREATE);
+    const EMPTY_ACL_MODE: AclMode = AclMode::empty();
     match object_type {
-        ObjectType::Table => AclMode::INSERT
-            .union(AclMode::SELECT)
-            .union(AclMode::UPDATE)
-            .union(AclMode::DELETE),
+        ObjectType::Table => TABLE_ACL_MODE,
         ObjectType::View => AclMode::SELECT,
         ObjectType::MaterializedView => AclMode::SELECT,
         ObjectType::Source => AclMode::SELECT,
-        ObjectType::Sink => AclMode::empty(),
-        ObjectType::Index => AclMode::empty(),
+        ObjectType::Sink => EMPTY_ACL_MODE,
+        ObjectType::Index => EMPTY_ACL_MODE,
         ObjectType::Type => AclMode::USAGE,
-        ObjectType::Role => AclMode::empty(),
-        ObjectType::Cluster => AclMode::USAGE.union(AclMode::CREATE),
-        ObjectType::ClusterReplica => AclMode::empty(),
+        ObjectType::Role => EMPTY_ACL_MODE,
+        ObjectType::Cluster => USAGE_CREATE_ACL_MODE,
+        ObjectType::ClusterReplica => EMPTY_ACL_MODE,
         ObjectType::Secret => AclMode::USAGE,
         ObjectType::Connection => AclMode::USAGE,
-        ObjectType::Database => AclMode::USAGE.union(AclMode::CREATE),
-        ObjectType::Schema => AclMode::USAGE.union(AclMode::CREATE),
-        ObjectType::Func => AclMode::empty(),
+        ObjectType::Database => USAGE_CREATE_ACL_MODE,
+        ObjectType::Schema => USAGE_CREATE_ACL_MODE,
+        ObjectType::Func => EMPTY_ACL_MODE,
     }
 }
 
