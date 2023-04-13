@@ -364,6 +364,11 @@
     description: Substring starting at `start_pos` of length `l`
     url: substring
 
+  - signature: "translate(s: str, from: str, to: str) -> str"
+    description: >- 
+      Any character in `s` that matches a character in `from` is replaced by the corresponding character in the `to`.
+      If `from` is longer than `to`, occurrences of the extra characters in `from` are removed.
+
   - signature: "trim([BOTH | LEADING | TRAILING]? ['c'? FROM]? 's') -> str"
     description: "Trims any character in `c` from `s` on the specified side.<br/><br/>Defaults:<br/>
       &bull; Side: `BOTH`<br/>
