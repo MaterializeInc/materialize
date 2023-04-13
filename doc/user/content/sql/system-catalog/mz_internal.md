@@ -404,11 +404,13 @@ Field           | Type       | Meaning
 
 The `mz_dataflow_channel_operators` view associates [dataflow] channels with the operators that are their endpoints.
 
-Field              | Type       | Meaning
--------------------|------------|--------
-`id`               | [`bigint`] | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).
-`from_operator_id` | [`bigint`] | The ID of the source of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
-`to_operator_id`   | [`bigint`] | The ID of the target of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+| Field                   | Type            | Meaning                                                                                                             |
+|-------------------------|-----------------|---------------------------------------------------------------------------------------------------------------------|
+| `id`                    | [`bigint`]      | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).                           |
+| `from_operator_id`      | [`bigint`]      | The ID of the source of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).           |
+| `from_operator_address` | [`bigint list`] | The address of the source of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
+| `to_operator_id`        | [`bigint`]      | The ID of the target of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).           |
+| `to_operator_address`   | [`bigint list`] | The address of the target of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
 
 ### `mz_dataflow_operators`
 
