@@ -25,6 +25,7 @@ use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{self, SystemVars, Var};
 use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
@@ -811,6 +812,7 @@ impl Coordinator {
         let mut new_materialized_views = 0;
         let mut new_clusters = 0;
         let mut new_replicas_per_cluster = BTreeMap::new();
+        let mut new_replicas = 0;
         let mut new_databases = 0;
         let mut new_schemas_per_database = BTreeMap::new();
         let mut new_objects_per_schema = BTreeMap::new();
@@ -844,6 +846,7 @@ impl Coordinator {
                 }
                 Op::CreateClusterReplica { cluster_id, .. } => {
                     *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
+                    new_replicas += 1;
                 }
                 Op::CreateItem { name, item, .. } => {
                     *new_objects_per_schema
@@ -892,6 +895,7 @@ impl Coordinator {
                         }
                         ObjectId::ClusterReplica((cluster_id, _)) => {
                             *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                            new_replicas -= 1;
                         }
                         ObjectId::Database(_) => {
                             new_databases -= 1;
@@ -1039,6 +1043,15 @@ impl Coordinator {
                 "Replicas per cluster",
             )?;
         }
+        self.validate_resource_limit(
+            self.catalog
+                .user_clusters()
+                .flat_map(|cluster| cluster.replicas())
+                .count(),
+            new_replicas,
+            SystemVars::max_cluster_replicas,
+            "Cluster replicas",
+        )?;
         self.validate_resource_limit(
             self.catalog().databases().count(),
             new_databases,

@@ -1384,6 +1384,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     $ postgres-execute connection=mz_system
                     ALTER SYSTEM SET max_clusters = {args.clusters * 10}
                     ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
+                    ALTER SYSTEM SET max_cluster_replicas = {args.replicas * 10}
                     """
                 )
             )

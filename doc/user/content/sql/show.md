@@ -32,6 +32,7 @@ max_clusters                                | `10`                              
 max_databases                               | `1000`                                                                | The maximum number of databases in the region.
 max_objects_per_schema                      | `1000`                                                                | The maximum number of objects in a schema.
 max_replicas_per_cluster                    | `5`                                                                   | The maximum number of replicas of a single cluster.
+max_cluster_replicas                        | `50`                                                                  | The maximum total number of replicas across all clusters.
 max_result_size                             | `1 GiB`                                                               | The maximum size in bytes for a single query's result.
 max_schemas_per_database                    | `1000`                                                                | The maximum number of schemas in a database.
 max_secrets                                 | `100`                                                                 | The maximum number of secrets in the region, across all schemas.

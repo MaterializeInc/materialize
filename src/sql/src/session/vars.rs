@@ -374,6 +374,15 @@ const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
+const MAX_CLUSTER_REPLICAS: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_cluster_replicas"),
+    // MAX_CLUSTERS.value * MAX_REPLICAS_PER_CLUSTER.value
+    value: &50,
+    description: "The maximum number of replicas across all clusters (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 const MAX_DATABASES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_databases"),
     value: &1000,
@@ -1437,6 +1446,7 @@ impl Default for SystemVars {
             .with_var(&MAX_MATERIALIZED_VIEWS)
             .with_var(&MAX_CLUSTERS)
             .with_var(&MAX_REPLICAS_PER_CLUSTER)
+            .with_var(&MAX_CLUSTER_REPLICAS)
             .with_var(&MAX_DATABASES)
             .with_var(&MAX_SCHEMAS_PER_DATABASE)
             .with_var(&MAX_OBJECTS_PER_SCHEMA)
@@ -1636,6 +1646,11 @@ impl SystemVars {
     /// Returns the value of the `max_replicas_per_cluster` configuration parameter.
     pub fn max_replicas_per_cluster(&self) -> u32 {
         *self.expect_value(&MAX_REPLICAS_PER_CLUSTER)
+    }
+
+    /// Returns the value of the `max_replicas` configuration parameter.
+    pub fn max_cluster_replicas(&self) -> u32 {
+        *self.expect_value(&MAX_CLUSTER_REPLICAS)
     }
 
     /// Returns the value of the `max_databases` configuration parameter.

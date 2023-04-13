@@ -352,5 +352,40 @@ ALTER SYSTEM SET max_aws_privatelink_connections = 42
 > SHOW max_aws_privatelink_connections
 42
 
+> DROP SOURCE mz_source
+
+> DROP SOURCE mz_source2
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_replicas_per_cluster = 100
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_cluster_replicas = 3
+
+> SHOW max_cluster_replicas
+3
+
+> CREATE CLUSTER c1 REPLICAS (r1 (size '1'), r2 (size '1'))
+
+! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
+contains:Cluster replicas resource limit of 3 cannot be exceeded. Current amount is 3 instances, tried to create 1 new instances.
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_cluster_replicas = 4
+
+> SHOW max_cluster_replicas
+4
+
+> CREATE CLUSTER REPLICA c1.r3 SIZE '1'
+
+! CREATE CLUSTER REPLICA c1.r4 SIZE '1'
+contains:Cluster replicas resource limit of 4 cannot be exceeded. Current amount is 4 instances, tried to create 1 new instances.
+
+> DROP CLUSTER REPLICA c1.r2
+
+> CREATE CLUSTER REPLICA c1.r4 SIZE '1'
+
+> DROP CLUSTER c1 CASCADE
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET ALL
