@@ -31,7 +31,7 @@ IntervalStyle                           postgres               "Sets the display
 is_superuser                            off                    "Reports whether the current session is a superuser (PostgreSQL)."
 max_aws_privatelink_connections         0                      "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
 max_clusters                            10                     "The maximum number of clusters in the region (Materialize)."
-max_cluster_replicas                    50                     "The maximum number of total replicas across all clusters (Materialize)."
+max_cluster_replicas                    50                     "The maximum number of replicas across all clusters (Materialize)."
 max_databases                           1000                   "The maximum number of databases in the region (Materialize)."
 max_materialized_views                  100                    "The maximum number of materialized views in the region, across all schemas (Materialize)."
 max_objects_per_schema                  1000                   "The maximum number of objects in a schema (Materialize)."
