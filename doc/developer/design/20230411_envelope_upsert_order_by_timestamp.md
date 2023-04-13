@@ -28,9 +28,10 @@ Make it possible with unsafe-mode to provide custom ORDER BY clause which will o
 
 The option will be part of the `ENVELOPE UPSERT` clause with the following grammar:
 
-ENVELOPE UPSERT [(ORDER BY (<expr>) [ASC])]
+`ENVELOPE UPSERT [(ORDER BY (<expr>) [ASC])]`
 
 The `ASC` modifier is optional noise for specifying ascending ordering, for symmetry with the `ORDER BY` clause in `SELECT` statements.
+
 Examples of valid syntax and semantics:
 - `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY TIMESTAMP )`
 - `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts ENVELOPE UPSERT ( ORDER BY ts )`
@@ -84,7 +85,7 @@ What will it take to promote this to the next stage i.e. Alpha?
 
 Users will need to be careful of what kind of compaction they have for the kafka topic. The upsert will do the correct thing based on the data it sees.
 
-If old data has been compacted away either via time based or key based compaction, and we start ingesting the source after that, the result of upsert will not include the data Kafka has compacted away, which might violate user expectations.```
+If old data has been compacted away either via time based or key based compaction, and we start ingesting the source after that, the result of upsert will not include the data Kafka has compacted away, which might violate user expectations.
 
 If users actually are using this custom order by, it’s likely they are **not** using key based compaction with Kafka because semantically that would be upsert-ing on offset.
 
