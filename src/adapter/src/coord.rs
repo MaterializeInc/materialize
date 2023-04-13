@@ -78,7 +78,6 @@ use derivative::Derivative;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
-use rand::seq::SliceRandom;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -1382,9 +1381,6 @@ pub async fn serve(
     if availability_zones.is_empty() {
         availability_zones.push(DUMMY_AVAILABILITY_ZONE.into());
     }
-    // Shuffle availability zones for unbiased selection in
-    // Coordinator::sequence_create_compute_replica.
-    availability_zones.shuffle(&mut rand::thread_rng());
 
     let aws_principal_context = if aws_account_id.is_some()
         && connection_context.aws_external_id_prefix.is_some()
