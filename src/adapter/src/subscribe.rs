@@ -108,6 +108,7 @@ impl ActiveSubscribe {
                         // TODO: Is sorting by time necessary?
                         match &self.output {
                             Some(SubscribeOutput::WithinTimestampOrderBy { order_by }) => {
+                                tracing::info!(?order_by);
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
                                 let mut right_datum_vec = mz_repr::DatumVec::new();
                                 rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {

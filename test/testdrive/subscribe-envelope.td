@@ -25,14 +25,35 @@ ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT KEY (b, a)
 > FETCH 1 c
+<TIMESTAMP> 1 1 2
+
+> FETCH 1 c
+<TIMESTAMP> 1 2 1
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY a, b
+> FETCH 1 c
+<TIMESTAMP> 1 1 2
+
+> FETCH 1 c
+<TIMESTAMP> 1 2 1
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY b, a
+> FETCH 1 c
 <TIMESTAMP> 1 2 1
 
 > FETCH 1 c
 <TIMESTAMP> 1 1 2
 > COMMIT
 
-! SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT KEY (c)
+! SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY c
 contains: No such column: c
 
-! SUBSCRIBE (SELECT 1 as c, 2 as c union select 2, 1) ENVELOPE UPSERT KEY (c)
+! SUBSCRIBE (SELECT 1 as c, 2 as c union select 2, 1) WITHIN TIMESTAMP ORDER BY c
 contains: Ambiguous column: c
+
+! SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY b, b
+contains: Repeated column names in subscribe envelope key: b
