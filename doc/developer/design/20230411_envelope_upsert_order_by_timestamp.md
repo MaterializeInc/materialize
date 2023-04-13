@@ -66,7 +66,7 @@ Here's an example of the upsert behavior where the source consists of a key, val
                   | Ok (key1, new1, 200)   | // value updated, 200 > 100
                   | Ok (key2, old2, 201)   | // old value kept, 200 < 201
                   | Err(key3, some_error2) | // new error always overrides old
-                  | Err(key4, new4, 300)   | // updated value with higher offset
+                  | Ok (key4, new4, 300)   | // updated value with higher offset
                   +------------------------+
 ```
 In case the order by value of two entries are same, the offset will be used as a tie-breaker.
