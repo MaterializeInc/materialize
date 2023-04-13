@@ -72,6 +72,8 @@ known_errors = [
     "operator does not exist",  # For list types
     "couldn't parse role id",
     "unrecognized privilege type:",
+    "cannot return complex numbers",
+    "statement batch size cannot exceed",
     "length must be nonnegative",
     "is only defined for finite arguments",
     "more than one record produced in subquery",
