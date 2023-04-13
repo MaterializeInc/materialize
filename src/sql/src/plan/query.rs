@@ -44,7 +44,6 @@ use uuid::Uuid;
 
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
-use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
@@ -1846,7 +1845,7 @@ fn plan_view_select(
             relation_expr = relation_expr.map(group_hir_exprs).reduce(
                 group_key,
                 agg_exprs,
-                expected_group_size.map(usize::cast_from),
+                expected_group_size,
             );
             (group_scope, select_all_mapping)
         } else {

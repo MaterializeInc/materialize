@@ -149,7 +149,7 @@ pub enum HirRelationExpr {
         input: Box<HirRelationExpr>,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     },
     Distinct {
         input: Box<HirRelationExpr>,
@@ -1196,7 +1196,7 @@ impl HirRelationExpr {
         self,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     ) -> Self {
         HirRelationExpr::Reduce {
             input: Box::new(self),

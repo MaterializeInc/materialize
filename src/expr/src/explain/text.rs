@@ -611,7 +611,7 @@ impl MirRelationExpr {
                         }
                         write!(f, " monotonic={}", monotonic)?;
                         if let Some(expected_group_size) = expected_group_size {
-                            write!(f, " expected_group_size={}", expected_group_size)?;
+                            write!(f, " exp_group_size={}", expected_group_size)?;
                         }
                         self.fmt_attributes(f, ctx)
                     },

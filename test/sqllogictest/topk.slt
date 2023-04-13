@@ -161,7 +161,7 @@ EXPLAIN WITH(arity, join_impls) SELECT state, name FROM
 ----
 Explained Query:
   Project (#1, #0) // { arity: 2 }
-    TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 monotonic=false expected_group_size=1 // { arity: 3 }
+    TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 monotonic=false exp_group_size=1 // { arity: 3 }
       Get materialize.public.cities // { arity: 3 }
 
 EOF

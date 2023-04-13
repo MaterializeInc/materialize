@@ -167,7 +167,7 @@ fn try_push_reduce_through_join(
     group_key: &Vec<MirScalarExpr>,
     aggregates: &Vec<AggregateExpr>,
     monotonic: bool,
-    expected_group_size: Option<usize>,
+    expected_group_size: Option<u64>,
 ) -> Option<MirRelationExpr> {
     // Variable name details:
     // The goal is to turn `old` (`Reduce { Join { <inputs> }}`) into
@@ -457,7 +457,7 @@ impl ReduceBuilder {
     fn construct_reduce(
         self,
         monotonic: bool,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     ) -> MirRelationExpr {
         MirRelationExpr::Reduce {
             input: Box::new(self.input),
