@@ -5720,16 +5720,7 @@ fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> 
         temp_storage.push_string(
             string
                 .chars()
-                .map(|c| {
-                    match from.find(c) {
-                        Some(m) => {
-                            to.chars().nth(m)
-                        },
-                        None => {
-                            Some(c)
-                        },
-                    }
-                })
+                .map(|c| from.find(c).map_or(Some(c), |m| to.chars().nth(m)))
                 .filter_map(identity)
                 .collect()
         )
