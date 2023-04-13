@@ -4566,6 +4566,7 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-persist-types",
+ "prometheus",
  "rocksdb",
  "tempfile",
  "thiserror",

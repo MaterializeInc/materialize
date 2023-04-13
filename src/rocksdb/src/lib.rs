@@ -84,12 +84,16 @@
 
 #![warn(missing_docs)]
 
+use std::path::Path;
+use std::time::Instant;
+
 use rocksdb::{
     DBCompressionType, Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB,
 };
-use std::path::Path;
 use tokio::sync::{mpsc, oneshot};
 
+use mz_ore::cast::CastLossy;
+use mz_ore::metrics::DeleteOnDropHistogram;
 use mz_persist_types::Codec;
 
 /// An error using this RocksDB wrapper.
@@ -128,6 +132,19 @@ pub struct Options {
 
     /// A possibly shared RocksDB `Env`.
     pub env: Env,
+}
+
+/// Metrics about an instances usage of RocksDB. User-provided
+/// so the user can choose the labels.
+pub struct RocksDBMetrics {
+    /// Latency of multi_gets, in fractional seconds.
+    pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    /// Size of multi_get batches.
+    pub multi_get_batch_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    /// Latency of write batch writes, in fractional seconds.
+    pub write_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    /// Size of write batches.
+    pub write_batch_size: DeleteOnDropHistogram<'static, Vec<String>>,
 }
 
 impl Options {
@@ -212,7 +229,11 @@ where
     V: Codec + Send + Sync + 'static,
 {
     /// Start a new RocksDB instance at the path.
-    pub async fn new(instance_path: &Path, options: Options) -> Result<Self, Error> {
+    pub async fn new(
+        instance_path: &Path,
+        options: Options,
+        metrics: RocksDBMetrics,
+    ) -> Result<Self, Error> {
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
             mz_ore::task::spawn_blocking(
@@ -266,12 +287,22 @@ where
                     }));
                 }
 
-                let gets: Result<Vec<_>, _> = db
-                    .multi_get(encoded_keys.iter().map(|k| k.as_slice()))
-                    .into_iter()
-                    .collect();
+                let batch_size = batch.len();
+
+                // Perform the multi_get and record metrics, if there wasn't an error.
+                let now = Instant::now();
+                let gets = db.multi_get(encoded_keys.iter().map(|k| k.as_slice()));
+                let latency = now.elapsed();
+
+                let gets: Result<Vec<_>, _> = gets.into_iter().collect();
                 let gets = match gets {
-                    Ok(gets) => gets,
+                    Ok(gets) => {
+                        metrics.multi_get_latency.observe(latency.as_secs_f64());
+                        metrics
+                            .multi_get_batch_size
+                            .observe(f64::cast_lossy(batch_size));
+                        gets
+                    }
                     Err(e) => {
                         let _ = response_sender.send(Err(Error::RocksDB(e)));
                         return;
@@ -305,8 +336,16 @@ where
                         previous_value,
                     });
                 }
+                // Perform the multi_get and record metrics, if there wasn't an error.
+                let now = Instant::now();
                 match db.write_opt(writes, &wo) {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        let latency = now.elapsed();
+                        metrics.write_latency.observe(latency.as_secs_f64());
+                        metrics
+                            .write_batch_size
+                            .observe(f64::cast_lossy(batch_size));
+                    }
                     Err(e) => {
                         let _ = response_sender.send(Err(Error::RocksDB(e)));
                         return;

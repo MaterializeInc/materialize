@@ -75,15 +75,33 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use mz_rocksdb::{Options, RocksDBInstance, UpsertResult, UpsertValue};
+use mz_ore::metrics::HistogramVecExt;
+use mz_rocksdb::{Options, RocksDBInstance, RocksDBMetrics, UpsertResult, UpsertValue};
+use prometheus::{HistogramOpts, HistogramVec};
+
+fn metrics_for_tests() -> Result<RocksDBMetrics, anyhow::Error> {
+    let fake_hist_vec =
+        HistogramVec::new(HistogramOpts::new("fake", "fake_help"), &["fake_label"])?;
+
+    Ok(RocksDBMetrics {
+        multi_get_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["one".to_string()]),
+        multi_get_batch_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["two".to_string()]),
+        write_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["three".to_string()]),
+        write_batch_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
+    })
+}
 
 #[tokio::test]
 async fn basic() -> Result<(), anyhow::Error> {
     // If the test aborts, this may not be cleaned up.
     let t = tempfile::tempdir()?;
 
-    let mut instance =
-        RocksDBInstance::<String, String>::new(t.path(), Options::new_with_defaults()?).await?;
+    let mut instance = RocksDBInstance::<String, String>::new(
+        t.path(),
+        Options::new_with_defaults()?,
+        metrics_for_tests()?,
+    )
+    .await?;
 
     let ret = instance
         .upsert(vec![

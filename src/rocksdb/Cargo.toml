@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 itertools = { version = "0.10.5" }
-mz-ore = { path = "../ore", features = ["cli", "network", "async"] }
+mz-ore = { path = "../ore", features = ["cli", "network", "async", "metrics"] }
 mz-persist-types = { path = "../persist-types" }
 tokio = { version = "1.24.2", features = ["macros", "sync", "rt"] }
 thiserror = "1.0.37"
@@ -19,6 +19,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [dev-dependencies]
 anyhow = "1.0.66"
 tempfile = "3.2.0"
+prometheus = { version = "0.13.3", default-features = false }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
