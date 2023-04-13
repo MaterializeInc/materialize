@@ -2322,7 +2322,9 @@ impl Coordinator {
                     &mut target_replica,
                 )?;
                 let id = self.allocate_transient_id()?;
+                tracing::info!(expr=?expr.typ(), desc=?desc);
                 let expr = self.view_optimizer.optimize(expr)?;
+                tracing::info!(expr=?expr.typ(), desc=?desc, "post optmiziation");
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, session, id, desc)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));

@@ -13,17 +13,9 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true
 
-> BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT KEY (a, b)
-> FETCH 1 c
-<TIMESTAMP> 1 1 2
-
-> FETCH 1 c
-<TIMESTAMP> 1 2 1
-> COMMIT
 
 > BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT KEY (b, a)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1+1, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY b DESC NULLS LAST, 1+1 ASC
 > FETCH 1 c
 <TIMESTAMP> 1 1 2
 
@@ -49,11 +41,85 @@ ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true
 <TIMESTAMP> 1 1 2
 > COMMIT
 
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY b DESC NULLS LAST, a ASC
+> FETCH 1 c
+<TIMESTAMP> 1 1 2
+
+> FETCH 1 c
+<TIMESTAMP> 1 2 1
+> COMMIT
+
+
+
 ! SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY c
-contains: No such column: c
+contains: column "c" does not exist
 
 ! SUBSCRIBE (SELECT 1 as c, 2 as c union select 2, 1) WITHIN TIMESTAMP ORDER BY c
-contains: Ambiguous column: c
+contains: column reference "c" is ambiguous
 
-! SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY b, b
-contains: Repeated column names in subscribe envelope key: b
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT KEY (a, b)
+> FETCH 1 c
+<TIMESTAMP> 1 2
+
+> FETCH 1 c
+<TIMESTAMP> 2 1
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT KEY (b, a)
+> FETCH 1 c
+<TIMESTAMP> 1 2
+
+> FETCH 1 c
+<TIMESTAMP> 2 1
+> COMMIT
+
+> CREATE TABLE t1(key int, value int, UNIQUE (key))
+> INSERT INTO t1 VALUES (1, 2), (2, 3)
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t1) ENVELOPE UPSERT KEY (key)
+> FETCH 2 c
+<TIMESTAMP> 1 2
+<TIMESTAMP> 2 3
+
+$ postgres-execute connection=mz_system
+UPDATE t1 SET value = 4 WHERE key = 1
+
+> FETCH 1 c
+<TIMESTAMP> 1 4
+
+$ postgres-execute connection=mz_system
+DELETE FROM t1 WHERE key = 1
+
+> FETCH ALL c
+<TIMESTAMP> 1 <null>
+
+> COMMIT
+
+> CREATE TABLE t2(value int, key int, UNIQUE (key))
+> INSERT INTO t2 VALUES (2, 1), (3, 2)
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t2) ENVELOPE UPSERT KEY (key)
+> FETCH 2 c
+<TIMESTAMP> 1 2
+<TIMESTAMP> 2 3
+
+
+$ postgres-execute connection=mz_system
+UPDATE t2 SET value = 4 WHERE key = 1
+
+> FETCH 1 c
+<TIMESTAMP> 1 4
+
+$ postgres-execute connection=mz_system
+DELETE FROM t2 WHERE key = 1
+
+> FETCH ALL c
+<TIMESTAMP> 1 <null>
+
+> COMMIT
+

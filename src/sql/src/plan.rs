@@ -592,7 +592,7 @@ pub struct PeekPlan {
 
 #[derive(Debug)]
 pub enum SubscribeOutput {
-    WithinTimestampOrderBy { order_by: Vec<ColumnOrder> },
+    WithinTimestampOrderBy { order_by: Vec<ColumnOrder>, project: Vec<usize> },
     EnvelopeUpsert { key_indices: Vec<usize> }
 }
 
