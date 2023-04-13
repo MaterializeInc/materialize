@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use futures::future::BoxFuture;
+use itertools::{Itertools, EitherOrBoth};
 use maplit::btreeset;
 use mz_transform::Optimizer;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -39,7 +40,7 @@ use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp, RelationType};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
@@ -57,7 +58,7 @@ use mz_sql::plan::{
     CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantRolePlan, IndexOption,
     InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
     ReadThenWritePlan, ResetVariablePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
+    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View, SubscribeOutput,
 };
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::Var;
@@ -2325,7 +2326,20 @@ impl Coordinator {
                 tracing::info!(expr=?expr.typ(), desc=?desc);
                 let expr = self.view_optimizer.optimize(expr)?;
                 tracing::info!(expr=?expr.typ(), desc=?desc, "post optmiziation");
-                let desc = RelationDesc::new(expr.typ(), desc.iter_names());
+                let all_types = expr.typ().column_types;
+                let projected_types = match &output {
+                    Some(SubscribeOutput::WithinTimestampOrderBy { project, .. }) => {
+                        project.clone()
+                    },
+                    _ => (0..desc.arity()).collect_vec(),
+                }.into_iter().merge_join_by(all_types.into_iter().enumerate(), |i, (j, ty)| i.cmp(j))
+                .filter_map(|r| match r {
+                    EitherOrBoth::Both(_, (_, ty)) => Some(ty),
+                    _ => None,
+                }).collect();
+
+
+                let desc = RelationDesc::new(RelationType::new(projected_types), desc.iter_names());
                 let sink_desc = make_sink_desc(self, session, id, desc)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);

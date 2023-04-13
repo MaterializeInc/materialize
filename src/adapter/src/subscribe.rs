@@ -107,8 +107,8 @@ impl ActiveSubscribe {
                         // results since the cursor will always produce rows in the same order.
                         // TODO: Is sorting by time necessary?
                         match &self.output {
-                            Some(SubscribeOutput::WithinTimestampOrderBy { order_by }) => {
-                                tracing::info!(?order_by);
+                            Some(SubscribeOutput::WithinTimestampOrderBy { order_by, project }) => {
+                                tracing::info!(?order_by, ?project);
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
                                 let mut right_datum_vec = mz_repr::DatumVec::new();
                                 rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
@@ -120,8 +120,18 @@ impl ActiveSubscribe {
                                         })
                                     })
                                 });
+                                let mut datum_vec = mz_repr::DatumVec::new();
+                                for (_t, row, _d) in &mut rows {
+                                    *row = {
+                                        let datums = datum_vec.borrow_with(&row);
+                                        row_buf
+                                        .packer()
+                                        .extend(project.iter().map(|i| &datums[*i]));
+                                        row_buf.clone()
+                                    }
+                                }
                             },
-                            Some(SubscribeOutput::EnvelopeUpsert { key_indices }) => {
+                            Some(SubscribeOutput::EnvelopeUpsert { key_indices  }) => {
                                 tracing::info!(?rows, ?key_indices);
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
                                 let mut right_datum_vec = mz_repr::DatumVec::new();

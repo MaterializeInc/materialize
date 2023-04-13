@@ -15,15 +15,6 @@ ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true
 
 
 > BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1+1, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY b DESC NULLS LAST, 1+1 ASC
-> FETCH 1 c
-<TIMESTAMP> 1 1 2
-
-> FETCH 1 c
-<TIMESTAMP> 1 2 1
-> COMMIT
-
-> BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY a, b
 > FETCH 1 c
 <TIMESTAMP> 1 1 2
@@ -50,7 +41,14 @@ ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true
 <TIMESTAMP> 1 2 1
 > COMMIT
 
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 10+10, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY b DESC NULLS LAST, 10+10 ASC
+> FETCH 1 c
+<TIMESTAMP> 1 20 2
 
+> FETCH 1 c
+<TIMESTAMP> 1 2 1
+> COMMIT
 
 ! SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY c
 contains: column "c" does not exist

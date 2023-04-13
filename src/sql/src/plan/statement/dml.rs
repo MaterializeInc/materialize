@@ -454,7 +454,7 @@ pub fn plan_subscribe(
     }: SubscribeStatement<Aug>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
-    let (from, desc, order_by) = match relation {
+    let (from, desc, order_by, project) = match relation {
         SubscribeRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
             let desc = match entry.desc(&scx.catalog.resolve_full_name(entry.name())) {
@@ -466,7 +466,7 @@ pub fn plan_subscribe(
                 ),
             };
 
-            (SubscribeFrom::Id(entry.id()), desc.into_owned(), vec![])
+            (SubscribeFrom::Id(entry.id()), desc.into_owned(), vec![], vec![])
         }
         SubscribeRelation::Query(query) => {
             // There's no way to apply finishing operations to a `SUBSCRIBE`
@@ -492,7 +492,8 @@ pub fn plan_subscribe(
                     desc: query.desc,
                 },
                 desc,
-                query.finishing.order_by
+                query.finishing.order_by,
+                query.finishing.project
             )
         }
     };
@@ -557,6 +558,7 @@ pub fn plan_subscribe(
                 }*/
                 Ok(plan::SubscribeOutput::WithinTimestampOrderBy {
                     order_by,
+                    project
                 })
             }
         })
