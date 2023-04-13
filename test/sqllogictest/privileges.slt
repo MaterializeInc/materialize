@@ -295,7 +295,7 @@ query TT
 SELECT * FROM schema_privileges WHERE name ='public' ORDER BY name
 ----
 public  =UC/mz_system
-public  =UC/materialize
+public  =U/materialize
 public  mz_system=UC/mz_system
 public  materialize=UC/materialize
 
