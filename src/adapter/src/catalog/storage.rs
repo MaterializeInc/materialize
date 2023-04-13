@@ -182,7 +182,7 @@ async fn migrate(
             txn.databases.insert(
                 DatabaseKey {
                     id: MATERIALIZE_DATABASE_ID,
-                    ns: Some(DatabaseNamespace::User),
+                    ns: None,
                 },
                 DatabaseValue {
                     name: "materialize".into(),
@@ -210,7 +210,7 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: MZ_CATALOG_SCHEMA_ID,
-                    ns: Some(SchemaNamespace::User),
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: None,
@@ -222,7 +222,7 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: PG_CATALOG_SCHEMA_ID,
-                    ns: Some(SchemaNamespace::User),
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: None,
@@ -234,11 +234,11 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: PUBLIC_SCHEMA_ID,
-                    ns: Some(SchemaNamespace::User),
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: Some(MATERIALIZE_DATABASE_ID),
-                    database_ns: Some(DatabaseNamespace::User),
+                    database_ns: None,
                     name: "public".into(),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID),
                 },
@@ -265,7 +265,7 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: MZ_INTERNAL_SCHEMA_ID,
-                    ns: Some(SchemaNamespace::User),
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: None,
@@ -277,7 +277,7 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: INFORMATION_SCHEMA_ID,
-                    ns: Some(SchemaNamespace::User),
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: None,
@@ -602,20 +602,40 @@ async fn migrate(
                 }
             })?;
 
-            // Migrate all of our SchemaKeys.
+            // Migrate all of our SchemaKeys and SchemaValues
             txn.schemas.migrate(|key, value| {
-                match key.ns {
+                let new_key = match key.ns {
                     // Set all keys without a namespace to the User namespace.
                     None => {
                         let new_key = SchemaKey {
                             id: key.id,
                             ns: Some(SchemaNamespace::User),
                         };
-
-                        Some((new_key, value.clone()))
+                        Some(new_key)
                     }
                     // If a namespace is already set, there is nothing to do.
                     Some(_) => None,
+                };
+                let new_value = match value.database_ns {
+                    // Set all values without a database namespace to the User namespace.
+                    None => {
+                        let new_value = SchemaValue {
+                            database_id: value.database_id,
+                            database_ns: Some(DatabaseNamespace::User),
+                            name: value.name.clone(),
+                            owner_id: value.owner_id,
+                        };
+                        Some(new_value)
+                    }
+                    // If a namespace is already set, there is nothing to do.
+                    Some(_) => None,
+                };
+
+                match (new_key, new_value) {
+                    (Some(n_k), None) => Some((n_k, value.clone())),
+                    (None, Some(n_v)) => Some((key.clone(), n_v)),
+                    (Some(n_k), Some(n_v)) => Some((n_k, n_v)),
+                    (None, None) => None,
                 }
             })?;
 
@@ -1494,7 +1514,7 @@ impl<'a> Transaction<'a> {
                     };
                     if databases.get(&key).is_none() {
                         panic!(
-                            "corrupt stash! unknown database id {id}, for item with key \
+                            "corrupt stash! unknown database id {key:?}, for item with key \
                         {k:?} and value {v:?}"
                         );
                     }
