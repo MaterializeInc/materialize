@@ -525,184 +525,207 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
     }
 }
 
+/// The logic to snapshot the PG collections.
+///
+/// Importantly this is broken out so we can ensure nothing returns an indefinite error, which can
+/// happen inadvertently.
+async fn postgres_replication_loop_inner_snapshot(
+    task_info: &mut PostgresTaskInfo,
+) -> Result<(), ReplicationError> {
+    // Get all the relevant tables for this publication
+    let publication_tables = mz_postgres_util::publication_info(
+        &task_info.connection_config,
+        &task_info.publication,
+        None,
+    )
+    .await
+    .err_indefinite()?;
+
+    // Validate publication tables against the state snapshot
+    determine_table_compatibility(&task_info.source_tables, publication_tables).err_definite()?;
+
+    let client = task_info
+        .connection_config
+        .clone()
+        .connect_replication()
+        .await
+        .err_indefinite()?;
+
+    // Technically there is TOCTOU problem here but it makes the code easier and if we end
+    // up attempting to create a slot and it already exists we will simply retry
+    // Also, we must check if the slot exists before we start a transaction because creating a
+    // slot must be the first statement in a transaction
+    let res = client
+        .simple_query(&format!(
+            r#"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{}'"#,
+            task_info.slot
+        ))
+        .await?;
+    let slot_lsn = parse_single_row(&res, "confirmed_flush_lsn");
+    client
+        .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
+        .await?;
+
+    let (slot_lsn, snapshot_lsn, temp_slot) = match slot_lsn {
+        Ok(slot_lsn) => {
+            // The main slot already exists which means we can't use it for the snapshot. So
+            // we'll create a temporary replication slot in order to both set the transaction's
+            // snapshot to be a consistent point and also to find out the LSN that the snapshot
+            // is going to run at.
+            //
+            // When this happens we'll most likely be snapshotting at a later LSN than the slot
+            // which we will take care below by rewinding.
+            let temp_slot = uuid::Uuid::new_v4().to_string().replace('-', "");
+            let res = client
+                .simple_query(&format!(
+                    r#"CREATE_REPLICATION_SLOT {:?} TEMPORARY LOGICAL "pgoutput" USE_SNAPSHOT"#,
+                    temp_slot
+                ))
+                .await?;
+            let snapshot_lsn = parse_single_row(&res, "consistent_point")?;
+            (slot_lsn, snapshot_lsn, Some(temp_slot))
+        }
+        Err(_) => {
+            let res = client
+                .simple_query(&format!(
+                    r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
+                    task_info.slot
+                ))
+                .await?;
+            let slot_lsn = parse_single_row(&res, "consistent_point")?;
+            (slot_lsn, slot_lsn, None)
+        }
+    };
+
+    let mut stream = Box::pin(
+        produce_snapshot(&client, &task_info.metrics, &task_info.source_tables).enumerate(),
+    );
+
+    while let Some((i, event)) = stream.as_mut().next().await {
+        if i > 0 {
+            // Failure scenario after we have produced at least one row, but before a
+            // successful `COMMIT`
+            fail::fail_point!("pg_snapshot_failure", |_| {
+                Err(ReplicationError::Indefinite(anyhow::anyhow!(
+                    "recoverable errors should crash the process"
+                )))
+            });
+        }
+        let (output, row) = match event {
+            Ok(event) => event,
+            Err(ReplicationError::Indefinite(err)) => {
+                return Err(ReplicationError::Irrecoverable(err))
+            }
+            e => e?,
+        };
+        task_info
+            .row_sender
+            .send_row(output, row, slot_lsn, 1)
+            .await;
+    }
+
+    if let Some(temp_slot) = temp_slot {
+        let _ = client
+            .simple_query(&format!("DROP_REPLICATION_SLOT {temp_slot:?}"))
+            .await
+            .err_irrecoverable()?;
+    }
+
+    client.simple_query("COMMIT;").await.err_irrecoverable()?;
+
+    // Drop the stream and the client, to ensure that the future `produce_replication` don't
+    // conflict with the above processing.
+    //
+    // Its possible we can avoid dropping the `client` value here, but we do it out of an
+    // abundance of caution, as rust-postgres has had curious bugs around this.
+    drop(stream);
+    drop(client);
+
+    assert!(slot_lsn <= snapshot_lsn);
+
+    // We only need to rewind values from the WAL if there are any values between the `slot_lsn`
+    // and `snapshot_lsn`. If there is nothing in the WAL for us to see between those times, we
+    // would just sit there dumbly waiting for a timeout.
+    if slot_lsn < snapshot_lsn
+        && peek_wal_lsns(
+            task_info.connection_config.clone(),
+            &task_info.slot,
+            &task_info.publication,
+            Some(snapshot_lsn),
+        )
+        .await
+        .err_irrecoverable()?
+        .count()
+            > 0
+    {
+        tracing::info!(
+            "postgres snapshot was at {snapshot_lsn:?} but we need it at {slot_lsn:?}. Rewinding"
+        );
+        // Our snapshot was too far ahead so we must rewind it by reading the replication
+        // stream until the snapshot lsn and emitting any rows that we find with negated diffs
+        let replication_stream = produce_replication(
+            task_info.connection_config.clone(),
+            &task_info.slot,
+            &task_info.publication,
+            slot_lsn,
+            Arc::clone(&task_info.resume_lsn),
+            &task_info.metrics,
+            &task_info.source_tables,
+        )
+        .await;
+        tokio::pin!(replication_stream);
+
+        while let Some(event) = replication_stream.next().await {
+            match event {
+                Ok(Event::Message(lsn, (output, row, diff))) => {
+                    // Here we ignore the lsn that this row actually happened at and we
+                    // forcefully emit it at the slot_lsn with a negated diff.
+                    if lsn <= snapshot_lsn {
+                        task_info
+                            .row_sender
+                            .send_row(output, row, slot_lsn, -diff)
+                            .await;
+                    }
+                }
+                Ok(Event::Progress([lsn])) => {
+                    if lsn > snapshot_lsn {
+                        // We successfully rewinded the snapshot from snapshot_lsn to slot_lsn
+                        task_info.row_sender.close_lsn(slot_lsn).await;
+                        break;
+                    }
+                }
+                Err(err @ ReplicationError::Definite(_)) => return Err(err),
+                Err(ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err)) => {
+                    return Err(ReplicationError::Irrecoverable(err))
+                }
+            }
+        }
+    }
+    task_info.metrics.lsn.set(slot_lsn.into());
+    task_info.row_sender.close_lsn(slot_lsn).await;
+
+    info!(
+        "replication snapshot for source {} succeeded",
+        &task_info.source_id
+    );
+    task_info.replication_lsn = slot_lsn;
+
+    Ok(())
+}
+
 /// Core logic
 async fn postgres_replication_loop_inner(
     task_info: &mut PostgresTaskInfo,
 ) -> Result<(), ReplicationError> {
     if task_info.replication_lsn == PgLsn::from(0) {
-        // Get all the relevant tables for this publication
-        let publication_tables = mz_postgres_util::publication_info(
-            &task_info.connection_config,
-            &task_info.publication,
-            None,
-        )
-        .await
-        .err_indefinite()?;
-
-        // Validate publication tables against the state snapshot
-        determine_table_compatibility(&task_info.source_tables, publication_tables)
-            .err_definite()?;
-
-        let client = task_info
-            .connection_config
-            .clone()
-            .connect_replication()
-            .await
-            .err_indefinite()?;
-
-        // Technically there is TOCTOU problem here but it makes the code easier and if we end
-        // up attempting to create a slot and it already exists we will simply retry
-        // Also, we must check if the slot exists before we start a transaction because creating a
-        // slot must be the first statement in a transaction
-        let res = client
-            .simple_query(&format!(
-                r#"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{}'"#,
-                task_info.slot
-            ))
-            .await?;
-        let slot_lsn = parse_single_row(&res, "confirmed_flush_lsn");
-        client
-            .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
-            .await?;
-
-        let (slot_lsn, snapshot_lsn, temp_slot) = match slot_lsn {
-            Ok(slot_lsn) => {
-                // The main slot already exists which means we can't use it for the snapshot. So
-                // we'll create a temporary replication slot in order to both set the transaction's
-                // snapshot to be a consistent point and also to find out the LSN that the snapshot
-                // is going to run at.
-                //
-                // When this happens we'll most likely be snapshotting at a later LSN than the slot
-                // which we will take care below by rewinding.
-                let temp_slot = uuid::Uuid::new_v4().to_string().replace('-', "");
-                let res = client
-                    .simple_query(&format!(
-                        r#"CREATE_REPLICATION_SLOT {:?} TEMPORARY LOGICAL "pgoutput" USE_SNAPSHOT"#,
-                        temp_slot
-                    ))
-                    .await?;
-                let snapshot_lsn = parse_single_row(&res, "consistent_point")?;
-                (slot_lsn, snapshot_lsn, Some(temp_slot))
+        match postgres_replication_loop_inner_snapshot(task_info).await {
+            // Snapshotting cannot, under any circmstance, return indefinite errors; everything must
+            // be restarted.
+            Err(ReplicationError::Indefinite(err)) => {
+                return Err(ReplicationError::Irrecoverable(err))
             }
-            Err(_) => {
-                let res = client
-                    .simple_query(&format!(
-                        r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
-                        task_info.slot
-                    ))
-                    .await?;
-                let slot_lsn = parse_single_row(&res, "consistent_point")?;
-                (slot_lsn, slot_lsn, None)
-            }
-        };
-
-        let mut stream = Box::pin(
-            produce_snapshot(&client, &task_info.metrics, &task_info.source_tables).enumerate(),
-        );
-
-        while let Some((i, event)) = stream.as_mut().next().await {
-            if i > 0 {
-                // Failure scenario after we have produced at least one row, but before a
-                // successful `COMMIT`
-                fail::fail_point!("pg_snapshot_failure", |_| {
-                    Err(ReplicationError::Indefinite(anyhow::anyhow!(
-                        "recoverable errors should crash the process"
-                    )))
-                });
-            }
-            let (output, row) = match event {
-                Ok(event) => event,
-                Err(err @ ReplicationError::Definite(_)) => return Err(err),
-                Err(ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err)) => {
-                    return Err(ReplicationError::Irrecoverable(err))
-                }
-            };
-            task_info
-                .row_sender
-                .send_row(output, row, slot_lsn, 1)
-                .await;
+            o => o?,
         }
-
-        if let Some(temp_slot) = temp_slot {
-            let _ = client
-                .simple_query(&format!("DROP_REPLICATION_SLOT {temp_slot:?}"))
-                .await;
-        }
-        client.simple_query("COMMIT;").await?;
-
-        // Drop the stream and the client, to ensure that the future `produce_replication` don't
-        // conflict with the above processing.
-        //
-        // Its possible we can avoid dropping the `client` value here, but we do it out of an
-        // abundance of caution, as rust-postgres has had curious bugs around this.
-        drop(stream);
-        drop(client);
-
-        assert!(slot_lsn <= snapshot_lsn);
-
-        // We only need to rewind values from the WAL if there are any values between the `slot_lsn`
-        // and `snapshot_lsn`. If there is nothing in the WAL for us to see between those times, we
-        // would just sit there dumbly waiting for a timeout.
-        if slot_lsn < snapshot_lsn
-            && peek_wal_lsns(
-                task_info.connection_config.clone(),
-                &task_info.slot,
-                &task_info.publication,
-                Some(snapshot_lsn),
-            )
-            .await?
-            .count()
-                > 0
-        {
-            tracing::info!("postgres snapshot was at {snapshot_lsn:?} but we need it at {slot_lsn:?}. Rewinding");
-            // Our snapshot was too far ahead so we must rewind it by reading the replication
-            // stream until the snapshot lsn and emitting any rows that we find with negated diffs
-            let replication_stream = produce_replication(
-                task_info.connection_config.clone(),
-                &task_info.slot,
-                &task_info.publication,
-                slot_lsn,
-                Arc::clone(&task_info.resume_lsn),
-                &task_info.metrics,
-                &task_info.source_tables,
-            )
-            .await;
-            tokio::pin!(replication_stream);
-
-            while let Some(event) = replication_stream.next().await {
-                match event {
-                    Ok(Event::Message(lsn, (output, row, diff))) => {
-                        // Here we ignore the lsn that this row actually happened at and we
-                        // forcefully emit it at the slot_lsn with a negated diff.
-                        if lsn <= snapshot_lsn {
-                            task_info
-                                .row_sender
-                                .send_row(output, row, slot_lsn, -diff)
-                                .await;
-                        }
-                    }
-                    Ok(Event::Progress([lsn])) => {
-                        if lsn > snapshot_lsn {
-                            // We successfully rewinded the snapshot from snapshot_lsn to slot_lsn
-                            task_info.row_sender.close_lsn(slot_lsn).await;
-                            break;
-                        }
-                    }
-                    Err(err @ ReplicationError::Definite(_)) => return Err(err),
-                    Err(
-                        ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err),
-                    ) => return Err(ReplicationError::Irrecoverable(err)),
-                }
-            }
-        }
-        task_info.metrics.lsn.set(slot_lsn.into());
-        task_info.row_sender.close_lsn(slot_lsn).await;
-
-        info!(
-            "replication snapshot for source {} succeeded",
-            &task_info.source_id
-        );
-        task_info.replication_lsn = slot_lsn;
     }
 
     let replication_stream = produce_replication(
@@ -1345,7 +1368,8 @@ async fn produce_replication<'a>(
             let peek_binary_start_time = Instant::now();
 
             let changes = peek_wal_lsns(client_config.clone(), slot, publication, None)
-                .await?
+                .await
+                .err_indefinite()?
                 .filter(|change_lsn| change_lsn > &last_commit_lsn)
                 .count();
 
@@ -1379,8 +1403,8 @@ async fn peek_wal_lsns(
     slot: &str,
     publication: &str,
     up_to: Option<PgLsn>,
-) -> Result<impl Iterator<Item = PgLsn>, ReplicationError> {
-    let client = config.connect_replication().await.err_indefinite()?;
+) -> Result<impl Iterator<Item = PgLsn>, mz_postgres_util::PostgresError> {
+    let client = config.connect_replication().await?;
     let query = format!(
         "SELECT lsn FROM pg_logical_slot_peek_binary_changes(
             '{}', {}, NULL,
@@ -1395,7 +1419,7 @@ async fn peek_wal_lsns(
         publication,
     );
 
-    let rows = client.simple_query(&query).await.err_indefinite()?;
+    let rows = client.simple_query(&query).await?;
 
     Ok(rows.into_iter().filter_map(|row| match row {
         SimpleQueryMessage::Row(row) => {
