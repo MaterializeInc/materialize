@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use itertools::Itertools;
+use itertools::{zip_eq, Itertools};
 
 use mz_expr::visit::Visit;
 use mz_expr::JoinImplementation::IndexedFilter;
@@ -53,6 +53,10 @@ impl CheckedRecursion for LiteralLifting {
 }
 
 impl crate::Transform for LiteralLifting {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -263,7 +267,48 @@ impl LiteralLifting {
                     gets.remove(&id);
                     result
                 }
-                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
+                MirRelationExpr::LetRec { ids, values, body } => {
+                    let recursive_ids = MirRelationExpr::recursive_ids(ids, values)?;
+
+                    // Extend the context with empty `literals` vectors for all
+                    // recursive IDs.
+                    for local_id in ids.iter() {
+                        if recursive_ids.contains(local_id) {
+                            let literals = vec![];
+                            let prior = gets.insert(Id::Local(*local_id), literals);
+                            assert!(!prior.is_some());
+                        }
+                    }
+
+                    // Descend into values and extend the context with their
+                    // `literals` results.
+                    for (local_id, value) in zip_eq(ids.iter(), values.iter_mut()) {
+                        let literals = self.action(value, gets)?;
+                        if recursive_ids.contains(local_id) {
+                            // Literals lifted from a recursive binding should
+                            // be re-installed at the top of the value.
+                            if !literals.is_empty() {
+                                *value = value.take_dangerous().map(literals);
+                            }
+                        } else {
+                            // Literals lifted from a non-recursive binding can
+                            // propagete to its call sites.
+                            let prior = gets.insert(Id::Local(*local_id), literals);
+                            assert!(!prior.is_some());
+                        }
+                    }
+
+                    // Descend into body.
+                    let result = self.action(body, gets)?;
+
+                    // Remove all enclosing IDs from the context before
+                    // returning the result.
+                    for id in ids.iter() {
+                        gets.remove(&Id::Local(*id));
+                    }
+
+                    Ok(result)
+                }
                 MirRelationExpr::Project { input, outputs } => {
                     // We do not want to lift literals around projections.
                     // Projections are the highest lifted operator and lifting
