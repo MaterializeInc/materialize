@@ -264,9 +264,9 @@ impl CatalogState {
                 ObjectId::Database(id) => {
                     dependents.extend_from_slice(&self.database_dependents(id, seen))
                 }
-                ObjectId::Schema((database_id, schema_id)) => {
+                ObjectId::Schema((database_spec, schema_id)) => {
                     dependents.extend_from_slice(&self.schema_dependents(
-                        database_id,
+                        database_spec,
                         schema_id,
                         seen,
                     ));
@@ -351,7 +351,7 @@ impl CatalogState {
             let database = self.get_database(&database_id);
             for schema_id in database.schemas().values() {
                 dependents.extend_from_slice(&self.schema_dependents(
-                    database_id,
+                    ResolvedDatabaseSpecifier::Id(database_id),
                     *schema_id,
                     seen,
                 ));
@@ -369,19 +369,21 @@ impl CatalogState {
     /// objects.
     fn schema_dependents(
         &self,
-        database_id: DatabaseId,
+        database_spec: ResolvedDatabaseSpecifier,
         schema_id: SchemaId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
-        let object_id = ObjectId::Schema((database_id, schema_id));
+        let object_id = ObjectId::Schema((database_spec, schema_id));
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
-            let schema = self
-                .get_database(&database_id)
-                .schemas_by_id
-                .get(&schema_id)
-                .expect("catalog out of sync");
+            let schemas = match database_spec {
+                ResolvedDatabaseSpecifier::Ambient => &self.ambient_schemas_by_id,
+                ResolvedDatabaseSpecifier::Id(database_id) => {
+                    &self.get_database(&database_id).schemas_by_id
+                }
+            };
+            let schema = schemas.get(&schema_id).expect("catalog out of sync");
             for item_id in schema.items().values() {
                 dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
             }
@@ -4818,7 +4820,7 @@ impl Catalog {
                         EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
                             id: schema_id.to_string(),
                             name: DEFAULT_SCHEMA.to_string(),
-                            database_name: name,
+                            database_name: Some(name),
                         }),
                     )?;
                     create_schema(
@@ -4862,7 +4864,7 @@ impl Catalog {
                         EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
                             id: schema_id.to_string(),
                             name: schema_name.clone(),
-                            database_name: state.database_by_id[&database_id].name.clone(),
+                            database_name: Some(state.database_by_id[&database_id].name.clone()),
                         }),
                     )?;
                     create_schema(
@@ -5165,11 +5167,21 @@ impl Catalog {
                         state.database_by_name.remove(db.name());
                         state.database_by_id.remove(&id);
                     }
-                    ObjectId::Schema((database_id, schema_id)) => {
-                        let schema = &state.database_by_id[&database_id].schemas_by_id[&schema_id];
+                    ObjectId::Schema((database_spec, schema_id)) => {
+                        let schemas = match database_spec {
+                            ResolvedDatabaseSpecifier::Ambient => &state.ambient_schemas_by_id,
+                            ResolvedDatabaseSpecifier::Id(database_id) => {
+                                &state.database_by_id[&database_id].schemas_by_id
+                            }
+                        };
+                        let schema = &schemas[&schema_id];
+                        let database_id = match database_spec {
+                            ResolvedDatabaseSpecifier::Ambient => None,
+                            ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
+                        };
                         tx.remove_schema(&database_id, &schema_id)?;
                         builtin_table_updates.push(state.pack_schema_update(
-                            &ResolvedDatabaseSpecifier::Id(database_id.clone()),
+                            &database_spec,
                             &schema_id,
                             -1,
                         ));
@@ -5184,19 +5196,20 @@ impl Catalog {
                             EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
                                 id: schema_id.to_string(),
                                 name: schema.name.schema.to_string(),
-                                database_name: state.database_by_id[&database_id].name.clone(),
+                                database_name: database_id.map(|database_id| {
+                                    state.database_by_id[&database_id].name.clone()
+                                }),
                             }),
                         )?;
-                        let db = state
-                            .database_by_id
-                            .get_mut(&database_id)
-                            .expect("catalog out of sync");
-                        let schema = db
-                            .schemas_by_id
-                            .get(&schema_id)
-                            .expect("catalog out of sync");
-                        db.schemas_by_name.remove(&schema.name.schema);
-                        db.schemas_by_id.remove(&schema_id);
+                        if let Some(database_id) = database_id {
+                            let db = state
+                                .database_by_id
+                                .get_mut(&database_id)
+                                .expect("catalog out of sync");
+                            let schema = &db.schemas_by_id[&schema_id];
+                            db.schemas_by_name.remove(&schema.name.schema);
+                            db.schemas_by_id.remove(&schema_id);
+                        }
                     }
                     ObjectId::Role(id) => {
                         let name = state.get_role(&id).name().to_string();
@@ -5611,21 +5624,27 @@ impl Catalog {
                         tx.update_database(id, database)?;
                         builtin_table_updates.push(state.pack_database_update(database, 1));
                     }
-                    ObjectId::Schema((database_id, schema_id)) => {
+                    ObjectId::Schema((database_spec, schema_id)) => {
                         builtin_table_updates.push(state.pack_schema_update(
-                            &ResolvedDatabaseSpecifier::Id(database_id),
+                            &database_spec,
                             &schema_id,
                             -1,
                         ));
-                        let database = state.get_database_mut(&database_id);
-                        let schema = database
-                            .schemas_by_id
-                            .get_mut(&schema_id)
-                            .expect("catalog out of sync");
+                        let schemas = match database_spec {
+                            ResolvedDatabaseSpecifier::Ambient => &mut state.ambient_schemas_by_id,
+                            ResolvedDatabaseSpecifier::Id(id) => {
+                                &mut state.get_database_mut(&id).schemas_by_id
+                            }
+                        };
+                        let schema = schemas.get_mut(&schema_id).expect("catalog out of sync");
                         schema.owner_id = new_owner;
-                        tx.update_schema(Some(database_id), schema_id, schema)?;
+                        let database_id = match database_spec {
+                            ResolvedDatabaseSpecifier::Ambient => None,
+                            ResolvedDatabaseSpecifier::Id(id) => Some(id),
+                        };
+                        tx.update_schema(database_id, schema_id, schema)?;
                         builtin_table_updates.push(state.pack_schema_update(
-                            &ResolvedDatabaseSpecifier::Id(database_id),
+                            &database_spec,
                             &schema_id,
                             1,
                         ));
@@ -6807,12 +6826,9 @@ impl SessionCatalog for ConnCatalog<'_> {
                     .owner_id(),
             ),
             ObjectId::Database(id) => Some(self.get_database(id).owner_id()),
-            ObjectId::Schema((database_id, schema_id)) => Some(
-                self.get_schema(
-                    &ResolvedDatabaseSpecifier::Id(*database_id),
-                    &SchemaSpecifier::Id(*schema_id),
-                )
-                .owner_id(),
+            ObjectId::Schema((database_spec, schema_id)) => Some(
+                self.get_schema(database_spec, &SchemaSpecifier::Id(*schema_id))
+                    .owner_id(),
             ),
             ObjectId::Item(id) => Some(self.get_item(id).owner_id()),
             ObjectId::Role(_) => None,

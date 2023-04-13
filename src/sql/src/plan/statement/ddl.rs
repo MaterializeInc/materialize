@@ -85,8 +85,7 @@ use crate::ast::{
     TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, CatalogType,
-    CatalogTypeDetails,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
@@ -3407,9 +3406,21 @@ fn plan_drop_schema(
     if_exists: bool,
     name: UnresolvedSchemaName,
     cascade: bool,
-) -> Result<Option<(DatabaseId, SchemaId)>, PlanError> {
-    Ok(match resolve_schema(scx, name, if_exists, "drop")? {
-        Some((database_id, schema_id, schema)) => {
+) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaId)>, PlanError> {
+    Ok(match resolve_schema(scx, name.clone(), if_exists)? {
+        Some((database_spec, schema_spec)) => {
+            if let ResolvedDatabaseSpecifier::Ambient = database_spec {
+                sql_bail!(
+                    "cannot drop schema '{name}' because it is required by the database system",
+                );
+            }
+            let schema_id = match schema_spec {
+                SchemaSpecifier::Temporary => {
+                    sql_bail!("cannot drop schema '{name}' because it is a temporary schema",)
+                }
+                SchemaSpecifier::Id(id) => id,
+            };
+            let schema = scx.get_schema(&database_spec, &schema_spec);
             if !cascade && schema.has_items() {
                 let full_schema_name = FullSchemaName {
                     database: match schema.name().database {
@@ -3425,7 +3436,7 @@ fn plan_drop_schema(
                     full_schema_name
                 );
             }
-            Some((database_id, schema_id))
+            Some((database_spec, schema_id))
         }
         None => None,
     })
@@ -3799,12 +3810,25 @@ fn plan_alter_schema_owner(
     name: UnresolvedSchemaName,
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
-    match resolve_schema(scx, name, if_exists, "alter")? {
-        Some((database_id, schema_id, _)) => Ok(Plan::AlterOwner(AlterOwnerPlan {
-            id: ObjectId::Schema((database_id, schema_id)),
-            object_type: ObjectType::Schema,
-            new_owner,
-        })),
+    match resolve_schema(scx, name.clone(), if_exists)? {
+        Some((database_spec, schema_spec)) => {
+            if let ResolvedDatabaseSpecifier::Ambient = database_spec {
+                sql_bail!(
+                    "cannot alter schema '{name}' because it is required by the database system",
+                );
+            }
+            let schema_id = match schema_spec {
+                SchemaSpecifier::Temporary => {
+                    sql_bail!("cannot alter schema '{name}' because it is a temporary schema",)
+                }
+                SchemaSpecifier::Id(id) => id,
+            };
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Schema((database_spec, schema_id)),
+                object_type: ObjectType::Schema,
+                new_owner,
+            }))
+        }
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
             object_type: ObjectType::Database,
         })),
@@ -4303,28 +4327,9 @@ fn resolve_schema<'a>(
     scx: &'a StatementContext,
     name: UnresolvedSchemaName,
     if_exists: bool,
-    action: &str,
-) -> Result<Option<(DatabaseId, SchemaId, &'a dyn CatalogSchema)>, PlanError> {
+) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
     match scx.resolve_schema(name) {
-        Ok(schema) => {
-            let database_id = match schema.database() {
-                ResolvedDatabaseSpecifier::Ambient => sql_bail!(
-                    "cannot {action} schema {} because it is required by the database system",
-                    schema.name().schema
-                ),
-                ResolvedDatabaseSpecifier::Id(id) => id,
-            };
-            let schema_id = match schema.id() {
-                // This branch should be unreachable because the temporary schema is in the ambient
-                // database, but this is just to protect against the case that ever changes.
-                SchemaSpecifier::Temporary => sql_bail!(
-                    "cannot {action} schema {} because it is a temporary schema",
-                    schema.name().schema,
-                ),
-                SchemaSpecifier::Id(id) => id,
-            };
-            Ok(Some((*database_id, *schema_id, schema)))
-        }
+        Ok(schema) => Ok(Some((schema.database().clone(), schema.id().clone()))),
         // TODO(benesch/jkosh44): generate a notice indicating that the
         // schema does not exist.
         Err(_) if if_exists => Ok(None),

@@ -319,7 +319,7 @@ pub struct RevokeRoleV1 {
 pub struct SchemaV1 {
     pub id: String,
     pub name: String,
-    pub database_name: String,
+    pub database_name: Option<String>,
 }
 
 impl EventDetails {

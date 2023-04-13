@@ -16,7 +16,7 @@ use itertools::Itertools;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::SessionCatalog;
-use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier, SchemaSpecifier};
+use mz_sql::names::{ObjectId, SchemaSpecifier};
 use mz_sql::plan::{AlterOwnerPlan, CreateMaterializedViewPlan, CreateViewPlan, Plan};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
@@ -241,11 +241,9 @@ pub fn check_plan(
                     ObjectType::Database,
                     catalog.get_database(&id).name().to_string(),
                 ),
-                ObjectId::Schema((database_id, schema_id)) => {
-                    let schema = catalog.get_schema(
-                        &ResolvedDatabaseSpecifier::Id(database_id),
-                        &SchemaSpecifier::Id(schema_id),
-                    );
+                ObjectId::Schema((database_spec, schema_id)) => {
+                    let schema =
+                        catalog.get_schema(&database_spec, &SchemaSpecifier::Id(schema_id));
                     let name = catalog.resolve_full_schema_name(schema.name());
                     (ObjectType::Schema, name.to_string())
                 }

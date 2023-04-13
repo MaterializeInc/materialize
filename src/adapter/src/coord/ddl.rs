@@ -822,10 +822,7 @@ impl Coordinator {
                     new_databases += 1;
                 }
                 Op::CreateSchema { database_id, .. } => {
-                    // Users can't create schemas in the ambient database.
-                    if let ResolvedDatabaseSpecifier::Id(database_id) = database_id {
-                        *new_schemas_per_database.entry(database_id).or_insert(0) += 1;
-                    }
+                    *new_schemas_per_database.entry(database_id).or_insert(0) += 1;
                 }
                 Op::CreateRole { .. } => {
                     new_roles += 1;
@@ -896,8 +893,8 @@ impl Coordinator {
                         ObjectId::Database(_) => {
                             new_databases -= 1;
                         }
-                        ObjectId::Schema((database_id, _)) => {
-                            *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
+                        ObjectId::Schema((database_spec, _)) => {
+                            *new_schemas_per_database.entry(database_spec).or_insert(0) -= 1;
                         }
                         ObjectId::Role(_) => {
                             new_roles -= 1;
@@ -1046,12 +1043,14 @@ impl Coordinator {
             "Database",
         )?;
         for (database_id, new_schemas) in new_schemas_per_database {
-            self.validate_resource_limit(
-                self.catalog().get_database(database_id).schemas_by_id.len(),
-                new_schemas,
-                SystemVars::max_schemas_per_database,
-                "Schemas per database",
-            )?;
+            if let ResolvedDatabaseSpecifier::Id(database_id) = database_id {
+                self.validate_resource_limit(
+                    self.catalog().get_database(database_id).schemas_by_id.len(),
+                    new_schemas,
+                    SystemVars::max_schemas_per_database,
+                    "Schemas per database",
+                )?;
+            }
         }
         for ((database_spec, schema_spec), new_objects) in new_objects_per_schema {
             self.validate_resource_limit(
