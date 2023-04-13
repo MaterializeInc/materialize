@@ -4817,7 +4817,7 @@ impl Catalog {
                         audit_events,
                         EventType::Create,
                         ObjectType::Schema,
-                        EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
+                        EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
                             id: schema_id.to_string(),
                             name: DEFAULT_SCHEMA.to_string(),
                             database_name: Some(name),
@@ -4861,7 +4861,7 @@ impl Catalog {
                         audit_events,
                         EventType::Create,
                         ObjectType::Schema,
-                        EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
+                        EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
                             id: schema_id.to_string(),
                             name: schema_name.clone(),
                             database_name: Some(state.database_by_id[&database_id].name.clone()),
@@ -5193,7 +5193,7 @@ impl Catalog {
                             audit_events,
                             EventType::Drop,
                             ObjectType::Schema,
-                            EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
+                            EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
                                 id: schema_id.to_string(),
                                 name: schema.name.schema.to_string(),
                                 database_name: database_id.map(|database_id| {

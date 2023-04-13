@@ -243,7 +243,7 @@ async fn migrate(
                         id,
                         EventType::Create,
                         ObjectType::Schema,
-                        EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
+                        EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
                             id: PUBLIC_SCHEMA_ID.to_string(),
                             name: "public".into(),
                             database_name: Some("materialize".into()),
