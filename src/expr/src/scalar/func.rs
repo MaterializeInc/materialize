@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp::{self, Ordering};
-use std::convert::{TryFrom, TryInto, identity};
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::ops::{BitOrAssign, Deref};
@@ -5720,10 +5720,9 @@ fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> 
         temp_storage.push_string(
             string
                 .chars()
-                .map(|c| from.find(c).map_or(Some(c), |m| to.chars().nth(m)))
-                .filter_map(identity)
-                .collect()
-        )
+                .filter_map(|c| from.find(c).map_or(Some(c), |m| to.chars().nth(m)))
+                .collect(),
+        ),
     )
 }
 
