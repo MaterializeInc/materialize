@@ -100,7 +100,7 @@ impl CatalogState {
                     .iter()
                     .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
             )
-            .expect("privileges is 1 dimensional, and it's length is used for the array length");
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
         let privileges = row.unpack_first();
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DATABASES),
@@ -140,7 +140,7 @@ impl CatalogState {
                     .iter()
                     .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
             )
-            .expect("privileges is 1 dimensional, and it's length is used for the array length");
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
         let privileges = row.unpack_first();
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SCHEMAS),
@@ -217,7 +217,7 @@ impl CatalogState {
                     .iter()
                     .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
             )
-            .expect("privileges is 1 dimensional, and it's length is used for the array length");
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
         let privileges = row.unpack_first();
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
@@ -340,7 +340,7 @@ impl CatalogState {
                     .iter()
                     .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
             )
-            .expect("privileges is 1 dimensional, and it's length is used for the array length");
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
         let privileges = privileges_row.unpack_first();
         let mut updates = match entry.item() {
             CatalogItem::Log(_) => self.pack_source_update(
@@ -633,7 +633,7 @@ impl CatalogState {
                     .iter()
                     .map(|broker| Datum::String(&broker.address)),
             )
-            .expect("kafka.brokers is 1 dimensional, and it's length is used for the array length");
+            .expect("kafka.brokers is 1 dimensional, and its length is used for the array length");
         let brokers = row.unpack_first();
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_KAFKA_CONNECTIONS),
@@ -948,7 +948,7 @@ impl CatalogState {
                     arg_type_ids.iter().map(|id| Datum::String(id)),
                 )
                 .expect(
-                    "arg_type_ids is 1 dimensional, and it's length is used for the array length",
+                    "arg_type_ids is 1 dimensional, and its length is used for the array length",
                 );
             let arg_type_ids = row.unpack_first();
 
@@ -1002,7 +1002,7 @@ impl CatalogState {
                 }],
                 arg_type_ids.iter().map(|id| Datum::String(id)),
             )
-            .expect("arg_type_ids is 1 dimensional, and it's length is used for the array length");
+            .expect("arg_type_ids is 1 dimensional, and its length is used for the array length");
         let arg_type_ids = row.unpack_first();
 
         BuiltinTableUpdate {
