@@ -12,7 +12,6 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
-use std::ops::BitOr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

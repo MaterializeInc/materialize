@@ -10,7 +10,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hash;
 use std::iter::once;
-use std::ops::BitOr;
 use std::sync::Arc;
 use std::time::Duration;
 

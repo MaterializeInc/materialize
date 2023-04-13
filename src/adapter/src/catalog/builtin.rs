@@ -23,7 +23,6 @@
 //! <https://materialize.com/docs/sql/system-catalog/>.
 
 use std::hash::Hash;
-use std::ops::BitOr;
 
 use once_cell::sync::Lazy;
 use serde::Serialize;
