@@ -925,23 +925,23 @@ where
     {
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let mut row_buf = Row::default();
-        let mut collection = collection.map(move |(key, row)| {
-            let mut values = Vec::with_capacity(skips.len());
-            let mut row_iter = row.iter();
-            for skip in skips.iter() {
-                row_buf.packer().push(row_iter.nth(*skip).unwrap());
-                values.push(row_buf.clone());
-            }
+        let collection = collection
+            .map(move |(key, row)| {
+                let mut values = Vec::with_capacity(skips.len());
+                let mut row_iter = row.iter();
+                for skip in skips.iter() {
+                    row_buf.packer().push(row_iter.nth(*skip).unwrap());
+                    values.push(row_buf.clone());
+                }
 
-            (key, values)
-        });
+                (key, values)
+            })
+            .consolidate_named_if::<RowKeySpine<_, _, _>>(
+                must_consolidate,
+                "Consolidated ReduceMonotonic input",
+            );
 
-        // Consolidate if required to do so.
-        if must_consolidate {
-            collection = collection
-                .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input");
-        }
-
+        // It should be now possible to ensure that we have a monotonic collection.
         let error_logger = self.error_logger();
         let (partial, errs) = collection.ensure_monotonic(move |data, diff| {
             error_logger.log(
