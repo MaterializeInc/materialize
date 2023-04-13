@@ -33,12 +33,16 @@ The option will be part of the `ENVELOPE UPSERT` clause with the following gramm
 The `ASC` modifier is optional noise for specifying ascending ordering, for symmetry with the `ORDER BY` clause in `SELECT` statements.
 
 Examples of valid syntax and semantics:
-- `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY TIMESTAMP )`
-- `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts ENVELOPE UPSERT ( ORDER BY ts )`
+- `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP ) ASC )`
+- `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts ENVELOPE UPSERT ( ORDER BY ( ts ) )`
 
-Examples that are syntatically valid but semantically invalid:
-- `CREATE SOURCE ... INCLUDE OFFSET ENVELOPE UPSERT ( ORDER BY TIMESTAMP )` (TIMESTAMP column is not included)
-- `CREATE SOURCE ... INCLUDE PARTITION AS p ENVELOPE UPSERT ( ORDER BY p )` (ORDER BY identifier does not refer to the TIMESTAMP metadata column)
+Examples that are syntactically invalid:
+- `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY TIMESTAMP )` (missing parentheses around TIMESTAMP)
+- `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts ENVELOPE UPSERT ( ORDER BY ( ts ) DESC )` (DESC ordering is not allowed, will be rejected at parsing)
+
+Examples that are syntactically valid but semantically invalid:
+- `CREATE SOURCE ... INCLUDE OFFSET ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP ) )` (TIMESTAMP column is not included)
+- `CREATE SOURCE ... INCLUDE PARTITION AS p ENVELOPE UPSERT ( ORDER BY ( p ) )` (ORDER BY identifier does not refer to the TIMESTAMP metadata column)
 
 # Reference Explanation
 For envelope upsert, the included metadata columns are appended to the value and eventually persisted. For this feature, we will keep track of the index of the order by field and read the corresponding value to compare when upsert-ing.
