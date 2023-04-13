@@ -122,7 +122,7 @@ mod tests {
                 .chain(std::iter::once::<Box<dyn Transform>>(
                     Box::new(mz_transform::normalize_lets::NormalizeLets::new(false))
                 ))
-                .chain(Optimizer::logical_cleanup_pass(&ctx).transforms.into_iter())
+                .chain(Optimizer::logical_cleanup_pass(&ctx, false).transforms.into_iter())
                 .chain(Optimizer::physical_optimizer(&ctx).transforms.into_iter())
                 .collect::<Vec<_>>()
             };
@@ -434,7 +434,7 @@ mod tests {
         };
         if test_type == TestType::Opt {
             let ctx = mz_transform::typecheck::empty_context();
-            let log_optimizer = Optimizer::logical_cleanup_pass(&ctx);
+            let log_optimizer = Optimizer::logical_cleanup_pass(&ctx, true);
             let phys_optimizer = Optimizer::physical_optimizer(&ctx);
             dataflow = dataflow
                 .into_iter()

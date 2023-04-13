@@ -92,6 +92,7 @@ use mz_expr::OptimizedMirRelationExpr;
 use std::error::Error;
 use std::fmt;
 use std::iter;
+use std::rc::Rc;
 use tracing::error;
 
 use mz_expr::visit::Visit;
@@ -452,7 +453,7 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer(ctx: &crate::typecheck::Context) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
+            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx))),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(crate::non_null_requirements::NonNullRequirements::default()),
@@ -506,7 +507,7 @@ impl Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
-            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
+            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
         ];
         Self {
             name: "logical",
@@ -523,7 +524,7 @@ impl Optimizer {
     pub fn physical_optimizer(ctx: &crate::typecheck::Context) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
+            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
             // Considerations for the relationship between JoinImplementation and other transforms:
             // - there should be a run of LiteralConstraints before JoinImplementation lifts away
             //   the Filters from the Gets;
@@ -580,7 +581,7 @@ impl Optimizer {
             // identical. Check the `threshold_elision.slt` tests that fail if
             // you remove this transform for examples.
             Box::new(crate::threshold_elision::ThresholdElision),
-            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
+            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
         ];
         Self {
             name: "physical",
@@ -590,9 +591,19 @@ impl Optimizer {
 
     /// Contains the logical optimizations that should run after cross-view
     /// transformations run.
-    pub fn logical_cleanup_pass(ctx: &crate::typecheck::Context) -> Self {
+    ///
+    /// Set `allow_new_globals` when you will use these as the first passes.
+    /// The first instance of the typechecker in an optimizer pipeline should
+    /// allow new globals (or it will crash when it encounters them).
+    pub fn logical_cleanup_pass(ctx: &crate::typecheck::Context, allow_new_globals: bool) -> Self {
+        let mut typechecker = crate::typecheck::Typecheck::new(Rc::clone(ctx));
+
+        if !allow_new_globals {
+            typechecker = typechecker.disallow_new_globals();
+        }
+
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
+            Box::new(typechecker),
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
@@ -617,7 +628,7 @@ impl Optimizer {
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                 ],
             }),
-            Box::new(crate::typecheck::Typecheck::new(ctx.clone())),
+            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
         ];
         Self {
             name: "logical_cleanup",

@@ -9,7 +9,7 @@
 
 //! Check that the visible type of each query has not been changed
 
-use std::{cell::RefCell, collections::BTreeMap};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use mz_compute_client::types::dataflows::BuildDesc;
 use mz_expr::{
@@ -23,11 +23,11 @@ use crate::TransformError;
 ///
 /// We use a `RefCell` to ensure that contexts are shared by multiple typechecker passes.
 /// Shared contexts help catch consistency issues.
-pub type Context = RefCell<mz_expr::typecheck::Context>;
+pub type Context = Rc<RefCell<mz_expr::typecheck::Context>>;
 
 /// Generates an empty context
 pub fn empty_context() -> Context {
-    RefCell::new(BTreeMap::new())
+    Rc::new(RefCell::new(BTreeMap::new()))
 }
 
 /// Check that the visible type of each query has not been changed
@@ -35,12 +35,25 @@ pub fn empty_context() -> Context {
 pub struct Typecheck {
     /// The known types of the queries so far
     ctx: Context,
+    /// Whether or not this is the first run of the transform
+    disallow_new_globals: bool,
 }
 
 impl Typecheck {
     /// Creates a typechecking consistency checking pass using a given shared context
     pub fn new(ctx: Context) -> Self {
-        Self { ctx }
+        Self {
+            ctx,
+            disallow_new_globals: false,
+        }
+    }
+
+    /// New non-transient global IDs will be treated as an error
+    ///
+    /// Only turn this on after the context has been appropraitely populated by, e.g., an earlier run
+    pub fn disallow_new_globals(mut self) -> Self {
+        self.disallow_new_globals = true;
+        self
     }
 }
 
@@ -72,7 +85,7 @@ impl crate::Transform for Typecheck {
 
         let expected = ctx.get(&Id::Global(*id));
 
-        if expected.is_none() && !id.is_transient() {
+        if self.disallow_new_globals && expected.is_none() && !id.is_transient() {
             return Err(TransformError::Internal(format!(
                 "FOUND NON-TRANDSIENT TOP LEVEL QUERY BOUND TO {id}:\n{}",
                 plan.pretty()
