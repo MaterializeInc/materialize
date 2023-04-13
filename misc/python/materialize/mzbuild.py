@@ -701,6 +701,8 @@ class Repository:
         release_mode: bool = True,
         coverage: bool = False,
     ):
+        if os.getenv("CI_COVERAGE_ENABLED", False):
+            coverage = True
         self.rd = RepositoryDetails(root, arch, release_mode, coverage)
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
@@ -748,7 +750,7 @@ class Repository:
 
           * The mutually-exclusive `--dev`/`--release` options to control the
             `release_mode` repository attribute.
-          * The `--coverage` booelan option to control the `coverage` repository
+          * The `--coverage` boolean option to control the `coverage` repository
             attribute.
 
         Use `Repository.from_arguments` to construct a repository from the
@@ -769,6 +771,7 @@ class Repository:
         parser.add_argument(
             "--coverage",
             help="whether to enable code coverage compilation flags",
+            default=bool(os.getenv("CI_COVERAGE_ENABLED", False)),
             action="store_true",
         )
         parser.add_argument(

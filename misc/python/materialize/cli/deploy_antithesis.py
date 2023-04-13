@@ -25,7 +25,8 @@ REGISTRY = "us-central1-docker.pkg.dev/molten-verve-216720/materialize-repositor
 
 def main() -> None:
     root = Path(os.environ["MZ_ROOT"])
-    repo = mzbuild.Repository(root)
+    coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+    repo = mzbuild.Repository(root, coverage=coverage)
     deps = repo.resolve_dependencies([repo.images[name] for name in IMAGES])
     deps.acquire()
 
