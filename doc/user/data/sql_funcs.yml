@@ -366,7 +366,7 @@
 
   - signature: "translate(s: str, from: str, to: str) -> str"
     description: >- 
-      Any character in `s` that matches a character in `from` is replaced by the corresponding character in the `to`.
+      Any character in `s` that matches a character in `from` is replaced by the corresponding character in `to`.
       If `from` is longer than `to`, occurrences of the extra characters in `from` are removed.
 
   - signature: "trim([BOTH | LEADING | TRAILING]? ['c'? FROM]? 's') -> str"
