@@ -13,7 +13,10 @@ The scope will be limited to only allow `ORDER BY TIMESTAMP` (ascending order).
 - For kafka upsert style topics, value = NULL is taken to mean that it’s a delete tombstone and that the corresponding key should be removed. If we want to keep the same behavior it would make sense to limit the `ORDER BY` columns to only the metadata columns.
 - Limiting it to only `TIMESTAMP` because
     - `OFFSET` is already default. We can make it explicit though if we want.
-    - `PARTITION`, `KEY`, `TOPIC`, would not make a good order by clause.
+    - `PARTITION`, `KEY`, `TOPIC`, would not make for meaningful orderings:
+        - The `PARTITION` of a record is typically derived from its key, and so is the same for every record with a given key.
+        - `KEY` is, by definition, the same for every record with a given key.
+        - `TOPIC` is the same for every record in the topic.
     - `HEADERS` by itself would not also make a good order by clause (it’s a json blob), but later we can probably allow expressions so that values could be extracted from it.
 - Limiting to only ascending order because no users have expressed a need for descending.
 
@@ -23,11 +26,16 @@ The scope will be limited to only allow `ORDER BY TIMESTAMP` (ascending order).
 
 Make it possible with unsafe-mode to provide custom ORDER BY clause which will override the default ordering by offset. The given ORDER BY identifier should refer to the included TIMESTAMP metadata column.
 
-Examples of valid syntax:
+The option will be part of the `ENVELOPE UPSERT` clause with the following grammar:
+
+ENVELOPE UPSERT [(ORDER BY (<expr>) [ASC])]
+
+The `ASC` modifier is optional noise for specifying ascending ordering, for symmetry with the `ORDER BY` clause in `SELECT` statements.
+Examples of valid syntax and semantics:
 - `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY TIMESTAMP )`
 - `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts ENVELOPE UPSERT ( ORDER BY ts )`
 
-Examples of invalid syntax:
+Examples that are syntatically valid but semantically invalid:
 - `CREATE SOURCE ... INCLUDE OFFSET ENVELOPE UPSERT ( ORDER BY TIMESTAMP )` (TIMESTAMP column is not included)
 - `CREATE SOURCE ... INCLUDE PARTITION AS p ENVELOPE UPSERT ( ORDER BY p )` (ORDER BY identifier does not refer to the TIMESTAMP metadata column)
 
@@ -76,7 +84,7 @@ What will it take to promote this to the next stage i.e. Alpha?
 
 Users will need to be careful of what kind of compaction they have for the kafka topic. The upsert will do the correct thing based on the data it sees.
 
-If old data has been compacted away either via time based or key based compaction, and we start ingesting the source after that, the result of upsert might not be accurate.
+If old data has been compacted away either via time based or key based compaction, and we start ingesting the source after that, the result of upsert will not include the data Kafka has compacted away, which might violate user expectations.```
 
 If users actually are using this custom order by, it’s likely they are **not** using key based compaction with Kafka because semantically that would be upsert-ing on offset.
 
