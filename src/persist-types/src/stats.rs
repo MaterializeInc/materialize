@@ -346,10 +346,10 @@ mod impls {
 
     impl ColumnStats<Option<Vec<u8>>> for OptionStats<BytesStats> {
         fn lower<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
-            Some(self.some.lower())
+            self.some.lower().map(Some)
         }
         fn upper<'a>(&'a self) -> Option<<Option<Vec<u8>> as Data>::Ref<'a>> {
-            Some(self.some.upper())
+            self.some.upper().map(Some)
         }
         fn none_count(&self) -> usize {
             self.none
