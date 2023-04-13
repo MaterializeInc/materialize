@@ -449,7 +449,11 @@ impl AstDisplay for Envelope {
                 if let Some(order) = order_by {
                     f.write_str("(");
                     f.write_str(" ORDER BY ");
+
+                    f.write_str("(");
                     f.write_node(order);
+                    f.write_str(")");
+
                     f.write_str(")");
                 }
             }

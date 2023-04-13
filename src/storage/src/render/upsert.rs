@@ -17,6 +17,7 @@ use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
+use mz_storage_client::types::sources::MzOffset;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
@@ -103,17 +104,43 @@ impl<H: Digest> Hasher for DigestHasher<H> {
     }
 }
 
-/// A tuple of the row or error, and the order by value
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-struct State(Result<Row, UpsertError>, Option<i128>);
+/// A tuple of the row or error, and the order by value.
+/// Will be used to store the state for a key in a hashmap in upsert
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+struct State(Result<Row, UpsertError>, UpsertOrder);
 
-/// Gets the field to compare the records by and returns the value
-/// Currently it expects the field to be only of timestamp type
+/// Struct containing the custom order by value and
+/// the default fallback kafka offset.
+///
+/// The following table shows the possible OrderBy values
+/// for a particular key with different value types where,
+/// - p = the UpsertOrder from previously persisted state
+/// - k = the UpsertOrder from incoming kafka ingestion
+///
+/// | value   | order by |p.order,  p.default|k.order,  k.default| k.cmp(p)                                 |
+/// |---------|----------|-------------------|-------------------|------------------------------------------|
+/// | Ok(row) | Y        |Some(),   None     |Some(),   Some()   | k.order.cmp(p.order), if equal then k > p|
+/// | Err()   | Y        |None,     None     |Some(),   Some()   | k > p always since Some > None           |
+/// | Ok(row) | N        |None,     None     |None,     Some()   | k > p always since Some > None           |
+/// | Err()   | N        |None,     None     |None,     Some()   | k > p always since Some > None           |
+///
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub(crate) struct UpsertOrder {
+    // Value if using upsert order by
+    // Currently can only hold i64 timestamp
+    pub order: Option<i64>,
+    // Fallback default offset for order by
+    pub default: Option<MzOffset>,
+}
+
+/// Gets the ordering information extracting out the value from the row
+/// based on the given index, and the default fallback value.
 pub(crate) fn get_order(
     row_or_error: &Result<Row, UpsertError>,
     order_by_index: Option<usize>,
-) -> Option<i128> {
-    match (row_or_error, order_by_index) {
+    default: Option<MzOffset>,
+) -> UpsertOrder {
+    let order = match (row_or_error, order_by_index) {
         (Ok(row), Some(index)) => {
             let datum = row
                 .iter()
@@ -121,23 +148,21 @@ pub(crate) fn get_order(
                 .expect("Expected a valid order by index");
 
             match datum {
-                Datum::Timestamp(ts) => Some(
-                    ts.timestamp_millis()
-                        .try_into()
-                        .expect("Unexpected overflow converting i64 timestamp to i128"),
-                ),
+                // Currently only timestamp type is supported
+                Datum::Timestamp(ts) => Some(ts.timestamp_nanos()),
                 _ => panic!("Only timestamp is supported for order by"),
             }
         }
         (_, None) => None,
         (Err(_), _) => None,
-    }
+    };
+    UpsertOrder { order, default }
 }
 
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
 pub(crate) fn upsert<G: Scope>(
-    input: &Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, i128), Diff>,
+    input: &Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, UpsertOrder), Diff>,
     mut key_indices: Vec<usize>,
     order_by_index: Option<usize>,
     resume_upper: Antichain<G::Timestamp>,
@@ -215,7 +240,7 @@ where
 
         for ((key, value), diff) in snapshot {
             assert_eq!(diff, 1, "invalid upsert state");
-            let order = get_order(&value, order_by_index);
+            let order = get_order(&value, order_by_index, None);
             state.insert(key, State(value, order));
         }
 
@@ -266,41 +291,21 @@ where
                             .expect("key missing from commands_state");
                         match (&command_state, value) {
                             (Some(State(old_value, old_order)), Some(new_value)) => {
-                                match old_order {
-                                    Some(old_order) if new_order.cmp(old_order).is_gt() => {
-                                        // replace if old_order is present and new_order is gt old_order value
-                                        output_updates.push((old_value.to_owned(), ts.clone(), -1));
-                                        output_updates.push((new_value.clone(), ts, 1));
-                                        command_state.replace(State(new_value, Some(new_order)));
-                                    }
-                                    None => {
-                                        // also replace if no order by to compare in state
-                                        // this will be implicit offset ordering and assumes new_order is latest
-                                        output_updates.push((old_value.to_owned(), ts.clone(), -1));
-                                        output_updates.push((new_value.clone(), ts, 1));
-                                        command_state.replace(State(new_value, Some(new_order)));
-                                    }
-                                    _ => {}
+                                if new_order.cmp(old_order).is_gt() {
+                                    output_updates.push((old_value.to_owned(), ts.clone(), -1));
+                                    output_updates.push((new_value.clone(), ts, 1));
+                                    command_state.replace(State(new_value, new_order));
                                 }
                             }
                             (None, Some(new_value)) => {
                                 // No previous state exists, insert new value
                                 output_updates.push((new_value.clone(), ts, 1));
-                                command_state.replace(State(new_value, Some(new_order)));
+                                command_state.replace(State(new_value, new_order));
                             }
                             (Some(State(old_value, old_order)), None) => {
-                                match old_order {
-                                    Some(old_order) if new_order.cmp(old_order).is_gt() => {
-                                        output_updates.push((old_value.to_owned(), ts, -1));
-                                        command_state.take();
-                                    }
-                                    None => {
-                                        // there's no old order, assume this is latest tombstone
-                                        // this is implicitly ordering by offset
-                                        output_updates.push((old_value.to_owned(), ts, -1));
-                                        command_state.take();
-                                    }
-                                    _ => {}
+                                if new_order.cmp(old_order).is_gt() {
+                                    output_updates.push((old_value.to_owned(), ts, -1));
+                                    command_state.take();
                                 }
                             }
                             (None, None) => {

@@ -32,7 +32,7 @@ use mz_storage_client::types::sources::{encoding::*, *};
 use mz_timely_util::operator::CollectionExt;
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
-use crate::render::upsert::UpsertKey;
+use crate::render::upsert::{UpsertKey, UpsertOrder};
 use crate::source::types::{DecodeResult, HealthStatusUpdate, SourceOutput};
 use crate::source::{self, RawSourceCreationConfig, SourceCreationParams};
 
@@ -467,27 +467,23 @@ fn append_metadata_to_value<G: Scope>(
 fn upsert_commands<G: Scope>(
     input: Collection<G, DecodeResult, Diff>,
     upsert_envelope: UpsertEnvelope,
-) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, i128), Diff> {
+) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, UpsertOrder), Diff> {
     let mut row_buf = Row::default();
     input.map(move |result| {
         let metadata = result.metadata;
 
-        let order = match upsert_envelope.order_by_index {
-            Some(absolute_pos) => {
-                // Getting the order by column always from metadata
-                // For tombstones, the value will be null
-                let key_value_arity = upsert_envelope.source_arity - metadata.iter().count();
-                let metadata_index = absolute_pos - key_value_arity;
+        // Converting absolute row position to get the index in metadata row
+        let metadata_index = upsert_envelope.order_by_index.map(|row_pos| {
+            let key_value_arity = upsert_envelope.source_arity - metadata.iter().count();
+            row_pos - key_value_arity
+        });
 
-                crate::render::upsert::get_order(&Ok(metadata.clone()), Some(metadata_index))
-                    .expect("expected order by value from metadata")
-            }
-            None => result
-                .position
-                .offset
-                .try_into()
-                .expect("Unexpected overflow converting u64 offset to i128"),
-        };
+        // Getting the ordering information from metadata
+        let order = crate::render::upsert::get_order(
+            &Ok(metadata.clone()),
+            metadata_index,
+            Some(result.position),
+        );
 
         let key = match result.key {
             Some(Ok(key)) => Ok(key),
