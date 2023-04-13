@@ -3438,7 +3438,7 @@ pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| Builtin
         MzAclItem {
             grantee: MZ_INTROSPECTION_ROLE_ID,
             grantor: MZ_SYSTEM_ROLE_ID,
-            acl_mode: AclMode::USAGE.bitor(AclMode::CREATE),
+            acl_mode: AclMode::USAGE.union(AclMode::CREATE),
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
