@@ -9,11 +9,13 @@
 
 //! Implementations around supporting the SUBSCRIBE protocol with the dataflow layer
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use itertools::Itertools;
 use mz_expr::{compare_columns, ColumnOrder};
 use mz_ore::now::EpochMillis;
+use mz_sql::plan::SubscribeOutput;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 
@@ -51,8 +53,8 @@ pub struct ActiveSubscribe {
     pub start_time: EpochMillis,
     /// Whether we are already in the process of dropping the resources related to this subscribe.
     pub dropping: bool,
-    /// If non empty, sort by these columns per timestamp to support envelopes
-    pub key_indices: Option<Vec<usize>>,
+    /// How to modify output
+    pub output: Option<SubscribeOutput>,
 }
 
 impl ActiveSubscribe {
@@ -70,8 +72,13 @@ impl ActiveSubscribe {
             let mut packer = row_buf.packer();
             packer.push(Datum::from(numeric::Numeric::from(*upper)));
             packer.push(Datum::True);
-            // Fill in the diff column and all table columns with NULL.
-            for _ in 0..(self.arity + 1) {
+
+            // Fill in the diff column
+            if !matches!(self.output, Some(SubscribeOutput::EnvelopeUpsert {..})) {
+                packer.push(Datum::Null);
+            }
+            // Fill all table columns with NULL.
+            for _ in 0..self.arity {
                 packer.push(Datum::Null);
             }
 
@@ -99,8 +106,24 @@ impl ActiveSubscribe {
                         // Sort results by time. We use stable sort here because it will produce deterministic
                         // results since the cursor will always produce rows in the same order.
                         // TODO: Is sorting by time necessary?
-                        if let Some(key_indices) = &self.key_indices {
-                            let order_by = &key_indices
+                        match &self.output {
+                            Some(SubscribeOutput::WithinTimestampOrderBy { order_by }) => {
+                                let mut left_datum_vec = mz_repr::DatumVec::new();
+                                let mut right_datum_vec = mz_repr::DatumVec::new();
+                                rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
+                                    left_time.cmp(right_time).then_with(|| {
+                                        let left_datums = left_datum_vec.borrow_with(left_row);
+                                        let right_datums = right_datum_vec.borrow_with(right_row);
+                                        compare_columns(order_by, &left_datums, &right_datums, || {
+                                            left_row.cmp(right_row).then(left_diff.cmp(right_diff))
+                                        })
+                                    })
+                                });
+                            },
+                            Some(SubscribeOutput::EnvelopeUpsert { key_indices }) => {
+                                let mut left_datum_vec = mz_repr::DatumVec::new();
+                                let mut right_datum_vec = mz_repr::DatumVec::new();
+                                let order_by = &key_indices
                                 .iter()
                                 .map(|idx| ColumnOrder {
                                     column: *idx,
@@ -108,19 +131,59 @@ impl ActiveSubscribe {
                                     nulls_last: true,
                                 })
                                 .collect_vec();
-                            let mut left_datum_vec = mz_repr::DatumVec::new();
-                            let mut right_datum_vec = mz_repr::DatumVec::new();
-                            rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
-                                left_time.cmp(right_time).then_with(|| {
-                                    let left_datums = left_datum_vec.borrow_with(left_row);
-                                    let right_datums = right_datum_vec.borrow_with(right_row);
-                                    compare_columns(order_by, &left_datums, &right_datums, || {
-                                        left_row.cmp(right_row).then(left_diff.cmp(right_diff))
+                                rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
+                                    left_time.cmp(right_time).then_with(|| {
+                                        let left_datums = left_datum_vec.borrow_with(left_row);
+                                        let right_datums = right_datum_vec.borrow_with(right_row);
+                                        compare_columns(order_by, &left_datums, &right_datums, || {
+                                            left_row.cmp(right_row).then(left_diff.cmp(right_diff))
+                                        })
                                     })
-                                })
-                            });
-                        } else {
-                            rows.sort_by_key(|(time, _, _)| *time);
+                                });
+
+                                let mut new_rows = Vec::new();
+                                let mut it = rows.iter();
+                                let mut datum_vec = mz_repr::DatumVec::new();
+                                while let Some(start) = it.next() {
+                                    let group = std::iter::once(start).chain(it.take_while_ref(|row| {
+                                        let left_datums = left_datum_vec.borrow_with(&start.1);
+                                        let right_datums = right_datum_vec.borrow_with(&row.1);
+                                        start.0 == row.0 && compare_columns(order_by, &left_datums, &right_datums, || Ordering::Equal) == Ordering::Equal
+                                    }
+                                    ));
+                                    let mut saw_new_row = false;
+                                    for (t, r, d) in group {
+                                        if *d < 0 { continue }
+                                        let mut packer = row_buf.packer();
+                                        let datums = datum_vec.borrow_with(r);
+                                        for idx in key_indices {
+                                            packer.push(datums[*idx]);
+                                        }
+                                        for idx in 0..self.arity {
+                                            if !key_indices.contains(&idx) {
+                                                packer.push(datums[idx]);
+                                            }
+                                        }
+
+                                        saw_new_row = true;
+                                        new_rows.push((*t, row_buf.clone(), 1));
+                                    }
+
+                                    if !saw_new_row {  // emit deletion
+                                        let mut packer = row_buf.packer();
+                                        let datums = datum_vec.borrow_with(&start.1);
+                                        for idx in key_indices {
+                                            packer.push(datums[*idx]);
+                                        }
+                                        for _ in 0..self.arity - key_indices.len() {
+                                            packer.push(Datum::Null);
+                                        }
+                                        new_rows.push((start.0, row_buf.clone(), 1));
+                                    }
+                                }
+                                rows = new_rows;
+                            },
+                            None => rows.sort_by_key(|(time, _, _)| *time),
                         }
 
                         let rows = rows
@@ -139,7 +202,9 @@ impl ActiveSubscribe {
                                     packer.push(Datum::False);
                                 }
 
-                                packer.push(Datum::Int64(diff));
+                                if !matches!(self.output, Some(SubscribeOutput::EnvelopeUpsert {..})) {
+                                    packer.push(Datum::Int64(diff));
+                                }
 
                                 packer.extend_by_row(&row);
 

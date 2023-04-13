@@ -4072,7 +4072,7 @@ pub fn coerce_homogeneous_exprs(
 
 /// Creates a `ColumnOrder` from an `OrderByExpr` and column index.
 /// Column index is specified by the caller, but `desc` and `nulls_last` is figured out here.
-fn resolve_desc_and_nulls_last<T: AstInfo>(obe: &OrderByExpr<T>, column: usize) -> ColumnOrder {
+pub(crate) fn resolve_desc_and_nulls_last<T: AstInfo>(obe: &OrderByExpr<T>, column: usize) -> ColumnOrder {
     let desc = !obe.asc.unwrap_or(true);
     ColumnOrder {
         column,

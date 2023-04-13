@@ -31,7 +31,7 @@ use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
     Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata,
-    SubscribeEnvelope, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
+    SubscribeOutput, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
     UnresolvedItemName, UnresolvedName, UnresolvedSchemaName, Value,
 };
 
@@ -2078,7 +2078,7 @@ pub struct SubscribeStatement<T: AstInfo> {
     pub options: Vec<SubscribeOption<T>>,
     pub as_of: Option<AsOf<T>>,
     pub up_to: Option<Expr<T>>,
-    pub envelope: Option<SubscribeEnvelope>,
+    pub output: Option<SubscribeOutput<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
@@ -2098,9 +2098,9 @@ impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
             f.write_str(" UP TO ");
             f.write_node(up_to);
         }
-        if let Some(envelope) = &self.envelope {
+        if let Some(output) = &self.output {
             f.write_str(" ");
-            f.write_str(envelope);
+            f.write_str(output);
         }
     }
 }

@@ -21,7 +21,7 @@ use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::SubscribeEnvelope;
+use mz_sql_parser::ast::SubscribeOutput;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -33,8 +33,8 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedItemName};
-use crate::normalize;
-use crate::plan::query::{plan_up_to, QueryLifetime};
+use crate::{normalize, plan};
+use crate::plan::query::{plan_up_to, QueryLifetime, resolve_desc_and_nulls_last};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
@@ -423,7 +423,7 @@ pub fn plan_subscribe(
         options,
         as_of,
         up_to,
-        envelope,
+        output,
     }: SubscribeStatement<Aug>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
@@ -468,9 +468,9 @@ pub fn plan_subscribe(
     let when = query::plan_as_of(scx, as_of)?;
     let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
 
-    let key_indices = envelope
+    let output = output
         .map(|env| match env {
-            SubscribeEnvelope::Upsert { key_columns } => {
+            SubscribeOutput::EnvelopeUpsert { key_columns } => {
                 scx.require_envelope_upsert_in_subscribe()?;
                 let key_columns = key_columns
                     .into_iter()
@@ -490,12 +490,15 @@ pub fn plan_subscribe(
                             .map(|(idx, _type)| idx)
                             .ok_or_else(|| sql_err!("No such column: {}", col))?;
                         if desc.get_unambiguous_name(name_idx).is_none() {
-                            anyhow::bail!("Ambiguous column: {}", col);
+                            sql_err!("Ambiguous column: {}", col);
                         }
                         Ok(name_idx)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(indices)
+                Ok(plan::SubscribeOutput::EnvelopeUpsert { key_indices: indices })
+            },
+            SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+                Ok(plan::SubscribeOutput::WithinTimestampOrderBy { order_by: order_by.iter().enumerate().map(|(idx, obe)| resolve_desc_and_nulls_last(obe, idx)).collect() })
             }
         })
         .transpose()?;
@@ -510,7 +513,7 @@ pub fn plan_subscribe(
         with_snapshot: snapshot.unwrap_or(true),
         copy_to,
         emit_progress: progress.unwrap_or(false),
-        key_indices,
+        output,
     }))
 }
 

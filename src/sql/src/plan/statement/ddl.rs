@@ -1957,7 +1957,7 @@ pub fn plan_create_sink(
                             .map(|(idx, _type)| idx)
                             .ok_or_else(|| sql_err!("No such column: {}", col))?;
                         if desc.get_unambiguous_name(name_idx).is_none() {
-                            anyhow::bail!("Ambiguous column: {}", col);
+                            sql_err!("Ambiguous column: {}", col);
                         }
                         Ok(name_idx)
                     })

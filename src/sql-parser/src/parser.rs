@@ -5653,8 +5653,11 @@ impl<'a> Parser<'a> {
         };
         let as_of = self.parse_optional_as_of()?;
         let up_to = self.parse_optional_up_to()?;
-        let envelope = if self.parse_keyword(ENVELOPE) {
-            Some(self.parse_subscribe_envelope()?)
+        let output = if self.parse_keywords(&[ENVELOPE, UPSERT, KEY]) {
+            let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
+            Some(SubscribeOutput::EnvelopeUpsert { key_columns })
+        } else if self.parse_keywords(&[WITHIN, TIMESTAMP, ORDER, BY]) {
+            Some(SubscribeOutput::WithinTimestampOrderBy { order_by: self.parse_comma_separated(Parser::parse_order_by_expr)? })
         } else {
             None
         };
@@ -5663,15 +5666,8 @@ impl<'a> Parser<'a> {
             options,
             as_of,
             up_to,
-            envelope,
+            output,
         }))
-    }
-
-    fn parse_subscribe_envelope(&mut self) -> Result<SubscribeEnvelope, ParserError> {
-        self.expect_keyword(UPSERT)?;
-        self.expect_keyword(KEY)?;
-        let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
-        Ok(SubscribeEnvelope::Upsert { key_columns })
     }
 
     fn parse_subscribe_option(&mut self) -> Result<SubscribeOption<Raw>, ParserError> {
