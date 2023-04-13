@@ -52,9 +52,10 @@ Here's an example of the upsert behavior where the source consists of a key, val
 ```
  Previously persisted data        Incoming kafka stream decoded
 +------------------------+         +-------------------------+
-| Ok (key1, value1, 100) |         |  Ok (key1, value3, 200) |
-| Ok (key2, value2, 201) |         |  Err(key3, some_error2) |
-| Err(key3, some_error1) |         |  Ok (key2, value4, 200) |
+| Ok (key1, old1, 100)   |         |  Ok (key1, new1, 200)   |
+| Ok (key2, old2, 201)   |         |  Ok (key2, new2, 200)   |
+| Err(key3, some_error1) |         |  Err(key3, some_error2) |
+| Ok (key4, old4, 300)   |         |  Ok (key4, new4, 300)   |
 +------------------+-----+         +-----+-------------------+
                    |                     |
                    |                     |
@@ -62,12 +63,15 @@ Here's an example of the upsert behavior where the source consists of a key, val
                    |                     |
                    v    Upsert Output    v
                   +------------------------+
-                  | Ok (key1, value3, 200) |
-                  | Ok (key2, value2, 201) |
-                  | Err(key3, some_error2) |
+                  | Ok (key1, new1, 200)   | // value updated, 200 > 100
+                  | Ok (key2, old2, 201)   | // old value kept, 200 < 201
+                  | Err(key3, some_error2) | // new error always overrides old
+                  | Err(key4, new4, 300)   | // updated value with higher offset
                   +------------------------+
 ```
-Note: As shown in the example above, the errors are still implicitly ordered by offset as we do not persist any extra metadata for them separately. A later error with the same key will always overwrite a previous one.
+In case the order by value of two entries are same, the offset will be used as a tie-breaker.
+
+Note: As shown in the example above, the errors are still implicitly ordered by offset as we do not persist any extra metadata for them separately. A later error with the same key will always overwrite a previous one. This would still allow us to retract errors in the same way as before.
 
 # Rollout
 This feature will be rolled out behind the unsafe flag, then upgraded to only being available behind a LaunchDarkly flag.
@@ -96,9 +100,6 @@ If users actually are using this custom order by, it’s likely they are **not**
 # Conclusion and alternatives
 
 An alternative could be waiting for `TRANSFORM USING` which has a much broader scope and could cover this particular scenario. In the meantime, having a smaller scoped custom order by could be useful for interested users.
-
-# Unresolved questions
-- In case the order by value of two entries are same, should it chose one of them deterministically? For eg, say we already have (key1, value1, ts=100) and have incoming (key1, value2, ts=100). Should we override `value1` with `value2` or not?
 
 # Future work
 
