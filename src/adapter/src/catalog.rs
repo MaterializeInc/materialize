@@ -4906,11 +4906,11 @@ impl Catalog {
                     )];
                     let default_schema_privileges = vec![
                         rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Schema, owner_id),
-                        // Default schemas provide usage and create privileges to PUBLIC by default.
+                        // Default schemas provide usage privileges to PUBLIC by default.
                         MzAclItem {
                             grantee: RoleId::Public,
                             grantor: owner_id,
-                            acl_mode: AclMode::USAGE.bitor(AclMode::CREATE),
+                            acl_mode: AclMode::USAGE,
                         },
                     ];
                     let database_id =
