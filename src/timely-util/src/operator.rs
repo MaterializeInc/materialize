@@ -22,8 +22,9 @@ use timely::dataflow::operators::generic::{
     operator::{self, Operator},
     InputHandle, OperatorInfo, OutputHandle,
 };
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 use timely::Data;
 
 use crate::buffer::ConsolidateBuffer;
@@ -146,8 +147,9 @@ where
     fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)>;
 
     /// Wraps the stream with a passthrough operator that will be shut down when the provided
-    /// token cannot be upgraded anymore.
-    fn fused(&self, token: Weak<()>) -> Stream<G, D1>;
+    /// token cannot be upgraded anymore. After shutdown all data flowing into the operator will be
+    /// dropped and the frontier will immediately advance to the empty antichain.
+    fn with_token(&self, token: Weak<()>) -> Stream<G, D1>;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -214,8 +216,9 @@ where
         R: num_traits::sign::Signed;
 
     /// Wraps the collection with a passthrough operator that will be shut down when the provided
-    /// token cannot be upgraded anymore.
-    fn fused(&self, token: Weak<()>) -> Collection<G, D1, R>;
+    /// token cannot be upgraded anymore. After shutdown all data flowing into the operator will be
+    /// dropped and the frontier will immediately advance to the empty antichain.
+    fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -400,22 +403,29 @@ where
         })
     }
 
-    fn fused(&self, token: Weak<()>) -> Stream<G, D1> {
-        let mut builder = OperatorBuilderRc::new("Fused".to_owned(), self.scope());
+    fn with_token(&self, token: Weak<()>) -> Stream<G, D1> {
+        let mut builder = OperatorBuilderRc::new("WithToken".to_owned(), self.scope());
 
         let mut input = builder.new_input(self, Pipeline);
-        let (mut output, stream) = builder.new_output();
+        let (mut output, stream) = builder.new_output_connection(vec![Antichain::new()]);
 
         let mut vector = Default::default();
-        builder.build(move |_capability| {
-            move |_frontier| {
+        builder.build(move |mut caps| {
+            let mut cap_set = CapabilitySet::from_elem(caps.pop().unwrap());
+            move |frontiers| {
+                if token.upgrade().is_none() {
+                    input.for_each(|_, _| {});
+                    cap_set.downgrade(&[]);
+                    return;
+                }
                 let mut output = output.activate();
                 while let Some((cap, data)) = input.next() {
-                    if token.upgrade().is_some() {
-                        data.swap(&mut vector);
-                        output.session(&cap).give_container(&mut vector);
-                    }
+                    data.swap(&mut vector);
+                    output
+                        .session(&cap_set.delayed(cap.time()))
+                        .give_container(&mut vector);
                 }
+                cap_set.downgrade(&frontiers[0].frontier())
             }
         });
         stream
@@ -510,8 +520,8 @@ where
         (oks.as_collection(), errs.as_collection())
     }
 
-    fn fused(&self, token: Weak<()>) -> Collection<G, D1, R> {
-        self.inner.fused(token).as_collection()
+    fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R> {
+        self.inner.with_token(token).as_collection()
     }
 }
 

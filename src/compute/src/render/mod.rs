@@ -656,7 +656,7 @@ where
                 use crate::typedefs::RowKeySpine;
                 oks_v.set(
                     &oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation")
-                        .fused(Weak::clone(&token)),
+                        .with_token(Weak::clone(&token)),
                 );
                 // Set err variable to the distinct elements of `err`.
                 // Distinctness is important, as we otherwise might add the same error each iteration,
@@ -670,7 +670,7 @@ where
                             move |_k, _s, t| t.push(((), 1)),
                         )
                         .as_collection(|k, _| k.clone())
-                        .fused(Weak::clone(&token)),
+                        .with_token(Weak::clone(&token)),
                 );
             }
             // Now extract each of the bindings into the outer scope.
