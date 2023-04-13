@@ -10,7 +10,10 @@
 //! Thorough consistency checking and type synthesis for MIR expressions
 
 use itertools::Itertools;
-use mz_repr::{ColumnType, RelationType, Row, ScalarType};
+use mz_repr::{
+    explain::{DummyHumanizer, ExprHumanizer},
+    ColumnType, RelationType, Row, ScalarType,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::warn;
 
@@ -72,13 +75,13 @@ pub enum TypeError<'a> {
     },
 }
 
-type Ctx = BTreeMap<Id, Vec<ColumnType>>;
+pub type Context = BTreeMap<Id, Vec<ColumnType>>;
 
 /// Returns true when it is safe to treat a `got` row as an `expected` row
 ///
 /// In particular, the core types must be equal, and if a column in `known` is nullable, that column should also be nullable in `got`
 /// Conversely, it is okay to treat a known non-nullable column as nullable: `got` may be nullable when `known` is not
-pub fn columns_match(got: &[ColumnType], known: &[ColumnType]) -> bool {
+pub fn is_subtype_of(got: &[ColumnType], known: &[ColumnType]) -> bool {
     if got.len() != known.len() {
         return false;
     }
@@ -86,6 +89,27 @@ pub fn columns_match(got: &[ColumnType], known: &[ColumnType]) -> bool {
     got.iter().zip_eq(known.iter()).all(|(got, known)| {
         (!known.nullable || got.nullable) && got.scalar_type.base_eq(&known.scalar_type)
     })
+}
+
+pub fn columns_pretty(cols: &[ColumnType]) -> String {
+    let mut s = String::with_capacity(2 + 3 * cols.len());
+
+    s.push('(');
+
+    let humanizer = DummyHumanizer;
+
+    let mut it = cols.iter().peekable();
+    while let Some(col) = it.next() {
+        s.push_str(&humanizer.humanize_column_type(col));
+
+        if it.peek().is_some() {
+            s.push_str(", ");
+        }
+    }
+
+    s.push(')');
+
+    s
 }
 
 impl MirRelationExpr {
@@ -96,7 +120,7 @@ impl MirRelationExpr {
     /// It should be linear in the size of the AST.
     ///
     /// ??? should we also compute keys and return a `RelationType`?
-    pub fn typecheck(&self, ctx: &Ctx) -> Result<Vec<ColumnType>, TypeError> {
+    pub fn typecheck(&self, ctx: &Context) -> Result<Vec<ColumnType>, TypeError> {
         use MirRelationExpr::*;
 
         match self {
@@ -134,7 +158,7 @@ impl MirRelationExpr {
             Get { typ, id } => {
                 if let Id::Global(_global_id) = id {
                     if !ctx.contains_key(id) {
-                        // TODO where can we find these types
+                        // TODO(mgree) pass QueryContext through to check these types
                         return Ok(typ.column_types.clone());
                     }
                 }
@@ -146,7 +170,7 @@ impl MirRelationExpr {
                 })?;
 
                 // the ascribed type must be a subtype of the actual type in the context
-                if !columns_match(&typ.column_types, ctx_typ) {
+                if !is_subtype_of(&typ.column_types, ctx_typ) {
                     return Err(TypeError::MismatchColumns {
                         source: self,
                         got: typ.column_types.clone(),
@@ -188,11 +212,11 @@ impl MirRelationExpr {
                 for expr in exprs {
                     t_exprs.push(expr.typecheck(self, &t_in)?);
                 }
-                // TODO check t_exprs agrees with `func`'s input type (where is that recorded?)
+                // TODO(mgree) check t_exprs agrees with `func`'s input type
 
                 let t_out = func.output_type().column_types;
 
-                // ??? why does col_with_input_cols include the input types in the output of FlatMap
+                // FlatMap extends the existing columns
                 t_in.extend(t_out);
                 Ok(t_in)
             }
@@ -422,8 +446,7 @@ impl MirRelationExpr {
                                     got: input_col,
                                     expected: base_col.clone(),
                                     message: format!(
-                                        "couldn't compute union of column types in union: {:?}",
-                                        e
+                                        "couldn't compute union of column types in union: {e}"
                                     ),
                                 })?;
                     }
@@ -463,8 +486,7 @@ impl MirRelationExpr {
                                     got: input_col,
                                     expected: base_col.clone(),
                                     message: format!(
-                                        "couldn't compute union of column types in let rec: {:?}",
-                                        e
+                                        "couldn't compute union of column types in let rec: {e}"
                                     ),
                                 }
                             })?;
@@ -496,7 +518,7 @@ impl MirRelationExpr {
     fn collect_recursive_variable_types(
         &self,
         ids: &[LocalId],
-        ctx: &mut Ctx,
+        ctx: &mut Context,
     ) -> Result<(), TypeError> {
         match self {
             MirRelationExpr::Get {
@@ -519,7 +541,7 @@ impl MirRelationExpr {
                                     got: input_col.clone(),
                                     expected: base_col.clone(),
                                     message: format!(
-                                        "couldn't compute union of collected column types: {:?}",
+                                        "couldn't compute union of collected column types: {}",
                                         e
                                     ),
                                 })?;
@@ -537,7 +559,7 @@ impl MirRelationExpr {
 
                 // we've shadowed the id
                 if ids.contains(id) {
-                    warn!("id {id} shadowed in {self:#?}");
+                    warn!("id {id} shadowed in {}", self.pretty());
                     return Ok(());
                 }
 
@@ -639,7 +661,8 @@ impl MirScalarExpr {
                 let cond_type = cond.typecheck(source, column_types)?;
 
                 // condition must be boolean
-                // ??? does nullability matter? ignoring it here (on purpose)
+                // ignoring nullability: null is treated as false
+                // NB this behavior is slightly different from columns_match (for which we would set nullable to false in the expected type)
                 if cond_type.scalar_type != ScalarType::Bool {
                     return Err(TypeError::MismatchColumn {
                         source,
@@ -660,7 +683,7 @@ impl MirScalarExpr {
                         source,
                         got: then_type,
                         expected: else_type,
-                        message: format!("couldn't compute union of column types for if: {e:?}"),
+                        message: format!("couldn't compute union of column types for if: {e}"),
                     })
             }
         }
@@ -699,12 +722,13 @@ impl<'a> TypeError<'a> {
 
 impl<'a> std::fmt::Display for TypeError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "In the MIR term:\n{:#?}\n", self.source())?;
+        writeln!(f, "In the MIR term:\n{}\n", self.source().pretty())?;
 
         use TypeError::*;
         match self {
             Unbound { source: _, id, typ } => {
-                writeln!(f, "{id} is unbound\ndeclared type {typ:?}")?
+                let typ = columns_pretty(&typ.column_types);
+                writeln!(f, "{id} is unbound\ndeclared type {typ}")?
             }
             NoSuchColumn {
                 source: _,
@@ -716,53 +740,76 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 got,
                 expected,
                 message,
-            } => writeln!(
-                f,
-                "mismatched column types: {message}\ngot {got:?}\nexpected {expected:?}"
-            )?,
+            } => {
+                let humanizer = DummyHumanizer;
+                let got = humanizer.humanize_column_type(got);
+                let expected = humanizer.humanize_column_type(expected);
+                writeln!(
+                    f,
+                    "mismatched column types: {message}\ngot {got}\nexpected {expected}"
+                )?
+            }
             MismatchColumns {
                 source: _,
                 got,
                 expected,
                 message,
-            } => writeln!(
-                f,
-                "mismatched relation types: {message}\ngot {got:?}\nexpected {expected:?}"
-            )?,
+            } => {
+                let got = columns_pretty(got);
+                let expected = columns_pretty(expected);
+
+                writeln!(
+                    f,
+                    "mismatched relation types: {message}\ngot {got}\nexpected {expected}"
+                )?
+            }
             BadConstantRow {
                 source: _,
                 got,
                 expected,
-            } => writeln!(
-                f,
-                "bad constant row\ngot {got}\nexpected row of type {expected:?}"
-            )?,
+            } => {
+                let expected = columns_pretty(expected);
+
+                writeln!(
+                    f,
+                    "bad constant row\ngot {got}\nexpected row of type {expected}"
+                )?
+            }
             BadProject {
                 source: _,
                 got,
                 input_type,
-            } => writeln!(
-                f,
-                "projection of non-existant columns {got:?} from type {input_type:?}"
-            )?,
+            } => {
+                let input_type = columns_pretty(input_type);
+
+                writeln!(
+                    f,
+                    "projection of non-existant columns {got:?} from type {input_type}"
+                )?
+            }
             BadTopKGroupKey {
                 source: _,
                 key,
                 input_type,
-            } => writeln!(
-                f,
-                "TopK group key {key} references invalid column\ncolumns: {input_type:?}"
-            )?,
+            } => {
+                let input_type = columns_pretty(input_type);
+
+                writeln!(
+                    f,
+                    "TopK group key {key} references invalid column\ncolumns: {input_type}"
+                )?
+            }
             BadTopKOrdering {
                 source: _,
                 order,
                 input_type,
             } => {
                 let col = order.column;
+                let input_type = columns_pretty(input_type);
+
                 writeln!(
-                f,
-                "TopK ordering {order} references invalid column {col} orderings\ncolumns: {input_type:?}"
-            )?
+                    f,
+                    "TopK ordering {order} references invalid column {col} orderings\ncolumns: {input_type}")?
             }
             BadLetRecBindings { source: _ } => {
                 writeln!(f, "LetRec ids and definitions don't line up")?

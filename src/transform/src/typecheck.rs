@@ -12,9 +12,10 @@
 use std::{cell::RefCell, collections::BTreeMap};
 
 use mz_compute_client::types::dataflows::BuildDesc;
-use mz_expr::{Id, OptimizedMirRelationExpr};
-use mz_repr::ColumnType;
-use tracing::{info, warn};
+use mz_expr::{
+    typecheck::{columns_pretty, is_subtype_of},
+    Id, OptimizedMirRelationExpr,
+};
 
 use crate::TransformError;
 
@@ -22,7 +23,7 @@ use crate::TransformError;
 ///
 /// We use a `RefCell` to ensure that contexts are shared by multiple typechecker passes.
 /// Shared contexts help catch consistency issues.
-pub type Context = RefCell<BTreeMap<Id, Vec<ColumnType>>>;
+pub type Context = RefCell<mz_expr::typecheck::Context>;
 
 /// Generates an empty context
 pub fn empty_context() -> Context {
@@ -33,7 +34,7 @@ pub fn empty_context() -> Context {
 #[derive(Debug)]
 pub struct Typecheck {
     /// The known types of the queries so far
-    pub ctx: Context,
+    ctx: Context,
 }
 
 impl Typecheck {
@@ -44,12 +45,6 @@ impl Typecheck {
 }
 
 impl crate::Transform for Typecheck {
-    #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
-        skip_all,
-        fields(path.segment = "typecheck")
-    )]
     fn transform(
         &self,
         relation: &mut mz_expr::MirRelationExpr,
@@ -59,19 +54,14 @@ impl crate::Transform for Typecheck {
 
         if let Err(err) = relation.typecheck(&ctx) {
             return Err(TransformError::Internal(format!(
-                "TYPE ERROR: {err}\nIN UNKNOWN QUERY:\n{relation:#?}"
+                "TYPE ERROR: {err}\nIN UNKNOWN QUERY:\n{}",
+                relation.pretty()
             )));
         }
 
         Ok(())
     }
 
-    #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
-        skip_all,
-        fields(path.segment = "typecheck")
-    )]
     fn transform_query(
         &self,
         build_desc: &mut BuildDesc<OptimizedMirRelationExpr>,
@@ -83,16 +73,23 @@ impl crate::Transform for Typecheck {
         let expected = ctx.get(&Id::Global(*id));
 
         if expected.is_none() && !id.is_transient() {
-            info!("TYPECHECKER FOUND NEW NON-TRANSIENT TOP LEVEL QUERY {id}\n{plan:#?}");
+            return Err(TransformError::Internal(format!(
+                "FOUND NON-TRANDSIENT TOP LEVEL QUERY BOUND TO {id}:\n{}",
+                plan.pretty()
+            )));
         }
 
         let got = plan.typecheck(&ctx);
 
         match (got, expected) {
             (Ok(got), Some(expected)) => {
-                if !mz_expr::typecheck::columns_match(&got, expected) {
+                if !is_subtype_of(&got, expected) {
+                    let got = columns_pretty(&got);
+                    let expected = columns_pretty(expected);
+
                     return Err(TransformError::Internal(format!(
-                        "TYPE ERROR: got {got:#?} expected {expected:#?} \nIN QUERY BOUND TO {id}:\n{plan:#?}"
+                        "TYPE ERROR: got {got} expected {expected} \nIN QUERY BOUND TO {id}:\n{}",
+                        plan.pretty()
                     )));
                 }
             }
@@ -100,8 +97,14 @@ impl crate::Transform for Typecheck {
                 ctx.insert(Id::Global(*id), got);
             }
             (Err(err), _) => {
+                let expected = match expected {
+                    Some(expected) => format!("expected type {}", columns_pretty(expected)),
+                    None => "no expected type".to_string(),
+                };
+
                 return Err(TransformError::Internal(format!(
-                    "TYPE ERROR:\n{err} expected type for this plan: {expected:#?} \nIN QUERY BOUND TO {id}:\n{plan:#?}"
+                    "TYPE ERROR:\n{err}\n{expected}\nIN QUERY BOUND TO {id}:\n{}",
+                    plan.pretty()
                 )));
             }
         }
