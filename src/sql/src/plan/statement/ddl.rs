@@ -3411,12 +3411,12 @@ fn plan_drop_schema(
         Some((database_spec, schema_spec)) => {
             if let ResolvedDatabaseSpecifier::Ambient = database_spec {
                 sql_bail!(
-                    "cannot drop schema '{name}' because it is required by the database system",
+                    "cannot drop schema {name} because it is required by the database system",
                 );
             }
             let schema_id = match schema_spec {
                 SchemaSpecifier::Temporary => {
-                    sql_bail!("cannot drop schema '{name}' because it is a temporary schema",)
+                    sql_bail!("cannot drop schema {name} because it is a temporary schema",)
                 }
                 SchemaSpecifier::Id(id) => id,
             };
@@ -3814,12 +3814,12 @@ fn plan_alter_schema_owner(
         Some((database_spec, schema_spec)) => {
             if let ResolvedDatabaseSpecifier::Ambient = database_spec {
                 sql_bail!(
-                    "cannot alter schema '{name}' because it is required by the database system",
+                    "cannot alter schema {name} because it is required by the database system",
                 );
             }
             let schema_id = match schema_spec {
                 SchemaSpecifier::Temporary => {
-                    sql_bail!("cannot alter schema '{name}' because it is a temporary schema",)
+                    sql_bail!("cannot alter schema {name} because it is a temporary schema",)
                 }
                 SchemaSpecifier::Id(id) => id,
             };
