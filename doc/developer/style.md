@@ -285,32 +285,34 @@ the line where the panic occurred. This is especially useful for debugging flaky
 
 #### Prefer structured errors over strings
 
-You should prefer structured error enums over strings. We currently have a
-number of places where we use `anyhow!("my error message")`, but we are trying
-to migrate away from that. Using [`thiserror`] makes it easy to write
-structured error enums.
+**Common case:** Use [`thiserror`] to define stuctured errors instead of using
+strings as errors. Meaning, you should _not_ use `anyhow!("this is my error")`.
+When your error wraps other errors or contain other errors as the underlying
+cause or source, you should make sure to tag them with `#[from]` or
+`#[source]`.
 
 If you write your own error enums, make sure to implement the standard
-[`Error`] trait and to properly implement `source()`. This makes sure that we
+[`Error`] trait and to properly implement `source()`. This makes it so that we
 can get the chain of causing/underlying errors so that they can be reported
 correctly when needed. With [`thiserror`] this will happen automatically when
 you use the `#[from]` attribute.
 
-Generally, the `Display` impl of your error type should _not_ print the chain
-of errors but only print itself and rely on callers to print the error chain
-when needed. There could be exceptions when your error type is wrapping another
-error type or is compositionally including one or multiple other errors, but
-those should be very rare!
+The `Display` impl of your error type should _not_ print the chain of errors
+but only print itself and rely on callers to print the error chain when needed.
+Again, this is the behaviour you will get by just using [`thiserror`]. There
+could be exceptions when your error type is wrapping another error type or is
+compositionally including one or multiple other errors, but those should be
+very rare!
 
 #### Printing errors
 
 As mentioned above, the `Display` impl of an error should not print the chain
 of source errors. Whenever you _do_ need to print an error with its chain of
 errors, say when tracing/logging or surfacing an error to users, you should
-make that explicit. There are the `ResultExt` and `ErrorExt` traits that
-provide `map_err_to_string_with_causes`/`err_to_string_with_causes` (for
-results) and `display_with_causes`/`to_string_with_causes` (for errors), that
-do this for you.
+make that explicit. We have the `ResultExt` and `ErrorExt` traits that provide
+`map_err_to_string_with_causes`/`err_to_string_with_causes` (for results) and
+`display_with_causes`/`to_string_with_causes` (for errors), that do this for
+you.
 
 
 [Clippy]: https://github.com/rust-lang/rust-clippy
