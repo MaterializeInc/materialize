@@ -12,7 +12,8 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true
-
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY a, b
@@ -49,6 +50,58 @@ ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true
 > FETCH 1 c
 <TIMESTAMP> 1 2 1
 > COMMIT
+
+> CREATE TABLE t(a int, b int, c int)
+> INSERT INTO t VALUES (1,2,3), (4,0,-4), (2,5,-6)
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t)
+> FETCH ALL c
+<TIMESTAMP> 1 1 2 3
+<TIMESTAMP> 1 4 0 -4
+<TIMESTAMP> 1 2 5 -6
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t) WITHIN TIMESTAMP ORDER BY a, b, c
+> FETCH 1 c
+<TIMESTAMP> 1 1 2 3
+> FETCH 1 c
+<TIMESTAMP> 1 2 5 -6
+> FETCH 1 c
+<TIMESTAMP> 1 4 0 -4
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE t WITHIN TIMESTAMP ORDER BY a, b, c
+> FETCH 1 c
+<TIMESTAMP> 1 1 2 3
+> FETCH 1 c
+<TIMESTAMP> 1 2 5 -6
+> FETCH 1 c
+<TIMESTAMP> 1 4 0 -4
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t) WITHIN TIMESTAMP ORDER BY c, b, a
+> FETCH 1 c
+<TIMESTAMP> 1 2 5 -6
+> FETCH 1 c
+<TIMESTAMP> 1 4 0 -4
+> FETCH 1 c
+<TIMESTAMP> 1 1 2 3
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE t WITHIN TIMESTAMP ORDER BY c, b, a
+> FETCH 1 c
+<TIMESTAMP> 1 2 5 -6
+> FETCH 1 c
+<TIMESTAMP> 1 4 0 -4
+> FETCH 1 c
+<TIMESTAMP> 1 1 2 3
+> COMMIT
+
 
 ! SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY c
 contains: column "c" does not exist

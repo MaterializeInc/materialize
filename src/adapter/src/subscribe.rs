@@ -108,7 +108,6 @@ impl ActiveSubscribe {
                         // TODO: Is sorting by time necessary?
                         match &self.output {
                             Some(SubscribeOutput::WithinTimestampOrderBy { order_by, project }) => {
-                                tracing::info!(?order_by, ?project);
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
                                 let mut right_datum_vec = mz_repr::DatumVec::new();
                                 rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
@@ -132,7 +131,6 @@ impl ActiveSubscribe {
                                 }
                             },
                             Some(SubscribeOutput::EnvelopeUpsert { key_indices  }) => {
-                                tracing::info!(?rows, ?key_indices);
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
                                 let mut right_datum_vec = mz_repr::DatumVec::new();
                                 let order_by = &key_indices
@@ -143,7 +141,6 @@ impl ActiveSubscribe {
                                     nulls_last: true,
                                 })
                                 .collect_vec();
-                                tracing::info!(?order_by);
                                 rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
                                     left_time.cmp(right_time).then_with(|| {
                                         let left_datums = left_datum_vec.borrow_with(left_row);
@@ -166,7 +163,6 @@ impl ActiveSubscribe {
                                     ));
                                     let mut saw_new_row = false;
                                     for (t, r, d) in group {
-                                        tracing::info!(?t, ?r, ?d);
                                         if *d < 0 { continue }
                                         let mut packer = row_buf.packer();
                                         let datums = datum_vec.borrow_with(r);
@@ -184,7 +180,6 @@ impl ActiveSubscribe {
                                     }
 
                                     if !saw_new_row {  // emit deletion
-                                        tracing::info!("didn't see new row");
                                         let mut packer = row_buf.packer();
                                         let datums = datum_vec.borrow_with(&start.1);
                                         for idx in key_indices {

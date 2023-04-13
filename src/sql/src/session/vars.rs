@@ -735,7 +735,15 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
 pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_envelope_upsert_in_subscribe"),
     value: &false,
-    description: "Feature flag indicating whether `ENVELOPE UPSERT` can be used in subscribed queries (Materialize).",
+    description: "Feature flag indicating whether `ENVELOPE UPSERT` can be used in SUBSCRIBE queries (Materialize).",
+    internal: false,
+    safe: true,
+};
+
+pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_within_timestamp_order_by_in_subscribe"),
+    value: &false,
+    description: "Feature flag indicating whether `WITHIN TIMESTAMP ORDER BY` can be used in SUBSCRIBE queries (Materialize).",
     internal: false,
     safe: true,
 };
@@ -1476,6 +1484,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
             .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
+            .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
     }
 }
 
@@ -1810,9 +1819,15 @@ impl SystemVars {
     pub fn enable_auto_route_introspection_queries(&self) -> bool {
         *self.expect_value(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
     }
+
     /// Returns the `enable_envelope_upsert_in_subscribe` configuration parameter.
     pub fn enable_envelope_upsert_in_subscribe(&self) -> bool {
         *self.expect_value(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
+    }
+
+    /// Returns the `enable_within_timestamp_order_by` configuration parameter.
+    pub fn enable_within_timestamp_order_by(&self) -> bool {
+        *self.expect_value(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
     }
 }
 

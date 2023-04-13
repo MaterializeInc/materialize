@@ -466,7 +466,26 @@ pub fn plan_subscribe(
                 ),
             };
 
-            (SubscribeFrom::Id(entry.id()), desc.into_owned(), vec![], vec![])
+            let mut order_by_col = Vec::new();
+            if let Some(SubscribeOutput::WithinTimestampOrderBy { order_by }) = &output {
+                for mut obe in order_by.clone() {
+                    let idx = match obe.expr.take() {
+                        mz_sql_parser::ast::Expr::Identifier(mut id) if id.len() == 1 => {
+                            let id = normalize::column_name(id.pop().expect("just checked the length"));
+                            let idx = desc.get_by_name(&id).map(|(idx, _type)| idx).ok_or_else(|| sql_err!("No such column: {}", id))?;
+                            if desc.get_unambiguous_name(idx).is_none() {
+                                sql_bail!("Ambiguous column: {}", id);
+                            }
+                            idx
+                        },
+                        expr @ _ => sql_bail!("Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY: {}", expr),
+                    };
+                    order_by_col.push(resolve_desc_and_nulls_last(&obe, idx));
+                }
+            }
+
+            let arity = desc.arity();
+            (SubscribeFrom::Id(entry.id()), desc.into_owned(), order_by_col, (0..arity).collect())
         }
         SubscribeRelation::Query(query) => {
             // There's no way to apply finishing operations to a `SUBSCRIBE`
@@ -483,8 +502,6 @@ pub fn plan_subscribe(
                 &Params::empty(),
                 QueryLifetime::OneShot(scx.pcx()?),
             )?;
-            //assert!(query.finishing.is_trivial(query.desc.arity()));
-            tracing::info!(finishing=?query.finishing);
             let desc = query.desc.clone();
             (
                 SubscribeFrom::Query {
@@ -529,33 +546,7 @@ pub fn plan_subscribe(
                 Ok(plan::SubscribeOutput::EnvelopeUpsert { key_indices: indices })
             },
             SubscribeOutput::WithinTimestampOrderBy { order_by: _ } => {
-                /*
-                let mut order_by_col = Vec::new();
-                let duplicates = order_by.iter().duplicates_by(|obe| {
-                    if let mz_sql_parser::ast::Expr::Identifier(id) = &obe.expr {
-                        Some(id)
-                    } else {
-                        None
-                    }
-                }).collect_vec();
-                if !duplicates.is_empty() {
-                    sql_bail!("Repeated column names in subscribe envelope key: {}", duplicates.iter().join(", "));
-                }
-
-                for mut obe in order_by {
-                    let idx = match obe.expr.take() {
-                        mz_sql_parser::ast::Expr::Identifier(mut id) if id.len() == 1 => {
-                          let id = normalize::column_name(id.pop().expect("just checked the length"));
-                          let idx = desc.get_by_name(&id).map(|(idx, _type)| idx).ok_or_else(|| sql_err!("No such column: {}", id))?;
-                          if desc.get_unambiguous_name(idx).is_none() {
-                            sql_bail!("Ambiguous column: {}", id);
-                          }
-                          idx
-                        },
-                        expr @ _ => sql_bail!("Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY: {}", expr),
-                    };
-                    order_by_col.push(resolve_desc_and_nulls_last(&obe, idx));
-                }*/
+                scx.require_within_timestamp_order_by_in_subscribe()?;
                 Ok(plan::SubscribeOutput::WithinTimestampOrderBy {
                     order_by,
                     project
