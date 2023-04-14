@@ -19,7 +19,7 @@ use mz_controller::clusters::{
     ReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -250,7 +250,13 @@ impl CatalogState {
         let event = self.get_cluster_status(cluster_id, replica_id, process_id);
         let status = match event.status {
             ClusterStatus::Ready => "ready",
-            ClusterStatus::NotReady => "not-ready",
+            ClusterStatus::NotReady(_) => "not-ready",
+        };
+
+        let not_ready_reason = match event.status {
+            ClusterStatus::Ready => None,
+            ClusterStatus::NotReady(None) => None,
+            ClusterStatus::NotReady(Some(NotReadyReason::OOMKilled)) => Some("oom-killed"),
         };
 
         // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
@@ -262,6 +268,7 @@ impl CatalogState {
                 Datum::String(&replica_id.to_string()),
                 Datum::UInt64(process_id),
                 Datum::String(status),
+                not_ready_reason.into(),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),
             diff,

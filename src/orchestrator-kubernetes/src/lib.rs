@@ -105,8 +105,8 @@ use tracing::warn;
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
-    LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
-    ServiceEvent, ServiceStatus,
+    LabelSelectionLogic, NamespacedOrchestrator, NotReadyReason, Orchestrator, Service,
+    ServiceConfig, ServiceEvent, ServiceStatus,
 };
 use mz_orchestrator::{LabelSelector as MzLabelSelector, ServiceProcessMetrics};
 
@@ -857,6 +857,23 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
                 .clone();
 
+            let pod2 = pod.clone();
+            let oomed = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_ref())
+                .map(|container_statuses| {
+                    container_statuses.iter().any(|cs| {
+                        cs.last_state
+                            .as_ref()
+                            .and_then(|last_state| last_state.terminated.as_ref())
+                            .and_then(|terminated| terminated.reason.as_ref())
+                            .map(|reason| reason == "OOMKilled")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+
             let (pod_ready, last_probe_time) = pod
                 .status
                 .and_then(|status| status.conditions)
@@ -867,7 +884,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let status = if pod_ready {
                 ServiceStatus::Ready
             } else {
-                ServiceStatus::NotReady
+                println!("[btv] {pod2:#?}");
+                // XXX
+                if oomed {
+                    ServiceStatus::NotReady(Some(NotReadyReason::OOMKilled))
+                } else {
+                    ServiceStatus::NotReady(None)
+                }
             };
             let time = if let Some(time) = last_probe_time {
                 time.0

@@ -913,7 +913,7 @@ impl CatalogState {
             process_status: (0..config.location.num_processes())
                 .map(|process_id| {
                     let status = ClusterReplicaProcessStatus {
-                        status: ClusterStatus::NotReady,
+                        status: ClusterStatus::NotReady(None),
                         time: to_datetime((self.config.now)()),
                     };
                     (u64::cast_from(process_id), status)
@@ -1629,7 +1629,18 @@ impl ClusterReplica {
             .values()
             .fold(ClusterStatus::Ready, |s, p| match (s, p.status) {
                 (ClusterStatus::Ready, ClusterStatus::Ready) => ClusterStatus::Ready,
-                _ => ClusterStatus::NotReady,
+                (x, y) => {
+                    let reason_x = match x {
+                        ClusterStatus::NotReady(reason) => reason,
+                        ClusterStatus::Ready => None,
+                    };
+                    let reason_y = match y {
+                        ClusterStatus::NotReady(reason) => reason,
+                        ClusterStatus::Ready => None,
+                    };
+                    // Arbitrarily pick the first known not-ready reason.
+                    ClusterStatus::NotReady(reason_x.or(reason_y))
+                }
             })
     }
 }
@@ -1637,6 +1648,7 @@ impl ClusterReplica {
 #[derive(Debug, Serialize, Clone)]
 pub struct ClusterReplicaProcessStatus {
     pub status: ClusterStatus,
+
     pub time: DateTime<Utc>,
 }
 
