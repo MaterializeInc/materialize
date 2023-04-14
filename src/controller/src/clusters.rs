@@ -657,6 +657,10 @@ fn generate_replica_service_name(cluster_id: ClusterId, replica_id: ReplicaId) -
 fn parse_replica_service_name(
     service_name: &str,
 ) -> Result<(ComputeInstanceId, ReplicaId), anyhow::Error> {
+    if let Some(ids) = parse_old_replica_service_name(service_name) {
+        return Ok(ids);
+    }
+
     static SERVICE_NAME_RE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"(?-u)^([us]\d+)-replica-([us]\d+)$").unwrap());
 
@@ -667,4 +671,28 @@ fn parse_replica_service_name(
     let cluster_id = caps.get(1).unwrap().as_str().parse().unwrap();
     let replica_id = caps.get(2).unwrap().as_str().parse().unwrap();
     Ok((cluster_id, replica_id))
+}
+
+/// Previously, replica service names had bare-integer replica IDs. This was recently changed
+/// (see `migrate_replica_ids` in adapter), but until that migration has been fully rolled out
+/// it is possible that we still see replicas with old service names, so we continue to support
+/// parsing them.
+///
+/// TODO(teskje): Remove this once the migration is fully rolled out.
+fn parse_old_replica_service_name(service_name: &str) -> Option<(ComputeInstanceId, ReplicaId)> {
+    static OLD_SERVICE_NAME_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?-u)^([us]\d+)-replica-(\d+)$").unwrap());
+
+    let caps = OLD_SERVICE_NAME_RE.captures(service_name)?;
+
+    let cluster_id = caps.get(1).unwrap().as_str().parse().unwrap();
+    let bare_replica_id = caps.get(2).unwrap().as_str().parse().unwrap();
+
+    // Use the same translation logic as `migrate_replica_ids`.
+    let replica_id = match cluster_id {
+        ClusterId::User(_) => ReplicaId::User(bare_replica_id),
+        ClusterId::System(id) => ReplicaId::System(id),
+    };
+
+    Some((cluster_id, replica_id))
 }
