@@ -1353,7 +1353,14 @@ impl CatalogState {
     /// that the serialized state for two identical catalogs will compare
     /// identically.
     pub fn dump(&self) -> String {
-        serde_json::to_string(&self.database_by_id).expect("serialization cannot fail")
+        // Note: database_by_id is a Map whose keys are not Strings, but serializing
+        // a Map to JSON requires the keys be strings, hence the mapping here.
+        let database_by_str: BTreeMap<String, _> = self
+            .database_by_id
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.debug_json()))
+            .collect();
+        serde_json::to_string(&database_by_str).expect("serialization cannot fail")
     }
 
     pub fn availability_zones(&self) -> &[String] {
@@ -1515,6 +1522,26 @@ pub struct Database {
     pub schemas_by_id: BTreeMap<SchemaId, Schema>,
     pub schemas_by_name: BTreeMap<String, SchemaId>,
     pub owner_id: RoleId,
+}
+
+impl Database {
+    /// Returns a `Database` formatted as a `serde_json::Value` that is suitable for debugging. For
+    /// example `CatalogState::dump`.
+    fn debug_json(&self) -> serde_json::Value {
+        let schemas_by_str: BTreeMap<String, _> = self
+            .schemas_by_id
+            .iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+
+        serde_json::json!({
+            "name": self.name,
+            "id": self.id,
+            "schemas_by_id": schemas_by_str,
+            "schemas_by_name": self.schemas_by_name,
+            "owner_id": self.owner_id,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

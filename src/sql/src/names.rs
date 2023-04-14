@@ -621,34 +621,9 @@ impl AstInfo for Aug {
 
 /// The identifier for a schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-#[serde(into = "SchemaIdJson")]
-#[serde(try_from = "SchemaIdJson")]
 pub enum SchemaId {
     User(u64),
     System(u64),
-}
-
-/// A type that specifies how we serialize and deserialize a [`SchemaId`].
-///
-/// Note: JSON maps require their keys to be strings, and we use [`SchemaId`] as the key
-/// in some maps, so we need to serialize them as plain strings, which is what this type
-/// does.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
-struct SchemaIdJson(String);
-
-impl From<SchemaId> for SchemaIdJson {
-    fn from(id: SchemaId) -> SchemaIdJson {
-        SchemaIdJson(id.to_string())
-    }
-}
-
-impl TryFrom<SchemaIdJson> for SchemaId {
-    type Error = PlanError;
-
-    fn try_from(value: SchemaIdJson) -> Result<Self, Self::Error> {
-        SchemaId::from_str(&value.0)
-    }
 }
 
 impl fmt::Display for SchemaId {
@@ -684,34 +659,9 @@ impl FromStr for SchemaId {
 
 /// The identifier for a database.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-#[serde(into = "DatabaseIdJson")]
-#[serde(try_from = "DatabaseIdJson")]
 pub enum DatabaseId {
     User(u64),
     System(u64),
-}
-
-/// A type that specifies how we serialize and deserialize a [`DatabaseId`].
-///
-/// Note: JSON maps require their keys to be strings, and we use [`DatabaseId`] as the key
-/// in some maps, so we need to serialize them as plain strings, which is what this type
-/// does.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
-struct DatabaseIdJson(String);
-
-impl From<DatabaseId> for DatabaseIdJson {
-    fn from(id: DatabaseId) -> DatabaseIdJson {
-        DatabaseIdJson(id.to_string())
-    }
-}
-
-impl TryFrom<DatabaseIdJson> for DatabaseId {
-    type Error = PlanError;
-
-    fn try_from(value: DatabaseIdJson) -> Result<Self, Self::Error> {
-        DatabaseId::from_str(&value.0)
-    }
 }
 
 impl fmt::Display for DatabaseId {
