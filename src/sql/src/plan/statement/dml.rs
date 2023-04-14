@@ -475,13 +475,14 @@ pub fn plan_subscribe(
                 ),
             };
 
+            // In constrast to a query, the order by cannot be very fancy, it's just column names
             let mut order_by_col = Vec::new();
             if let Some(SubscribeOutput::WithinTimestampOrderBy { order_by }) = &output {
                 for mut obe in order_by.clone() {
                     let idx = match obe.expr.take() {
-                        mz_sql_parser::ast::Expr::Identifier(mut id) if id.len() == 1 => {
+                        mz_sql_parser::ast::Expr::Identifier(mut id) => {
                             let id =
-                                normalize::column_name(id.pop().expect("just checked the length"));
+                                normalize::column_name(id.pop().expect("shouldn't be empty"));
                             let idx = desc
                                 .get_by_name(&id)
                                 .map(|(idx, _type)| idx)
@@ -509,7 +510,8 @@ pub fn plan_subscribe(
             )
         }
         SubscribeRelation::Query(query) => {
-            // There's no way to apply finishing operations to a `SUBSCRIBE`
+            // With the exception of WITHIN TIMESTAMP ORDER BY,
+            // there's no way to apply finishing operations to a `SUBSCRIBE`
             // directly. So we wrap the query in another query so that the
             // user-supplied query is planned as a subquery whose `ORDER
             // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
@@ -554,7 +556,7 @@ pub fn plan_subscribe(
                         duplicates.iter().join(", ")
                     );
                 }
-                let indices = key_columns
+                let key_indices = key_columns
                     .iter()
                     .map(|col| -> anyhow::Result<usize> {
                         let name_idx = desc
@@ -568,7 +570,7 @@ pub fn plan_subscribe(
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(plan::SubscribeOutput::EnvelopeUpsert {
-                    key_indices: indices,
+                    key_indices,
                 })
             }
             SubscribeOutput::WithinTimestampOrderBy { order_by: _ } => {

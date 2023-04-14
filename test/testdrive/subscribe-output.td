@@ -102,6 +102,18 @@ ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
 <TIMESTAMP> 1 1 2 3
 > COMMIT
 
+# make sure progress messages are ok
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE t WITH (PROGRESS, SNAPSHOT) WITHIN TIMESTAMP ORDER BY c, b, a
+> FETCH 1 c
+<TIMESTAMP> true <null> <null> <null> <null>
+> FETCH ALL c
+<TIMESTAMP> false 1 2 5 -6
+<TIMESTAMP> false 1 4 0 -4
+<TIMESTAMP> false 1 1 2 3
+<TIMESTAMP> true <null> <null> <null> <null>
+> COMMIT
+
 
 ! SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY c
 contains: column "c" does not exist
@@ -159,7 +171,6 @@ DELETE FROM t1 WHERE key = 1
 <TIMESTAMP> 1 2
 <TIMESTAMP> 2 3
 
-
 $ postgres-execute connection=mz_system
 UPDATE t2 SET value = 4 WHERE key = 1
 
@@ -174,3 +185,14 @@ DELETE FROM t2 WHERE key = 1
 
 > COMMIT
 
+# make sure progress messages are ok
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t2) WITH (PROGRESS, SNAPSHOT) ENVELOPE UPSERT (KEY (key))
+> FETCH 1 c
+<TIMESTAMP> true <null> <null>
+
+> FETCH ALL c
+<TIMESTAMP> false 2 3
+<TIMESTAMP> true <null> <null>
+
+> COMMIT

@@ -169,6 +169,12 @@ impl ActiveSubscribe {
                                         }));
                                     let mut saw_new_row = false;
                                     for (t, r, d) in group {
+                                        // We don't have to consider (k, v, -1), (k, v, +1) because
+                                        // the rows are already consolidated. For a key, if all we
+                                        // see is retractions we generate (k, null), otherwise we
+                                        // produce all values that k can take. If there are multiple
+                                        // live values for a given key it's impossible for a client
+                                        // to figure out when they are all deleted with ENVELOPE UPSERT.
                                         if *d < 0 {
                                             continue;
                                         }
