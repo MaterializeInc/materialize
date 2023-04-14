@@ -24,7 +24,6 @@ use differential_dataflow::Collection;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
-use tracing::{error, warn};
 
 use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
@@ -36,6 +35,7 @@ use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 
 use crate::render::context::{CollectionBundle, Context};
+use crate::render::errors::ErrorLogger;
 use crate::render::errors::MaybeValidatingRow;
 use crate::typedefs::{RowKeySpine, RowSpine};
 
@@ -62,8 +62,13 @@ where
                     group_key,
                     order_key,
                 }) => {
-                    let (oks, errs) =
-                        render_top1_monotonic(ok_input, group_key, order_key, &self.debug_name);
+                    let (oks, errs) = render_top1_monotonic(
+                        ok_input,
+                        group_key,
+                        order_key,
+                        &self.debug_name,
+                        self.error_logger(),
+                    );
                     err_collection = err_collection.concat(&errs);
                     oks
                 }
@@ -132,6 +137,7 @@ where
                         arity,
                         false,
                         &self.debug_name,
+                        self.error_logger(),
                     );
                     retractions.set(&collection.concat(&result.negate()));
                     soft_assert_or_log!(
@@ -158,6 +164,7 @@ where
                         arity,
                         buckets,
                         &self.debug_name,
+                        self.error_logger(),
                     );
                     err_collection = err_collection.concat(&errs);
                     oks
@@ -179,6 +186,7 @@ where
             arity: usize,
             buckets: Vec<u64>,
             debug_name: &str,
+            error_logger: ErrorLogger,
         ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
         where
             G: Scope,
@@ -220,6 +228,7 @@ where
                         arity,
                         validating,
                         debug_name,
+                        error_logger.clone(),
                     );
                     collection = oks;
                     if validating {
@@ -233,7 +242,15 @@ where
             // apply `offset` to the final group, as we have not yet been applying it to the partially
             // formed groups.
             let (oks, errs) = build_topk_stage(
-                collection, order_key, 1u64, offset, limit, arity, validating, debug_name,
+                collection,
+                order_key,
+                1u64,
+                offset,
+                limit,
+                arity,
+                validating,
+                debug_name,
+                error_logger,
             );
             collection = oks;
             if validating {
@@ -262,6 +279,7 @@ where
             arity: usize,
             validating: bool,
             debug_name: &str,
+            error_logger: ErrorLogger,
         ) -> (
             Collection<G, ((Row, u64), Row), Diff>,
             Option<Collection<G, DataflowError, Diff>>,
@@ -281,8 +299,10 @@ where
                     stage.map_fallible("Demuxing Errors", move |((k, h), result)| match result {
                         Err(v) => {
                             let message = "Negative multiplicities in TopK";
-                            warn!(?k, ?h, ?v, debug_name, "[customer-data] {message}");
-                            error!(message);
+                            error_logger.log(
+                                message,
+                                &format!("k={k:?}, h={h}, v={v:?}, debug_name={debug_name}"),
+                            );
                             Err(EvalError::Internal(message.to_string()).into())
                         }
                         Ok(t) => Ok(((k, h), t)),
@@ -406,6 +426,7 @@ where
             group_key: Vec<usize>,
             order_key: Vec<mz_expr::ColumnOrder>,
             debug_name: &str,
+            error_logger: ErrorLogger,
         ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
         where
             G: Scope,
@@ -435,11 +456,10 @@ where
                 .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTop1 input");
             let debug_name = debug_name.to_string();
             let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
-                warn!(
-                    "[customer-data] MonotonicTop1 expected monotonic input but \
-                    received {data:?} with diff {diff:?} in dataflow {debug_name}"
+                error_logger.log(
+                    "Non-monotonic input to MonotonicTop1",
+                    &format!("data={data:?}, diff={diff}, debug_name={debug_name}"),
                 );
-                error!("Non-monotonic input to MonotonicTop1");
                 let m = "tried to build monotonic top-1 on non-monotonic input".to_string();
                 (EvalError::Internal(m).into(), 1)
             });

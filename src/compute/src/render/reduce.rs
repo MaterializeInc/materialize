@@ -25,14 +25,13 @@ use differential_dataflow::Collection;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
-use tracing::{error, warn};
+use tracing::warn;
 
 use mz_compute_client::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
 };
 use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
-use mz_ore::soft_assert_or_log;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage_client::types::errors::DataflowError;
@@ -45,6 +44,8 @@ use crate::render::reduce::monoids::ReductionMonoid;
 use crate::render::ArrangementFlavor;
 use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 
+use super::errors::ErrorLogger;
+
 /// Render a dataflow based on the provided plan.
 ///
 /// The output will be an arrangements that looks the same as if
@@ -56,6 +57,7 @@ fn render_reduce_plan<G, T>(
     collection: Collection<G, (Row, Row), Diff>,
     err_input: Collection<G, DataflowError, Diff>,
     key_arity: usize,
+    error_logger: ErrorLogger,
 ) -> CollectionBundle<G, Row, T>
 where
     G: Scope,
@@ -64,12 +66,18 @@ where
 {
     // Note also the special case in `ReducePlan::keys()`.
     if plan == ReducePlan::DistinctNegated {
-        let (output, errs) = build_distinct_retractions(debug_name, collection);
+        let (output, errs) = build_distinct_retractions(debug_name, collection, error_logger);
         return CollectionBundle::from_collections(output, err_input.concat(&errs));
     }
     let mut errors = Default::default();
-    let arrangement =
-        render_reduce_plan_inner(debug_name, plan, collection, &mut errors, key_arity);
+    let arrangement = render_reduce_plan_inner(
+        debug_name,
+        plan,
+        collection,
+        &mut errors,
+        key_arity,
+        error_logger,
+    );
     CollectionBundle::from_columns(
         0..key_arity,
         ArrangementFlavor::Local(
@@ -87,6 +95,7 @@ fn render_reduce_plan_inner<G, T>(
     collection: Collection<G, (Row, Row), Diff>,
     errors: &mut Vec<Collection<G, DataflowError, Diff>>,
     key_arity: usize,
+    error_logger: ErrorLogger,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
@@ -97,35 +106,38 @@ where
         // If we have no aggregations or just a single type of reduction, we
         // can go ahead and render them directly.
         ReducePlan::Distinct => {
-            let (arranged_output, errs) = build_distinct(debug_name, collection);
+            let (arranged_output, errs) = build_distinct(debug_name, collection, error_logger);
             errors.push(errs);
             arranged_output
         }
         ReducePlan::DistinctNegated => panic!("should have been handled in render_reduce_plan()"),
         ReducePlan::Accumulable(expr) => {
-            let (arranged_output, errs) = build_accumulable(debug_name, collection, expr);
+            let (arranged_output, errs) =
+                build_accumulable(debug_name, collection, expr, error_logger);
             errors.push(errs);
             arranged_output
         }
         ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
-            let (output, errs) = build_monotonic(debug_name, collection, expr);
+            let (output, errs) = build_monotonic(debug_name, collection, expr, error_logger);
             errors.push(errs);
             output
         }
         ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
-            let (output, errs) = build_bucketed(debug_name, collection, expr);
+            let (output, errs) = build_bucketed(debug_name, collection, expr, error_logger);
             if let Some(e) = errs {
                 errors.push(e);
             }
             output
         }
         ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
-            let (output, errs) = build_basic_aggregate(debug_name, collection, index, &aggr, true);
+            let (output, errs) =
+                build_basic_aggregate(debug_name, collection, index, &aggr, true, error_logger);
             errors.push(errs.expect("validation should have occurred as it was requested"));
             output
         }
         ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
-            let (output, errs) = build_basic_aggregates(debug_name, collection, aggrs);
+            let (output, errs) =
+                build_basic_aggregates(debug_name, collection, aggrs, error_logger);
             errors.push(errs);
             output
         }
@@ -152,6 +164,7 @@ where
                     collection.clone(),
                     errors,
                     key_arity,
+                    error_logger.clone(),
                 );
                 to_collate.push((r#type, arrangement));
             }
@@ -162,6 +175,7 @@ where
                 to_collate,
                 expr.aggregate_types,
                 &mut collection.scope(),
+                error_logger,
             );
             errors.push(errs);
             oks
@@ -271,7 +285,15 @@ where
             err = err.concat(&err_input);
 
             // Render the reduce plan
-            render_reduce_plan(&self.debug_name, reduce_plan, ok, err, key_arity).leave_region()
+            render_reduce_plan(
+                &self.debug_name,
+                reduce_plan,
+                ok,
+                err,
+                key_arity,
+                self.error_logger(),
+            )
+            .leave_region()
         })
     }
 }
@@ -288,6 +310,7 @@ fn build_collation<G>(
     arrangements: Vec<(ReductionType, Arrangement<G, Row>)>,
     aggregate_types: Vec<ReductionType>,
     scope: &mut G,
+    error_logger: ErrorLogger,
 ) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
@@ -295,11 +318,12 @@ where
 {
     // We must have more than one arrangement to collate.
     if arrangements.len() <= 1 {
-        warn!("Building a collation of {} arrangements, but expected more than one in dataflow {debug_name}",
-            arrangements.len());
-        soft_assert_or_log!(
-            false,
-            "Incorrect number of arrangements in reduce collation"
+        error_logger.soft_panic_or_log(
+            "Incorrect number of arrangements in reduce collation",
+            &format!(
+                "len={len}, debug_name={debug_name}",
+                len = arrangements.len(),
+            ),
         );
     }
 
@@ -387,15 +411,15 @@ where
                     // by the collation. If we cannot, we log an error and produce no output for
                     // this key.
                     let message = "Mismatched aggregates for key in ReduceCollation";
-                    warn!(
-                        ?key,
-                        debug_name,
-                        n_aggregates_requested = input.len(),
-                        n_distinct_aggregate_types,
-                        "[customer-data] {message}"
+                    error_logger.log(
+                        message,
+                        &format!(
+                            "key={key:?}, debug_name={debug_name}, \
+                             n_aggregates_requested={requested}, \
+                             n_distinct_aggregate_types={n_distinct_aggregate_types}",
+                            requested = input.len(),
+                        ),
                     );
-
-                    error!("{message}");
                     output.push((EvalError::Internal(message.to_string()).into(), 1));
                     return;
                 }
@@ -424,8 +448,10 @@ where
                     // We cannot properly reconstruct a row if aggregates are missing.
                     // This situation is not expected, so we log an error if it occurs.
                     let message = "Missing value for key in ReduceCollation";
-                    warn!(?typ, ?key, debug_name, "[customer-data] {message}");
-                    error!("{message}");
+                    error_logger.log(
+                        message,
+                        &format!("typ={typ:?}, key={key:?}, debug_name={debug_name}"),
+                    );
                     output.push((EvalError::Internal(message.to_string()).into(), 1));
                     return;
                 }
@@ -437,12 +463,7 @@ where
                 }
 
                 let message = "Rows too large for key in ReduceCollation";
-                warn!(
-                    ?key,
-                    debug_name,
-                    "[customer-data] Found excessively large row for key in ReduceCollation"
-                );
-                error!("{message}");
+                error_logger.log(message, &format!("key={key:?}, debug_name={debug_name}"));
                 output.push((EvalError::Internal(message.to_string()).into(), 1));
             },
         );
@@ -453,6 +474,7 @@ where
 fn build_distinct<G>(
     debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
+    error_logger: ErrorLogger,
 ) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
@@ -476,8 +498,10 @@ where
                         continue;
                     }
                     let message = "Non-positive multiplicity in DistinctBy";
-                    warn!(?row, ?count, debug_name, "[customer-data] {message}");
-                    error!("{message}");
+                    error_logger.log(
+                        message,
+                        &format!("row={row:?}, count={count}, debug_name={debug_name}"),
+                    );
                     output.push((EvalError::Internal(message.to_string()).into(), 1));
                     return;
                 }
@@ -492,6 +516,7 @@ where
 fn build_distinct_retractions<G, T>(
     debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
+    error_logger: ErrorLogger,
 ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
@@ -508,8 +533,10 @@ where
                         continue;
                     }
                     let message = "Non-positive multiplicity in DistinctBy Retractions";
-                    warn!(?row, ?count, debug_name, "[customer-data] {message}");
-                    error!("{message}");
+                    error_logger.log(
+                        message,
+                        &format!("row={row:?}, count={count}, debug_name={debug_name}"),
+                    );
                     output.push((Err(message.to_string()), 1));
                     return;
                 }
@@ -551,6 +578,7 @@ fn build_basic_aggregates<G>(
     debug_name: &str,
     input: Collection<G, (Row, Row), Diff>,
     aggrs: Vec<(usize, AggregateExpr)>,
+    error_logger: ErrorLogger,
 ) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
@@ -559,8 +587,10 @@ where
     // We are only using this function to render multiple basic aggregates and
     // stitch them together. If that's not true we should complain.
     if aggrs.len() <= 1 {
-        warn!("Unexpectedly computing {} basic aggregations together, but we expected to be doing more than one in dataflow {debug_name}", aggrs.len());
-        soft_assert_or_log!(false, "Too few aggregations when building basic aggregates");
+        error_logger.soft_panic_or_log(
+            "Too few aggregations when building basic aggregates",
+            &format!("len={len}, debug_name={debug_name}", len = aggrs.len()),
+        )
     }
     let mut err_output = None;
     let mut to_collect = Vec::new();
@@ -571,6 +601,7 @@ where
             index,
             &aggr,
             err_output.is_none(),
+            error_logger.clone(),
         );
         if errs.is_some() {
             err_output = errs
@@ -605,6 +636,7 @@ fn build_basic_aggregate<G>(
     index: usize,
     aggr: &AggregateExpr,
     validating: bool,
+    error_logger: ErrorLogger,
 ) -> (
     Arrangement<G, Row>,
     Option<Collection<G, DataflowError, Diff>>,
@@ -632,18 +664,25 @@ where
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
         if validating {
-            let (oks, errs) =
-                build_reduce_inaccumulable_distinct::<_, Result<(), String>>(debug_name, partial)
-                    .as_collection(|k, v| (k.clone(), v.clone()))
-                    .map_fallible("Demux Errors", move |(key, result)| match result {
-                        Ok(()) => Ok(key),
-                        Err(m) => Err(EvalError::Internal(m).into()),
-                    });
+            let (oks, errs) = build_reduce_inaccumulable_distinct::<_, Result<(), String>>(
+                debug_name,
+                partial,
+                error_logger.clone(),
+            )
+            .as_collection(|k, v| (k.clone(), v.clone()))
+            .map_fallible("Demux Errors", move |(key, result)| match result {
+                Ok(()) => Ok(key),
+                Err(m) => Err(EvalError::Internal(m).into()),
+            });
             err_output = Some(errs);
             partial = oks;
         } else {
-            partial = build_reduce_inaccumulable_distinct::<_, ()>(debug_name, partial)
-                .as_collection(|k, _| k.clone());
+            partial = build_reduce_inaccumulable_distinct::<_, ()>(
+                debug_name,
+                partial,
+                error_logger.clone(),
+            )
+            .as_collection(|k, _| k.clone());
         }
     }
 
@@ -682,8 +721,10 @@ where
                     }
 
                     let message = "Non-positive accumulation in ReduceInaccumulable";
-                    warn!(?value, ?count, debug_name, "[customer-data] {message}");
-                    error!("{message}");
+                    error_logger.log(
+                        message,
+                        &format!("value={value:?}, count={count}, debug_name={debug_name}"),
+                    );
                     target.push((EvalError::Internal(message.to_string()).into(), 1));
                     return;
                 }
@@ -698,6 +739,7 @@ where
 fn build_reduce_inaccumulable_distinct<G, R>(
     debug_name: &str,
     input: Collection<G, (Row, Row), Diff>,
+    error_logger: ErrorLogger,
 ) -> KeyArrangement<G, (Row, Row), R>
 where
     G: Scope,
@@ -715,8 +757,10 @@ where
                     }
 
                     let message = "Non-positive accumulation in ReduceInaccumulable DISTINCT";
-                    warn!(?value, ?count, debug_name, "[customer-data] {message}");
-                    error!("{message}");
+                    error_logger.log(
+                        message,
+                        &format!("value={value:?}, count={count}, debug_name={debug_name}"),
+                    );
                     t.push((err(message.to_string()), 1));
                     return;
                 }
@@ -744,6 +788,7 @@ fn build_bucketed<G>(
         skips,
         buckets,
     }: BucketedPlan,
+    error_logger: ErrorLogger,
 ) -> (
     Arrangement<G, Row>,
     Option<Collection<G, DataflowError, Diff>>,
@@ -783,6 +828,7 @@ where
                     debug_name,
                     &input,
                     aggr_funcs.clone(),
+                    error_logger.clone(),
                 )
                 .map_fallible(
                     "Checked Invalid Accumulations",
@@ -801,7 +847,12 @@ where
                 err_output = Some(errs.leave_region());
                 oks
             } else {
-                build_bucketed_negated_output::<_, Vec<Row>>(debug_name, &input, aggr_funcs.clone())
+                build_bucketed_negated_output::<_, Vec<Row>>(
+                    debug_name,
+                    &input,
+                    aggr_funcs.clone(),
+                    error_logger.clone(),
+                )
             };
 
             stage = negated_output
@@ -835,8 +886,10 @@ where
                             }
 
                             let message = "Non-positive accumulation in ReduceMinsMaxes";
-                            warn!(?val, ?count, debug_name, "[customer-data] {message}");
-                            error!("{message}");
+                            error_logger.log(
+                                message,
+                                &format!("val={val:?}, count={count}, debug_name={debug_name}"),
+                            );
                             target.push((EvalError::Internal(message.to_string()).into(), 1));
                             return;
                         }
@@ -879,6 +932,7 @@ fn build_bucketed_negated_output<G, R>(
     debug_name: &str,
     input: &Collection<G, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
+    error_logger: ErrorLogger,
 ) -> Collection<G, ((Row, u64), R), Diff>
 where
     G: Scope,
@@ -899,15 +953,13 @@ where
                         if count.is_positive() {
                             continue;
                         }
-                        let message = "Non-positive accumulation in MinsMaxesHierarchical";
-                        warn!(
-                            ?key,
-                            ?value,
-                            ?count,
-                            debug_name,
-                            "[customer-data] {message}"
+                        error_logger.log(
+                            "Non-positive accumulation in MinsMaxesHierarchical",
+                            &format!(
+                                "key={key:?}, value={value:?}, count={count}, \
+                                 debug_name={debug_name}"
+                            ),
                         );
-                        error!("{message}");
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
                         target.push((err(key.clone()), -1));
@@ -943,6 +995,7 @@ fn build_monotonic<G>(
     debug_name: &str,
     collection: Collection<G, (Row, Row), Diff>,
     MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
+    error_logger: ErrorLogger,
 ) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
@@ -967,11 +1020,10 @@ where
         collection.consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input");
     let debug_name = debug_name.to_string();
     let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
-        warn!(
-            "[customer-data] ReduceMonotonic expected monotonic input but \
-             received {data:?} with diff {diff:?} in dataflow {debug_name}"
+        error_logger.log(
+            "Non-monotonic input to ReduceMonotonic",
+            &format!("data={data:?}, diff={diff}, debug_name={debug_name}"),
         );
-        error!("Non-monotonic input to ReduceMonotonic");
         let m = "tried to build a monotonic reduction on non-monotonic input".to_string();
         (EvalError::Internal(m).into(), 1)
     });
@@ -1273,6 +1325,7 @@ fn build_accumulable<G>(
         simple_aggrs,
         distinct_aggrs,
     }: AccumulablePlan,
+    error_logger: ErrorLogger,
 ) -> (Arrangement<G, Row>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
@@ -1280,11 +1333,14 @@ where
 {
     // we must have called this function with something to reduce
     if full_aggrs.len() == 0 || simple_aggrs.len() + distinct_aggrs.len() != full_aggrs.len() {
-        warn!("Building arrangement for accumulable plan requires aggregates ({} found) and that their counts match ({} + {}) in dataflow {debug_name}",
-            full_aggrs.len(), simple_aggrs.len(), distinct_aggrs.len());
-        soft_assert_or_log!(
-            false,
-            "Incorrect numbers of aggregates in accummulable reduction rendering"
+        error_logger.soft_panic_or_log(
+            "Incorrect numbers of aggregates in accummulable reduction rendering",
+            &format!(
+                "full_aggrs={}, simple_aggrs={}, distinct_aggrs={}, debug_name={debug_name}",
+                full_aggrs.len(),
+                simple_aggrs.len(),
+                distinct_aggrs.len()
+            ),
         );
     }
 
@@ -1539,234 +1595,228 @@ where
     let err_full_aggrs = full_aggrs.clone();
     let (arranged_output, arranged_errs) = collection
         .arrange_named::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable")
-        .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>("ReduceAccumulable", "AccumulableErrorCheck", {
-            let mut row_buf = Row::default();
-            move |_key, input, output| {
-                let (ref accums, total) = input[0].1;
-                let mut row_packer = row_buf.packer();
+        .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>(
+            "ReduceAccumulable",
+            "AccumulableErrorCheck",
+            {
+                let mut row_buf = Row::default();
+                move |_key, input, output| {
+                    let (ref accums, total) = input[0].1;
+                    let mut row_packer = row_buf.packer();
 
-                for (aggr, accum) in full_aggrs.iter().zip(accums) {
-                    // The finished value depends on the aggregation function in a variety of ways.
-                    // For all aggregates but count, if only null values were
-                    // accumulated, then the output is null.
-                    let value = if total > 0
-                        && accum.is_zero()
-                        && aggr.func != AggregateFunc::Count
-                    {
-                        Datum::Null
-                    } else {
-                        match (&aggr.func, &accum) {
-                            (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => {
-                                Datum::Int64(*non_nulls)
-                            }
-                            (AggregateFunc::All, Accum::Bool { falses, trues }) => {
-                                // If any false, else if all true, else must be no false and some nulls.
-                                if *falses > 0 {
-                                    Datum::False
-                                } else if *trues == total {
-                                    Datum::True
-                                } else {
-                                    Datum::Null
+                    for (aggr, accum) in full_aggrs.iter().zip(accums) {
+                        // The finished value depends on the aggregation function in a variety of ways.
+                        // For all aggregates but count, if only null values were
+                        // accumulated, then the output is null.
+                        let value = if total > 0
+                            && accum.is_zero()
+                            && aggr.func != AggregateFunc::Count
+                        {
+                            Datum::Null
+                        } else {
+                            match (&aggr.func, &accum) {
+                                (AggregateFunc::Count, Accum::SimpleNumber { non_nulls, .. }) => {
+                                    Datum::Int64(*non_nulls)
                                 }
-                            }
-                            (AggregateFunc::Any, Accum::Bool { falses, trues }) => {
-                                // If any true, else if all false, else must be no true and some nulls.
-                                if *trues > 0 {
-                                    Datum::True
-                                } else if *falses == total {
-                                    Datum::False
-                                } else {
-                                    Datum::Null
+                                (AggregateFunc::All, Accum::Bool { falses, trues }) => {
+                                    // If any false, else if all true, else must be no false and some nulls.
+                                    if *falses > 0 {
+                                        Datum::False
+                                    } else if *trues == total {
+                                        Datum::True
+                                    } else {
+                                        Datum::Null
+                                    }
                                 }
-                            }
-                            (AggregateFunc::Dummy, _) => Datum::Dummy,
-                            // If any non-nulls, just report the aggregate.
-                            (AggregateFunc::SumInt16, Accum::SimpleNumber { accum, .. })
-                            | (AggregateFunc::SumInt32, Accum::SimpleNumber { accum, .. }) => {
-                                // This conversion is safe, as long as we have less than 2^32
-                                // summands.
-                                // TODO(benesch): are we guaranteed to have less than 2^32 summands?
-                                // If so, rewrite to avoid `as`.
-                                #[allow(clippy::as_conversions)]
-                                Datum::Int64(*accum as i64)
-                            }
-                            (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => {
-                                Datum::from(*accum)
-                            }
-                            (
-                                AggregateFunc::SumUInt16,
-                                Accum::SimpleNumber { accum, .. },
-                            )
-                            | (
-                                AggregateFunc::SumUInt32,
-                                Accum::SimpleNumber { accum, .. },
-                            ) => {
-                                if !accum.is_negative() {
-                                    // Our semantics of overflow are not clearly articulated wrt.
-                                    // unsigned vs. signed types (#17758). We adopt an unsigned
-                                    // wrapping behavior to match what we do above for signed types.
-                                    // TODO(vmarcos): remove potentially dangerous usage of `as`.
+                                (AggregateFunc::Any, Accum::Bool { falses, trues }) => {
+                                    // If any true, else if all false, else must be no true and some nulls.
+                                    if *trues > 0 {
+                                        Datum::True
+                                    } else if *falses == total {
+                                        Datum::False
+                                    } else {
+                                        Datum::Null
+                                    }
+                                }
+                                (AggregateFunc::Dummy, _) => Datum::Dummy,
+                                // If any non-nulls, just report the aggregate.
+                                (AggregateFunc::SumInt16, Accum::SimpleNumber { accum, .. })
+                                | (AggregateFunc::SumInt32, Accum::SimpleNumber { accum, .. }) => {
+                                    // This conversion is safe, as long as we have less than 2^32
+                                    // summands.
+                                    // TODO(benesch): are we guaranteed to have less than 2^32 summands?
+                                    // If so, rewrite to avoid `as`.
                                     #[allow(clippy::as_conversions)]
-                                    Datum::UInt64(*accum as u64)
-                                } else {
-                                    // Note that we return a value here, but an error in the other
-                                    // operator of the reduce_pair. Therefore, we expect that this
-                                    // value will never be exposed as an output.
-                                    Datum::Null
+                                    Datum::Int64(*accum as i64)
                                 }
-                            }
-                            | (
-                                AggregateFunc::SumUInt64,
-                                Accum::SimpleNumber { accum, .. },
-                            ) => {
-                                if !accum.is_negative() {
+                                (AggregateFunc::SumInt64, Accum::SimpleNumber { accum, .. }) => {
                                     Datum::from(*accum)
-                                } else {
-                                    // Note that we return a value here, but an error in the other
-                                    // operator of the reduce_pair. Therefore, we expect that this
-                                    // value will never be exposed as an output.
-                                    Datum::Null
                                 }
-                            }
-                            (
-                                AggregateFunc::SumFloat32,
-                                Accum::Float {
-                                    accum,
-                                    pos_infs,
-                                    neg_infs,
-                                    nans,
-                                    non_nulls: _,
-                                },
-                            ) => {
-                                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
-                                    // NaNs are NaNs and cases where we've seen a
-                                    // mixture of positive and negative infinities.
-                                    Datum::from(f32::NAN)
-                                } else if *pos_infs > 0 {
-                                    Datum::from(f32::INFINITY)
-                                } else if *neg_infs > 0 {
-                                    Datum::from(f32::NEG_INFINITY)
-                                } else {
-                                    // TODO(benesch): remove potentially dangerous usage of `as`.
-                                    #[allow(clippy::as_conversions)]
-                                    {
-                                        Datum::from(((*accum as f64) / float_scale) as f32)
+                                (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
+                                | (AggregateFunc::SumUInt32, Accum::SimpleNumber { accum, .. }) => {
+                                    if !accum.is_negative() {
+                                        // Our semantics of overflow are not clearly articulated wrt.
+                                        // unsigned vs. signed types (#17758). We adopt an unsigned
+                                        // wrapping behavior to match what we do above for signed types.
+                                        // TODO(vmarcos): remove potentially dangerous usage of `as`.
+                                        #[allow(clippy::as_conversions)]
+                                        Datum::UInt64(*accum as u64)
+                                    } else {
+                                        // Note that we return a value here, but an error in the other
+                                        // operator of the reduce_pair. Therefore, we expect that this
+                                        // value will never be exposed as an output.
+                                        Datum::Null
                                     }
                                 }
-                            }
-                            (
-                                AggregateFunc::SumFloat64,
-                                Accum::Float {
-                                    accum,
-                                    pos_infs,
-                                    neg_infs,
-                                    nans,
-                                    non_nulls: _,
-                                },
-                            ) => {
-                                if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
-                                    // NaNs are NaNs and cases where we've seen a
-                                    // mixture of positive and negative infinities.
-                                    Datum::from(f64::NAN)
-                                } else if *pos_infs > 0 {
-                                    Datum::from(f64::INFINITY)
-                                } else if *neg_infs > 0 {
-                                    Datum::from(f64::NEG_INFINITY)
-                                } else {
-                                    // TODO(benesch): remove potentially dangerous usage of `as`.
-                                    #[allow(clippy::as_conversions)]
-                                    {
-                                        Datum::from((*accum as f64) / float_scale)
+                                (AggregateFunc::SumUInt64, Accum::SimpleNumber { accum, .. }) => {
+                                    if !accum.is_negative() {
+                                        Datum::from(*accum)
+                                    } else {
+                                        // Note that we return a value here, but an error in the other
+                                        // operator of the reduce_pair. Therefore, we expect that this
+                                        // value will never be exposed as an output.
+                                        Datum::Null
                                     }
                                 }
-                            }
-                            (
-                                AggregateFunc::SumNumeric,
-                                Accum::Numeric {
-                                    accum,
-                                    pos_infs,
-                                    neg_infs,
-                                    nans,
-                                    non_nulls: _,
-                                },
-                            ) => {
-                                let mut cx_datum = numeric::cx_datum();
-                                let d = cx_datum.to_width(accum.0);
-                                // Take a wide decimal (aggregator) into a
-                                // narrow decimal (datum). If this operation
-                                // overflows the datum, this new value will be
-                                // +/- infinity. However, the aggregator tracks
-                                // the amount of overflow, making it invertible.
-                                let inf_d = d.is_infinite();
-                                let neg_d = d.is_negative();
-                                let pos_inf = *pos_infs > 0 || (inf_d && !neg_d);
-                                let neg_inf = *neg_infs > 0 || (inf_d && neg_d);
-                                if *nans > 0 || (pos_inf && neg_inf) {
-                                    // NaNs are NaNs and cases where we've seen a
-                                    // mixture of positive and negative infinities.
-                                    Datum::from(Numeric::nan())
-                                } else if pos_inf {
-                                    Datum::from(Numeric::infinity())
-                                } else if neg_inf {
-                                    let mut cx = numeric::cx_datum();
-                                    let mut d = Numeric::infinity();
-                                    cx.neg(&mut d);
-                                    Datum::from(d)
-                                } else {
-                                    Datum::from(d)
+                                (
+                                    AggregateFunc::SumFloat32,
+                                    Accum::Float {
+                                        accum,
+                                        pos_infs,
+                                        neg_infs,
+                                        nans,
+                                        non_nulls: _,
+                                    },
+                                ) => {
+                                    if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                                        // NaNs are NaNs and cases where we've seen a
+                                        // mixture of positive and negative infinities.
+                                        Datum::from(f32::NAN)
+                                    } else if *pos_infs > 0 {
+                                        Datum::from(f32::INFINITY)
+                                    } else if *neg_infs > 0 {
+                                        Datum::from(f32::NEG_INFINITY)
+                                    } else {
+                                        // TODO(benesch): remove potentially dangerous usage of `as`.
+                                        #[allow(clippy::as_conversions)]
+                                        {
+                                            Datum::from(((*accum as f64) / float_scale) as f32)
+                                        }
+                                    }
                                 }
+                                (
+                                    AggregateFunc::SumFloat64,
+                                    Accum::Float {
+                                        accum,
+                                        pos_infs,
+                                        neg_infs,
+                                        nans,
+                                        non_nulls: _,
+                                    },
+                                ) => {
+                                    if *nans > 0 || (*pos_infs > 0 && *neg_infs > 0) {
+                                        // NaNs are NaNs and cases where we've seen a
+                                        // mixture of positive and negative infinities.
+                                        Datum::from(f64::NAN)
+                                    } else if *pos_infs > 0 {
+                                        Datum::from(f64::INFINITY)
+                                    } else if *neg_infs > 0 {
+                                        Datum::from(f64::NEG_INFINITY)
+                                    } else {
+                                        // TODO(benesch): remove potentially dangerous usage of `as`.
+                                        #[allow(clippy::as_conversions)]
+                                        {
+                                            Datum::from((*accum as f64) / float_scale)
+                                        }
+                                    }
+                                }
+                                (
+                                    AggregateFunc::SumNumeric,
+                                    Accum::Numeric {
+                                        accum,
+                                        pos_infs,
+                                        neg_infs,
+                                        nans,
+                                        non_nulls: _,
+                                    },
+                                ) => {
+                                    let mut cx_datum = numeric::cx_datum();
+                                    let d = cx_datum.to_width(accum.0);
+                                    // Take a wide decimal (aggregator) into a
+                                    // narrow decimal (datum). If this operation
+                                    // overflows the datum, this new value will be
+                                    // +/- infinity. However, the aggregator tracks
+                                    // the amount of overflow, making it invertible.
+                                    let inf_d = d.is_infinite();
+                                    let neg_d = d.is_negative();
+                                    let pos_inf = *pos_infs > 0 || (inf_d && !neg_d);
+                                    let neg_inf = *neg_infs > 0 || (inf_d && neg_d);
+                                    if *nans > 0 || (pos_inf && neg_inf) {
+                                        // NaNs are NaNs and cases where we've seen a
+                                        // mixture of positive and negative infinities.
+                                        Datum::from(Numeric::nan())
+                                    } else if pos_inf {
+                                        Datum::from(Numeric::infinity())
+                                    } else if neg_inf {
+                                        let mut cx = numeric::cx_datum();
+                                        let mut d = Numeric::infinity();
+                                        cx.neg(&mut d);
+                                        Datum::from(d)
+                                    } else {
+                                        Datum::from(d)
+                                    }
+                                }
+                                _ => panic!(
+                                    "Unexpected accumulation (aggr={:?}, accum={accum:?})",
+                                    aggr.func
+                                ),
                             }
-                            _ => panic!(
-                                "Unexpected accumulation (aggr={:?}, accum={accum:?})",
-                                aggr.func
-                            ),
-                        }
-                    };
+                        };
 
-                    row_packer.push(value);
-                }
-                output.push((row_buf.clone(), 1));
-            }
-        },
-        move |key, input, output| {
-            let (ref accums, total) = input[0].1;
-            for (aggr, accum) in err_full_aggrs.iter().zip(accums) {
-                // We first test here if inputs without net-positive records are present,
-                // producing an error to the logs and to the query output if that is the case.
-                if total == 0 && !accum.is_zero() {
-                    warn!("[customer-data] ReduceAccumulable observed net-zero records \
-                        with non-zero accumulation: {aggr:?}: {accum:?} in dataflow {debug_name}");
-                    error!("Net-zero records with non-zero accumulation in ReduceAccumulable");
-                    let message = format!("Invalid data in source, saw net-zero records for key {key} \
-                        with non-zero accumulation in accumulable aggregate");
-                    output.push((EvalError::Internal(message).into(), 1));
-                }
-                match (&aggr.func, &accum) {
-                    (
-                        AggregateFunc::SumUInt16,
-                        Accum::SimpleNumber { accum, .. },
-                    )
-                    | (
-                        AggregateFunc::SumUInt32,
-                        Accum::SimpleNumber { accum, .. },
-                    )
-                    | (
-                        AggregateFunc::SumUInt64,
-                        Accum::SimpleNumber { accum, .. },
-                    ) => {
-                        if accum.is_negative() {
-                            warn!("[customer-data] ReduceAccumulable observed a negative sum \
-                                accumulation over an unsigned type: {aggr:?}: {accum:?} in dataflow {debug_name}");
-                            error!("Invalid negative unsigned aggregation in ReduceAccumulable");
-                            let message = format!("Invalid data in source, saw negative accumulation with \
-                            unsigned type for key {key}");
-                            output.push((EvalError::Internal(message).into(), 1));
-                        }
+                        row_packer.push(value);
                     }
-                    _ => (), // no more errors to check for at this point!
+                    output.push((row_buf.clone(), 1));
                 }
-            }
-        });
+            },
+            move |key, input, output| {
+                let (ref accums, total) = input[0].1;
+                for (aggr, accum) in err_full_aggrs.iter().zip(accums) {
+                    // We first test here if inputs without net-positive records are present,
+                    // producing an error to the logs and to the query output if that is the case.
+                    if total == 0 && !accum.is_zero() {
+                        error_logger.log(
+                            "Net-zero records with non-zero accumulation in ReduceAccumulable",
+                            &format!("aggr={aggr:?}, accum={accum:?}, debug_name={debug_name}"),
+                        );
+                        let message = format!(
+                            "Invalid data in source, saw net-zero records for key {key} \
+                        with non-zero accumulation in accumulable aggregate"
+                        );
+                        output.push((EvalError::Internal(message).into(), 1));
+                    }
+                    match (&aggr.func, &accum) {
+                        (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
+                        | (AggregateFunc::SumUInt32, Accum::SimpleNumber { accum, .. })
+                        | (AggregateFunc::SumUInt64, Accum::SimpleNumber { accum, .. }) => {
+                            if accum.is_negative() {
+                                error_logger.log(
+                                    "Invalid negative unsigned aggregation in ReduceAccumulable",
+                                    &format!(
+                                        "aggr={aggr:?}, accum={accum:?}, debug_name={debug_name}"
+                                    ),
+                                );
+                                let message = format!(
+                                    "Invalid data in source, saw negative accumulation with \
+                            unsigned type for key {key}"
+                                );
+                                output.push((EvalError::Internal(message).into(), 1));
+                            }
+                        }
+                        _ => (), // no more errors to check for at this point!
+                    }
+                }
+            },
+        );
     (
         arranged_output,
         arranged_errs.as_collection(|_key, error| error.clone()),
