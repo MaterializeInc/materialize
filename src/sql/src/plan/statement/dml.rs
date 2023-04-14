@@ -481,8 +481,7 @@ pub fn plan_subscribe(
                 for mut obe in order_by.clone() {
                     let idx = match obe.expr.take() {
                         mz_sql_parser::ast::Expr::Identifier(mut id) => {
-                            let id =
-                                normalize::column_name(id.pop().expect("shouldn't be empty"));
+                            let id = normalize::column_name(id.pop().expect("shouldn't be empty"));
                             let idx = desc
                                 .get_by_name(&id)
                                 .map(|(idx, _type)| idx)
@@ -569,9 +568,7 @@ pub fn plan_subscribe(
                         Ok(name_idx)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(plan::SubscribeOutput::EnvelopeUpsert {
-                    key_indices,
-                })
+                Ok(plan::SubscribeOutput::EnvelopeUpsert { key_indices })
             }
             SubscribeOutput::WithinTimestampOrderBy { order_by: _ } => {
                 scx.require_within_timestamp_order_by_in_subscribe()?;
