@@ -2324,9 +2324,7 @@ impl Coordinator {
                     &mut target_replica,
                 )?;
                 let id = self.allocate_transient_id()?;
-                tracing::info!(expr=?expr.typ(), desc=?desc);
                 let expr = self.view_optimizer.optimize(expr)?;
-                tracing::info!(expr=?expr.typ(), desc=?desc, "post optmiziation");
                 let all_types = expr.typ().column_types;
                 let projected_types = match &output {
                     Some(SubscribeOutput::WithinTimestampOrderBy { project, .. }) => {
