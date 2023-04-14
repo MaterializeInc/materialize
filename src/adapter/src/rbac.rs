@@ -26,66 +26,6 @@ use crate::command::Command;
 use crate::session::Session;
 use crate::AdapterError;
 
-/// Attributes that allow a role to execute certain plans.
-///
-/// Note: This is a subset of all role attributes used for privilege checks.
-#[derive(Debug)]
-pub enum Attribute {
-    /// Allows creating, altering, and dropping roles.
-    CreateRole,
-    /// Allows creating databases.
-    CreateDB,
-    /// Allows creating clusters.
-    CreateCluster,
-}
-
-impl Attribute {
-    /// Reports whether a role has the privilege granted by the attribute.
-    fn check_role(&self, role_id: &RoleId, catalog: &impl SessionCatalog) -> bool {
-        let role = catalog.get_role(role_id);
-        match self {
-            Attribute::CreateRole => role.create_role(),
-            Attribute::CreateDB => role.create_db(),
-            Attribute::CreateCluster => role.create_cluster(),
-        }
-    }
-
-    /// Reports whether any role has the privilege granted by the attribute.
-    fn check_roles<'a>(
-        &self,
-        role_ids: impl IntoIterator<Item = &'a RoleId>,
-        catalog: &impl SessionCatalog,
-    ) -> bool {
-        role_ids
-            .into_iter()
-            .any(|role_id| self.check_role(role_id, catalog))
-    }
-}
-
-impl fmt::Display for Attribute {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Attribute::CreateRole => f.write_str("CREATEROLE"),
-            Attribute::CreateDB => f.write_str("CREATEDB"),
-            Attribute::CreateCluster => f.write_str("CREATECLUSTER"),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Ownership(ObjectId);
-
-impl Ownership {
-    /// Reports whether any role has ownership over an object.
-    fn check_roles(&self, role_ids: &BTreeSet<RoleId>, catalog: &impl SessionCatalog) -> bool {
-        if let Some(owner_id) = catalog.get_owner_id(&self.0) {
-            role_ids.contains(&owner_id)
-        } else {
-            true
-        }
-    }
-}
-
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
 pub enum UnauthorizedError {
@@ -193,6 +133,7 @@ pub fn check_plan(
     // Obtain all roles that the current session is a member of.
     let role_membership = catalog.collect_role_membership(role_id);
 
+    // Validate that the current role has the required membership to alter an object's owner.
     if let Plan::AlterOwner(AlterOwnerPlan { new_owner, .. }) = plan {
         if !role_membership.contains(new_owner) {
             return Err(AdapterError::Unauthorized(
@@ -216,51 +157,11 @@ pub fn check_plan(
     // Validate that the current session has the required object ownership to execute the provided
     // plan.
     let required_ownership = generate_required_ownership(plan);
-    let unheld_ownership: Vec<Ownership> = required_ownership
+    let unheld_ownership = required_ownership
         .into_iter()
-        .filter(|ownership| !ownership.check_roles(&role_membership, catalog))
+        .filter(|ownership| !check_owner_roles(ownership, &role_membership, catalog))
         .collect();
-    if !unheld_ownership.is_empty() {
-        let objects = unheld_ownership
-            .into_iter()
-            .map(|ownership| match ownership.0 {
-                ObjectId::Cluster(id) => (
-                    ObjectType::Cluster,
-                    catalog.get_cluster(id).name().to_string(),
-                ),
-                ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                    let cluster = catalog.get_cluster(cluster_id);
-                    let replica = catalog.get_cluster_replica(cluster_id, replica_id);
-                    let name = QualifiedReplica {
-                        cluster: cluster.name().into(),
-                        replica: replica.name().into(),
-                    };
-                    (ObjectType::ClusterReplica, name.to_string())
-                }
-                ObjectId::Database(id) => (
-                    ObjectType::Database,
-                    catalog.get_database(&id).name().to_string(),
-                ),
-                ObjectId::Schema((database_id, schema_id)) => {
-                    let schema = catalog.get_schema(
-                        &ResolvedDatabaseSpecifier::Id(database_id),
-                        &SchemaSpecifier::Id(schema_id),
-                    );
-                    let name = catalog.resolve_full_schema_name(schema.name());
-                    (ObjectType::Schema, name.to_string())
-                }
-                ObjectId::Item(id) => {
-                    let item = catalog.get_item(&id);
-                    let name = catalog.resolve_full_name(item.name());
-                    (item.item_type().into(), name.to_string())
-                }
-                ObjectId::Role(_) => unreachable!("roles have no owner"),
-            })
-            .collect();
-        return Err(AdapterError::Unauthorized(UnauthorizedError::Ownership {
-            objects,
-        }));
-    }
+    ownership_err(unheld_ownership, catalog)?;
 
     Ok(())
 }
@@ -354,8 +255,54 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
     }
 }
 
+/// Attributes that allow a role to execute certain plans.
+///
+/// Note: This is a subset of all role attributes used for privilege checks.
+#[derive(Debug)]
+pub enum Attribute {
+    /// Allows creating, altering, and dropping roles.
+    CreateRole,
+    /// Allows creating databases.
+    CreateDB,
+    /// Allows creating clusters.
+    CreateCluster,
+}
+
+impl Attribute {
+    /// Reports whether a role has the privilege granted by the attribute.
+    fn check_role(&self, role_id: &RoleId, catalog: &impl SessionCatalog) -> bool {
+        let role = catalog.get_role(role_id);
+        match self {
+            Attribute::CreateRole => role.create_role(),
+            Attribute::CreateDB => role.create_db(),
+            Attribute::CreateCluster => role.create_cluster(),
+        }
+    }
+
+    /// Reports whether any role has the privilege granted by the attribute.
+    fn check_roles<'a>(
+        &self,
+        role_ids: impl IntoIterator<Item = &'a RoleId>,
+        catalog: &impl SessionCatalog,
+    ) -> bool {
+        role_ids
+            .into_iter()
+            .any(|role_id| self.check_role(role_id, catalog))
+    }
+}
+
+impl fmt::Display for Attribute {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Attribute::CreateRole => f.write_str("CREATEROLE"),
+            Attribute::CreateDB => f.write_str("CREATEDB"),
+            Attribute::CreateCluster => f.write_str("CREATECLUSTER"),
+        }
+    }
+}
+
 /// Generates the ownership required to execute a given plan.
-fn generate_required_ownership(plan: &Plan) -> Vec<Ownership> {
+fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
     match plan {
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
@@ -404,18 +351,77 @@ fn generate_required_ownership(plan: &Plan) -> Vec<Ownership> {
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_) => Vec::new(),
         Plan::CreateView(CreateViewPlan { replace, .. })
-        | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
-            .iter()
-            .map(|id| Ownership(ObjectId::Item(*id)))
-            .collect(),
-        Plan::DropObjects(plan) => plan.ids.iter().cloned().map(Ownership).collect(),
-        Plan::AlterIndexSetOptions(plan) => vec![Ownership(ObjectId::Item(plan.id))],
-        Plan::AlterIndexResetOptions(plan) => vec![Ownership(ObjectId::Item(plan.id))],
-        Plan::AlterSink(plan) => vec![Ownership(ObjectId::Item(plan.id))],
-        Plan::AlterSource(plan) => vec![Ownership(ObjectId::Item(plan.id))],
-        Plan::AlterItemRename(plan) => vec![Ownership(ObjectId::Item(plan.id))],
-        Plan::AlterSecret(plan) => vec![Ownership(ObjectId::Item(plan.id))],
-        Plan::RotateKeys(plan) => vec![Ownership(ObjectId::Item(plan.id))],
-        Plan::AlterOwner(plan) => vec![Ownership(plan.id.clone())],
+        | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => {
+            replace.iter().map(|id| ObjectId::Item(*id)).collect()
+        }
+        Plan::DropObjects(plan) => plan.ids.clone(),
+        Plan::AlterIndexSetOptions(plan) => vec![ObjectId::Item(plan.id)],
+        Plan::AlterIndexResetOptions(plan) => vec![ObjectId::Item(plan.id)],
+        Plan::AlterSink(plan) => vec![ObjectId::Item(plan.id)],
+        Plan::AlterSource(plan) => vec![ObjectId::Item(plan.id)],
+        Plan::AlterItemRename(plan) => vec![ObjectId::Item(plan.id)],
+        Plan::AlterSecret(plan) => vec![ObjectId::Item(plan.id)],
+        Plan::RotateKeys(plan) => vec![ObjectId::Item(plan.id)],
+        Plan::AlterOwner(plan) => vec![plan.id.clone()],
+    }
+}
+
+/// Reports whether any role has ownership over an object.
+fn check_owner_roles(
+    object_id: &ObjectId,
+    role_ids: &BTreeSet<RoleId>,
+    catalog: &impl SessionCatalog,
+) -> bool {
+    if let Some(owner_id) = catalog.get_owner_id(object_id) {
+        role_ids.contains(&owner_id)
+    } else {
+        true
+    }
+}
+
+fn ownership_err(
+    unheld_ownership: Vec<ObjectId>,
+    catalog: &impl SessionCatalog,
+) -> Result<(), UnauthorizedError> {
+    if !unheld_ownership.is_empty() {
+        let objects = unheld_ownership
+            .into_iter()
+            .map(|ownership| match ownership {
+                ObjectId::Cluster(id) => (
+                    ObjectType::Cluster,
+                    catalog.get_cluster(id).name().to_string(),
+                ),
+                ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                    let cluster = catalog.get_cluster(cluster_id);
+                    let replica = catalog.get_cluster_replica(cluster_id, replica_id);
+                    let name = QualifiedReplica {
+                        cluster: cluster.name().into(),
+                        replica: replica.name().into(),
+                    };
+                    (ObjectType::ClusterReplica, name.to_string())
+                }
+                ObjectId::Database(id) => (
+                    ObjectType::Database,
+                    catalog.get_database(&id).name().to_string(),
+                ),
+                ObjectId::Schema((database_id, schema_id)) => {
+                    let schema = catalog.get_schema(
+                        &ResolvedDatabaseSpecifier::Id(database_id),
+                        &SchemaSpecifier::Id(schema_id),
+                    );
+                    let name = catalog.resolve_full_schema_name(schema.name());
+                    (ObjectType::Schema, name.to_string())
+                }
+                ObjectId::Item(id) => {
+                    let item = catalog.get_item(&id);
+                    let name = catalog.resolve_full_name(item.name());
+                    (item.item_type().into(), name.to_string())
+                }
+                ObjectId::Role(_) => unreachable!("roles have no owner"),
+            })
+            .collect();
+        Err(UnauthorizedError::Ownership { objects })
+    } else {
+        Ok(())
     }
 }
