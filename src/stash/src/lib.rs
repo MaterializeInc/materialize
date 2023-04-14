@@ -945,6 +945,10 @@ where
         }
     }
 
+    /// Migrates k, v pairs. `f` is a function that can return `Some((K, V))` if the value should
+    /// be updated, otherwise `None`. Returns the number of changed entries.
+    ///
+    /// Returns an error if the uniqueness check failed.
     pub fn migrate<F: Fn(&K, &V) -> Option<(K, V)>>(&mut self, f: F) -> Result<Diff, StashError> {
         let mut changed = 0;
         // Keep a copy of pending in case of uniqueness violation.

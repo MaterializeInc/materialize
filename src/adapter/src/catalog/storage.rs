@@ -582,8 +582,8 @@ async fn migrate(
         //
         // Introduced in v0.51.0
         //
-        // TODO(parkertimmerman): We can make DatabaseKey and SchemaKey more idomatic
-        // enums after this upgrade.
+        // TODO(parkertimmerman): Once we support more complex migrations, we
+        // should make DatabaseKey and SchemaKey more idomatic enums.
         |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
             // Migrate all of our DatabaseKeys.
             txn.databases.migrate(|key, value| {
@@ -1495,10 +1495,11 @@ impl<'a> Transaction<'a> {
         let schemas = self.schemas.items();
         let mut items = Vec::new();
         self.items.for_values(|k, v| {
-            let schema = match schemas.get(&SchemaKey {
+            let schema_key = SchemaKey {
                 id: v.schema_id,
                 ns: v.schema_ns,
-            }) {
+            };
+            let schema = match schemas.get(&schema_key) {
                 Some(schema) => schema,
                 None => panic!(
                     "corrupt stash! unknown schema id {}, for item with key \
@@ -1522,12 +1523,13 @@ impl<'a> Transaction<'a> {
                 }
                 None => ResolvedDatabaseSpecifier::Ambient,
             };
+            let schema_id = SchemaId::from(schema_key);
             items.push((
                 k.gid,
                 QualifiedItemName {
                     qualifiers: ItemQualifiers {
                         database_spec,
-                        schema_spec: SchemaSpecifier::from(v.schema_id),
+                        schema_spec: SchemaSpecifier::from(schema_id),
                     },
                     item: v.name.clone(),
                 },
@@ -1548,7 +1550,7 @@ impl<'a> Transaction<'a> {
             .push((StorageUsageKey { metric }, (), 1));
     }
 
-    pub fn insert_database(
+    pub fn insert_user_database(
         &mut self,
         database_name: &str,
         owner_id: RoleId,
@@ -1573,7 +1575,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn insert_schema(
+    pub fn insert_user_schema(
         &mut self,
         database_id: DatabaseId,
         schema_name: &str,
@@ -2571,6 +2573,7 @@ pub enum DatabaseNamespace {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DatabaseKey {
     id: u64,
+    // TODO(parkertimmerman) Remove option in v0.53.0
     #[serde(skip_serializing_if = "Option::is_none")]
     ns: Option<DatabaseNamespace>,
 }
@@ -2633,6 +2636,7 @@ pub enum SchemaNamespace {
 #[derive(Clone, Copy, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SchemaKey {
     id: u64,
+    // TODO(parkertimmerman) Remove option in v0.53.0
     #[serde(skip_serializing_if = "Option::is_none")]
     ns: Option<SchemaNamespace>,
 }
@@ -2664,6 +2668,7 @@ impl From<SchemaId> for SchemaKey {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct SchemaValue {
     database_id: Option<u64>,
+    // TODO(parkertimmerman) Remove option in v0.53.0
     #[serde(skip_serializing_if = "Option::is_none")]
     database_ns: Option<DatabaseNamespace>,
     name: String,
@@ -2679,6 +2684,7 @@ pub struct ItemKey {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct ItemValue {
     schema_id: u64,
+    // TODO(parkertimmerman) Remove option in v0.53.0
     #[serde(skip_serializing_if = "Option::is_none")]
     schema_ns: Option<SchemaNamespace>,
     name: String,

@@ -315,12 +315,13 @@ impl AstDisplay for SchemaSpecifier {
     }
 }
 
-impl From<u64> for SchemaSpecifier {
-    fn from(id: u64) -> Self {
-        if id == Self::TEMPORARY_SCHEMA_ID {
-            Self::Temporary
-        } else {
-            Self::Id(SchemaId::User(id))
+impl From<SchemaId> for SchemaSpecifier {
+    fn from(id: SchemaId) -> SchemaSpecifier {
+        match id {
+            SchemaId::User(id) if id == SchemaSpecifier::TEMPORARY_SCHEMA_ID => {
+                SchemaSpecifier::Temporary
+            }
+            schema_id => SchemaSpecifier::Id(schema_id),
         }
     }
 }

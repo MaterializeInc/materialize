@@ -4774,8 +4774,8 @@ impl Catalog {
                     public_schema_oid,
                     owner_id,
                 } => {
-                    let database_id = tx.insert_database(&name, owner_id)?;
-                    let schema_id = tx.insert_schema(database_id, DEFAULT_SCHEMA, owner_id)?;
+                    let database_id = tx.insert_user_database(&name, owner_id)?;
+                    let schema_id = tx.insert_user_schema(database_id, DEFAULT_SCHEMA, owner_id)?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4850,7 +4850,7 @@ impl Catalog {
                             )));
                         }
                     };
-                    let schema_id = tx.insert_schema(database_id, &schema_name, owner_id)?;
+                    let schema_id = tx.insert_user_schema(database_id, &schema_name, owner_id)?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
