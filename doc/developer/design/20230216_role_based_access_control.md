@@ -365,7 +365,7 @@ We will add the following SQL commands:
     - Only the owner of `<object>` can grant privileges on it.
         - Note: PostgreSQL allows other roles to grant privileges with the `WITH GRANT OPTION` option.
     - `GROUP` is ignored.
-    - For tables, views, materialized, and source, the object type can be omitted. 
+    - For tables, views, materialized, and source, the object type can be omitted.
     - For views, materialized views, and sources, the object type must be `TABLE` if not omitted.
 - `GRANT ALL [ PRIVILEGES ] ON <object-type> <object> TO [ GROUP ] <role>`
     - Same as grant above, but for all privileges.
@@ -375,7 +375,7 @@ We will add the following SQL commands:
     - Only the owner of `<object>` can revoke privileges from it.
         - Note: PostgreSQL allows other roles to revoke privileges with the `WITH GRANT OPTION` option.
     - `GROUP` is ignored.
-    - For tables, views, materialized, and source, the object type can be omitted. 
+    - For tables, views, materialized, and source, the object type can be omitted.
     - For views, materialized views, and sources, the object type must be `TABLE` if not omitted.
 - `REVOKE ALL [ PRIVILEGES ] ON <object-type> <object> FROM [ GROUP ] <role>`
     - Same as revoke above but for all privileges.
