@@ -420,7 +420,7 @@ pub fn describe_subscribe(
     if let Some(SubscribeOutput::EnvelopeUpsert{ key_columns }) = stmt.output {
         let key_columns = key_columns.into_iter().map(normalize::column_name).collect_vec();
         for key in &key_columns {
-            let mut ty = relation_desc.get_by_name(&key).map(|(_idx, ty)| ty).ok_or_else(|| sql_err!("No such column: {}", key))?.clone();
+            let mut ty = relation_desc.get_by_name(key).map(|(_idx, ty)| ty).ok_or_else(|| sql_err!("No such column: {}", key))?.clone();
             if progress {
                 ty.nullable = true;
             }
@@ -478,7 +478,7 @@ pub fn plan_subscribe(
                             }
                             idx
                         },
-                        expr @ _ => sql_bail!("Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY: {}", expr),
+                        expr => sql_bail!("Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY: {}", expr),
                     };
                     order_by_col.push(resolve_desc_and_nulls_last(&obe, idx));
                 }

@@ -2332,12 +2332,11 @@ impl Coordinator {
                         project.clone()
                     },
                     _ => (0..desc.arity()).collect_vec(),
-                }.into_iter().merge_join_by(all_types.into_iter().enumerate(), |i, (j, ty)| i.cmp(j))
+                }.into_iter().merge_join_by(all_types.into_iter().enumerate(), |i, (j, _ty)| i.cmp(j))
                 .filter_map(|r| match r {
                     EitherOrBoth::Both(_, (_, ty)) => Some(ty),
                     _ => None,
                 }).collect();
-
 
                 let desc = RelationDesc::new(RelationType::new(projected_types), desc.iter_names());
                 let sink_desc = make_sink_desc(self, session, id, desc)?;
