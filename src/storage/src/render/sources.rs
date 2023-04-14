@@ -48,6 +48,13 @@ pub enum SourceType<G: Scope> {
     Row(Collection<G, SourceOutput<(), Row>, Diff>),
 }
 
+/// The worker index for health streams, used to differentiate itself from [`OutputIndex`].
+pub(crate) type WorkerId = usize;
+
+/// The output index for health streams, used to handle multiplexed streams and differentiate itself
+/// from [`WorkerId`].
+pub(crate) type OutputIndex = usize;
+
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the final source and its errors
 /// as requested by the original `CREATE SOURCE` statement,
@@ -71,8 +78,8 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
-        Stream<G, (usize, HealthStatusUpdate)>,
     )>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
     Rc<dyn Any>,
 ) {
     // Tokens that we should return from the method.
@@ -126,9 +133,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (streams, capability) = match connection {
+    let (streams, health, capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
-            let (streams, cap) = source::create_raw_source(
+            let (streams, health, cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
@@ -137,12 +144,12 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             );
             let streams: Vec<_> = streams
                 .into_iter()
-                .map(|(ok, err, health)| (SourceType::Delimited(ok), err, health))
+                .map(|(ok, err)| (SourceType::Delimited(ok), err))
                 .collect();
-            (streams, cap)
+            (streams, health, cap)
         }
         GenericSourceConnection::Postgres(connection) => {
-            let (streams, cap) = source::create_raw_source(
+            let (streams, health, cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
@@ -151,12 +158,12 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             );
             let streams: Vec<_> = streams
                 .into_iter()
-                .map(|(ok, err, health)| (SourceType::Row(ok), err, health))
+                .map(|(ok, err)| (SourceType::Row(ok), err))
                 .collect();
-            (streams, cap)
+            (streams, health, cap)
         }
         GenericSourceConnection::LoadGenerator(connection) => {
-            let (streams, cap) = source::create_raw_source(
+            let (streams, health, cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
@@ -165,12 +172,12 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             );
             let streams: Vec<_> = streams
                 .into_iter()
-                .map(|(ok, err, health)| (SourceType::Row(ok), err, health))
+                .map(|(ok, err)| (SourceType::Row(ok), err))
                 .collect();
-            (streams, cap)
+            (streams, health, cap)
         }
         GenericSourceConnection::TestScript(connection) => {
-            let (streams, cap) = source::create_raw_source(
+            let (streams, health, cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
@@ -179,9 +186,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             );
             let streams: Vec<_> = streams
                 .into_iter()
-                .map(|(ok, err, health)| (SourceType::Delimited(ok), err, health))
+                .map(|(ok, err)| (SourceType::Delimited(ok), err))
                 .collect();
-            (streams, cap)
+            (streams, health, cap)
         }
     };
 
@@ -190,7 +197,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     needed_tokens.push(source_token);
 
     let mut outputs = vec![];
-    for (ok_source, err_source, health) in streams {
+    for (ok_source, err_source) in streams {
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
@@ -207,9 +214,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             storage_state,
         );
         needed_tokens.extend(extra_tokens);
-        outputs.push((ok, err, health));
+        outputs.push((ok, err));
     }
-    (outputs, Rc::new(needed_tokens))
+    (outputs, health, Rc::new(needed_tokens))
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope

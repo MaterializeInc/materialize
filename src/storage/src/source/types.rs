@@ -31,6 +31,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
 
+use crate::render::sources::OutputIndex;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::RawSourceCreationConfig;
 
@@ -81,7 +82,7 @@ pub trait SourceRender {
             Diff,
         >,
         Option<Stream<G, Infallible>>,
-        Stream<G, (usize, HealthStatusUpdate)>,
+        Stream<G, (OutputIndex, HealthStatusUpdate)>,
         Rc<dyn Any>,
     );
 }
