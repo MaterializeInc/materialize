@@ -469,10 +469,9 @@ impl<T: AstInfo> AstDisplay for SubscribeOutput<T> {
                 f.write_node(&display::comma_separated(order_by));
             },
             Self::EnvelopeUpsert { key_columns } => {
-                f.write_str("ENVELOPE UPSERT");
-                f.write_str(" KEY (");
+                f.write_str("ENVELOPE UPSERT (KEY (");
                 f.write_node(&display::comma_separated(key_columns));
-                f.write_str(")");
+                f.write_str("))");
             }
         }
     }

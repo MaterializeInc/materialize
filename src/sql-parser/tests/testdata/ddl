@@ -831,11 +831,34 @@ SUBSCRIBE foo.bar ENVELOPE UPSERT KEY (a, b, c, d, e)
                                   ^
 
 parse-statement
-SUBSCRIBE foo.bar WITHIN TIMESTAMP ORDER BY (a ASC NULLS LAST, b, c DESC)
+SUBSCRIBE foo.bar ENVELOPE UPSERT (KEY (a, b, c, d, e))
 ----
-error: Expected right parenthesis, found ASC
-SUBSCRIBE foo.bar WITHIN TIMESTAMP ORDER BY (a ASC NULLS LAST, b, c DESC)
-                                               ^
+SUBSCRIBE foo.bar ENVELOPE UPSERT (KEY (a, b, c, d, e))
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, output: Some(EnvelopeUpsert { key_columns: [Ident("a"), Ident("b"), Ident("c"), Ident("d"), Ident("e")] }) })
+
+
+parse-statement
+SUBSCRIBE foo.bar WITHIN TIMESTAMP ORDER BY a ASC NULLS LAST, b, c DESC
+----
+SUBSCRIBE foo.bar WITHIN TIMESTAMP ORDER BY a ASC NULLS LAST, b, c DESC
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, output: Some(WithinTimestampOrderBy { order_by: [OrderByExpr { expr: Identifier([Ident("a")]), asc: Some(true), nulls_last: Some(true) }, OrderByExpr { expr: Identifier([Ident("b")]), asc: None, nulls_last: None }, OrderByExpr { expr: Identifier([Ident("c")]), asc: Some(false), nulls_last: None }] }) })
+
+parse-statement
+SUBSCRIBE (SELECT *, f1 + f2 FROM foo.bar) WITHIN TIMESTAMP ORDER BY foo.bar.baz DESC, f1 + f2
+----
+SUBSCRIBE (SELECT *, f1 + f2 FROM foo.bar) WITHIN TIMESTAMP ORDER BY foo.bar.baz DESC, f1 + f2
+=>
+Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard, Expr { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Identifier([Ident("f1")]), expr2: Some(Identifier([Ident("f2")])) }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("foo"), Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None, output: Some(WithinTimestampOrderBy { order_by: [OrderByExpr { expr: Identifier([Ident("foo"), Ident("bar"), Ident("baz")]), asc: Some(false), nulls_last: None }, OrderByExpr { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Identifier([Ident("f1")]), expr2: Some(Identifier([Ident("f2")])) }, asc: None, nulls_last: None }] }) })
+
+
+parse-statement
+SUBSCRIBE foo.bar WITHIN TIMESTAMP ORDER BY
+----
+error: Unexpected EOF
+SUBSCRIBE foo.bar WITHIN TIMESTAMP ORDER BY
+                                           ^
 
 parse-statement
 CREATE TABLE public.customer (
