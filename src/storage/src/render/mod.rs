@@ -246,7 +246,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut tokens = vec![];
 
-            let (outputs, token) = crate::render::sources::render_source(
+            let (mut outputs, health_stream, token) = crate::render::sources::render_source(
                 into_time_scope,
                 &debug_name,
                 primary_source_id,
@@ -257,8 +257,12 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             );
             tokens.push(token);
 
+            let mut health_configs = BTreeMap::new();
+
             for (export_id, export) in description.source_exports {
-                let (ok, err, health) = &outputs[export.output_index];
+                let (ok, err) = outputs
+                    .get_mut(export.output_index)
+                    .expect("known to exist");
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
                 let metrics = SourcePersistSinkMetrics::new(
@@ -316,15 +320,16 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 };
                 tokens.push(token);
 
-                let health_token = crate::source::health_operator(
-                    into_time_scope,
-                    storage_state,
-                    export_id,
-                    export.storage_metadata,
-                    health,
-                );
-                tokens.push(health_token);
+                health_configs.insert(export.output_index, (export_id, export.storage_metadata));
             }
+
+            let health_token = crate::source::health_operator(
+                into_time_scope,
+                storage_state,
+                &health_stream,
+                health_configs,
+            );
+            tokens.push(health_token);
 
             storage_state
                 .source_tokens

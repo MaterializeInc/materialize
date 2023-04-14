@@ -26,7 +26,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fmt::Display;
 use std::future::Future;
@@ -61,6 +61,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
 use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
@@ -80,6 +81,7 @@ use mz_timely_util::operator::StreamExt as _;
 
 use crate::healthcheck::write_to_persist;
 use crate::internal_control::InternalStorageCommand;
+use crate::render::sources::{OutputIndex, WorkerId};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
@@ -159,8 +161,8 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C, R>(
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
-        Stream<G, (usize, HealthStatusUpdate)>,
     )>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
     Option<Rc<dyn Any>>,
 )
 where
@@ -196,7 +198,7 @@ where
 
     let timestamp_desc = source_connection.timestamp_desc();
 
-    let (health_stream, token) = {
+    let (health, token) = {
         let config = config.clone();
         scope.parent.scoped("SourceTimeDomain", move |scope| {
             let (source, source_upper, health_stream, token) = source_render_operator(
@@ -216,41 +218,16 @@ where
         })
     };
 
-    // Demux the health streams outside of the reclock operator because reclocking has nothing to do
-    // with health streams.
-    let partition_count = u64::cast_from(
-        config
-            .source_exports
-            .iter()
-            .map(|(_, SourceExport { output_index, .. })| *output_index)
-            .max()
-            .unwrap_or_default()
-            + 1,
-    );
-
-    let health_streams: Vec<_> = health_stream
-        .partition(partition_count, |(worker_idx, (output_index, update))| {
-            (u64::cast_from(output_index), (worker_idx, update))
-        });
-
     let (remap_stream, remap_token) =
         remap_operator(scope, config.clone(), source_upper_rx, timestamp_desc);
 
     let (streams, _reclock_token) =
         reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
 
-    let streams = streams
-        .into_iter()
-        .zip_eq(health_streams.into_iter())
-        .map(|((ok, err), health)| (ok, err, health))
-        .collect();
-
     let token = Rc::new((token, remap_token, resume_token));
 
-    (streams, Some(token))
+    (streams, health, Some(token))
 }
-
-type WorkerId = usize;
 
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
 /// collection timestamped with the source specific timestamp type. Also returns a second stream
@@ -273,7 +250,7 @@ fn source_render_operator<G, C>(
         Diff,
     >,
     Stream<G, Infallible>,
-    Stream<G, (WorkerId, (usize, HealthStatusUpdate))>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
     Rc<dyn Any>,
 )
 where
@@ -300,7 +277,7 @@ where
     let (mut _progress_output, derived_progress) = builder.new_output();
     let (mut health_output, derived_health): (
         _,
-        timely::dataflow::StreamCore<G, Vec<(usize, HealthStatusUpdate)>>,
+        timely::dataflow::StreamCore<G, Vec<(OutputIndex, HealthStatusUpdate)>>,
     ) = builder.new_output();
 
     builder.build(move |mut caps| async move {
@@ -353,7 +330,7 @@ where
 
     let health = health
         .concat(&derived_health)
-        .map(move |status| (worker_id, status));
+        .map(move |(output_index, status)| (worker_id, output_index, status));
 
     (
         data.as_collection(),
@@ -363,17 +340,51 @@ where
     )
 }
 
-/// Mints new contents for the remap shard based on summaries about the source
-/// upper it receives from the raw reader operators.
+struct HealthState<'a> {
+    source_id: GlobalId,
+    persist_details: Option<(ShardId, &'a PersistClient)>,
+    healths: Vec<Option<HealthStatus>>,
+    last_reported_status: Option<HealthStatus>,
+    halt_with: Option<HealthStatus>,
+}
+
+impl<'a> HealthState<'a> {
+    fn new(
+        source_id: GlobalId,
+        metadata: CollectionMetadata,
+        persist_clients: &'a BTreeMap<PersistLocation, PersistClient>,
+        worker_count: usize,
+    ) -> HealthState<'a> {
+        let persist_details = match (
+            metadata.status_shard,
+            persist_clients.get(&metadata.persist_location),
+        ) {
+            (Some(shard), Some(persist_client)) => Some((shard, persist_client)),
+            _ => None,
+        };
+
+        HealthState {
+            source_id,
+            persist_details,
+            healths: vec![None; worker_count],
+            last_reported_status: None,
+            halt_with: None,
+        }
+    }
+}
+
+/// Writes updates that come across `health_stream` to the collection's status shards, as identified
+/// by their `CollectionMetadata`.
 ///
-/// Only one worker will be active and write to the remap shard. All source
-/// upper summaries will be exchanged to it.
+/// Only one worker will be active and write to the status shard.
+///
+/// The `OutputIndex` values that come across `health_stream` must be a strict subset of those in
+/// `configs`'s keys.
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    source_id: GlobalId,
-    storage_metadata: CollectionMetadata,
-    health_stream: &Stream<G, (usize, HealthStatusUpdate)>,
+    health_stream: &Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+    configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
 ) -> Rc<dyn Any> {
     // Derived config options
     let healthcheck_worker_id = scope.index();
@@ -384,10 +395,8 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
 
     // We'll route all the work to a single arbitrary worker;
     // there's not much to do, and we need a global view.
-    let chosen_worker_id = usize::cast_from(source_id.hashed()) % worker_count;
+    let chosen_worker_id = usize::cast_from(configs.keys().next().hashed()) % worker_count;
     let is_active_worker = chosen_worker_id == healthcheck_worker_id;
-
-    let mut healths = vec![None; worker_count];
 
     let operator_name = format!("healthcheck({})", healthcheck_worker_id);
     let mut health_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
@@ -399,30 +408,66 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
 
-    fn overall_status(healths: &[Option<HealthStatus>]) -> Option<&HealthStatus> {
-        healths.iter().filter_map(Option::as_ref).max()
-    }
-
-    let mut last_reported_status = overall_status(&healths).cloned();
+    // Construct a minimal number of persist clients
+    let persist_locations: BTreeSet<_> = configs
+        .values()
+        .filter_map(|(source_id, metadata)| {
+            if is_active_worker {
+                match &metadata.status_shard {
+                    Some(status_shard) => {
+                        info!("Health for source {source_id} being written to {status_shard}");
+                        Some(metadata.persist_location.clone())
+                    }
+                    None => {
+                        trace!("Health for source {source_id} not being written to status shard");
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
 
     let button = health_op.build(move |mut _capabilities| async move {
-        let persist_client = persist_clients
-            .open(storage_metadata.persist_location.clone())
-            .await
-            .expect("error creating persist client for Healthchecker");
-
-        if is_active_worker {
-            if let Some(status_shard) = storage_metadata.status_shard {
-                info!("Health for source {source_id} being written to {status_shard}");
-            } else {
-                trace!("Health for source {source_id} not being written to status shard");
-            }
+        // Convert the persist locations into persist clients
+        let mut persist_clients_per_location = BTreeMap::new();
+        for persist_location in persist_locations {
+            persist_clients_per_location.insert(
+                persist_location.clone(),
+                persist_clients
+                    .open(persist_location)
+                    .await
+                    .expect("error creating persist client for Healthchecker"),
+            );
         }
 
+        let mut health_states: BTreeMap<_, _> = configs
+            .into_iter()
+            .map(|(output_idx, (id, metadata))| {
+                (
+                    output_idx,
+                    HealthState::new(id, metadata, &persist_clients_per_location, worker_count),
+                )
+            })
+            .collect();
+
+        let mut outputs_seen = BTreeSet::new();
         while let Some(event) = input.next_mut().await {
             if let AsyncEvent::Data(_cap, rows) = event {
-                let mut halt_with = None;
-                for (worker_id, health_event) in rows.drain(..) {
+                for (worker_id, output_index, health_event) in rows.drain(..) {
+                    let HealthState {
+                        source_id, healths, halt_with, ..
+                    } = match health_states.get_mut(&output_index) {
+                        Some(health) => health,
+                        // This is a health status update for a subsource that we did not request to
+                        // be generated, which means it doesn't have a GlobalId and should not be
+                        // propagated to the shard.
+                        None => continue,
+                    };
+
+                    outputs_seen.insert(output_index);
+
                     if !is_active_worker {
                         warn!(
                             "Health messages for source {source_id} passed to \
@@ -435,50 +480,58 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
                         should_halt,
                     } = health_event;
                     if should_halt {
-                        halt_with = Some(update.clone());
+                        *halt_with = Some(update.clone());
                     }
                     healths[worker_id] = Some(update);
                 }
 
-                if let Some(new_status) = overall_status(&healths) {
-                    if last_reported_status.as_ref() != Some(&new_status) {
-                        info!(
-                            "Health transition for source {source_id}: \
-                              {last_reported_status:?} -> {new_status:?}"
-                        );
-                        if let Some(status_shard) = storage_metadata.status_shard {
-                            write_to_persist(
-                                source_id,
-                                new_status.name(),
-                                new_status.error(),
-                                now.clone(),
-                                &persist_client,
-                                status_shard,
-                                &*MZ_SOURCE_STATUS_HISTORY_DESC,
-                                new_status.hint(),
-                            )
-                            .await;
-                        }
+                while let Some(output_index) = outputs_seen.pop_first() {
+                    let HealthState {
+                        source_id, healths, persist_details, last_reported_status, halt_with
+                    } = health_states.get_mut(&output_index).expect("known to exist");
 
-                        last_reported_status = Some(new_status.clone());
+                    let overall_status = healths.iter().filter_map(Option::as_ref).max();
+
+                    if let Some(new_status) = overall_status {
+                        if last_reported_status.as_ref() != Some(&new_status) {
+                            info!(
+                                "Health transition for source {source_id}: \
+                                  {last_reported_status:?} -> {new_status:?}"
+                            );
+                            if let Some((status_shard, persist_client)) = persist_details {
+                                write_to_persist(
+                                    *source_id,
+                                    new_status.name(),
+                                    new_status.error(),
+                                    now.clone(),
+                                    persist_client,
+                                    *status_shard,
+                                    &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                                    new_status.hint(),
+                                )
+                                .await;
+                            }
+
+                            *last_reported_status = Some(new_status.clone());
+                        }
                     }
-                }
-                // TODO(aljoscha): Instead of threading through the
-                // `should_halt` bit, we can give an internal command sender
-                // directly to the places where `should_halt = true` originates.
-                // We should definitely do that, but this is okay for a PoC.
-                if let Some(halt_with) = halt_with {
-                    info!(
-                        "Broadcasting suspend-and-restart command because of {:?} after {:?} delay",
-                        halt_with, SUSPEND_AND_RESTART_DELAY
-                    );
-                    tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
-                    internal_cmd_tx.borrow_mut().broadcast(
-                        InternalStorageCommand::SuspendAndRestart {
-                            id: source_id,
-                            reason: format!("{:?}", halt_with),
-                        },
-                    );
+                    // TODO(aljoscha): Instead of threading through the
+                    // `should_halt` bit, we can give an internal command sender
+                    // directly to the places where `should_halt = true` originates.
+                    // We should definitely do that, but this is okay for a PoC.
+                    if let Some(halt_with) = halt_with {
+                        info!(
+                            "Broadcasting suspend-and-restart command because of {:?} after {:?} delay",
+                            halt_with, SUSPEND_AND_RESTART_DELAY
+                        );
+                        tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
+                        internal_cmd_tx.borrow_mut().broadcast(
+                            InternalStorageCommand::SuspendAndRestart {
+                                id: *source_id,
+                                reason: format!("{:?}", halt_with),
+                            },
+                        );
+                    }
                 }
             }
         }
