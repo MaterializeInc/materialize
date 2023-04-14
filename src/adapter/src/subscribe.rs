@@ -122,7 +122,7 @@ impl ActiveSubscribe {
                                 let mut datum_vec = mz_repr::DatumVec::new();
                                 for (_t, row, _d) in &mut rows {
                                     *row = {
-                                        let datums = datum_vec.borrow_with(&row);
+                                        let datums = datum_vec.borrow_with(row);
                                         row_buf
                                         .packer()
                                         .extend(project.iter().map(|i| &datums[*i]));
