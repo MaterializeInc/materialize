@@ -30,9 +30,9 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
-    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata,
-    SubscribeOutput, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedName, UnresolvedSchemaName, Value,
+    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput,
+    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    UnresolvedName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)

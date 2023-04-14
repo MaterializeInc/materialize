@@ -34,14 +34,14 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedItemName};
-use crate::{normalize, plan};
-use crate::plan::query::{plan_up_to, QueryLifetime, resolve_desc_and_nulls_last};
+use crate::plan::query::{plan_up_to, resolve_desc_and_nulls_last, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
 };
+use crate::{normalize, plan};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -417,17 +417,26 @@ pub fn describe_subscribe(
         desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
     }
 
-    if let Some(SubscribeOutput::EnvelopeUpsert{ key_columns }) = stmt.output {
-        let key_columns = key_columns.into_iter().map(normalize::column_name).collect_vec();
+    if let Some(SubscribeOutput::EnvelopeUpsert { key_columns }) = stmt.output {
+        let key_columns = key_columns
+            .into_iter()
+            .map(normalize::column_name)
+            .collect_vec();
         for key in &key_columns {
-            let mut ty = relation_desc.get_by_name(key).map(|(_idx, ty)| ty).ok_or_else(|| sql_err!("No such column: {}", key))?.clone();
+            let mut ty = relation_desc
+                .get_by_name(key)
+                .map(|(_idx, ty)| ty)
+                .ok_or_else(|| sql_err!("No such column: {}", key))?
+                .clone();
             if progress {
                 ty.nullable = true;
             }
             desc = desc.with_column(key.clone(), ty);
         }
         for (name, mut ty) in relation_desc.into_iter() {
-            if key_columns.contains(&name) { continue }
+            if key_columns.contains(&name) {
+                continue;
+            }
             ty.nullable = true;
             desc = desc.with_column(name, ty);
         }
@@ -471,21 +480,33 @@ pub fn plan_subscribe(
                 for mut obe in order_by.clone() {
                     let idx = match obe.expr.take() {
                         mz_sql_parser::ast::Expr::Identifier(mut id) if id.len() == 1 => {
-                            let id = normalize::column_name(id.pop().expect("just checked the length"));
-                            let idx = desc.get_by_name(&id).map(|(idx, _type)| idx).ok_or_else(|| sql_err!("No such column: {}", id))?;
+                            let id =
+                                normalize::column_name(id.pop().expect("just checked the length"));
+                            let idx = desc
+                                .get_by_name(&id)
+                                .map(|(idx, _type)| idx)
+                                .ok_or_else(|| sql_err!("No such column: {}", id))?;
                             if desc.get_unambiguous_name(idx).is_none() {
                                 sql_bail!("Ambiguous column: {}", id);
                             }
                             idx
-                        },
-                        expr => sql_bail!("Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY: {}", expr),
+                        }
+                        expr => sql_bail!(
+                            "Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY: {}",
+                            expr
+                        ),
                     };
                     order_by_col.push(resolve_desc_and_nulls_last(&obe, idx));
                 }
             }
 
             let arity = desc.arity();
-            (SubscribeFrom::Id(entry.id()), desc.into_owned(), order_by_col, (0..arity).collect())
+            (
+                SubscribeFrom::Id(entry.id()),
+                desc.into_owned(),
+                order_by_col,
+                (0..arity).collect(),
+            )
         }
         SubscribeRelation::Query(query) => {
             // There's no way to apply finishing operations to a `SUBSCRIBE`
@@ -510,7 +531,7 @@ pub fn plan_subscribe(
                 },
                 desc,
                 query.finishing.order_by,
-                query.finishing.project
+                query.finishing.project,
             )
         }
     };
@@ -528,7 +549,10 @@ pub fn plan_subscribe(
                     .collect::<Vec<_>>();
                 let duplicates = key_columns.iter().duplicates().collect_vec();
                 if !duplicates.is_empty() {
-                    sql_bail!("Repeated column names in subscribe envelope key: {}", duplicates.iter().join(", "));
+                    sql_bail!(
+                        "Repeated column names in subscribe envelope key: {}",
+                        duplicates.iter().join(", ")
+                    );
                 }
                 let indices = key_columns
                     .iter()
@@ -543,14 +567,13 @@ pub fn plan_subscribe(
                         Ok(name_idx)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(plan::SubscribeOutput::EnvelopeUpsert { key_indices: indices })
-            },
+                Ok(plan::SubscribeOutput::EnvelopeUpsert {
+                    key_indices: indices,
+                })
+            }
             SubscribeOutput::WithinTimestampOrderBy { order_by: _ } => {
                 scx.require_within_timestamp_order_by_in_subscribe()?;
-                Ok(plan::SubscribeOutput::WithinTimestampOrderBy {
-                    order_by,
-                    project
-                })
+                Ok(plan::SubscribeOutput::WithinTimestampOrderBy { order_by, project })
             }
         })
         .transpose()?;

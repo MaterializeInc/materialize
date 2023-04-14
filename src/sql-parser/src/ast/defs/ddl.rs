@@ -24,7 +24,7 @@
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, UnresolvedItemName, WithOptionValue, OrderByExpr};
+use crate::ast::{AstInfo, Expr, Ident, OrderByExpr, UnresolvedItemName, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Schema {
@@ -457,17 +457,17 @@ impl_display!(Envelope);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SubscribeOutput<T: AstInfo> {
-    WithinTimestampOrderBy{ order_by: Vec<OrderByExpr<T>> },
+    WithinTimestampOrderBy { order_by: Vec<OrderByExpr<T>> },
     EnvelopeUpsert { key_columns: Vec<Ident> },
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeOutput<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::WithinTimestampOrderBy{order_by} => {
+            Self::WithinTimestampOrderBy { order_by } => {
                 f.write_str("WITHIN TIMESTAMP ORDER BY ");
                 f.write_node(&display::comma_separated(order_by));
-            },
+            }
             Self::EnvelopeUpsert { key_columns } => {
                 f.write_str("ENVELOPE UPSERT (KEY (");
                 f.write_node(&display::comma_separated(key_columns));

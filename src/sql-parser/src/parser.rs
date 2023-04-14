@@ -5661,7 +5661,9 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RParen)?;
             output
         } else if self.parse_keywords(&[WITHIN, TIMESTAMP, ORDER, BY]) {
-            Some(SubscribeOutput::WithinTimestampOrderBy { order_by: self.parse_comma_separated(Parser::parse_order_by_expr)? })
+            Some(SubscribeOutput::WithinTimestampOrderBy {
+                order_by: self.parse_comma_separated(Parser::parse_order_by_expr)?,
+            })
         } else {
             None
         };
