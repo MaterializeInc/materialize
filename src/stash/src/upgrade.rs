@@ -54,6 +54,7 @@ pub(crate) mod v29_to_v30;
 pub(crate) mod v30_to_v31;
 pub(crate) mod v31_to_v32;
 pub(crate) mod v32_to_v33;
+pub(crate) mod v33_to_v34;
 
 pub(crate) enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.
