@@ -110,7 +110,7 @@ contains: column "c" does not exist
 contains: column reference "c" is ambiguous
 
 > BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT KEY (a, b)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT (KEY (a, b))
 > FETCH 1 c
 <TIMESTAMP> 1 2
 
@@ -119,7 +119,7 @@ contains: column reference "c" is ambiguous
 > COMMIT
 
 > BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT KEY (b, a)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT (KEY (b, a))
 > FETCH 1 c
 <TIMESTAMP> 1 2
 
@@ -131,7 +131,7 @@ contains: column reference "c" is ambiguous
 > INSERT INTO t1 VALUES (1, 2), (2, 3)
 
 > BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t1) ENVELOPE UPSERT KEY (key)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t1) ENVELOPE UPSERT (KEY (key))
 > FETCH 2 c
 <TIMESTAMP> 1 2
 <TIMESTAMP> 2 3
@@ -154,7 +154,7 @@ DELETE FROM t1 WHERE key = 1
 > INSERT INTO t2 VALUES (2, 1), (3, 2)
 
 > BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t2) ENVELOPE UPSERT KEY (key)
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t2) ENVELOPE UPSERT (KEY (key))
 > FETCH 2 c
 <TIMESTAMP> 1 2
 <TIMESTAMP> 2 3

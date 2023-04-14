@@ -5653,9 +5653,13 @@ impl<'a> Parser<'a> {
         };
         let as_of = self.parse_optional_as_of()?;
         let up_to = self.parse_optional_up_to()?;
-        let output = if self.parse_keywords(&[ENVELOPE, UPSERT, KEY]) {
+        let output = if self.parse_keywords(&[ENVELOPE, UPSERT]) {
+            self.expect_token(&Token::LParen)?;
+            self.expect_keyword(KEY)?;
             let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
-            Some(SubscribeOutput::EnvelopeUpsert { key_columns })
+            let output = Some(SubscribeOutput::EnvelopeUpsert { key_columns });
+            self.expect_token(&Token::RParen)?;
+            output
         } else if self.parse_keywords(&[WITHIN, TIMESTAMP, ORDER, BY]) {
             Some(SubscribeOutput::WithinTimestampOrderBy { order_by: self.parse_comma_separated(Parser::parse_order_by_expr)? })
         } else {

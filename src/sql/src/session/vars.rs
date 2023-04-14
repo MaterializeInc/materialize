@@ -735,7 +735,7 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
 pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_envelope_upsert_in_subscribe"),
     value: &false,
-    description: "Feature flag indicating whether `ENVELOPE UPSERT` can be used in SUBSCRIBE queries (Materialize).",
+    description: "Feature flag indicating whether `ENVELOPE UPSERT` can be used in `SUBSCRIBE` queries (Materialize).",
     internal: false,
     safe: true,
 };
@@ -743,7 +743,7 @@ pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
 pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_within_timestamp_order_by_in_subscribe"),
     value: &false,
-    description: "Feature flag indicating whether `WITHIN TIMESTAMP ORDER BY` can be used in SUBSCRIBE queries (Materialize).",
+    description: "Feature flag indicating whether `WITHIN TIMESTAMP ORDER BY` can be used in `SUBSCRIBE` queries (Materialize).",
     internal: false,
     safe: true,
 };

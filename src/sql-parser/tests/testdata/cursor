@@ -25,7 +25,7 @@ DECLARE c CURSOR FOR SUBSCRIBE t
 ----
 DECLARE c CURSOR FOR SUBSCRIBE t
 =>
-Declare(DeclareStatement { name: Ident("c"), stmt: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, envelope: None }) })
+Declare(DeclareStatement { name: Ident("c"), stmt: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: None }) })
 
 parse-statement
 CLOSE c
