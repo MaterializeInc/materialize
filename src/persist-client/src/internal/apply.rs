@@ -35,6 +35,7 @@ use crate::internal::state::{
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
+use crate::internal::watch::StateWatch;
 use crate::{PersistConfig, ShardId};
 
 /// An applier of persist commands.
@@ -104,6 +105,11 @@ where
             shard_id,
             state,
         })
+    }
+
+    /// Returns a new [StateWatch] for changes to this Applier's State.
+    pub fn watch(&self) -> StateWatch<K, V, T, D> {
+        StateWatch::new(Arc::clone(&self.state), &self.metrics)
     }
 
     /// Fetches the latest state from Consensus and passes its `upper` to the provided closure.
@@ -217,7 +223,7 @@ where
             })
     }
 
-    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Result<HollowBatch<T>, SeqNo> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state.next_listen_batch(frontier)

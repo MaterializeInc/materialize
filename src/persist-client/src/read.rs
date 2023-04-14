@@ -39,6 +39,7 @@ use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, MetricsRetryStream};
 use crate::internal::state::{HollowBatch, Since};
+use crate::internal::watch::StateWatch;
 use crate::{parse_id, GarbageCollector, PersistConfig};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
@@ -230,6 +231,7 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     handle: ReadHandle<K, V, T, D>,
+    watch: StateWatch<K, V, T, D>,
 
     as_of: Antichain<T>,
     since: Antichain<T>,
@@ -250,8 +252,10 @@ where
         // isn't). Be a good citizen and downgrade early.
         handle.downgrade_since(&since).await;
 
+        let watch = handle.machine.applier.watch();
         Listen {
             handle,
+            watch,
             since,
             frontier: as_of.clone(),
             as_of,
@@ -284,7 +288,10 @@ where
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
     pub async fn next(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
-        let batch = self.handle.next_listen_batch(&self.frontier).await;
+        let batch = self
+            .handle
+            .next_listen_batch(&self.frontier, &mut self.watch)
+            .await;
 
         // A lot of things across mz have to line up to hold the following
         // invariant and violations only show up as subtle correctness errors,
@@ -881,34 +888,47 @@ where
         self.explicitly_expired = true;
     }
 
-    async fn next_listen_batch(&mut self, frontier: &Antichain<T>) -> HollowBatch<T> {
+    async fn next_listen_batch(
+        &mut self,
+        frontier: &Antichain<T>,
+        watch: &mut StateWatch<K, V, T, D>,
+    ) -> HollowBatch<T> {
         let mut retry: Option<MetricsRetryStream> = None;
         loop {
-            if let Some(b) = self.machine.next_listen_batch(frontier) {
-                return b;
-            }
+            let seqno = match self.machine.next_listen_batch(frontier) {
+                Ok(b) => return b,
+                Err(seqno) => seqno,
+            };
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.
-            retry = Some(match retry.take() {
-                None => self.metrics.retries.next_listen_batch.stream(
-                    self.cfg
-                        .dynamic
-                        .next_listen_batch_retry_params()
-                        .into_retry(SystemTime::now())
-                        .into_retry_stream(),
+            retry = match retry.take() {
+                None => Some(
+                    self.metrics.retries.next_listen_batch.stream(
+                        self.cfg
+                            .dynamic
+                            .next_listen_batch_retry_params()
+                            .into_retry(SystemTime::now())
+                            .into_retry_stream(),
+                    ),
                 ),
                 Some(retry) => {
                     // Wait a bit and try again. Intentionally don't ever log
                     // this at info level.
-                    //
-                    // TODO: See if we can watch for changes in Consensus to be
-                    // more reactive here.
                     debug!(
                         "{}: next_listen_batch didn't find new data, retrying in {:?}",
                         self.reader_id,
                         retry.next_sleep()
                     );
-                    let retry = retry.sleep().instrument(trace_span!("listen::sleep")).await;
+                    let retry = tokio::select! {
+                        retry = retry.sleep().instrument(trace_span!("listen::sleep")) => {
+                            debug!("listen {} got woken via sleep", self.machine.shard_id());
+                            Some(retry)
+                        },
+                        _ = watch.wait_for_seqno_ge(seqno.next()).instrument(trace_span!("listen::wait_for_seqno_ge")) => {
+                            debug!("listen {} got woken via watch", self.machine.shard_id());
+                            None
+                        },
+                    };
 
                     // There might be some holdup in the next batch being
                     // produced. Perhaps we've quiesced a table or maybe a
@@ -920,7 +940,7 @@ where
 
                     retry
                 }
-            });
+            };
             self.machine.applier.fetch_and_update_state(None).await;
         }
     }

@@ -1288,18 +1288,18 @@ where
         Ok(Ok(()))
     }
 
-    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Result<HollowBatch<T>, SeqNo> {
         // TODO: Avoid the O(n^2) here: `next_listen_batch` is called once per
         // batch and this iterates through all batches to find the next one.
-        let mut ret = None;
+        let mut ret = Err(self.seqno);
         self.collections.trace.map_batches(|b| {
-            if ret.is_some() {
+            if ret.is_ok() {
                 return;
             }
             if PartialOrder::less_equal(b.desc.lower(), frontier)
                 && PartialOrder::less_than(frontier, b.desc.upper())
             {
-                ret = Some(b.clone());
+                ret = Ok(b.clone());
             }
         });
         ret
@@ -1782,8 +1782,11 @@ mod tests {
 
         // Empty collection never has any batches to listen for, regardless of the
         // current frontier.
-        assert_eq!(state.next_listen_batch(&Antichain::from_elem(0)), None);
-        assert_eq!(state.next_listen_batch(&Antichain::new()), None);
+        assert_eq!(
+            state.next_listen_batch(&Antichain::from_elem(0)),
+            Err(SeqNo(0))
+        );
+        assert_eq!(state.next_listen_batch(&Antichain::new()), Err(SeqNo(0)));
 
         let writer_id = WriterId::new();
         let _ = state
@@ -1815,7 +1818,7 @@ mod tests {
         for t in 0..=4 {
             assert_eq!(
                 state.next_listen_batch(&Antichain::from_elem(t)),
-                Some(hollow(0, 5, &["key1"], 1))
+                Ok(hollow(0, 5, &["key1"], 1))
             );
         }
 
@@ -1823,16 +1826,19 @@ mod tests {
         for t in 5..=9 {
             assert_eq!(
                 state.next_listen_batch(&Antichain::from_elem(t)),
-                Some(hollow(5, 10, &["key2"], 1))
+                Ok(hollow(5, 10, &["key2"], 1))
             );
         }
 
         // There is no batch currently available for t = 10.
-        assert_eq!(state.next_listen_batch(&Antichain::from_elem(10)), None);
+        assert_eq!(
+            state.next_listen_batch(&Antichain::from_elem(10)),
+            Err(SeqNo(0))
+        );
 
         // By definition, there is no frontier ever at the empty antichain which
         // is the time after all possible times.
-        assert_eq!(state.next_listen_batch(&Antichain::new()), None);
+        assert_eq!(state.next_listen_batch(&Antichain::new()), Err(SeqNo(0)));
     }
 
     #[test]

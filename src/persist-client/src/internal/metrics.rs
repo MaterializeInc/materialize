@@ -496,6 +496,7 @@ impl MetricsVecs {
             applier_read_cacheable: self.lock_metrics("applier_read_cacheable"),
             applier_read_noncacheable: self.lock_metrics("applier_read_noncacheable"),
             applier_write: self.lock_metrics("applier_write"),
+            watch: self.lock_metrics("watch"),
         }
     }
 
@@ -1464,6 +1465,7 @@ pub struct LocksMetrics {
     pub(crate) applier_read_cacheable: LockMetrics,
     pub(crate) applier_read_noncacheable: LockMetrics,
     pub(crate) applier_write: LockMetrics,
+    pub(crate) watch: LockMetrics,
 }
 
 #[derive(Debug)]

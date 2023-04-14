@@ -153,6 +153,7 @@ mod internal {
     pub mod state_diff;
     pub mod state_versions;
     pub mod trace;
+    pub mod watch;
 
     #[cfg(test)]
     pub mod datadriven;

@@ -35,6 +35,7 @@ use crate::error::{CodecConcreteType, CodecMismatch};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus};
 use crate::internal::state::TypedState;
+use crate::internal::watch::StateWatchNotifier;
 use crate::{PersistClient, PersistConfig, PersistLocation, ShardId};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
@@ -350,7 +351,11 @@ impl StateCache {
                     let state = init_once
                         .get_or_try_init::<Box<CodecMismatch>, _, _>(|| async {
                             let init_res = init_fn().await;
-                            let state = Arc::new(LockingTypedState(RwLock::new(init_res?)));
+                            let state = Arc::new(LockingTypedState {
+                                shard_id,
+                                notifier: StateWatchNotifier::default(),
+                                state: RwLock::new(init_res?),
+                            });
                             let ret = Arc::downgrade(&state);
                             did_init = Some(state);
                             let ret: Weak<dyn DynState> = ret;
@@ -430,28 +435,44 @@ impl StateCache {
 /// A locked decorator for TypedState that abstracts out the specific lock implementation used.
 /// Guards the private lock with public accessor fns to make locking scopes more explicit and
 /// simpler to reason about.
-pub(crate) struct LockingTypedState<K, V, T, D>(RwLock<TypedState<K, V, T, D>>);
+pub(crate) struct LockingTypedState<K, V, T, D> {
+    shard_id: ShardId,
+    state: RwLock<TypedState<K, V, T, D>>,
+    notifier: StateWatchNotifier,
+}
 
 impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let LockingTypedState(state) = self;
-        f.debug_tuple("LockingTypedState").field(state).finish()
+        let LockingTypedState {
+            shard_id,
+            state,
+            notifier,
+        } = self;
+        f.debug_struct("LockingTypedState")
+            .field("shard_id", shard_id)
+            .field("state", state)
+            .field("notifier", notifier)
+            .finish()
     }
 }
 
 impl<K, V, T, D> LockingTypedState<K, V, T, D> {
+    pub(crate) fn shard_id(&self) -> &ShardId {
+        &self.shard_id
+    }
+
     pub(crate) fn read_lock<R, F: FnMut(&TypedState<K, V, T, D>) -> R>(
         &self,
         metrics: &LockMetrics,
         mut f: F,
     ) -> R {
         metrics.acquire_count.inc();
-        let state = match self.0.try_read() {
+        let state = match self.state.try_read() {
             Ok(x) => x,
             Err(TryLockError::WouldBlock) => {
                 metrics.blocking_acquire_count.inc();
                 let start = Instant::now();
-                let state = self.0.read().expect("lock poisoned");
+                let state = self.state.read().expect("lock poisoned");
                 metrics
                     .blocking_seconds
                     .inc_by(start.elapsed().as_secs_f64());
@@ -468,12 +489,12 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         f: F,
     ) -> R {
         metrics.acquire_count.inc();
-        let mut state = match self.0.try_write() {
+        let mut state = match self.state.try_write() {
             Ok(x) => x,
             Err(TryLockError::WouldBlock) => {
                 metrics.blocking_acquire_count.inc();
                 let start = Instant::now();
-                let state = self.0.write().expect("lock poisoned");
+                let state = self.state.write().expect("lock poisoned");
                 metrics
                     .blocking_seconds
                     .inc_by(start.elapsed().as_secs_f64());
@@ -481,7 +502,21 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
             }
             Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
         };
-        f(&mut state)
+        let seqno_before = state.seqno;
+        let ret = f(&mut state);
+        let seqno_after = state.seqno;
+        debug_assert!(seqno_after >= seqno_before);
+        if seqno_after > seqno_before {
+            self.notifier.notify(seqno_after);
+        }
+        // For now, make sure to notify while under lock. It's possible to move
+        // this out of the lock window, see [StateWatchNotifier::notify].
+        drop(state);
+        ret
+    }
+
+    pub(crate) fn notifier(&self) -> &StateWatchNotifier {
+        &self.notifier
     }
 }
 
@@ -585,8 +620,8 @@ mod tests {
             state1: &LockingTypedState<K, V, T, D>,
             state2: &LockingTypedState<K, V, T, D>,
         ) {
-            let pointer1 = format!("{:p}", state1.0.read().expect("lock").deref());
-            let pointer2 = format!("{:p}", state2.0.read().expect("lock").deref());
+            let pointer1 = format!("{:p}", state1.state.read().expect("lock").deref());
+            let pointer2 = format!("{:p}", state2.state.read().expect("lock").deref());
             assert_eq!(pointer1, pointer2);
         }
 
