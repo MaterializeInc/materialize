@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 itertools = { version = "0.10.5" }
-mz-ore = { path = "../ore", features = ["cli", "network", "async", "metrics"] }
+mz-ore = { path = "../ore", features = ["async", "metrics"] }
 mz-persist-types = { path = "../persist-types" }
 tokio = { version = "1.24.2", features = ["macros", "sync", "rt"] }
 thiserror = "1.0.37"

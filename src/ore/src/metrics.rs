@@ -182,6 +182,8 @@ pub type UIntGauge = GenericGauge<AtomicU64>;
 pub type CounterVec = DeleteOnDropWrapper<prometheus::CounterVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::Gauge].
 pub type Gauge = DeleteOnDropWrapper<prometheus::Gauge>;
+/// Delete-on-drop shadow of Prometheus [prometheus::CounterVec].
+pub type GaugeVec = DeleteOnDropWrapper<prometheus::GaugeVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::HistogramVec].
 pub type HistogramVec = DeleteOnDropWrapper<prometheus::HistogramVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::IntCounterVec].

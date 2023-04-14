@@ -14,8 +14,16 @@
 //! vectors to the registry once, and then generate concrete instantiations of them for the
 //! appropriate source.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, Weak};
+
 use mz_ore::metric;
-use mz_ore::metrics::{IntCounter, IntCounterVec, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{
+    DeleteOnDropHistogram, GaugeVec, HistogramVec, HistogramVecExt, IntCounter, IntCounterVec,
+    IntGaugeVec, MetricsRegistry, UIntGaugeVec,
+};
+use mz_ore::stats::histogram_seconds_buckets;
+use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, GenericCounterVec};
 
 #[derive(Clone, Debug)]
@@ -196,6 +204,130 @@ impl PostgresSourceSpecificMetrics {
     }
 }
 
+/// Metrics for the `upsert` operator.
+#[derive(Clone, Debug)]
+pub(super) struct UpsertMetrics {
+    pub(super) rehydration_latency: GaugeVec,
+    pub(super) rehydration_total: UIntGaugeVec,
+
+    // These are used by `shared`.
+    pub(super) multi_get_latency: HistogramVec,
+    pub(super) multi_get_size: HistogramVec,
+    pub(super) multi_put_latency: HistogramVec,
+    pub(super) multi_put_size: HistogramVec,
+    // This is a map so that multiple timely workers can interact with the same
+    // `DeleteOnDropHistogram`, which is only dropped once ALL workers drop it.
+    // The map may contain arbitrary, old `Weak`s for deleted sources, which are
+    // only cleaned if those sources are recreated.
+    //
+    // We don't parameterize these by `worker_id` like the `rehydration_*` ones
+    // to save on time-series cardinality.
+    pub(super) shared: Arc<Mutex<BTreeMap<GlobalId, Weak<UpsertSharedMetrics>>>>,
+}
+
+impl UpsertMetrics {
+    fn register_with(registry: &MetricsRegistry) -> Self {
+        let shared = Arc::new(Mutex::new(BTreeMap::new()));
+        Self {
+            rehydration_latency: registry.register(metric!(
+                name: "mz_storage_upsert_state_rehydration_latency",
+                help: "The latency, per-worker, in fractional seconds, \
+                    of rehydrating the upsert state for this source",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            rehydration_total: registry.register(metric!(
+                name: "mz_storage_upsert_state_rehydration_total",
+                help: "The number of values, per-worker, \
+                    rehydrated into the upsert state for this source",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            multi_get_latency: registry.register(metric!(
+                name: "mz_storage_upsert_multi_get_latency",
+                help: "The latencies, in fractional seconds, \
+                    of getting values into the upsert state for this source. \
+                    Specific implementations of upsert state may have more detailed \
+                    metrics about sub-batches.",
+                var_labels: ["source_id"],
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
+            )),
+            // Choose a relatively low number of representative buckets.
+            multi_get_size: registry.register(metric!(
+                name: "mz_storage_upsert_multi_get_size",
+                help: "The batch size, \
+                    of getting values into the upsert state for this source. \
+                    Specific implementations of upsert state may have more detailed \
+                    metrics about sub-batches.",
+                var_labels: ["source_id"],
+                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
+            )),
+            multi_put_latency: registry.register(metric!(
+                name: "mz_storage_upsert_multi_put_latency",
+                help: "The latencies, in fractional seconds, \
+                    of getting values into the upsert state for this source. \
+                    Specific implementations of upsert state may have more detailed \
+                    metrics about sub-batches.",
+                var_labels: ["source_id"],
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
+            )),
+            // Choose a relatively low number of representative buckets.
+            multi_put_size: registry.register(metric!(
+                name: "mz_storage_upsert_multi_put_size",
+                help: "The batch size, \
+                    of getting values into the upsert state for this source. \
+                    Specific implementations of upsert state may have more detailed \
+                    metrics about sub-batches.",
+                var_labels: ["source_id"],
+                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
+            )),
+            shared,
+        }
+    }
+
+    pub(super) fn shared(&self, source_id: &GlobalId) -> Arc<UpsertSharedMetrics> {
+        let mut shared = self.shared.lock().expect("mutex poisoned");
+        if let Some(shared_metrics) = shared.get(source_id) {
+            if let Some(shared_metrics) = shared_metrics.upgrade() {
+                return Arc::clone(&shared_metrics);
+            } else {
+                assert!(shared.remove(source_id).is_some());
+            }
+        }
+        let shared_metrics = Arc::new(UpsertSharedMetrics::new(source_id, self));
+        assert!(shared
+            .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
+            .is_none());
+        shared_metrics
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct UpsertSharedMetrics {
+    pub(crate) multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub(crate) multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub(crate) multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub(crate) multi_put_size: DeleteOnDropHistogram<'static, Vec<String>>,
+}
+
+impl UpsertSharedMetrics {
+    fn new(source_id: &GlobalId, metrics: &UpsertMetrics) -> Self {
+        let source_id = source_id.to_string();
+        UpsertSharedMetrics {
+            multi_get_latency: metrics
+                .multi_get_latency
+                .get_delete_on_drop_histogram(vec![source_id.clone()]),
+            multi_get_size: metrics
+                .multi_get_size
+                .get_delete_on_drop_histogram(vec![source_id.clone()]),
+            multi_put_latency: metrics
+                .multi_put_latency
+                .get_delete_on_drop_histogram(vec![source_id.clone()]),
+            multi_put_size: metrics
+                .multi_put_size
+                .get_delete_on_drop_histogram(vec![source_id]),
+        }
+    }
+}
+
 /// A set of base metrics that hang off a central metrics registry, labeled by the source they
 /// belong to.
 #[derive(Debug, Clone)]
@@ -203,6 +335,8 @@ pub struct SourceBaseMetrics {
     pub(super) source_specific: SourceSpecificMetrics,
     pub(super) partition_specific: PartitionSpecificMetrics,
     pub(super) postgres_source_specific: PostgresSourceSpecificMetrics,
+
+    pub(super) upsert_specific: UpsertMetrics,
 
     pub(crate) bytes_read: IntCounter,
 
@@ -217,6 +351,8 @@ impl SourceBaseMetrics {
             source_specific: SourceSpecificMetrics::register_with(registry),
             partition_specific: PartitionSpecificMetrics::register_with(registry),
             postgres_source_specific: PostgresSourceSpecificMetrics::register_with(registry),
+
+            upsert_specific: UpsertMetrics::register_with(registry),
 
             bytes_read: registry.register(metric!(
                 name: "mz_bytes_read_total",
