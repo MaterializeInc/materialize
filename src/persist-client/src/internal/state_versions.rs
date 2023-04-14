@@ -160,19 +160,21 @@ impl StateVersions {
 
         // Shard is not initialized, try initializing it.
         let (initial_state, initial_diff) = self.write_initial_rollup(shard_metrics).await;
-        let cas_res = retry_external(&self.metrics.retries.external.maybe_init_cas, || async {
-            self.try_compare_and_set_current(
-                "maybe_init_shard",
-                shard_metrics,
-                None,
-                &initial_state,
-                &initial_diff,
-            )
-            .await
-            .map_err(|err| err.into())
-        })
-        .await;
+        let (cas_res, _diff) =
+            retry_external(&self.metrics.retries.external.maybe_init_cas, || async {
+                self.try_compare_and_set_current(
+                    "maybe_init_shard",
+                    shard_metrics,
+                    None,
+                    &initial_state,
+                    &initial_diff,
+                )
+                .await
+                .map_err(|err| err.into())
+            })
+            .await;
         match cas_res {
+            // WIP push initial diff too?
             CaSResult::Committed => Ok(initial_state),
             CaSResult::ExpectationMismatch => {
                 let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&shard_id).await;
@@ -219,7 +221,7 @@ impl StateVersions {
         expected: Option<SeqNo>,
         new_state: &TypedState<K, V, T, D>,
         diff: &StateDiff<T>,
-    ) -> Result<CaSResult, Indeterminate>
+    ) -> Result<(CaSResult, VersionedData), Indeterminate>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -294,7 +296,7 @@ impl StateVersions {
                 shard_metrics
                     .encoded_diff_size
                     .inc_by(u64::cast_from(payload_len));
-                Ok(CaSResult::Committed)
+                Ok((CaSResult::Committed, new))
             }
             CaSResult::ExpectationMismatch => {
                 debug!(
@@ -303,7 +305,7 @@ impl StateVersions {
                     cmd_name,
                     expected,
                 );
-                Ok(CaSResult::ExpectationMismatch)
+                Ok((CaSResult::ExpectationMismatch, new))
             }
         }
     }

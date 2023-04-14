@@ -1503,7 +1503,7 @@ pub struct LocksMetrics {
     pub(crate) watch: LockMetrics,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LockMetrics {
     pub(crate) acquire_count: IntCounter,
     pub(crate) blocking_acquire_count: IntCounter,

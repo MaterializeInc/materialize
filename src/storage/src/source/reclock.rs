@@ -637,7 +637,11 @@ mod tests {
     static PERSIST_CACHE: Lazy<Arc<PersistClientCache>> = Lazy::new(|| {
         let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
-        Arc::new(PersistClientCache::new(persistcfg, &MetricsRegistry::new()))
+        Arc::new(PersistClientCache::new(
+            persistcfg,
+            &MetricsRegistry::new(),
+            None,
+        ))
     });
 
     static PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {

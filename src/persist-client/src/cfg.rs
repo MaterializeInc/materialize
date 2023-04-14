@@ -177,7 +177,6 @@ impl PersistConfig {
     }
 
     /// Returns a new instance of [PersistConfig] for tests.
-    #[cfg(test)]
     pub fn new_for_tests() -> Self {
         use mz_build_info::DUMMY_BUILD_INFO;
         use mz_ore::now::SYSTEM_TIME;

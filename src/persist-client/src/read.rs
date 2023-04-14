@@ -1416,7 +1416,8 @@ mod tests {
             consensus,
             metrics,
             Arc::new(CpuHeavyRuntime::new()),
-            Arc::new(StateCache::new_no_metrics()),
+            StateCache::new_no_metrics(),
+            None,
         )
         .expect("client construction failed")
         .expect_open::<String, String, u64, i64>(ShardId::new())

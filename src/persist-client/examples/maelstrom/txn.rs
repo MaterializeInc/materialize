@@ -672,7 +672,7 @@ impl Service for TransactorService {
 
         // Wire up the TransactorService.
         let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-        let shared_states = Arc::new(StateCache::new(Arc::clone(&metrics)));
+        let shared_states = StateCache::new(&config, Arc::clone(&metrics), None);
         let client = PersistClient::new(
             config,
             blob,
@@ -680,6 +680,7 @@ impl Service for TransactorService {
             metrics,
             cpu_heavy_runtime,
             shared_states,
+            None,
         )?;
         let transactor = Transactor::new(&client, handle.node_id(), shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));

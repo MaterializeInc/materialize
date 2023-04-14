@@ -132,6 +132,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let persist = PersistClientCache::new(
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
+        None,
     )
     .open(location)
     .await?;

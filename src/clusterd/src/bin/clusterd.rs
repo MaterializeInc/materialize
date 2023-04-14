@@ -81,6 +81,7 @@ use anyhow::Context;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
+use mz_persist_client::rpc::{PersistPubSub, PersistPubSubClient};
 use once_cell::sync::Lazy;
 use tracing::info;
 
@@ -139,6 +140,14 @@ struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
+    /// WIP
+    #[clap(
+        long,
+        env = "PERSIST_PUBSUB_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "127.0.0.1:6879"
+    )]
+    persist_pubsub_addr: String,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -263,9 +272,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
     });
 
+    info!("WIP persist_pubsub_addr {}", args.persist_pubsub_addr);
+    let pubsub_caller_id = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| args.tracing.log_prefix.clone())
+        .unwrap_or_default();
+    // WIP: try to connect, but pass in None if it fails
+    let pubsub = PersistPubSubClient::connect(args.persist_pubsub_addr, pubsub_caller_id).await?;
     let persist_clients = Arc::new(PersistClientCache::new(
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
+        Some(pubsub),
     ));
 
     // Start storage server.

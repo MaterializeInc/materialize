@@ -435,7 +435,12 @@ async fn make_machine(
         shard_id,
         Arc::clone(&metrics),
         state_versions,
+<<<<<<< HEAD
         &StateCache::new(metrics),
+=======
+        &StateCache::new(&cfg, metrics, None),
+        None,
+>>>>>>> cc72cf33f8 (persist: wip pubsub)
     )
     .await?;
 

@@ -156,6 +156,8 @@ pub struct ControllerConfig {
     pub metrics_registry: MetricsRegistry,
     /// The directory of instance storage.
     pub scratch_directory: Option<PathBuf>,
+    /// The URL for Persist PubSub.
+    pub persist_pubsub_addr: String,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -236,6 +238,8 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
     /// Additional context to pass through to cluster instances.
     pub instance_context: StorageInstanceContext,
+    /// WIP
+    persist_pubsub_addr: String,
 }
 
 impl<T> Controller<T> {
@@ -376,7 +380,7 @@ where
             metrics_tasks: BTreeMap::new(),
             metrics_tx,
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
-            instance_context,
+            persist_pubsub_addr: config.persist_pubsub_addr,
         }
     }
 }

@@ -203,8 +203,11 @@ where
                 blob_uri: "mem://".to_string(),
                 consensus_uri: "mem://".to_string(),
             };
-            let persist_cache =
-                mz_persist_client::cache::PersistClientCache::new(persistcfg, &metrics_registry);
+            let persist_cache = mz_persist_client::cache::PersistClientCache::new(
+                persistcfg,
+                &metrics_registry,
+                None,
+            );
 
             // create a client for use with the `until` closure later.
             let persist_client = tokio_runtime

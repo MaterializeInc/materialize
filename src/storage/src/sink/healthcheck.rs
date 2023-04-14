@@ -467,6 +467,7 @@ mod tests {
         Arc::new(PersistClientCache::new(
             PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
+            None,
         ))
     }
 

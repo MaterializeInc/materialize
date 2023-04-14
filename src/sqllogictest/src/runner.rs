@@ -880,6 +880,7 @@ impl RunnerInner {
         let persist_clients = PersistClientCache::new(
             PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
             &metrics_registry,
+            None,
         );
         let persist_clients = Arc::new(persist_clients);
         let postgres_factory = StashFactory::new(&metrics_registry);
@@ -901,7 +902,7 @@ impl RunnerInner {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
-                scratch_directory: None,
+                persist_pubsub_addr: "http://localhost:6879".into(),
             },
             secrets_controller,
             cloud_resource_controller: None,
@@ -909,7 +910,7 @@ impl RunnerInner {
             // allocate an available port.
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            // internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
