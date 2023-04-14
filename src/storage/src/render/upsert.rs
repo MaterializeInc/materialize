@@ -10,13 +10,18 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Reverse;
+use std::convert::AsRef;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Instant;
 
 use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
@@ -24,13 +29,28 @@ use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
-use mz_ore::collections::{CollectionExt, HashMap};
+use crate::source::types::UpsertMetrics;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+
+use self::types::{InMemoryHashMap, StatsState, UpsertState};
+
+mod rocksdb;
+mod types;
+
+pub type UpsertValue = Result<Row, UpsertError>;
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct UpsertKey([u8; 32]);
+
+impl AsRef<[u8]> for UpsertKey {
+    #[inline(always)]
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 thread_local! {
     /// A thread-local datum cache used to calculate hashes
@@ -106,11 +126,12 @@ impl<H: Digest> Hasher for DigestHasher<H> {
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
 pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
-    input: &Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, O), Diff>,
+    input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
     mut key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,
+    source_config: crate::source::RawSourceCreationConfig,
 ) -> Collection<G, Result<Row, DataflowError>, Diff>
 where
     G::Timestamp: TotalOrder,
@@ -143,6 +164,12 @@ where
     );
     let (mut output_handle, output) = builder.new_output();
 
+    let upsert_metrics = UpsertMetrics::new(
+        &source_config.base_metrics,
+        source_config.id,
+        source_config.worker_id,
+    );
+    let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     builder.build(move |caps| async move {
         let mut output_cap = caps.into_element();
 
@@ -175,17 +202,39 @@ where
         consolidation::consolidate(&mut snapshot);
 
         // The main key->value used to store previous values.
-        let mut state = HashMap::new();
+        let mut state = StatsState::new(InMemoryHashMap::default(), upsert_shared_metrics);
 
-        // A re-usable buffer of changes, per key. This is a `std`
-        // `HashMap` so we can use `HashMap::drain` below.
-        #[allow(clippy::disallowed_types)]
-        let mut commands_state = std::collections::HashMap::new();
+        // A re-usable buffer of changes, per key. This is
+        // an `IndexMap` because it has to be `drain`-able
+        // and have a consistent iteration order.
+        let mut commands_state = indexmap::IndexMap::new();
+        let mut multi_get_scratch = Vec::new();
 
-        for ((key, value), diff) in snapshot {
+        // Rehydrate the upsert state (and bump some stats), even if the snapshot is empty.
+        let snapshot = snapshot.into_iter().map(|((key, value), diff)| {
             assert_eq!(diff, 1, "invalid upsert state");
-            state.insert(key, value);
-        }
+            (
+                key,
+                // Temporarily drop into a `SourceData` to obtain a `Codec`
+                // impl. This will allocate on errors, which should be rare.
+                Some(SourceData(
+                    value.map_err(|e| DataflowError::from(EnvelopeError::Upsert(e))),
+                )),
+            )
+        });
+
+        let now = Instant::now();
+        let snapshot_size = snapshot.len();
+        state
+            .multi_put(snapshot)
+            .await
+            .expect("hashmap impl to not error");
+        upsert_metrics
+            .rehydration_latency
+            .set(now.elapsed().as_secs_f64());
+        upsert_metrics
+            .rehydration_total
+            .set(u64::cast_from(snapshot_size));
 
         // Now can can resume consuming the collection
         let mut stash = vec![];
@@ -213,10 +262,20 @@ where
                     // along with the value with the _latest timestamp for that key_.
                     commands_state.clear();
                     for (_, key, _, _) in stash.iter().take(idx) {
-                        commands_state
-                            .entry(*key)
-                            .or_insert_with(|| state.get(key).cloned());
+                        commands_state.entry(*key).or_insert(None);
                     }
+
+                    // These iterators iterate in the same order because `commands_state`
+                    // is an `IndexMap`.
+                    multi_get_scratch.clear();
+                    multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
+                    state
+                        .multi_get(
+                            multi_get_scratch.drain(..),
+                            commands_state.iter_mut().map(|(_, v)| v),
+                        )
+                        .await
+                        .expect("hashmap impl to not fail");
 
                     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
                     // order to only process the command with the maximum order within the (ts,
@@ -234,6 +293,13 @@ where
                             .expect("key missing from commands_state");
                         match value {
                             Some(value) => {
+                                // Temporarily drop into a `SourceData` to obtain a `Codec`
+                                // impl. This will allocate on errors, which should be rare.
+                                let value =
+                                    SourceData(value.map_err(|e| {
+                                        DataflowError::from(EnvelopeError::Upsert(e))
+                                    }));
+
                                 if let Some(old_value) = command_state.replace(value.clone()) {
                                     output_updates.push((old_value, ts.clone(), -1));
                                 }
@@ -248,16 +314,10 @@ where
                     }
 
                     // Record the changes in `state`.
-                    for (key, command_state) in commands_state.drain() {
-                        match command_state {
-                            Some(value) => {
-                                state.insert(key, value);
-                            }
-                            None => {
-                                state.remove(&key);
-                            }
-                        }
-                    }
+                    state
+                        .multi_put(commands_state.drain(..))
+                        .await
+                        .expect("hashmap impl to not fail");
 
                     // Emit the _consolidated_ changes to the output.
                     output_handle
@@ -272,8 +332,5 @@ where
         }
     });
 
-    output.as_collection().map(|result| match result {
-        Ok(ok) => Ok(ok),
-        Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
-    })
+    output.as_collection().map(|result| result.0)
 }

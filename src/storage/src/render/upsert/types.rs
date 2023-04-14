@@ -1,0 +1,140 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use itertools::Itertools;
+
+use mz_ore::cast::CastLossy;
+use mz_ore::collections::HashMap;
+use mz_storage_client::types::sources::SourceData;
+
+use super::UpsertKey;
+use crate::source::metrics::UpsertSharedMetrics;
+
+/// A trait that defines the fundamental primitives required by a state-backing of
+/// the `upsert` operator.
+#[async_trait::async_trait(?Send)]
+pub trait UpsertState {
+    /// Insert or delete for all `puts` keys, prioritizing the last value for
+    /// repeated keys.
+    ///
+    /// Returns the size of the `puts`.
+    async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, Option<SourceData>)>;
+
+    /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
+    ///
+    /// Returns the size of the `gets`.
+    ///
+    /// Panics if `gets` and `results_out` are not the same length.
+    async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, anyhow::Error>
+    where
+        G: IntoIterator<Item = UpsertKey>,
+        R: IntoIterator<Item = &'r mut Option<SourceData>>;
+}
+
+/// A `HashMap` with an extra scratch vector used to
+pub struct InMemoryHashMap {
+    state: HashMap<UpsertKey, SourceData>,
+}
+
+impl Default for InMemoryHashMap {
+    fn default() -> Self {
+        Self {
+            state: HashMap::new(),
+        }
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl UpsertState for InMemoryHashMap {
+    async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, Option<SourceData>)>,
+    {
+        let mut size = 0;
+        for (key, value) in puts {
+            match value {
+                Some(value) => {
+                    self.state.insert(key, value);
+                }
+                None => {
+                    self.state.remove(&key);
+                }
+            }
+            size += 1;
+        }
+        Ok(size)
+    }
+
+    async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, anyhow::Error>
+    where
+        G: IntoIterator<Item = UpsertKey>,
+        R: IntoIterator<Item = &'r mut Option<SourceData>>,
+    {
+        let mut size = 0;
+        for (key, result_out) in gets.into_iter().zip_eq(results_out) {
+            *result_out = self.state.get(&key).cloned();
+            size += 1;
+        }
+        Ok(size)
+    }
+}
+
+/// An `UpsertState` wrapper that reports basic metrics about the usage of the `UpsertState`.
+pub struct StatsState<S> {
+    inner: S,
+    metrics: Arc<UpsertSharedMetrics>,
+}
+
+impl<S> StatsState<S> {
+    pub(crate) fn new(inner: S, metrics: Arc<UpsertSharedMetrics>) -> Self {
+        Self { inner, metrics }
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl<S> UpsertState for StatsState<S>
+where
+    S: UpsertState,
+{
+    async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, Option<SourceData>)>,
+    {
+        let now = Instant::now();
+        let size = self.inner.multi_put(puts).await?;
+
+        self.metrics
+            .multi_put_latency
+            .observe(now.elapsed().as_secs_f64());
+        self.metrics.multi_put_size.observe(f64::cast_lossy(size));
+
+        Ok(size)
+    }
+
+    async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, anyhow::Error>
+    where
+        G: IntoIterator<Item = UpsertKey>,
+        R: IntoIterator<Item = &'r mut Option<SourceData>>,
+    {
+        let now = Instant::now();
+        let size = self.inner.multi_get(gets, results_out).await?;
+
+        self.metrics
+            .multi_get_latency
+            .observe(now.elapsed().as_secs_f64());
+        self.metrics.multi_get_size.observe(f64::cast_lossy(size));
+
+        Ok(size)
+    }
+}
