@@ -426,34 +426,10 @@ impl MirRelationExpr {
             }
             Filter { predicates, .. } => {
                 let mut result = input_types.next().unwrap().clone();
-                // Augment non-nullability of columns, by observing either
-                // 1. Predicates that explicitly test for null values, and
-                // 2. Columns that if null would make a predicate be null.
-                let mut nonnull_required_columns = BTreeSet::new();
-                for predicate in predicates {
-                    // Add any columns that being null would force the predicate to be null.
-                    // Should that happen, the row would be discarded.
-                    predicate.non_null_requirements(&mut nonnull_required_columns);
-                    // Test for explicit checks that a column is non-null.
-                    if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not(scalar_func::Not),
-                        expr,
-                    } = predicate
-                    {
-                        if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull(scalar_func::IsNull),
-                            expr,
-                        } = &**expr
-                        {
-                            if let MirScalarExpr::Column(c) = &**expr {
-                                result[*c].nullable = false;
-                            }
-                        }
-                    }
-                }
+
                 // Set as nonnull any columns where null values would cause
                 // any predicate to evaluate to null.
-                for column in nonnull_required_columns.into_iter() {
+                for column in non_nullable_columns(predicates) {
                     result[column].nullable = false;
                 }
                 result
@@ -1915,6 +1891,57 @@ impl MirRelationExpr {
             }
         }
     }
+}
+
+/// Augment non-nullability of columns, by observing either
+/// 1. Predicates that explicitly test for null values, and
+/// 2. Columns that if null would make a predicate be null.
+pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
+    let mut nonnull_required_columns = BTreeSet::new();
+    for predicate in predicates {
+        // Add any columns that being null would force the predicate to be null.
+        // Should that happen, the row would be discarded.
+        predicate.non_null_requirements(&mut nonnull_required_columns);
+
+        /*
+        Test for explicit checks that a column is non-null.
+
+        This analysis is ad hoc, and will miss things:
+
+        materialize=> create table a(x int, y int);
+        CREATE TABLE
+        materialize=> explain with(types) select x from a where (y=x and y is not null) or x is not null;
+        Optimized Plan
+        --------------------------------------------------------------------------------------------------------
+        Explained Query:                                                                                      +
+        Project (#0) // { types: "(integer?)" }                                                             +
+        Filter ((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))) // { types: "(integer?, integer?)" }+
+        Get materialize.public.a // { types: "(integer?, integer?)" }                                   +
+                                                                                  +
+        Source materialize.public.a                                                                           +
+        filter=(((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))))                                     +
+
+        (1 row)
+        */
+
+        if let MirScalarExpr::CallUnary {
+            func: UnaryFunc::Not(scalar_func::Not),
+            expr,
+        } = predicate
+        {
+            if let MirScalarExpr::CallUnary {
+                func: UnaryFunc::IsNull(scalar_func::IsNull),
+                expr,
+            } = &**expr
+            {
+                if let MirScalarExpr::Column(c) = &**expr {
+                    nonnull_required_columns.insert(*c);
+                }
+            }
+        }
+    }
+
+    nonnull_required_columns
 }
 
 impl CollectionPlan for MirRelationExpr {

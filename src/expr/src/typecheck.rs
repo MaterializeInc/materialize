@@ -14,11 +14,11 @@ use mz_repr::{
     explain::{DummyHumanizer, ExprHumanizer},
     ColumnType, RelationType, Row, ScalarType,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::{
-    func as scalar_func, AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId,
-    MirRelationExpr, MirScalarExpr, UnaryFunc,
+    relation::non_nullable_columns, AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId,
+    MirRelationExpr, MirScalarExpr,
 };
 
 /// The possible forms of inconsistency/errors discovered during typechecking.
@@ -80,16 +80,16 @@ pub enum TypeError<'a> {
 
 pub type Context = BTreeMap<Id, Vec<ColumnType>>;
 
-/// Returns true when it is safe to treat a `got` row as an `expected` row
+/// Returns true when it is safe to treat a `sub` row as an `sup` row
 ///
-/// In particular, the core types must be equal, and if a column in `known` is nullable, that column should also be nullable in `got`
-/// Conversely, it is okay to treat a known non-nullable column as nullable: `got` may be nullable when `known` is not
-pub fn is_subtype_of(got: &[ColumnType], known: &[ColumnType]) -> bool {
-    if got.len() != known.len() {
+/// In particular, the core types must be equal, and if a column in `sup` is nullable, that column should also be nullable in `sub`
+/// Conversely, it is okay to treat a known non-nullable column as nullable: `sub` may be nullable when `sup` is not
+pub fn is_subtype_of(sub: &[ColumnType], sup: &[ColumnType]) -> bool {
+    if sub.len() != sup.len() {
         return false;
     }
 
-    got.iter().zip_eq(known.iter()).all(|(got, known)| {
+    sub.iter().zip_eq(sup.iter()).all(|(got, known)| {
         (!known.nullable || got.nullable) && got.scalar_type.base_eq(&known.scalar_type)
     })
 }
@@ -151,7 +151,7 @@ impl MirRelationExpr {
                     typ: typ.clone(),
                 })?;
 
-                // the ascribed type must be a subtype of the actual type in the context
+                // covariant: the ascribed type must be a subtype of the actual type in the context
                 if !is_subtype_of(&typ.column_types, ctx_typ) {
                     return Err(TypeError::MismatchColumns {
                         source: self,
@@ -205,53 +205,9 @@ impl MirRelationExpr {
             Filter { input, predicates } => {
                 let mut t_in = input.typecheck(ctx)?;
 
-                /*
-                col_with_input_cols does a analysis to determine which columns will never be null when the predicate is passed
-
-                but the analysis is ad hoc, and will miss things:
-
-                materialize=> create table a(x int, y int);
-                CREATE TABLE
-                materialize=> explain with(types) select x from a where (y=x and y is not null) or x is not null;
-                Optimized Plan
-                --------------------------------------------------------------------------------------------------------
-                Explained Query:                                                                                      +
-                Project (#0) // { types: "(integer?)" }                                                             +
-                Filter ((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))) // { types: "(integer?, integer?)" }+
-                Get materialize.public.a // { types: "(integer?, integer?)" }                                   +
-                                                                                          +
-                Source materialize.public.a                                                                           +
-                filter=(((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))))                                     +
-
-                (1 row)
-                */
-
-                // stolen from `col_with_input_cols`
-                let mut nonnull_required_columns = BTreeSet::new();
-                for predicate in predicates {
-                    // Add any columns that being null would force the predicate to be null.
-                    // Should that happen, the row would be discarded.
-                    predicate.non_null_requirements(&mut nonnull_required_columns);
-                    // Test for explicit checks that a column is non-null.
-                    if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not(scalar_func::Not),
-                        expr,
-                    } = predicate
-                    {
-                        if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull(scalar_func::IsNull),
-                            expr,
-                        } = &**expr
-                        {
-                            if let MirScalarExpr::Column(c) = &**expr {
-                                t_in[*c].nullable = false;
-                            }
-                        }
-                    }
-                }
                 // Set as nonnull any columns where null values would cause
                 // any predicate to evaluate to null.
-                for column in nonnull_required_columns.into_iter() {
+                for column in non_nullable_columns(predicates) {
                     t_in[column].nullable = false;
                 }
 
@@ -377,6 +333,7 @@ impl MirRelationExpr {
                 limit: _,
                 offset: _,
                 monotonic: _,
+                expected_group_size: _,
             } => {
                 let t_in = input.typecheck(ctx)?;
 

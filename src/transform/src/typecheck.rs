@@ -97,12 +97,13 @@ impl crate::Transform for Typecheck {
         let humanizer = mz_repr::explain::DummyHumanizer;
         match (got, expected) {
             (Ok(got), Some(expected)) => {
-                if !is_subtype_of(&got, expected) {
+                // contravariant: global types can be updated
+                if !is_subtype_of(expected, &got) {
                     let got = columns_pretty(&got, &humanizer);
                     let expected = columns_pretty(expected, &humanizer);
 
                     return Err(TransformError::Internal(format!(
-                        "TYPE ERROR: got {got} expected {expected} \nIN KNOWN QUERY BOUND TO {id}:\n{}",
+                        "TYPE ERROR: GLOBAL ID TYPE CHANGED\ngot {got} expected {expected} \nIN KNOWN QUERY BOUND TO {id}:\n{}",
                         plan.pretty()
                     )));
                 }
