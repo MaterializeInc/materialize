@@ -35,9 +35,8 @@ use mz_repr::{DatumVec, Diff, Row};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 
-use crate::render::context::CollectionBundle;
-use crate::render::context::Context;
-use crate::render::MaybeValidatingRow;
+use crate::render::context::{CollectionBundle, Context};
+use crate::render::errors::MaybeValidatingRow;
 use crate::typedefs::{RowKeySpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.

@@ -40,8 +40,9 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::reduce::ReduceExt;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context, KeyArrangement};
+use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::ReductionMonoid;
-use crate::render::{ArrangementFlavor, MaybeValidatingRow};
+use crate::render::ArrangementFlavor;
 use crate::typedefs::{ErrValSpine, RowKeySpine, RowSpine};
 
 /// Render a dataflow based on the provided plan.
