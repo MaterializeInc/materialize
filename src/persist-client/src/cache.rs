@@ -267,7 +267,7 @@ trait DynState: Debug + Send + Sync {
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
-impl<K, V, T, D> DynState for RwLock<TypedState<K, V, T, D>>
+impl<K, V, T, D> DynState for LockingTypedState<K, V, T, D>
 where
     K: Codec,
     V: Codec,
@@ -280,9 +280,7 @@ where
             V::codec_name(),
             T::codec_name(),
             D::codec_name(),
-            Some(CodecConcreteType(std::any::type_name::<
-                TypedState<K, V, T, D>,
-            >())),
+            Some(CodecConcreteType(std::any::type_name::<(K, V, T, D)>())),
         )
     }
 
@@ -317,7 +315,7 @@ impl StateCache {
         &self,
         shard_id: ShardId,
         mut init_fn: InitFn,
-    ) -> Result<LockingTypedState<K, V, T, D>, Box<CodecMismatch>>
+    ) -> Result<Arc<LockingTypedState<K, V, T, D>>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -348,11 +346,11 @@ impl StateCache {
             let state = match init {
                 StateCacheInit::Init(x) => x,
                 StateCacheInit::NeedInit(init_once) => {
-                    let mut did_init: Option<Arc<RwLock<TypedState<K, V, T, D>>>> = None;
+                    let mut did_init: Option<Arc<LockingTypedState<K, V, T, D>>> = None;
                     let state = init_once
                         .get_or_try_init::<Box<CodecMismatch>, _, _>(|| async {
                             let init_res = init_fn().await;
-                            let state = Arc::new(RwLock::new(init_res?));
+                            let state = Arc::new(LockingTypedState(RwLock::new(init_res?)));
                             let ret = Arc::downgrade(&state);
                             did_init = Some(state);
                             let ret: Weak<dyn DynState> = ret;
@@ -362,7 +360,7 @@ impl StateCache {
                     if let Some(x) = did_init {
                         // We actually did the init work, don't bother casting back
                         // the type erased and weak version.
-                        return Ok(LockingTypedState(x));
+                        return Ok(x);
                     }
                     let Some(state) = state.upgrade() else {
                         // Race condition. Between when we first checked the
@@ -379,9 +377,9 @@ impl StateCache {
 
             match Arc::clone(&state)
                 .as_any()
-                .downcast::<RwLock<TypedState<K, V, T, D>>>()
+                .downcast::<LockingTypedState<K, V, T, D>>()
             {
-                Ok(x) => return Ok(LockingTypedState(x)),
+                Ok(x) => return Ok(x),
                 Err(_) => {
                     return Err(Box::new(CodecMismatch {
                         requested: (
@@ -389,9 +387,7 @@ impl StateCache {
                             V::codec_name(),
                             T::codec_name(),
                             D::codec_name(),
-                            Some(CodecConcreteType(std::any::type_name::<
-                                TypedState<K, V, T, D>,
-                            >())),
+                            Some(CodecConcreteType(std::any::type_name::<(K, V, T, D)>())),
                         ),
                         actual: state.codecs(),
                     }))
@@ -434,12 +430,12 @@ impl StateCache {
 /// A locked decorator for TypedState that abstracts out the specific lock implementation used.
 /// Guards the private lock with public accessor fns to make locking scopes more explicit and
 /// simpler to reason about.
-#[derive(Debug)]
-pub(crate) struct LockingTypedState<K, V, T, D>(Arc<RwLock<TypedState<K, V, T, D>>>);
+pub(crate) struct LockingTypedState<K, V, T, D>(RwLock<TypedState<K, V, T, D>>);
 
-impl<K, V, T, D> Clone for LockingTypedState<K, V, T, D> {
-    fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let LockingTypedState(state) = self;
+        f.debug_tuple("LockingTypedState").field(state).finish()
     }
 }
 
@@ -670,7 +666,7 @@ mod tests {
         assert_eq!(did_work.load(Ordering::SeqCst), false);
         assert_eq!(
             format!("{}", res.expect_err("types shouldn't match")),
-            "requested codecs (\"String\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"mz_persist_client::internal::state::TypedState<alloc::string::String, (), u64, i64>\"))) did not match ones in durable storage (\"()\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"mz_persist_client::internal::state::TypedState<(), (), u64, i64>\")))"
+            "requested codecs (\"String\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"(alloc::string::String, (), u64, i64)\"))) did not match ones in durable storage (\"()\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"((), (), u64, i64)\")))"
         );
         assert_eq!(states.initialized_count().await, 1);
         assert_eq!(states.strong_count().await, 1);
