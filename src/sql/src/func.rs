@@ -2374,6 +2374,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "to_timestamp" => Scalar {
             params!(Float64) => UnaryFunc::ToTimestamp(func::ToTimestamp) => TimestampTz, 1158;
         },
+        "translate" => Scalar {
+            params!(String, String, String) => VariadicFunc::Translate => String, 878;
+        },
         "trunc" => Scalar {
             params!(Float32) => UnaryFunc::TruncFloat32(func::TruncFloat32) => Float32, oid::FUNC_TRUNC_F32_OID;
             params!(Float64) => UnaryFunc::TruncFloat64(func::TruncFloat64) => Float64, 1343;
