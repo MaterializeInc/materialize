@@ -15,7 +15,6 @@ use mz_repr::{
     ColumnType, RelationType, Row, ScalarType,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use tracing::warn;
 
 use crate::{
     func as scalar_func, AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId,
@@ -73,6 +72,10 @@ pub enum TypeError<'a> {
     BadLetRecBindings {
         source: &'a MirRelationExpr,
     },
+    Shadowing {
+        source: &'a MirRelationExpr,
+        id: Id,
+    },
 }
 
 pub type Context = BTreeMap<Id, Vec<ColumnType>>;
@@ -89,27 +92,6 @@ pub fn is_subtype_of(got: &[ColumnType], known: &[ColumnType]) -> bool {
     got.iter().zip_eq(known.iter()).all(|(got, known)| {
         (!known.nullable || got.nullable) && got.scalar_type.base_eq(&known.scalar_type)
     })
-}
-
-pub fn columns_pretty(cols: &[ColumnType]) -> String {
-    let mut s = String::with_capacity(2 + 3 * cols.len());
-
-    s.push('(');
-
-    let humanizer = DummyHumanizer;
-
-    let mut it = cols.iter().peekable();
-    while let Some(col) = it.next() {
-        s.push_str(&humanizer.humanize_column_type(col));
-
-        if it.peek().is_some() {
-            s.push_str(", ");
-        }
-    }
-
-    s.push(')');
-
-    s
 }
 
 impl MirRelationExpr {
@@ -457,6 +439,14 @@ impl MirRelationExpr {
             Let { id, value, body } => {
                 let t_value = value.typecheck(ctx)?;
 
+                let binding = Id::Local(*id);
+                if ctx.contains_key(&binding) {
+                    return Err(TypeError::Shadowing {
+                        source: self,
+                        id: binding,
+                    });
+                }
+
                 let mut body_ctx = ctx.clone();
                 body_ctx.insert(Id::Local(*id), t_value);
 
@@ -559,8 +549,10 @@ impl MirRelationExpr {
 
                 // we've shadowed the id
                 if ids.contains(id) {
-                    warn!("id {id} shadowed in {}", self.pretty());
-                    return Ok(());
+                    return Err(TypeError::Shadowing {
+                        source: self,
+                        id: Id::Local(*id),
+                    });
                 }
 
                 body.collect_recursive_variable_types(ids, ctx)?;
@@ -572,7 +564,10 @@ impl MirRelationExpr {
             } => {
                 for inner_id in inner_ids {
                     if ids.contains(inner_id) {
-                        warn!("let recs shadowing other let recs (inner id {inner_id} appears in outer ids {ids:?}");
+                        return Err(TypeError::Shadowing {
+                            source: self,
+                            id: Id::Local(*inner_id),
+                        });
                     }
                 }
 
@@ -706,28 +701,31 @@ impl AggregateExpr {
 
 impl<'a> TypeError<'a> {
     pub fn source(&self) -> &'a MirRelationExpr {
+        use TypeError::*;
         match self {
-            TypeError::Unbound { source, .. }
-            | TypeError::NoSuchColumn { source, .. }
-            | TypeError::MismatchColumn { source, .. }
-            | TypeError::MismatchColumns { source, .. }
-            | TypeError::BadConstantRow { source, .. }
-            | TypeError::BadProject { source, .. }
-            | TypeError::BadTopKGroupKey { source, .. }
-            | TypeError::BadTopKOrdering { source, .. }
-            | TypeError::BadLetRecBindings { source } => source,
+            Unbound { source, .. }
+            | NoSuchColumn { source, .. }
+            | MismatchColumn { source, .. }
+            | MismatchColumns { source, .. }
+            | BadConstantRow { source, .. }
+            | BadProject { source, .. }
+            | BadTopKGroupKey { source, .. }
+            | BadTopKOrdering { source, .. }
+            | BadLetRecBindings { source }
+            | Shadowing { source, .. } => source,
         }
     }
-}
 
-impl<'a> std::fmt::Display for TypeError<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn humanize<H>(&self, humanizer: &H, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    where
+        H: ExprHumanizer,
+    {
         writeln!(f, "In the MIR term:\n{}\n", self.source().pretty())?;
 
         use TypeError::*;
         match self {
             Unbound { source: _, id, typ } => {
-                let typ = columns_pretty(&typ.column_types);
+                let typ = columns_pretty(&typ.column_types, humanizer);
                 writeln!(f, "{id} is unbound\ndeclared type {typ}")?
             }
             NoSuchColumn {
@@ -741,7 +739,6 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 expected,
                 message,
             } => {
-                let humanizer = DummyHumanizer;
                 let got = humanizer.humanize_column_type(got);
                 let expected = humanizer.humanize_column_type(expected);
                 writeln!(
@@ -755,8 +752,8 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 expected,
                 message,
             } => {
-                let got = columns_pretty(got);
-                let expected = columns_pretty(expected);
+                let got = columns_pretty(got, humanizer);
+                let expected = columns_pretty(expected, humanizer);
 
                 writeln!(
                     f,
@@ -768,7 +765,7 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 got,
                 expected,
             } => {
-                let expected = columns_pretty(expected);
+                let expected = columns_pretty(expected, humanizer);
 
                 writeln!(
                     f,
@@ -780,7 +777,7 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 got,
                 input_type,
             } => {
-                let input_type = columns_pretty(input_type);
+                let input_type = columns_pretty(input_type, humanizer);
 
                 writeln!(
                     f,
@@ -792,7 +789,7 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 key,
                 input_type,
             } => {
-                let input_type = columns_pretty(input_type);
+                let input_type = columns_pretty(input_type, humanizer);
 
                 writeln!(
                     f,
@@ -805,7 +802,7 @@ impl<'a> std::fmt::Display for TypeError<'a> {
                 input_type,
             } => {
                 let col = order.column;
-                let input_type = columns_pretty(input_type);
+                let input_type = columns_pretty(input_type, humanizer);
 
                 writeln!(
                     f,
@@ -814,8 +811,37 @@ impl<'a> std::fmt::Display for TypeError<'a> {
             BadLetRecBindings { source: _ } => {
                 writeln!(f, "LetRec ids and definitions don't line up")?
             }
+            Shadowing { source: _, id } => writeln!(f, "id {id} is shadowed")?,
         }
 
         Ok(())
+    }
+}
+
+pub fn columns_pretty<H>(cols: &[ColumnType], humanizer: &H) -> String
+where
+    H: ExprHumanizer,
+{
+    let mut s = String::with_capacity(2 + 3 * cols.len());
+
+    s.push('(');
+
+    let mut it = cols.iter().peekable();
+    while let Some(col) = it.next() {
+        s.push_str(&humanizer.humanize_column_type(col));
+
+        if it.peek().is_some() {
+            s.push_str(", ");
+        }
+    }
+
+    s.push(')');
+
+    s
+}
+
+impl<'a> std::fmt::Display for TypeError<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.humanize(&DummyHumanizer, f)
     }
 }

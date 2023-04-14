@@ -87,21 +87,22 @@ impl crate::Transform for Typecheck {
 
         if self.disallow_new_globals && expected.is_none() && !id.is_transient() {
             return Err(TransformError::Internal(format!(
-                "FOUND NON-TRANDSIENT TOP LEVEL QUERY BOUND TO {id}:\n{}",
+                "FOUND NEW NON-TRANSIENT TOP LEVEL QUERY BOUND TO {id}:\n{}",
                 plan.pretty()
             )));
         }
 
         let got = plan.typecheck(&ctx);
 
+        let humanizer = mz_repr::explain::DummyHumanizer;
         match (got, expected) {
             (Ok(got), Some(expected)) => {
                 if !is_subtype_of(&got, expected) {
-                    let got = columns_pretty(&got);
-                    let expected = columns_pretty(expected);
+                    let got = columns_pretty(&got, &humanizer);
+                    let expected = columns_pretty(expected, &humanizer);
 
                     return Err(TransformError::Internal(format!(
-                        "TYPE ERROR: got {got} expected {expected} \nIN QUERY BOUND TO {id}:\n{}",
+                        "TYPE ERROR: got {got} expected {expected} \nIN KNOWN QUERY BOUND TO {id}:\n{}",
                         plan.pretty()
                     )));
                 }
@@ -110,13 +111,16 @@ impl crate::Transform for Typecheck {
                 ctx.insert(Id::Global(*id), got);
             }
             (Err(err), _) => {
-                let expected = match expected {
-                    Some(expected) => format!("expected type {}", columns_pretty(expected)),
-                    None => "no expected type".to_string(),
+                let (expected, known) = match expected {
+                    Some(expected) => (
+                        format!("expected type {}", columns_pretty(expected, &humanizer)),
+                        "KNOWN".to_string(),
+                    ),
+                    None => ("no expected type".to_string(), "NEW".to_string()),
                 };
 
                 return Err(TransformError::Internal(format!(
-                    "TYPE ERROR:\n{err}\n{expected}\nIN QUERY BOUND TO {id}:\n{}",
+                    "TYPE ERROR:\n{err}\n{expected}\nIN {known} QUERY BOUND TO {id}:\n{}",
                     plan.pretty()
                 )));
             }
