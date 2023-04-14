@@ -168,6 +168,8 @@ CREATE VIEW cluster_privileges (name, privilege) AS SELECT name, unnest(privileg
 statement ok
 CREATE VIEW item_privileges (name, type, privilege) AS SELECT name, type, unnest(privileges)::text FROM mz_objects;
 
+## Test built-in objects
+
 query TT
 SELECT * FROM database_privileges
 ----
@@ -198,7 +200,7 @@ mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_introspection=UC/mz_system
 mz_system         mz_system=UC/mz_system
 
-# The materialize privilege comes from the views created above
+### The materialize privilege comes from the views created above
 query T
 SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'view' OR type = 'materialized view' OR type = 'source'
 ----
@@ -218,11 +220,13 @@ SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'type'
 =U/mz_system
 mz_system=U/mz_system
 
+## Test user created objects
+
 statement ok
 CREATE TABLE t (a INT);
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='t'
+SELECT name, privilege FROM item_privileges WHERE name = 't'
 ----
 t  materialize=arwd/materialize
 
@@ -230,7 +234,7 @@ statement ok
 CREATE VIEW v AS SELECT 1;
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='v'
+SELECT name, privilege FROM item_privileges WHERE name = 'v'
 ----
 v  materialize=r/materialize
 
@@ -238,7 +242,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT 1;
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='mv'
+SELECT name, privilege FROM item_privileges WHERE name = 'mv'
 ----
 mv  materialize=r/materialize
 
@@ -306,3 +310,110 @@ query TT
 SELECT * FROM schema_privileges WHERE name ='sch'
 ----
 sch  materialize=UC/materialize
+
+# Changing the owner of an object should change the grantor of all privileges to the new owner and
+# transfer the privileges of the old owner to the new owner.
+
+statement ok
+CREATE ROLE joe
+
+simple conn=mz_system,user=mz_system
+ALTER TABLE t OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't'
+----
+t  joe=arwd/joe
+
+simple conn=mz_system,user=mz_system
+ALTER VIEW v OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v'
+----
+v  joe=r/joe
+
+simple conn=mz_system,user=mz_system
+ALTER MATERIALIZED VIEW mv OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv'
+----
+mv  joe=r/joe
+
+simple conn=mz_system,user=mz_system
+ALTER SOURCE s OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='s'
+----
+s  joe=r/joe
+
+simple conn=mz_system,user=mz_system
+ALTER TYPE ty OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='ty'
+----
+ty  =U/joe
+ty  joe=U/joe
+
+simple conn=mz_system,user=mz_system
+ALTER SECRET se OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='se'
+----
+se  joe=U/joe
+
+simple conn=mz_system,user=mz_system
+ALTER CONNECTION conn OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name ='conn'
+----
+conn  joe=U/joe
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER c OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT * FROM cluster_privileges WHERE name ='c'
+----
+c  joe=UC/joe
+
+simple conn=mz_system,user=mz_system
+ALTER DATABASE d OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT * FROM database_privileges WHERE name ='d'
+----
+d  joe=UC/joe
+
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA sch OWNER TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT * FROM schema_privileges WHERE name ='sch'
+----
+sch  joe=UC/joe
