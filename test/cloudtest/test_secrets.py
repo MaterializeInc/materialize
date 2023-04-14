@@ -232,6 +232,17 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
               WHERE name = 'source_with_deleted_secret';
             true
 
+            ! DROP CLUSTER to_be_killed CASCADE;
+            contains:error creating Postgres client for dropping acquired slots
+
+            # The cluster should still be there.
+            > SELECT name from mz_clusters where name = 'to_be_killed';
+            to_be_killed
+
+            # Try and put the secret in place again.
+            > ALTER SECRET to_be_deleted AS 'postgres';
+
+            # Cluster can now be deleted.
             > DROP CLUSTER to_be_killed CASCADE;
             """
         ),
