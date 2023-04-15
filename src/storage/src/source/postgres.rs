@@ -552,13 +552,17 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                                     error: e.to_string_with_causes(),
                                     hint: None,
                                 },
-                                // TODO: In the future we probably want to handle this more gracefully,
-                                // but for now halting is the easiest way to dump the data in the pipe.
-                                // The restarted clusterd instance will restart the snapshot fresh, which will
-                                // avoid any inconsistencies. Note that if the same lsn is chosen in the
-                                // next snapshotting, the remapped timestamp chosen will be the same for
-                                // both instances of clusterd.
-                                should_halt: true,
+                                // TODO: In the future we probably want to handle this more
+                                // gracefully, but for now halting is the easiest way to dump the
+                                // data in the pipe. The restarted clusterd instance will restart
+                                // the snapshot fresh, which will avoid any inconsistencies. Note
+                                // that if the same lsn is chosen in the next snapshotting, the
+                                // remapped timestamp chosen will be the same for both instances of
+                                // clusterd.
+                                //
+                                // Note that only the primary source halts, though all of them
+                                // error.
+                                should_halt: output_index == 0,
                             }),
                         ))
                         .await;
