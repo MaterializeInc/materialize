@@ -300,8 +300,10 @@ where
                 };
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
-                if statuses.last() != Some(&status) {
-                    statuses.push(status)
+
+                let status_wrapper = Some((*output_index, status));
+                if statuses.last() != status_wrapper.as_ref() {
+                    statuses.push(status_wrapper.expect("definitely Some"));
                 }
 
                 match message {
@@ -315,15 +317,14 @@ where
                 }
             }
             data_output.give_container(&cap, data).await;
-            let mut status_buf = vec![];
-            for (output, statuses) in statuses_by_idx.iter() {
-                status_buf.clear();
-                for status in statuses {
-                    status_buf.push((*output, status.clone()));
+
+            for statuses in statuses_by_idx.values_mut() {
+                if statuses.is_empty() {
+                    continue;
                 }
-                health_output
-                    .give_container(&health_cap, &mut status_buf)
-                    .await;
+
+                health_output.give_container(&health_cap, statuses).await;
+                statuses.clear()
             }
         }
     });
@@ -383,6 +384,7 @@ impl<'a> HealthState<'a> {
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
+    primary_source_id: GlobalId,
     health_stream: &Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
 ) -> Rc<dyn Any> {
@@ -457,7 +459,10 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
             if let AsyncEvent::Data(_cap, rows) = event {
                 for (worker_id, output_index, health_event) in rows.drain(..) {
                     let HealthState {
-                        source_id, healths, halt_with, ..
+                        source_id,
+                        healths,
+                        halt_with,
+                        ..
                     } = match health_states.get_mut(&output_index) {
                         Some(health) => health,
                         // This is a health status update for a subsource that we did not request to
@@ -466,7 +471,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
                         None => continue,
                     };
 
-                    outputs_seen.insert(output_index);
+                    let new_round = outputs_seen.insert(output_index);
 
                     if !is_active_worker {
                         warn!(
@@ -479,16 +484,31 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
                         update,
                         should_halt,
                     } = health_event;
+
                     if should_halt {
                         *halt_with = Some(update.clone());
                     }
-                    healths[worker_id] = Some(update);
+
+                    let update = Some(update);
+                    // Keep the max of the messages in each round; this ensures that errors don't
+                    // get lost while also letting us frequently update to the newest status.
+                    if new_round || &healths[worker_id] < &update {
+                        healths[worker_id] = update;
+                    }
                 }
+
+                let mut halt_with_outer = None;
 
                 while let Some(output_index) = outputs_seen.pop_first() {
                     let HealthState {
-                        source_id, healths, persist_details, last_reported_status, halt_with
-                    } = health_states.get_mut(&output_index).expect("known to exist");
+                        source_id,
+                        healths,
+                        persist_details,
+                        last_reported_status,
+                        halt_with,
+                    } = health_states
+                        .get_mut(&output_index)
+                        .expect("known to exist");
 
                     let overall_status = healths.iter().filter_map(Option::as_ref).max();
 
@@ -515,23 +535,39 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
                             *last_reported_status = Some(new_status.clone());
                         }
                     }
-                    // TODO(aljoscha): Instead of threading through the
-                    // `should_halt` bit, we can give an internal command sender
-                    // directly to the places where `should_halt = true` originates.
-                    // We should definitely do that, but this is okay for a PoC.
-                    if let Some(halt_with) = halt_with {
-                        info!(
-                            "Broadcasting suspend-and-restart command because of {:?} after {:?} delay",
-                            halt_with, SUSPEND_AND_RESTART_DELAY
-                        );
-                        tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
-                        internal_cmd_tx.borrow_mut().broadcast(
-                            InternalStorageCommand::SuspendAndRestart {
-                                id: *source_id,
-                                reason: format!("{:?}", halt_with),
-                            },
-                        );
+
+                    // Set halt with if None.
+                    if halt_with_outer.is_none() && halt_with.is_some() {
+                        halt_with_outer = Some((*source_id, halt_with.clone()));
                     }
+                }
+
+                // TODO(aljoscha): Instead of threading through the
+                // `should_halt` bit, we can give an internal command sender
+                // directly to the places where `should_halt = true` originates.
+                // We should definitely do that, but this is okay for a PoC.
+                if let Some((id, halt_with)) = halt_with_outer {
+                    mz_ore::soft_assert!(
+                        id == primary_source_id,
+                        "subsources should not produce halting errors, however {:?} halted while primary \
+                                            source is {:?}",
+                        id,
+                        primary_source_id
+                    );
+
+                    info!(
+                        "Broadcasting suspend-and-restart command because of {:?} after {:?} delay",
+                        halt_with, SUSPEND_AND_RESTART_DELAY
+                    );
+                    tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
+                    internal_cmd_tx.borrow_mut().broadcast(
+                        InternalStorageCommand::SuspendAndRestart {
+                            // Suspend and restart is expected to operate on the primary source and
+                            // not any of the subsources.
+                            id,
+                            reason: format!("{:?}", halt_with),
+                        },
+                    );
                 }
             }
         }
