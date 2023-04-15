@@ -312,9 +312,9 @@ Below is a summary of the default privileges of all builtin objects:
 
 - The `mz_introspection` role will have `UC` privileges on the `mz_introspection` cluster.
 - The `PUBLIC` pseudo-role will have `U` privileges on the `mz_introspection` cluster.
-- The `PUBLIC` psuedo-role will have `UC` privileges on the `default` cluster.
-- The `PUBLIC` psuedo-role will have `UC` privileges on the default `materialize` database.
-- The `PUBLIC` psuedo-role will have `UC` privileges on all `public` schemas (the default schema
+- The `PUBLIC` psuedo-role will have `U` privileges on the `default` cluster.
+- The `PUBLIC` psuedo-role will have `U` privileges on the default `materialize` database.
+- The `PUBLIC` psuedo-role will have `U` privileges on all `public` schemas (the default schema
   created in every database).
 - The `PUBLIC` pseudo-role will have `U` privileges on all catalog schemas.
 - The `PUBLIC` pseudo-role will have `r` privileges on all applicable objects within all catalog
