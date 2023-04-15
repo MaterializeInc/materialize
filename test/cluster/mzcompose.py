@@ -990,21 +990,19 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 
         c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
         c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
+        c.run("testdrive", "pg-snapshot-resumption/03-ensure-source-down.td")
 
         # Temporarily disabled because it is timing out.
         # https://github.com/MaterializeInc/materialize/issues/14533
         # # clusterd should crash
-        # c.run("testdrive", "pg-snapshot-resumption/03-while-clusterd-down.td")
-
-        print("Sleeping to ensure that clusterd crashes")
-        time.sleep(10)
+        # c.run("testdrive", "pg-snapshot-resumption/04-while-clusterd-down.td")
 
         with c.override(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
             c.up("storage")
-            c.run("testdrive", "pg-snapshot-resumption/04-verify-data.td")
+            c.run("testdrive", "pg-snapshot-resumption/05-verify-data.td")
 
 
 def workflow_test_bootstrap_vars(c: Composition) -> None:
