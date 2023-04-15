@@ -797,7 +797,7 @@ pub struct GrantRolePlan {
     pub role_id: RoleId,
     /// The roles that will be added to `role_id`.
     pub member_ids: Vec<RoleId>,
-    /// The role who executed the plan.
+    /// The role that granted the membership.
     pub grantor_id: RoleId,
 }
 
@@ -807,6 +807,8 @@ pub struct RevokeRolePlan {
     pub role_id: RoleId,
     /// The roles that will be removed from `role_id`.
     pub member_ids: Vec<RoleId>,
+    /// The role that granted the membership.
+    pub grantor_id: RoleId,
 }
 
 #[derive(Clone, Debug)]
