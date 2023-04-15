@@ -147,7 +147,7 @@ pub fn check_plan(
     // Validate that the current session has the required attributes to execute the provided plan.
     // Note: role attributes are not inherited by role membership.
     if let Some(required_attribute) = generate_required_plan_attribute(plan) {
-        if !required_attribute.check_role(&role_id, catalog) {
+        if !required_attribute.check_role(role_id, catalog) {
             return Err(AdapterError::Unauthorized(UnauthorizedError::Attribute {
                 action: plan.name().to_string(),
                 attribute: required_attribute,
