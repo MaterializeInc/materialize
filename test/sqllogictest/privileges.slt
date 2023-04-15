@@ -171,7 +171,7 @@ CREATE VIEW item_privileges (name, type, privilege) AS SELECT name, type, unnest
 query TT
 SELECT * FROM database_privileges
 ----
-materialize  =UC/mz_system
+materialize  =U/mz_system
 materialize  mz_system=UC/mz_system
 
 query TT
@@ -185,13 +185,13 @@ mz_internal         =U/mz_system
 mz_internal         mz_system=UC/mz_system
 pg_catalog          =U/mz_system
 pg_catalog          mz_system=UC/mz_system
-public              =UC/mz_system
+public              =U/mz_system
 public              mz_system=UC/mz_system
 
 query TT
 SELECT * FROM cluster_privileges ORDER BY name
 ----
-default           =UC/mz_system
+default           =U/mz_system
 default           mz_system=UC/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
@@ -294,7 +294,7 @@ d  materialize=UC/materialize
 query TT
 SELECT * FROM schema_privileges WHERE name ='public' ORDER BY name
 ----
-public  =UC/mz_system
+public  =U/mz_system
 public  =U/materialize
 public  mz_system=UC/mz_system
 public  materialize=UC/materialize
