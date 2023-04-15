@@ -5405,6 +5405,25 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_join_using_alias(&mut self, column_names: Vec<Ident>) -> Result<Option<Ident>, ParserError> {
+        if self.parse_keyword(AS) {
+            return match self.next_token() {
+                // Accept any identifier after `AS`, including keywords.
+                Some(Token::Keyword(kw)) => Ok(Some(kw.into_ident())),
+                Some(Token::Ident(id)) => Ok(Some(Ident::new(id))),
+                not_an_ident => {
+                    return self.expected(
+                        self.peek_prev_pos(),
+                        "an identifier after AS",
+                        not_an_ident,
+                    );
+                }
+            };
+        }
+
+        Ok(None)
+    }
+
     fn parse_join_constraint(&mut self, natural: bool) -> Result<JoinConstraint<Raw>, ParserError> {
         if natural {
             Ok(JoinConstraint::Natural)
@@ -5413,7 +5432,8 @@ impl<'a> Parser<'a> {
             Ok(JoinConstraint::On(constraint))
         } else if self.parse_keyword(USING) {
             let columns = self.parse_parenthesized_column_list(Mandatory)?;
-            Ok(JoinConstraint::Using(columns))
+            let alias = self.parse_join_using_alias(columns.clone())?;
+            Ok(JoinConstraint::Using { columns, alias })
         } else {
             self.expected(
                 self.peek_pos(),
