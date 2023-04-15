@@ -191,7 +191,7 @@ async fn migrate(
                         MzAclItem {
                             grantee: RoleId::Public,
                             grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE.union(AclMode::CREATE),
+                            acl_mode: AclMode::USAGE,
                         },
                         rbac::owner_privilege(
                             mz_sql_parser::ast::ObjectType::Database,
@@ -264,7 +264,7 @@ async fn migrate(
                         MzAclItem {
                             grantee: RoleId::Public,
                             grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE.union(AclMode::CREATE),
+                            acl_mode: AclMode::USAGE,
                         },
                         rbac::owner_privilege(
                             mz_sql_parser::ast::ObjectType::Schema,
@@ -334,7 +334,7 @@ async fn migrate(
                     MzAclItem {
                         grantee: RoleId::Public,
                         grantor: MZ_SYSTEM_ROLE_ID,
-                        acl_mode: AclMode::USAGE.union(AclMode::CREATE),
+                        acl_mode: AclMode::USAGE,
                     },
                     rbac::owner_privilege(
                         mz_sql_parser::ast::ObjectType::Cluster,
@@ -641,7 +641,7 @@ async fn migrate(
                         database_value.privileges = Some(vec![MzAclItem {
                             grantee: RoleId::Public,
                             grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE.union(AclMode::CREATE),
+                            acl_mode: AclMode::USAGE,
                         }]);
                     } else {
                         database_value.privileges = Some(Vec::new());
@@ -680,7 +680,7 @@ async fn migrate(
                         schema_value.privileges = Some(vec![MzAclItem {
                             grantee: RoleId::Public,
                             grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE.union(AclMode::CREATE),
+                            acl_mode: AclMode::USAGE,
                         }]);
                     } else {
                         schema_value.privileges = Some(Vec::new());
@@ -776,7 +776,7 @@ async fn migrate(
                             MzAclItem {
                                 grantee: MZ_INTROSPECTION_ROLE_ID,
                                 grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::USAGE.union(AclMode::CREATE),
+                                acl_mode: AclMode::USAGE,
                             },
                         ]);
                     } else {
