@@ -874,7 +874,7 @@ async fn postgres_replication_loop_inner(
 }
 
 struct RowMessage {
-    lsn: PgLsn,
+    lsn: Option<PgLsn>,
     output_index: usize,
     value: Result<(Row, Diff), anyhow::Error>,
 }
@@ -887,7 +887,7 @@ struct RowMessage {
 /// Internally, this type uses asserts to uphold the first requirement.
 struct RowSender {
     sender: Sender<(usize, InternalMessage)>,
-    buffered_message: Option<RowMessage>,
+    buffered_messages: Vec<RowMessage>,
 }
 
 impl RowSender {
@@ -895,8 +895,26 @@ impl RowSender {
     pub fn new(sender: Sender<(usize, InternalMessage)>) -> Self {
         Self {
             sender,
-            buffered_message: None,
+            buffered_messages: vec![],
         }
+    }
+
+    /// Buffer an error without an LSN.
+    ///
+    /// If you can produce an LSN, instead use [`RowSender::send_row`].
+    pub fn buffer_error(&mut self, output_index: usize, err: anyhow::Error) {
+        let lsn = self
+            .buffered_messages
+            .iter()
+            .map(|row| row.lsn)
+            .max()
+            .flatten();
+
+        self.buffered_messages.push(RowMessage {
+            lsn,
+            output_index,
+            value: Err(err),
+        })
     }
 
     /// Send a triplet for the specific output
@@ -906,14 +924,14 @@ impl RowSender {
         output_index: usize,
         value: Result<(Row, Diff), anyhow::Error>,
     ) {
-        if let Some(buffered) = self.buffered_message.take() {
-            assert_eq!(buffered.lsn, lsn);
-            self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value, false)
-                .await;
+        while let Some(buffered) = self.buffered_messages.pop() {
+            assert!(buffered.lsn.is_none() || buffered.lsn == Some(lsn));
+            self.send_row_inner(lsn, buffered.output_index, buffered.value, false)
+                .await
         }
 
-        self.buffered_message = Some(RowMessage {
-            lsn,
+        self.buffered_messages.push(RowMessage {
+            lsn: Some(lsn),
             output_index,
             value,
         });
@@ -923,13 +941,14 @@ impl RowSender {
     /// last message sent is marked as closing the `lsn` (which is the messages `offset` in the
     /// rest of the source pipeline.
     pub async fn close_lsn(&mut self, lsn: PgLsn) {
-        match self.buffered_message.take() {
-            Some(buffered) => {
-                assert!(buffered.lsn <= lsn);
-                self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value, true)
-                    .await;
-            }
-            // We should still announce that we're running even if nothing else.
+        for message in self.buffered_messages.iter_mut() {
+            message.lsn = Some(message.lsn.unwrap_or(lsn));
+            assert!(message.lsn <= Some(lsn));
+        }
+
+        // Get last message or notify that source is running.
+        let last = match self.buffered_messages.pop() {
+            Some(last) => last,
             None => {
                 // If the channel is shutting down, so is the source.
                 let _ = self
@@ -942,8 +961,27 @@ impl RowSender {
                         }),
                     ))
                     .await;
+                return;
             }
+        };
+
+        while let Some(buffered) = self.buffered_messages.pop() {
+            self.send_row_inner(
+                buffered.lsn.expect("set to Some earlier"),
+                buffered.output_index,
+                buffered.value,
+                false,
+            )
+            .await
         }
+
+        self.send_row_inner(
+            last.lsn.expect("set to Some earlier"),
+            last.output_index,
+            last.value,
+            true,
+        )
+        .await
     }
 
     async fn send_row_inner(
