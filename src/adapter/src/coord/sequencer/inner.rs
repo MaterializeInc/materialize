@@ -37,6 +37,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
@@ -1394,7 +1395,7 @@ impl Coordinator {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
 
-        let mut dropped_roles = plan
+        let mut dropped_roles: BTreeMap<_, _> = plan
             .ids
             .iter()
             .filter_map(|id| match id {
@@ -1406,6 +1407,9 @@ impl Coordinator {
                 (*id, name)
             })
             .collect();
+        for role_id in dropped_roles.keys() {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
         self.validate_dropped_role_ownership(&dropped_roles)?;
         // If any role is a member of a dropped role, then we must revoke that membership.
         let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
@@ -1478,29 +1482,77 @@ impl Coordinator {
         &self,
         dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
+        fn privilege_check(
+            privileges: &Vec<MzAclItem>,
+            dropped_roles: &BTreeMap<RoleId, &str>,
+            dependent_objects: &mut BTreeMap<String, Vec<String>>,
+            object_name: &str,
+            object_type: &str,
+        ) {
+            for privilege in privileges {
+                if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!("privileges for {object_type} {object_name}",));
+                }
+                if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!("privileges for {object_type} {object_name}"));
+                }
+            }
+        }
+
         let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for entry in self.catalog.entries() {
             if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("{} {}", entry.item().typ(), entry.name().item));
+                    .push(format!(
+                        "owner of {} {}",
+                        entry.item().typ(),
+                        entry.name().item
+                    ));
             }
+            privilege_check(
+                entry.privileges(),
+                dropped_roles,
+                &mut dependent_objects,
+                &entry.item().typ().to_string(),
+                &entry.name().item,
+            );
         }
         for database in self.catalog.databases() {
             if let Some(role_name) = dropped_roles.get(&database.owner_id) {
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("database {}", database.name()));
+                    .push(format!("owner of database {}", database.name()));
             }
+            privilege_check(
+                &database.privileges,
+                dropped_roles,
+                &mut dependent_objects,
+                database.name(),
+                "database",
+            );
             for schema in database.schemas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("schema {}", schema.name().schema));
+                        .push(format!("owner of schema {}", schema.name().schema));
                 }
+                privilege_check(
+                    &schema.privileges,
+                    dropped_roles,
+                    &mut dependent_objects,
+                    &schema.name().schema,
+                    "schema",
+                );
             }
         }
         for cluster in self.catalog.clusters() {
@@ -1508,20 +1560,27 @@ impl Coordinator {
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("cluster {}", cluster.name()));
+                    .push(format!("owner of cluster {}", cluster.name()));
             }
+            privilege_check(
+                &cluster.privileges,
+                dropped_roles,
+                &mut dependent_objects,
+                cluster.name(),
+                "cluster",
+            );
             for replica in cluster.replicas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("cluster replica {}", replica.name));
+                        .push(format!("owner of cluster replica {}", replica.name));
                 }
             }
         }
 
         if !dependent_objects.is_empty() {
-            Err(AdapterError::DependentObjectOwnership(dependent_objects))
+            Err(AdapterError::DependentObject(dependent_objects))
         } else {
             Ok(())
         }
