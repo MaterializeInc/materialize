@@ -619,33 +619,12 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
 async fn postgres_replication_loop_inner_snapshot(
     task_info: &mut PostgresTaskInfo,
 ) -> Result<(), ReplicationError> {
-    // Verify relevant tables for this publication; we do this on every loop to cleanup source
-    // tables and very lazily detect dropped tables.
-    let publication_tables = mz_postgres_util::publication_info(
-        &task_info.connection_config,
-        &task_info.publication,
-        None,
-    )
-    .await
-    .err_indefinite()?;
-
-    // Validate publication tables against the state snapshot
-    let incompatible_tables =
-        determine_table_compatibility(task_info.source_tables.iter(), publication_tables);
-    for (id, output, err) in incompatible_tables {
-        task_info.source_tables.remove(&id);
-        task_info
-            .row_sender
-            .send_row(task_info.replication_lsn, output, Err(err))
-            .await;
-    }
-
     let client = task_info
         .connection_config
         .clone()
         .connect_replication()
         .await
-        .err_indefinite()?;
+        .err_irrecoverable()?;
 
     // Technically there is TOCTOU problem here but it makes the code easier and if we end
     // up attempting to create a slot and it already exists we will simply retry
@@ -827,6 +806,24 @@ async fn postgres_replication_loop_inner_snapshot(
 async fn postgres_replication_loop_inner(
     task_info: &mut PostgresTaskInfo,
 ) -> Result<(), ReplicationError> {
+    // Verify relevant tables for this publication; we do this on every loop to cleanup source
+    // tables and very lazily detect dropped tables.
+    let publication_tables = mz_postgres_util::publication_info(
+        &task_info.connection_config,
+        &task_info.publication,
+        None,
+    )
+    .await
+    .err_indefinite()?;
+
+    // Validate publication tables against the state snapshot
+    let incompatible_tables =
+        determine_table_compatibility(task_info.source_tables.iter(), publication_tables);
+    for (id, output, err) in incompatible_tables {
+        task_info.source_tables.remove(&id);
+        task_info.row_sender.buffer_error(output, err);
+    }
+
     if task_info.replication_lsn == PgLsn::from(0) {
         match postgres_replication_loop_inner_snapshot(task_info).await {
             // Snapshotting cannot, under any circmstance, return indefinite errors; everything must
