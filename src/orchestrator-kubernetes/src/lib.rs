@@ -857,7 +857,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
                 .clone();
 
-            let pod2 = pod.clone();
             let oomed = pod
                 .status
                 .as_ref()
@@ -884,8 +883,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let status = if pod_ready {
                 ServiceStatus::Ready
             } else {
-                println!("[btv] {pod2:#?}");
-                // XXX
                 if oomed {
                     ServiceStatus::NotReady(Some(NotReadyReason::OOMKilled))
                 } else {
