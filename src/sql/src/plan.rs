@@ -807,7 +807,7 @@ pub struct RevokeRolePlan {
     pub role_id: RoleId,
     /// The roles that will be removed from `role_id`.
     pub member_ids: Vec<RoleId>,
-    /// The role that granted the membership.
+    /// The role that revoked the membership.
     pub grantor_id: RoleId,
 }
 
