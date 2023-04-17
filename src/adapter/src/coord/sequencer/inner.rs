@@ -1492,21 +1492,29 @@ impl Coordinator {
             privileges: &Vec<MzAclItem>,
             dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
+            object_type: ObjectType,
             object_name: &str,
-            object_type: &str,
+            catalog: &Catalog,
         ) {
+            let object_type = object_type.to_string().to_lowercase();
             for privilege in privileges {
                 if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
+                    let grantor_name = catalog.get_role(&privilege.grantor).name();
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("privileges for {object_type} {object_name}",));
+                        .push(format!(
+                            "privileges on {object_type} {object_name} granted by {grantor_name}",
+                        ));
                 }
                 if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
+                    let grantee_name = catalog.get_role(&privilege.grantee).name();
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("privileges for {object_type} {object_name}"));
+                        .push(format!(
+                            "privileges granted on {object_type} {object_name} to {grantee_name}"
+                        ));
                 }
             }
         }
@@ -1527,8 +1535,9 @@ impl Coordinator {
                 entry.privileges(),
                 dropped_roles,
                 &mut dependent_objects,
-                &entry.item().typ().to_string(),
+                entry.item().typ().into(),
                 &entry.name().item,
+                self.catalog(),
             );
         }
         for database in self.catalog.databases() {
@@ -1542,8 +1551,9 @@ impl Coordinator {
                 &database.privileges,
                 dropped_roles,
                 &mut dependent_objects,
+                ObjectType::Database,
                 database.name(),
-                "database",
+                self.catalog(),
             );
             for schema in database.schemas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
@@ -1556,8 +1566,9 @@ impl Coordinator {
                     &schema.privileges,
                     dropped_roles,
                     &mut dependent_objects,
+                    ObjectType::Schema,
                     &schema.name().schema,
-                    "schema",
+                    self.catalog(),
                 );
             }
         }
@@ -1572,8 +1583,9 @@ impl Coordinator {
                 &cluster.privileges,
                 dropped_roles,
                 &mut dependent_objects,
+                ObjectType::Cluster,
                 cluster.name(),
-                "cluster",
+                self.catalog(),
             );
             for replica in cluster.replicas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
