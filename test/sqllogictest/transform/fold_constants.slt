@@ -143,3 +143,668 @@ Explained Query:
           Get l0 // { arity: 1 }
 
 EOF
+
+# ---------------------------------------------------------------------------------------------
+# Test consistency between constant-folding vs. rendered query evaluations
+# In particular, floating-point computations as well as integer sum aggregations could produce different outputs.
+# ---------------------------------------------------------------------------------------------
+
+mode cockroach
+
+# -------------------------------
+# 1) very small numbers
+# -------------------------------
+
+# 1a) with table using dataflow rendering
+
+statement ok
+CREATE TABLE t_using_dataflow_rendering (real1 REAL, double1 DOUBLE PRECISION, numeric1 NUMERIC);
+
+statement ok
+INSERT INTO t_using_dataflow_rendering VALUES (1e-39::real, 1e-39::double, 1e-39::numeric);
+
+query RRR
+SELECT * FROM t_using_dataflow_rendering
+UNION ALL
+SELECT SUM(real1), SUM(double1), SUM(numeric1) FROM t_using_dataflow_rendering;
+----
+0 0 0.000000000000000000000000000000000000001
+0.000000000000000000000000000000000000001 0.000000000000000000000000000000000000001 0.000000000000000000000000000000000000001
+
+query T multiline
+EXPLAIN SELECT * FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Get materialize.public.t_using_dataflow_rendering
+
+EOF
+
+# 1b) with view using constant folding
+
+statement ok
+CREATE VIEW v_using_constant_folding (real1, double1, numeric1) AS
+SELECT
+ 1e-39::real, 1e-39::double, 1e-39::numeric;
+
+query RRR
+SELECT * FROM v_using_constant_folding
+UNION ALL
+SELECT SUM(real1), SUM(double1), SUM(numeric1) FROM v_using_constant_folding;
+----
+0.000000000000000000000000000000000000001 0.000000000000000000000000000000000000001 0.000000000000000000000000000000000000001
+0.000000000000000000000000000000000000001 0.000000000000000000000000000000000000001 0.000000000000000000000000000000000000001
+
+query T multiline
+EXPLAIN SELECT * FROM v_using_constant_folding;
+----
+Explained Query (fast path):
+  Constant
+    - (0.000000000000000000000000000000000000001, 0.000000000000000000000000000000000000001, 0.000000000000000000000000000000000000001)
+
+EOF
+
+# 1c) cleanup
+
+statement ok
+DROP VIEW v_using_constant_folding;
+
+statement ok
+DROP TABLE t_using_dataflow_rendering;
+
+# -------------------------------
+# 2) very big numbers
+# -------------------------------
+
+# 2a) with table using dataflow rendering
+
+statement ok
+CREATE TABLE t_using_dataflow_rendering (real1 REAL, double1 DOUBLE PRECISION, numeric1 NUMERIC);
+
+statement ok
+INSERT INTO t_using_dataflow_rendering VALUES (1e38::real, 1e38::double, 1e38::numeric);
+
+query RRR
+SELECT * FROM t_using_dataflow_rendering
+UNION ALL
+SELECT SUM(real1), SUM(double1), SUM(numeric1) FROM t_using_dataflow_rendering;
+----
+10141205000000000000000000000000 10141204801825835000000000000000 100000000000000000000000000000000000000
+100000000000000000000000000000000000000 100000000000000000000000000000000000000 100000000000000000000000000000000000000
+
+query T multiline
+EXPLAIN SELECT * FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Get materialize.public.t_using_dataflow_rendering
+
+EOF
+
+# 2b) with view using constant folding
+
+statement ok
+CREATE VIEW v_using_constant_folding (real1, double1, numeric1) AS
+SELECT
+ 1e38::real, 1e38::double, 1e38::numeric;
+
+query RRR
+SELECT * FROM v_using_constant_folding
+UNION ALL
+SELECT SUM(real1), SUM(double1), SUM(numeric1) FROM v_using_constant_folding;
+----
+100000000000000000000000000000000000000 100000000000000000000000000000000000000 100000000000000000000000000000000000000
+100000000000000000000000000000000000000 100000000000000000000000000000000000000 100000000000000000000000000000000000000
+
+query T multiline
+EXPLAIN SELECT * FROM v_using_constant_folding;
+----
+Explained Query (fast path):
+  Constant
+    - (100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000)
+
+EOF
+
+# 2c) cleanup
+
+statement ok
+DROP VIEW v_using_constant_folding;
+
+statement ok
+DROP TABLE t_using_dataflow_rendering;
+
+# -------------------------------
+# 3) ILIKE operator
+# -------------------------------
+
+statement ok
+CREATE TABLE t_data (f1 TEXT);
+
+statement ok
+INSERT INTO t_data VALUES ('ABCDEF'), ('abcdef'), ('aBcDeF'), ('AbCdEf');
+
+# 3a) with table using dataflow rendering
+
+statement ok
+CREATE TABLE t_operator (op_val TEXT);
+
+statement ok
+INSERT INTO t_operator VALUES ('%bCd%');
+
+query T
+SELECT * FROM t_data WHERE f1 ILIKE (SELECT op_val FROM t_operator) ORDER BY f1;
+----
+ABCDEF
+AbCdEf
+aBcDeF
+abcdef
+
+query T multiline
+EXPLAIN SELECT * FROM t_data WHERE f1 ILIKE (SELECT op_val FROM t_operator);
+----
+Explained Query:
+  Project (#0)
+    Filter (#0 ilike #1)
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          Get materialize.public.t_data
+        ArrangeBy keys=[[]]
+          Union
+            Get materialize.public.t_operator
+            Map (error("more than one record produced in subquery"))
+              Project ()
+                Filter (#0 > 1)
+                  Reduce aggregates=[count(*)]
+                    Project ()
+                      Get materialize.public.t_operator
+
+EOF
+
+# 3b) using constant folding
+
+query T
+SELECT * FROM t_data WHERE f1 ILIKE '%bCd%'  ORDER BY f1;
+----
+AbCdEf
+
+query T multiline
+EXPLAIN SELECT * FROM t_data WHERE f1 ILIKE '%bCd%';
+----
+Explained Query:
+  Filter "%bCd%" ~~(#0)
+    Get materialize.public.t_data
+
+Source materialize.public.t_data
+  filter=("%bCd%" ~~(#0))
+
+EOF
+
+# 3c) cleanup
+
+statement ok
+DROP TABLE t_operator;
+
+statement ok
+DROP TABLE t_data;
+
+# -------------------------------
+# 4) Further text operators
+# -------------------------------
+
+statement ok
+CREATE TABLE t_using_dataflow_rendering (f1 TEXT, f2 TEXT, f3 TEXT, f4 TEXT, f1ls TEXT, f1rs TEXT);
+
+statement ok
+INSERT INTO t_using_dataflow_rendering VALUES ('ABCDef', 'CD', 'cd', 'XX', ' ABCDef', 'ABCDef ');
+
+# 4a) with table using dataflow rendering
+
+query TTTTTTTTTTTTTTTTTT
+SELECT
+ f1 || f4,
+ BTRIM(f1ls), LTRIM(f1ls),
+ BTRIM(f1rs), RTRIM(f1rs),
+ UPPER(f1), LOWER(f1),
+ SUBSTRING(f1, 1),
+ REPLACE(f1, f2, f3),
+ POSITION(f2 IN f1),
+ SPLIT_PART(f1, f2, 1),
+ TRANSLATE(f1, 'C', 'Z'),
+ LPAD(f1, 10),
+ LPAD(f1, 10, f2),
+ REGEXP_MATCH(f1, f2),
+ REGEXP_MATCH(f1, f3, 'i') AS case_insensitive,
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM t_using_dataflow_rendering;
+----
+ABCDefXX  ABCDef  ABCDef  ABCDef  ABCDef  ABCDEF  abcdef  ABCDef  ABcdef  3  AB  ABZDef      ABCDef  CDCDABCDef  {CD}  {CD}  ABCDef  [238, 226, 119, 230, 210, 45, 158, 105, 232, 127, 11, 125, 76, 10, 244, 149, 96, 158, 231, 207, 230, 136, 216, 56, 30, 157, 228, 74, 89, 49, 203, 21, 238, 196, 151, 235, 205, 247, 59, 41, 81, 87, 67, 152, 170, 149, 41, 38, 39, 103, 214, 97, 156, 131, 169, 93, 142, 69, 43, 29, 72, 113, 255, 236]
+
+query T multiline
+EXPLAIN
+SELECT
+ f1 || f4,
+ BTRIM(f1ls), LTRIM(f1ls),
+ BTRIM(f1rs), RTRIM(f1rs),
+ UPPER(f1), LOWER(f1),
+ SUBSTRING(f1, 1),
+ REPLACE(f1, f2, f3),
+ POSITION(f2 IN f1),
+ SPLIT_PART(f1, f2, 1),
+ TRANSLATE(f1, 'C', 'Z'),
+ LPAD(f1, 10),
+ LPAD(f1, 10, f2),
+ REGEXP_MATCH(f1, f2),
+ REGEXP_MATCH(f1, f3, 'i') AS case_insensitive,
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Project (#6..=#23)
+    Map ((#0 || #3), btrim(#4), ltrim(#4), btrim(#5), rtrim(#5), upper(#0), lower(#0), substr(#0, 1), replace(#0, #1, #2), position(#1, #0), split_string(#0, #1, 1), translate(#0, "C", "Z"), lpad(#0, 10), lpad(#0, 10, #1), regexp_match(#0, #1), regexp_match(#0, #2, "i"), text_to_bytea(#0), digest(#22, "sha512"))
+      Get materialize.public.t_using_dataflow_rendering
+
+EOF
+
+# 4b) using constant folding
+
+statement ok
+CREATE VIEW v_using_constant_folding (f1, f2, f3, f4, f1ls, f1rs) AS
+SELECT
+ 'ABCDef', 'CD', 'cd', 'XX', ' ABCDef', 'ABCDef ';
+
+query TTTTTTTTTTTTTTTTTT
+SELECT
+ f1 || f4,
+ BTRIM(f1ls), LTRIM(f1ls),
+ BTRIM(f1rs), RTRIM(f1rs),
+ UPPER(f1), LOWER(f1),
+ SUBSTRING(f1, 1),
+ REPLACE(f1, f2, f3),
+ POSITION(f2 IN f1),
+ SPLIT_PART(f1, f2, 1),
+ TRANSLATE(f1, 'C', 'Z'),
+ LPAD(f1, 10),
+ LPAD(f1, 10, f2),
+ REGEXP_MATCH(f1, f2),
+ REGEXP_MATCH(f1, f3, 'i') AS case_insensitive,
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM v_using_constant_folding;
+----
+ABCDefXX  ABCDef  ABCDef  ABCDef  ABCDef  ABCDEF  abcdef  ABCDef  ABcdef  3  AB  ABZDef      ABCDef  CDCDABCDef  {CD}  {CD}  ABCDef  [238, 226, 119, 230, 210, 45, 158, 105, 232, 127, 11, 125, 76, 10, 244, 149, 96, 158, 231, 207, 230, 136, 216, 56, 30, 157, 228, 74, 89, 49, 203, 21, 238, 196, 151, 235, 205, 247, 59, 41, 81, 87, 67, 152, 170, 149, 41, 38, 39, 103, 214, 97, 156, 131, 169, 93, 142, 69, 43, 29, 72, 113, 255, 236]
+
+query T multiline
+EXPLAIN
+SELECT
+ f1 || f4,
+ BTRIM(f1ls), LTRIM(f1ls),
+ BTRIM(f1rs), RTRIM(f1rs),
+ UPPER(f1), LOWER(f1),
+ SUBSTRING(f1, 1),
+ REPLACE(f1, f2, f3),
+ POSITION(f2 IN f1),
+ SPLIT_PART(f1, f2, 1),
+ TRANSLATE(f1, 'C', 'Z'),
+ LPAD(f1, 10),
+ LPAD(f1, 10, f2),
+ REGEXP_MATCH(f1, f2),
+ REGEXP_MATCH(f1, f3, 'i') AS case_insensitive,
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM v_using_constant_folding;
+----
+Explained Query (fast path):
+  Constant
+    - ("ABCDefXX", "ABCDef", "ABCDef", "ABCDef", "ABCDef", "ABCDEF", "abcdef", "ABCDef", "ABcdef", 3, "AB", "ABZDef", "    ABCDef", "CDCDABCDef", {"CD"}, {"CD"}, 0x414243446566, 0xeee277e6d22d9e69e87f0b7d4c0af495609ee7cfe688d8381e9de44a5931cb15eec497ebcdf73b2951574398aa9529262767d6619c83a95d8e452b1d4871ffec)
+
+EOF
+
+# 4c) cleanup
+
+statement ok
+DROP VIEW v_using_constant_folding;
+
+statement ok
+DROP TABLE t_using_dataflow_rendering;
+
+# -------------------------------
+# 5) repeat row (=> this panics!)
+# -------------------------------
+
+statement ok
+CREATE TABLE t_base (data int, diff bigint);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+# 5a) with table using dataflow rendering
+
+# statement ok
+# CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
+#  SELECT data FROM t_base, repeat_row(diff);
+
+# query I
+# SELECT SUM(data) FROM mv_using_dataflow_rendering;
+# ----
+
+# query T multiline
+# EXPLAIN SELECT SUM(data) FROM mv_using_dataflow_rendering;
+# ----
+# EOF
+
+# 5b) with view using constant folding
+
+# statement ok
+# CREATE VIEW v_using_constant_folding AS
+#  SELECT data FROM (
+#     SELECT * FROM (
+#         VALUES (1, 9223372036854775807),
+#                (1, 9223372036854775807)
+#         ) AS t_base(data, diff),
+#         repeat_row(diff)
+# );
+
+# query I
+# SELECT SUM(data) FROM v_using_constant_folding;
+# ----
+
+# query T multiline
+# EXPLAIN SELECT * FROM v_using_constant_folding;
+# ----
+# EOF
+
+# 5c) cleanup
+
+statement ok
+DROP MATERIALIZED VIEW IF EXISTS mv_using_dataflow_rendering;
+
+statement ok
+DROP VIEW IF EXISTS v_using_constant_folding;
+
+statement ok
+DROP TABLE t_base;
+
+# -------------------------------
+# 6) very big numbers and functions
+# -------------------------------
+
+# 6a) with table using dataflow rendering
+
+statement ok
+CREATE TABLE t_using_dataflow_rendering (real1 REAL, double1 DOUBLE PRECISION, numeric1 NUMERIC, tint1 INT2, tint2 INT2);
+
+statement ok
+INSERT INTO t_using_dataflow_rendering VALUES
+ (1e38::real, 1e38::double, 1e38::numeric, (-32767)::INT2, (-1)::INT2),
+ (2, 2, 2, 32767::INT2, 1::INT2);
+
+# without aggregate functions
+query IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
+SELECT
+ real1, real1 + 1, real1 - 1,
+ real1 + 0, double1 + 0, numeric1 + 0,
+ real1 + real1, double1 + double1, numeric1 + numeric1,
+ SQRT(real1), SQRT(double1), SQRT(numeric1),
+ SQRT(real1 + real1), SQRT(double1 + double1), SQRT(numeric1 + numeric1),
+ tint1 / tint2, tint2 / tint1,
+ COALESCE(real1, NULL), COALESCE(double1, NULL), COALESCE(numeric1, NULL),
+ GREATEST(real1, 1), GREATEST(double1, 1), GREATEST(numeric1, 1),
+ LEAST(real1, 1e38::real), LEAST(double1, 1e38::double), LEAST(numeric1, 1e38::numeric),
+ NULLIF(real1, 1e38::real), NULLIF(double1, 1e38::double), NULLIF(numeric1, 1e38::numeric),
+ real1 <= 1e38::real, double1 <= 1e38::double, numeric1 <= 1e38::numeric,
+ real1 >= 1e38::real, double1 >= 1e38::double, numeric1 >= 1e38::numeric,
+ real1 < 1e38::real, double1 < 1e38::double, numeric1 < 1e38::numeric,
+ real1 > 1e38::real, double1 > 1e38::double, numeric1 > 1e38::numeric,
+ real1 = 1e38::real, double1 = 1e38::double, numeric1 = 1e38::numeric,
+ CASE WHEN 1=1 THEN real1 ELSE -1 END, CASE WHEN 1=1 THEN double1 ELSE -1 END, CASE WHEN 1=1 THEN numeric1 ELSE -1 END
+FROM t_using_dataflow_rendering
+ORDER BY real1;
+----
+2  3  1  2  2  2  4  4  4  1  1  1  2  2  2  32767  0  2  2  2  2  2  2  2  2  2  2  2  2  1  1  1  0  0  0  1  1  1  0  0  0  0  0  0  2  2  2
+9223372036854775807  9223372036854775807  9223372036854775807  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  200000000000000000000000000000000000000  9223372036854775807  9223372036854775807  10000000000000000000  9223372036854775807  9223372036854775807  14142135623730950488  32767  0  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  NULL  NULL  NULL  1  1  1  1  1  1  0  0  0  0  0  0  1  1  1  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000
+
+query error
+SELECT
+ (tint1 + tint2) / tint2
+FROM t_using_dataflow_rendering;
+
+query T multiline
+EXPLAIN
+SELECT
+ real1, real1 + 1, real1 - 1,
+ real1 + 0, double1 + 0, numeric1 + 0,
+ real1 + real1, double1 + double1, numeric1 + numeric1,
+ SQRT(real1), SQRT(double1), SQRT(numeric1),
+ SQRT(real1 + real1), SQRT(double1 + double1), SQRT(numeric1 + numeric1),
+ tint1 / tint2, tint2 / tint1,
+ COALESCE(real1, NULL), COALESCE(double1, NULL), COALESCE(numeric1, NULL),
+ GREATEST(real1, 1), GREATEST(double1, 1), GREATEST(numeric1, 1),
+ LEAST(real1, 1e38::real), LEAST(double1, 1e38::double), LEAST(numeric1, 1e38::numeric),
+ NULLIF(real1, 1e38::real), NULLIF(double1, 1e38::double), NULLIF(numeric1, 1e38::numeric),
+ real1 <= 1e38::real, double1 <= 1e38::double, numeric1 <= 1e38::numeric,
+ real1 >= 1e38::real, double1 >= 1e38::double, numeric1 >= 1e38::numeric,
+ real1 < 1e38::real, double1 < 1e38::double, numeric1 < 1e38::numeric,
+ real1 > 1e38::real, double1 > 1e38::double, numeric1 > 1e38::numeric,
+ real1 = 1e38::real, double1 = 1e38::double, numeric1 = 1e38::numeric,
+ CASE WHEN 1=1 THEN real1 ELSE -1 END, CASE WHEN 1=1 THEN double1 ELSE -1 END, CASE WHEN 1=1 THEN numeric1 ELSE -1 END
+FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Project (#0, #5..=#20, #0..=#2, #21..=#26, #28, #30, #32..=#44, #27, #29, #31, #0..=#2)
+    Map ((#0 + 1), (#0 - 1), (#0 + 0), (#1 + 0), (#2 + 0), (#0 + #0), (#1 + #1), (#2 + #2), sqrtf64(real_to_double(#0)), sqrtf64(#1), sqrtnumeric(#2), sqrtf64(real_to_double(#10)), sqrtf64(#11), sqrtnumeric(#12), (#3 / #4), (#4 / #3), greatest(#0, 1), greatest(#1, 1), greatest(#2, 1), least(#0, 100000000000000000000000000000000000000), least(#1, 100000000000000000000000000000000000000), least(#2, 100000000000000000000000000000000000000), (#0 = 100000000000000000000000000000000000000), case when #27 then null else #0 end, (#1 = 100000000000000000000000000000000000000), case when #29 then null else #1 end, (#2 = 100000000000000000000000000000000000000), case when #31 then null else #2 end, (#0 <= 100000000000000000000000000000000000000), (#1 <= 100000000000000000000000000000000000000), (#2 <= 100000000000000000000000000000000000000), (#0 >= 100000000000000000000000000000000000000), (#1 >= 100000000000000000000000000000000000000), (#2 >= 100000000000000000000000000000000000000), (#0 < 100000000000000000000000000000000000000), (#1 < 100000000000000000000000000000000000000), (#2 < 100000000000000000000000000000000000000), (#0 > 100000000000000000000000000000000000000), (#1 > 100000000000000000000000000000000000000), (#2 > 100000000000000000000000000000000000000))
+      Get materialize.public.t_using_dataflow_rendering
+
+EOF
+
+# with aggregate functions
+query IIIIIIIIIIIIIIIIIIIIIIII
+SELECT
+ SUM(real1), SUM(double1), SUM(numeric1),
+ SUM(real1 + real1), SUM(double1 + double1), SUM(numeric1 + numeric1),
+ MIN(real1), MIN(double1), MIN(numeric1),
+ MIN(real1 + real1), MIN(double1 + double1), MIN(numeric1 + numeric1),
+ MAX(real1), MAX(double1), MAX(numeric1),
+ MAX(real1 + real1), MAX(double1 + double1), MAX(numeric1 + numeric1),
+ AVG(real1), AVG(double1), AVG(numeric1),
+ AVG(real1 + real1), AVG(double1 + double1), AVG(numeric1 + numeric1)
+FROM t_using_dataflow_rendering;
+----
+-9223372036854775808  -9223372036854775808  100000000000000000000000000000000000002  -9223372036854775808  -9223372036854775808  200000000000000000000000000000000000004  2  2  2  4  4  4  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  200000000000000000000000000000000000000  -9223372036854775808  -9223372036854775808  9223372036854775807  -9223372036854775808  -9223372036854775808  9223372036854775807
+
+query T multiline
+EXPLAIN
+SELECT
+ SUM(real1), SUM(double1), SUM(numeric1),
+ SUM(real1 + real1), SUM(double1 + double1), SUM(numeric1 + numeric1),
+ MIN(real1), MIN(double1), MIN(numeric1),
+ MIN(real1 + real1), MIN(double1 + double1), MIN(numeric1 + numeric1),
+ MAX(real1), MAX(double1), MAX(numeric1),
+ MAX(real1 + real1), MAX(double1 + double1), MAX(numeric1 + numeric1),
+ AVG(real1), AVG(double1), AVG(numeric1),
+ AVG(real1 + real1), AVG(double1 + double1), AVG(numeric1 + numeric1),
+ STDDEV(real1), STDDEV(double1), STDDEV(numeric1),
+ STDDEV(real1 + real1), STDDEV(double1 + double1), STDDEV(numeric1 + numeric1)
+FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Return
+    Project (#0..=#17, #48..=#59)
+      Map ((#18 / bigint_to_real(case when (#19 = 0) then null else #19 end)), (#20 / bigint_to_double(case when (#21 = 0) then null else #21 end)), (numeric_to_double(#22) / bigint_to_double(case when (#23 = 0) then null else #23 end)), (#24 / bigint_to_real(case when (#25 = 0) then null else #25 end)), (#26 / bigint_to_double(case when (#27 = 0) then null else #27 end)), (numeric_to_double(#28) / bigint_to_double(case when (#29 = 0) then null else #29 end)), sqrtf64(real_to_double(((#30 - ((#31 * #31) / bigint_to_real(case when (#32 = 0) then null else #32 end))) / bigint_to_real(case when (0 = (#32 - 1)) then null else (#32 - 1) end)))), sqrtf64(((#33 - ((#34 * #34) / bigint_to_double(case when (#35 = 0) then null else #35 end))) / bigint_to_double(case when (0 = (#35 - 1)) then null else (#35 - 1) end))), sqrtf64(((#36 - ((#37 * #37) / bigint_to_double(case when (#38 = 0) then null else #38 end))) / bigint_to_double(case when (0 = (#38 - 1)) then null else (#38 - 1) end))), sqrtf64(real_to_double(((#39 - ((#40 * #40) / bigint_to_real(case when (#41 = 0) then null else #41 end))) / bigint_to_real(case when (0 = (#41 - 1)) then null else (#41 - 1) end)))), sqrtf64(((#42 - ((#43 * #43) / bigint_to_double(case when (#44 = 0) then null else #44 end))) / bigint_to_double(case when (0 = (#44 - 1)) then null else (#44 - 1) end))), sqrtf64(((#45 - ((#46 * #46) / bigint_to_double(case when (#47 = 0) then null else #47 end))) / bigint_to_double(case when (0 = (#47 - 1)) then null else (#47 - 1) end))))
+        Union
+          Project (#0..=#17, #0, #18, #1, #19, #2, #20, #3, #21, #4, #22, #5, #23, #24, #0, #18, #25, #1, #19, #26..=#29, #3, #21, #30, #4, #22, #31..=#33)
+            Get l0
+          Map (null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, 0, null, 0, null, 0, null, 0, null, 0, null, null, 0, null, null, 0, null, null, 0, null, null, 0, null, null, 0, null, null, 0)
+            Union
+              Negate
+                Project ()
+                  Get l0
+              Constant
+                - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0), sum(#1), sum(#2), sum((#0 + #0)), sum((#1 + #1)), sum((#2 + #2)), min(#0), min(#1), min(#2), min((#0 + #0)), min((#1 + #1)), min((#2 + #2)), max(#0), max(#1), max(#2), max((#0 + #0)), max((#1 + #1)), max((#2 + #2)), count(#0), count(#1), count(#2), count((#0 + #0)), count((#1 + #1)), count((#2 + #2)), sum((#0 * #0)), sum((#1 * #1)), sum((numeric_to_double(#2) * numeric_to_double(#2))), sum(numeric_to_double(#2)), count(numeric_to_double(#2)), sum(((#0 + #0) * (#0 + #0))), sum(((#1 + #1) * (#1 + #1))), sum((numeric_to_double((#2 + #2)) * numeric_to_double((#2 + #2)))), sum(numeric_to_double((#2 + #2))), count(numeric_to_double((#2 + #2)))]
+        Project (#0..=#2)
+          Get materialize.public.t_using_dataflow_rendering
+
+EOF
+
+query error
+SELECT
+ STDDEV(real1)
+FROM t_using_dataflow_rendering;
+
+query T multiline
+EXPLAIN
+SELECT
+ STDDEV(real1)
+FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Return
+    Project (#3)
+      Map (sqrtf64(real_to_double(((#0 - ((#1 * #1) / bigint_to_real(case when (#2 = 0) then null else #2 end))) / bigint_to_real(case when (0 = (#2 - 1)) then null else (#2 - 1) end)))))
+        Union
+          Get l0
+          Map (null, null, 0)
+            Union
+              Negate
+                Project ()
+                  Get l0
+              Constant
+                - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
+        Project (#0)
+          Get materialize.public.t_using_dataflow_rendering
+
+EOF
+
+# 6b) with view using constant folding
+
+statement ok
+CREATE VIEW v_using_constant_folding (real1, double1, numeric1, tint1, tint2) AS
+SELECT
+ 1e38::real, 1e38::double, 1e38::numeric, (-32767)::INT2, (-1)::INT2
+UNION ALL
+SELECT
+ 2, 2, 2, 32767::INT2, 1::INT2;
+
+# without aggregate functions
+query IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
+SELECT
+ real1, real1 + 1, real1 - 1,
+ real1 + 0, double1 + 0, numeric1 + 0,
+ real1 + real1, double1 + double1, numeric1 + numeric1,
+ SQRT(real1), SQRT(double1), SQRT(numeric1),
+ SQRT(real1 + real1), SQRT(double1 + double1), SQRT(numeric1 + numeric1),
+ tint1 / tint2, tint2 / tint1,
+ COALESCE(real1, NULL), COALESCE(double1, NULL), COALESCE(numeric1, NULL),
+ GREATEST(real1, 1), GREATEST(double1, 1), GREATEST(numeric1, 1),
+ LEAST(real1, 1e38::real), LEAST(double1, 1e38::double), LEAST(numeric1, 1e38::numeric),
+ NULLIF(real1, 1e38::real), NULLIF(double1, 1e38::double), NULLIF(numeric1, 1e38::numeric),
+ real1 <= 1e38::real, double1 <= 1e38::double, numeric1 <= 1e38::numeric,
+ real1 >= 1e38::real, double1 >= 1e38::double, numeric1 >= 1e38::numeric,
+ real1 < 1e38::real, double1 < 1e38::double, numeric1 < 1e38::numeric,
+ real1 > 1e38::real, double1 > 1e38::double, numeric1 > 1e38::numeric,
+ real1 = 1e38::real, double1 = 1e38::double, numeric1 = 1e38::numeric,
+ CASE WHEN 1=1 THEN real1 ELSE -1 END, CASE WHEN 1=1 THEN double1 ELSE -1 END, CASE WHEN 1=1 THEN numeric1 ELSE -1 END
+FROM v_using_constant_folding
+ORDER BY real1;
+----
+2  3  1  2  2  2  4  4  4  1  1  1  2  2  2  32767  0  2  2  2  2  2  2  2  2  2  2  2  2  1  1  1  0  0  0  1  1  1  0  0  0  0  0  0  2  2  2
+9223372036854775807  9223372036854775807  9223372036854775807  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  200000000000000000000000000000000000000  9223372036854775807  9223372036854775807  10000000000000000000  9223372036854775807  9223372036854775807  14142135623730950488  32767  0  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  NULL  NULL  NULL  1  1  1  1  1  1  0  0  0  0  0  0  1  1  1  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000
+
+query error
+SELECT
+ (tint1 + tint2) / tint2
+FROM v_using_constant_folding;
+
+query T multiline
+EXPLAIN
+SELECT
+ real1, real1 + 1, real1 - 1,
+ real1 + 0, double1 + 0, numeric1 + 0,
+ real1 + real1, double1 + double1, numeric1 + numeric1,
+ SQRT(real1), SQRT(double1), SQRT(numeric1),
+ SQRT(real1 + real1), SQRT(double1 + double1), SQRT(numeric1 + numeric1),
+ tint1 / tint2, tint2 / tint1,
+ COALESCE(real1, NULL), COALESCE(double1, NULL), COALESCE(numeric1, NULL),
+ GREATEST(real1, 1), GREATEST(double1, 1), GREATEST(numeric1, 1),
+ LEAST(real1, 1e38::real), LEAST(double1, 1e38::double), LEAST(numeric1, 1e38::numeric),
+ NULLIF(real1, 1e38::real), NULLIF(double1, 1e38::double), NULLIF(numeric1, 1e38::numeric),
+ real1 <= 1e38::real, double1 <= 1e38::double, numeric1 <= 1e38::numeric,
+ real1 >= 1e38::real, double1 >= 1e38::double, numeric1 >= 1e38::numeric,
+ real1 < 1e38::real, double1 < 1e38::double, numeric1 < 1e38::numeric,
+ real1 > 1e38::real, double1 > 1e38::double, numeric1 > 1e38::numeric,
+ real1 = 1e38::real, double1 = 1e38::double, numeric1 = 1e38::numeric,
+ CASE WHEN 1=1 THEN real1 ELSE -1 END, CASE WHEN 1=1 THEN double1 ELSE -1 END, CASE WHEN 1=1 THEN numeric1 ELSE -1 END
+FROM v_using_constant_folding;
+----
+Explained Query (fast path):
+  Constant
+    - (100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 200000000000000000000000000000000000000, 200000000000000000000000000000000000000, 200000000000000000000000000000000000000, 9999999840142846000, 10000000000000000000, 10000000000000000000, 14142135397658794000, 14142135623730950000, 14142135623730950488.0168872420969807857, 32767, 0, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, null, null, null, true, true, true, true, true, true, false, false, false, false, false, false, true, true, true, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000)
+    - (2, 3, 1, 2, 2, 2, 4, 4, 4, 1.4142135623730951, 1.4142135623730951, 1.41421356237309504880168872420969807857, 2, 2, 2, 32767, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, true, true, true, false, false, false, true, true, true, false, false, false, false, false, false, 2, 2, 2)
+
+EOF
+
+# with aggregate functions
+query IIIIIIIIIIIIIIIIIIIIIIII
+SELECT
+ SUM(real1), SUM(double1), SUM(numeric1),
+ SUM(real1 + real1), SUM(double1 + double1), SUM(numeric1 + numeric1),
+ MIN(real1), MIN(double1), MIN(numeric1),
+ MIN(real1 + real1), MIN(double1 + double1), MIN(numeric1 + numeric1),
+ MAX(real1), MAX(double1), MAX(numeric1),
+ MAX(real1 + real1), MAX(double1 + double1), MAX(numeric1 + numeric1),
+ AVG(real1), AVG(double1), AVG(numeric1),
+ AVG(real1 + real1), AVG(double1 + double1), AVG(numeric1 + numeric1)
+FROM v_using_constant_folding;
+----
+9223372036854775807  9223372036854775807  100000000000000000000000000000000000002  9223372036854775807  9223372036854775807  200000000000000000000000000000000000004  2  2  2  4  4  4  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  200000000000000000000000000000000000000  9223372036854775807  9223372036854775807  9223372036854775807  9223372036854775807  9223372036854775807  9223372036854775807
+
+query T multiline
+EXPLAIN
+SELECT
+ SUM(real1), SUM(double1), SUM(numeric1),
+ SUM(real1 + real1), SUM(double1 + double1), SUM(numeric1 + numeric1),
+ MIN(real1), MIN(double1), MIN(numeric1),
+ MIN(real1 + real1), MIN(double1 + double1), MIN(numeric1 + numeric1),
+ MAX(real1), MAX(double1), MAX(numeric1),
+ MAX(real1 + real1), MAX(double1 + double1), MAX(numeric1 + numeric1),
+ AVG(real1), AVG(double1), AVG(numeric1),
+ AVG(real1 + real1), AVG(double1 + double1), AVG(numeric1 + numeric1)
+FROM v_using_constant_folding;
+----
+Explained Query (fast path):
+  Constant
+    - (100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000002, 200000000000000000000000000000000000000, 200000000000000000000000000000000000000, 200000000000000000000000000000000000004, 2, 2, 2, 4, 4, 4, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 200000000000000000000000000000000000000, 200000000000000000000000000000000000000, 200000000000000000000000000000000000000, 50000000000000000000000000000000000000, 50000000000000000000000000000000000000, 50000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000, 100000000000000000000000000000000000000)
+
+EOF
+
+query error
+SELECT
+ STDDEV(real1)
+FROM v_using_constant_folding;
+
+query T multiline
+EXPLAIN
+SELECT
+ STDDEV(real1)
+FROM v_using_constant_folding;
+----
+Explained Query (fast path):
+  Error "value out of range: overflow"
+
+EOF
+
+# 6c) cleanup
+
+statement ok
+DROP VIEW v_using_constant_folding;
+
+statement ok
+DROP TABLE t_using_dataflow_rendering;
