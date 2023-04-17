@@ -626,13 +626,10 @@ async fn postgres_replication_loop_inner_snapshot(
 ) -> Result<(), ReplicationError> {
     // Verify relevant tables for this publication; we do this on every loop to cleanup source
     // tables and very lazily detect dropped tables.
-    let publication_tables = mz_postgres_util::publication_info(
-        &task_info.connection_config,
-        &task_info.publication,
-        None,
-    )
-    .await
-    .err_indefinite()?;
+    let publication_tables =
+        mz_postgres_util::publication_info(&task_info.connection_config, &task_info.publication)
+            .await
+            .err_indefinite()?;
 
     // Validate publication tables against the state snapshot
     let incompatible_tables =
@@ -1425,40 +1422,35 @@ async fn produce_replication<'a>(
                             yield Event::Progress([PgLsn::from(u64::from(last_commit_lsn) + 1)]);
                             metrics.lsn.set(last_commit_lsn.into());
                         }
-                        Relation(relation) => {
+                        Relation(relation) if source_tables.get(&relation.rel_id()).is_some() => {
                             last_data_message = Instant::now();
-                            let rel_id = relation.rel_id();
-                            if let Some(info) = source_tables.get(&rel_id) {
-                                // Because the replication stream doesn't include columns'
-                                // attnums, we need to check the current local schema against
-                                // the current remote schema to ensure e.g. we haven't received
-                                // a schema update with the same terminal column name which is
-                                // actually a different column.
-                                let current_publication_info = mz_postgres_util::publication_info(
-                                    &client_config,
-                                    publication,
-                                    Some(rel_id),
-                                )
-                                .await
-                                .err_indefinite()?;
+                            // Because the replication stream doesn't include columns'
+                            // attnums, we need to check the current local schema against
+                            // the current remote schema to ensure e.g. we haven't received
+                            // a schema update with the same terminal column name which is
+                            // actually a different column.
+                            let current_publication_info =
+                                mz_postgres_util::publication_info(&client_config, publication)
+                                    .await
+                                    .err_indefinite()?;
 
-                                // Validate publication tables against the state snapshot
-                                let incompatible_tables = determine_table_compatibility(
-                                    std::iter::once((&rel_id, info)),
-                                    current_publication_info,
+                            // Validate publication tables against the state snapshot; we might as
+                            // well check them all.
+                            let incompatible_tables = determine_table_compatibility(
+                                source_tables.iter(),
+                                current_publication_info,
+                            );
+                            for (rel_id, output_index, err) in incompatible_tables {
+                                handle_subsource_err!(
+                                    errors,
+                                    source_tables,
+                                    output_index,
+                                    err,
+                                    rel_id
                                 );
-                                for (rel_id, output_index, err) in incompatible_tables {
-                                    handle_subsource_err!(
-                                        errors,
-                                        source_tables,
-                                        output_index,
-                                        err,
-                                        rel_id
-                                    );
-                                }
                             }
                         }
-                        Insert(_) | Update(_) | Delete(_) | Origin(_) | Type(_) => {
+                        Insert(_) | Update(_) | Delete(_) | Origin(_) | Type(_) | Relation(_) => {
                             last_data_message = Instant::now();
                             metrics.ignored.inc();
                         }

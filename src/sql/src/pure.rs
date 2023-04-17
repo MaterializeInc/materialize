@@ -292,7 +292,7 @@ pub async fn purify_create_source(
                 .config(&*connection_context.secrets_reader)
                 .await?;
             let publication_tables =
-                mz_postgres_util::publication_info(&config, &publication, None).await?;
+                mz_postgres_util::publication_info(&config, &publication).await?;
 
             if publication_tables.is_empty() {
                 return Err(PlanError::EmptyPublication(publication));

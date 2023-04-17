@@ -220,7 +220,6 @@ pub async fn get_schemas(config: &Config) -> Result<Vec<PostgresSchemaDesc>, Pos
 pub async fn publication_info(
     config: &Config,
     publication: &str,
-    oid_filter: Option<u32>,
 ) -> Result<Vec<PostgresTableDesc>, PostgresError> {
     let client = config.connect("postgres_publication_info").await?;
 
@@ -243,9 +242,8 @@ pub async fn publication_info(
                 JOIN pg_publication_tables AS p ON
                         c.relname = p.tablename AND n.nspname = p.schemaname
             WHERE
-                p.pubname = $1
-                AND ($2::oid IS NULL OR c.oid = $2::oid)",
-            &[&publication, &oid_filter],
+                p.pubname = $1",
+            &[&publication],
         )
         .await?;
 
