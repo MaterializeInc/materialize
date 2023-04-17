@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
 `SHOW INDEXES` provides details about indexes built on a source, view, or materialized view.
 
 ## Syntax
