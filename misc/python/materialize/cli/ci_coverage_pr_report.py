@@ -50,12 +50,12 @@ def find_modified_lines() -> Coverage:
         line = line_raw.decode("utf-8")
         # +++ b/src/adapter/src/coord/command_handler.rs
         if line.startswith("+++"):
+            file = line.removeprefix("+++ b/")
             if not line.endswith(".rs"):
                 continue
-            file = line.removeprefix("+++ b/")
             coverage[file] = OrderedDict()
         # @@ -641,7 +640,6 @@ impl Coordinator {
-        elif line.startswith("@@ ") and file:
+        elif line.startswith("@@ ") and file in coverage:
             # We only care about the second value ("+640,6" in the example),
             # which contains the line number and length of the modified block
             # in new code state.
