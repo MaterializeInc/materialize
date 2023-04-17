@@ -844,6 +844,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn test_truncate_bytes_proptest() {
         fn testcase(x: &[u8]) {
             for max_len in 0..=x.len() {
@@ -906,6 +907,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn test_truncate_string_proptest() {
         fn testcase(x: &str) {
             for max_len in 0..=x.len() {
