@@ -5027,8 +5027,12 @@ impl Catalog {
                         mz_sql::ast::ObjectType::Schema,
                         owner_id,
                     )];
-                    let schema_id =
-                        tx.insert_user_schema(database_id, &schema_name, owner_id, privileges.clone())?;
+                    let schema_id = tx.insert_user_schema(
+                        database_id,
+                        &schema_name,
+                        owner_id,
+                        privileges.clone(),
+                    )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
