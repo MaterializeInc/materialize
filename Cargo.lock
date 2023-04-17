@@ -4331,6 +4331,7 @@ dependencies = [
  "bytes",
  "mz-proto",
  "parquet2",
+ "proptest",
  "prost",
  "prost-build",
  "protobuf-src",
