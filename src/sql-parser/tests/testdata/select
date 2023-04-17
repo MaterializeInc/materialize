@@ -597,14 +597,14 @@ SELECT * FROM t1 JOIN t2 AS foo USING (c1)
 ----
 SELECT * FROM t1 JOIN t2 AS foo USING (c1)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: Some(TableAlias { name: Ident("foo"), columns: [], strict: false }) }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: Some(TableAlias { name: Ident("foo"), columns: [], strict: false }) }, join_operator: Inner(Using { columns: [Ident("c1")], alias: None }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 JOIN t2 foo USING (c1)
 ----
 SELECT * FROM t1 JOIN t2 AS foo USING (c1)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: Some(TableAlias { name: Ident("foo"), columns: [], strict: false }) }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: Some(TableAlias { name: Ident("foo"), columns: [], strict: false }) }, join_operator: Inner(Using { columns: [Ident("c1")], alias: None }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM t1 NATURAL JOIN t2
@@ -646,7 +646,7 @@ SELECT c1, c2 FROM t1, t4 JOIN t2 ON t2.c = t1.c LEFT JOIN t3 USING (q, c) WHERE
 ----
 SELECT c1, c2 FROM t1, t4 JOIN t2 ON t2.c = t1.c LEFT JOIN t3 USING (q, c) WHERE t4.c = t1.c
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }, Expr { expr: Identifier([Ident("c2")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [] }, TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t4")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: Inner(On(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("t2"), Ident("c")]), expr2: Some(Identifier([Ident("t1"), Ident("c")])) })) }, Join { relation: Table { name: Name(UnresolvedItemName([Ident("t3")])), alias: None }, join_operator: LeftOuter(Using([Ident("q"), Ident("c")])) }] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("t4"), Ident("c")]), expr2: Some(Identifier([Ident("t1"), Ident("c")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }, Expr { expr: Identifier([Ident("c2")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [] }, TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t4")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: Inner(On(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("t2"), Ident("c")]), expr2: Some(Identifier([Ident("t1"), Ident("c")])) })) }, Join { relation: Table { name: Name(UnresolvedItemName([Ident("t3")])), alias: None }, join_operator: LeftOuter(Using { columns: [Ident("q"), Ident("c")], alias: None }) }] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("t4"), Ident("c")]), expr2: Some(Identifier([Ident("t1"), Ident("c")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM a NATURAL JOIN (b NATURAL JOIN (c NATURAL JOIN d NATURAL JOIN e)) NATURAL JOIN (f NATURAL JOIN (g NATURAL JOIN h))
@@ -695,28 +695,64 @@ SELECT c1 FROM t1 INNER JOIN t2 USING (c1)
 ----
 SELECT c1 FROM t1 JOIN t2 USING (c1)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: Inner(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: Inner(Using { columns: [Ident("c1")], alias: None }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT x.c1 FROM t1 INNER JOIN t2 USING (c1) AS x
+----
+SELECT x.c1 FROM t1 JOIN t2 USING (c1) AS x
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("x"), Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: Inner(Using { columns: [Ident("c1")], alias: Some(Ident("x")) }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
 
 parse-statement
 SELECT c1 FROM t1 LEFT OUTER JOIN t2 USING (c1)
 ----
 SELECT c1 FROM t1 LEFT JOIN t2 USING (c1)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: LeftOuter(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: LeftOuter(Using { columns: [Ident("c1")], alias: None }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT x.c1 FROM t1 LEFT OUTER JOIN t2 USING (c1) AS x
+----
+SELECT x.c1 FROM t1 LEFT JOIN t2 USING (c1) AS x
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("x"), Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: LeftOuter(Using { columns: [Ident("c1")], alias: Some(Ident("x")) }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT c1 FROM t1 RIGHT OUTER JOIN t2 USING (c1)
 ----
 SELECT c1 FROM t1 RIGHT JOIN t2 USING (c1)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: RightOuter(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: RightOuter(Using { columns: [Ident("c1")], alias: None }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT x.c1 FROM t1 RIGHT OUTER JOIN t2 USING (c1) AS x
+----
+SELECT x.c1 FROM t1 RIGHT JOIN t2 USING (c1) AS x
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("x"), Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: RightOuter(Using { columns: [Ident("c1")], alias: Some(Ident("x")) }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT c1 FROM t1 FULL OUTER JOIN t2 USING (c1)
 ----
 SELECT c1 FROM t1 FULL JOIN t2 USING (c1)
 =>
-Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: FullOuter(Using([Ident("c1")])) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: FullOuter(Using { columns: [Ident("c1")], alias: None }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT x.c1 FROM t1 FULL OUTER JOIN t2 USING (c1) AS x
+----
+SELECT x.c1 FROM t1 FULL JOIN t2 USING (c1) AS x
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("x"), Ident("c1")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t1")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t2")])), alias: None }, join_operator: FullOuter(Using { columns: [Ident("c1")], alias: Some(Ident("x")) }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM t1 JOIN t2 USING (c1) AS
+----
+error: Expected identifier, found EOF
+SELECT * FROM t1 JOIN t2 USING (c1) AS
+                                      ^
 
 parse-statement
 SELECT * FROM a OUTER JOIN b ON 1
