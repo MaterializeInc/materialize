@@ -12,13 +12,16 @@ import re
 import subprocess
 import sys
 from collections import OrderedDict
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import junit_xml
 
 from materialize import ROOT, ci_util
 
-Coverage = Dict[str, OrderedDict[int, int]]
+# None value indicates that this line is interesting, but we don't know yet if
+# it can actually be covered. Int values indicate that the line can be covered
+# and how often is has been covered.
+Coverage = Dict[str, OrderedDict[int, Optional[int]]]
 SOURCE_RE = re.compile(
     "^/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/(.*$)"
 )
@@ -63,7 +66,7 @@ def find_modified_lines() -> Coverage:
                 start = int(parts)
                 length = 1
             for line_nr in range(start, start + length):
-                coverage[file][line_nr] = 0
+                coverage[file][line_nr] = None
     return coverage
 
 
@@ -92,7 +95,7 @@ def mark_covered_lines(lcov_file: str, coverage: Coverage) -> None:
             line_nr = int(line_str)
             hit = int(hit_str) if hit_str.isnumeric() else int(float(hit_str))
             if line_nr in coverage[file]:
-                coverage[file][line_nr] += hit
+                coverage[file][line_nr] = (coverage[file][line_nr] or 0) + hit
 
 
 def get_report(coverage: Coverage) -> str:
@@ -106,7 +109,7 @@ def get_report(coverage: Coverage) -> str:
                 content = f.readlines()
                 f.seek(0)
                 for i, line in enumerate(content):
-                    if i + 1 not in lines or lines[i + 1] > 0:
+                    if lines.get(i + 1) != 0:
                         f.write(line)
                 f.truncate()
 
