@@ -153,9 +153,19 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
+##### Error handling
+
+In the case of errors or known limitations, Materialize will place tables' sources into an errored
+state, where they will no longer return non-error results.
+
+At this time, the only means of removing an errored table is to drop the existing source and then
+recreate it; however, we are working on improving this user experience. {{% gh 15832 %}}
+
 ##### Schema changes
 
-Materialize does not support changes to schemas for existing publications, and will set the source into an error state if a breaking DDL change is detected upstream. To handle schema changes, you need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
+Materialize does not support the following schema changes:
+- Dropping ingested columns.
+- Removing `NOT NULL` or `PRIMARY KEY` constraints from ingested columns.
 
 ##### Supported types
 
@@ -164,10 +174,28 @@ Replicating tables that contain [data types](/sql/types/) unsupported in Materia
 * [`enum`]: the implicit ordering of the original PostgreSQL `enum` type is not preserved, as Materialize will sort values as `text`.
 * [`money`]: the resulting `text` value cannot be cast back to e.g. `numeric`, since PostgreSQL adds typical currency formatting to the output.
 
+##### Dropped tables
+
+Materialize places dropped tables in an error state.
+
+However, due to limitations in the PostgreSQL logical replication stream, we only detect that tables
+have been dropped if some other ingested table in the publication has a schema change, such as an
+added column.
+
 ##### Truncation
 
-Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is recreated.
-Instead, remove all rows from a table using an unqualified `DELETE`.
+{{< warning >}}
+Truncating tables that Materialize ingests has the potential of diverging Materialize's and
+PostgreSQL's table data.
+{{< /warning >}}
+
+Materialize's behavior in the face of `TRUNCATE` commands depends on the version of PostgreSQL used as a source:
+- Before version 11, `TRUNCATE` commands were not propagated via the logical replication stream.
+  This means Materialize receives no notification that the table was truncated and will lead to
+  inconsistent representations of the table's data.
+- With versions 11+, Materialize places the table's source in an errored state.
+
+Instead of using `TRUNCATE`, remove all rows from a table using an unqualified `DELETE`.
 
 ```sql
 DELETE FROM t;
