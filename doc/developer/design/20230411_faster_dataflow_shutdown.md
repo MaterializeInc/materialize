@@ -125,7 +125,14 @@ It is also likely to be useful to support [tokenizing join operators](#tokenizin
 
 The fuse operator is instantiated with a token reference that it uses to observe dataflow shutdowns.
 As long as there are still other holders of the token, it simply forwards all updates received on its inputs to its outputs.
-Once the token has been dropped by everyone else, it advances its output to the empty frontier and discards all input updates.
+Once the token has been dropped by everyone else, it discards all input updates.
+
+In addition to discarding updates when the token is dropped, the fuse operator can also immediately advance its output to the empty frontier.
+This is not a requirement for solving divergent WMR cancellation, as dropping data updates is sufficient for reaching a fixpoint.
+Rather, immediately advancing to the empty frontier is a measure to speed up shutdown of the operators downstream of the fuse operator.
+It allows them to observe the empty import frontier as soon as the token is dropped, potentially long before the input to the fuse operator has produced all of its remaining outputs and advanced to the empty frontier.
+We propose implementing this performance optimization in the fuse operator, even though it is not strictly required, because it has low implementation complexity and little associated risk.
+
 [#18718] provides the described fuse operator implementation, and applies it to the cancellation of WMR dataflows.
 
 [#18718]: https://github.com/MaterializeInc/materialize/pull/18718
@@ -156,6 +163,7 @@ This implies that the join closure should perform a token check before processin
 Concerns have been raised that the overhead of performing a check for every update might slow down joins prohibitively.
 We have not been able to corroborate these concerns with tests so far.
 At least for `SELECT` queries computing simple cross joins adding a token check to the join closure does not appear to increase the query time noticeably.
+It is likely that the compiler is able to lift the token check out of the loop that calls the join closure in DD, so the check is only performed once per batch rather than once per update.
 
 There might be other places in the join implementations where adding a token check improves shutdown performance.
 For example, adding a fuse operator after the join output would allow downstream operators to observe an empty input frontier and begin shutting down before the join operator has finished iterating over all matches.
@@ -195,9 +203,13 @@ We rely on our existing test suite to ensure that the above measures for faster 
 For testing that the proposed measures have an effect we will write testdrive tests that drop dataflows and observe their shutdown process with help of the introspection sources.
 This will be very simple for testing cancellation of divergent WMR dataflows (which shut down either quickly or never) but harder for testing the cancellation of persist sources and cross joins (which shut down either quickly or slowly).
 Since the later tests rely on timing, care must be taken to ensure they don't produce false positives or false negatives.
+For divergent WMR dataflows, we will make sure to include complex mutually recursive structures, to ensure that dropping those works as expected.
 
 For [tokenizing join operators](#tokenizing-join-operators) in particular, potential performance degradation is a concern.
 We can build some confidence here by performing SQL-based benchmarks to accompany the PR that introduces this feature.
+
+Finally, we will perform a load test that creates and drops a large number of dataflows in a staging environment over a period of several hours.
+We will use this test to verify that there are no unexpected race conditions or memory leaks introduced by the mechanisms described in this design.
 
 ## Lifecycle
 [lifecycle]: #lifecycle
@@ -218,7 +230,7 @@ They make dataflows shut down faster but cannot guarantee immediate shutdown.
 # Conclusion and alternatives
 [conclusion-and-alternatives]: #conclusion-and-alternatives
 
-The propsed design is effective in solving commonly observed issues that lead to slow dataflow shutdown and corresponding usability issues.
+The proposed design is effective in solving commonly observed issues that lead to slow dataflow shutdown and corresponding usability issues.
 It is also relatively easy to implement, as it extends the token mechanism that already exists in dataflow rendering.
 
 As an alternative to the changes proposed here, we could instead rely on Timely's `drop_dataflow`.
@@ -249,7 +261,10 @@ We expect to find more instances of dataflow operators that are slow to shut dow
 Insofar as these instances can be resolved by adding more token checks, we should do so.
 
 This design does not consider issues caused by dataflow operators refusing to yield back to the Timely runtime.
+Examples of this are `FlatMap`s executing `generate_series` functions with high numbers ([#8853]), or high-cardinality joins over a small number of keys.
 These instances can only be solved by adding or improving fueling for these operators, which is something we should do but leave as future work.
 
 Finally, we should continue the work of stabilizing `drop_dataflow`.
 As pointed out above, it is a simpler and more effective approach than what this design proposes, and therefore a strictly better solution provided we can gain confidence in it.
+
+[#8853]: https://github.com/MaterializeInc/materialize/issues/8853
