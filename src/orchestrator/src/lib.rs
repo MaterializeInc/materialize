@@ -155,7 +155,7 @@ pub struct ServiceEvent {
 /// Why the service is not ready, if known
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
 pub enum NotReadyReason {
-    OOMKilled,
+    OomKilled,
 }
 
 /// Describes the status of an orchestrated service.

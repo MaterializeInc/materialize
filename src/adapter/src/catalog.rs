@@ -1648,7 +1648,6 @@ impl ClusterReplica {
 #[derive(Debug, Serialize, Clone)]
 pub struct ClusterReplicaProcessStatus {
     pub status: ClusterStatus,
-
     pub time: DateTime<Utc>,
 }
 

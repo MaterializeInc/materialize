@@ -248,15 +248,12 @@ impl CatalogState {
         diff: Diff,
     ) -> BuiltinTableUpdate {
         let event = self.get_cluster_status(cluster_id, replica_id, process_id);
-        let status = match event.status {
-            ClusterStatus::Ready => "ready",
-            ClusterStatus::NotReady(_) => "not-ready",
-        };
+        let status = event.status.as_kebab_case_str();
 
         let not_ready_reason = match event.status {
             ClusterStatus::Ready => None,
             ClusterStatus::NotReady(None) => None,
-            ClusterStatus::NotReady(Some(NotReadyReason::OOMKilled)) => Some("oom-killed"),
+            ClusterStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("oom-killed"),
         };
 
         // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.

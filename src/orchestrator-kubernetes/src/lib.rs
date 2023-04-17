@@ -883,11 +883,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let status = if pod_ready {
                 ServiceStatus::Ready
             } else {
-                if oomed {
-                    ServiceStatus::NotReady(Some(NotReadyReason::OOMKilled))
-                } else {
-                    ServiceStatus::NotReady(None)
-                }
+                ServiceStatus::NotReady(oomed.then_some(NotReadyReason::OomKilled))
             };
             let time = if let Some(time) = last_probe_time {
                 time.0
