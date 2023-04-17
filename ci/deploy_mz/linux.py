@@ -17,7 +17,7 @@ from .deploy_util import APT_BUCKET, VERSION
 
 
 def main() -> None:
-    repo = mzbuild.Repository(Path("."))
+    repo = mzbuild.Repository(Path("."), coverage=False)
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
     print(f"--- Checking version")

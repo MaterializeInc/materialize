@@ -19,6 +19,7 @@ apt-get update
 apt-get install -y \
     cmake \
     g++ \
+    postgresql-client \
     python3-venv \
     unzip
 

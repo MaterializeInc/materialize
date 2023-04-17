@@ -1591,6 +1591,13 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') 
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR SCHEMAS (one, two);
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR SCHEMAS (one, two)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetSchemas([Ident("one"), Ident("two")])), progress_subsource: None })
+
+parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES WITH (SIZE = 'small');
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES WITH (SIZE = 'small')
@@ -1609,7 +1616,7 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (foo, bar AS qux, baz AS zop) WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]) WITH (SIZE = 'small');
@@ -1623,7 +1630,7 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]) WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedItemName([Ident("foo"), Ident("bar")])))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedItemName([Ident("foo"), Ident("bar")])))) }])), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz) WITH (SIZE = 'small');

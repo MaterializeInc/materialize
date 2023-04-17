@@ -11,6 +11,9 @@ statement ok
 CREATE TABLE t1(f1 INT, f2 INT);
 
 statement ok
+CREATE TABLE t2(f1 INT NOT NULL, f2 INT NOT NULL);
+
+statement ok
 CREATE VIEW v1 AS SELECT t1 from t1;
 
 statement ok
@@ -41,5 +44,127 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.v1_primary_idx
+
+EOF
+
+## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
+
+# Wrapping the first example from this file in a WMR works, but only if we can
+# eliminate the `<expr> IS NOT NULL` predicates that are added when pushing the
+# join condition through the CrossJoin.
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH MUTUALLY RECURSIVE
+  c0(f1 INT, f2 INT, f INT) AS (
+    SELECT * FROM c0
+    UNION
+    SELECT * FROM t2, (SELECT DISTINCT f1 % 2 AS f FROM t2) t0 WHERE t2.f1 % 2 = t0.f
+  )
+SELECT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 3 }
+    Get l0 // { arity: 3 }
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0..=#2] // { arity: 3 }
+        Union // { arity: 3 }
+          Get l0 // { arity: 3 }
+          Map ((#0 % 2)) // { arity: 3 }
+            Get materialize.public.t2 // { arity: 2 }
+
+EOF
+
+# Same query, but selecting from t1 instead of t2. The added `- IS NOT NULL`
+# filters prevent redundant join elimination. To be able to eliminate the join
+# we need to factor out the filter on top of t1 behind a common binding.
+#
+# This might be fixed by #18173 (depending on the strength of the solution).
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH MUTUALLY RECURSIVE
+  c0(f1 INT, f2 INT, f INT) AS (
+    SELECT * FROM c0
+    UNION
+    SELECT * FROM t1, (SELECT DISTINCT f1 % 2 AS f FROM t1) t0 WHERE t1.f1 % 2 = t0.f
+  )
+SELECT * FROM c0;
+----
+Explained Query:
+  Return // { arity: 3 }
+    Get l0 // { arity: 3 }
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0..=#2] // { arity: 3 }
+        Union // { arity: 3 }
+          Get l0 // { arity: 3 }
+          Join on=(#2 = (#0 % 2)) type=differential // { arity: 3 }
+            implementation
+              %1[#0]UKA » %0:t1[(#0 % 2)]K
+            ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
+              Filter (#0) IS NOT NULL // { arity: 2 }
+                Get materialize.public.t1 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Distinct group_by=[(#0 % 2)] // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Filter (#0) IS NOT NULL // { arity: 2 }
+                    Get materialize.public.t1 // { arity: 2 }
+
+Source materialize.public.t1
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# Another case that does not work at the moment because of the naive ProvInfo
+# initialization for WMR bindings.
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH
+  t0 AS (
+    SELECT DISTINCT f1 % 2 AS f, 42 as c FROM t2
+  )
+SELECT * FROM (
+  WITH MUTUALLY RECURSIVE
+    c0(f INT) AS (
+      SELECT f FROM t0
+    ),
+    c1(f1 INT, f2 INT, f INT) AS (
+      SELECT * FROM c1
+      UNION
+      SELECT f, f, f from c0
+      UNION
+      SELECT * FROM t2, c0 WHERE t2.f1 % 2 = c0.f
+    )
+  SELECT f FROM c1 UNION ALL SELECT c FROM t0
+);
+----
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Project (#2) // { arity: 1 }
+        Get l1 // { arity: 3 }
+      Project (#1) // { arity: 1 }
+        Get l0 // { arity: 2 }
+  With Mutually Recursive
+    cte l1 =
+      Distinct group_by=[#0..=#2] // { arity: 3 }
+        Union // { arity: 3 }
+          Distinct group_by=[#0..=#2] // { arity: 3 }
+            Union // { arity: 3 }
+              Get l1 // { arity: 3 }
+              Project (#0, #0, #0) // { arity: 3 }
+                Get l0 // { arity: 2 }
+          Join on=(#2 = (#0 % 2)) type=differential // { arity: 3 }
+            implementation
+              %0:t2[(#0 % 2)]K » %1:l0[#0]K
+            ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
+              Get materialize.public.t2 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Get l0 // { arity: 2 }
+    cte l0 =
+      Distinct group_by=[(#0 % 2), 42] // { arity: 2 }
+        Project (#0) // { arity: 1 }
+          Get materialize.public.t2 // { arity: 2 }
 
 EOF

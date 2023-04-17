@@ -32,7 +32,7 @@ EXPLAIN SHOW SCHEMAS
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter ((#0) IS NULL OR (1 = bigint_to_numeric(#0)))
+    Filter ((#0) IS NULL OR (#0 = "u1"))
       ReadExistingIndex mz_internal.mz_show_schemas_ind
 
 Used Indexes:
@@ -45,8 +45,7 @@ EXPLAIN SHOW CONNECTIONS
 ----
 Explained Query (fast path):
   Project (#3, #4)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_connections_ind
+    ReadExistingIndex mz_internal.mz_show_connections_ind lookup_value=("u3")
 
 Used Indexes:
   - mz_internal.mz_show_connections_ind
@@ -58,8 +57,7 @@ EXPLAIN SHOW TABLES
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_tables_ind
+    ReadExistingIndex mz_internal.mz_show_tables_ind lookup_value=("u3")
 
 Used Indexes:
   - mz_internal.mz_show_tables_ind
@@ -71,8 +69,7 @@ EXPLAIN SHOW SOURCES
 ----
 Explained Query (fast path):
   Project (#3, #4, #6)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_sources_ind
+    ReadExistingIndex mz_internal.mz_show_sources_ind lookup_value=("u3")
 
 Used Indexes:
   - mz_internal.mz_show_sources_ind
@@ -84,8 +81,7 @@ EXPLAIN SHOW VIEWS
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_views_ind
+    ReadExistingIndex mz_internal.mz_show_views_ind lookup_value=("u3")
 
 Used Indexes:
   - mz_internal.mz_show_views_ind
@@ -97,7 +93,7 @@ EXPLAIN SHOW MATERIALIZED VIEWS
 ----
 Explained Query (fast path):
   Project (#2, #3)
-    Filter (3 = bigint_to_numeric(#0))
+    Filter (#0 = "u3")
       ReadExistingIndex mz_internal.mz_show_materialized_views_ind
 
 Used Indexes:
@@ -110,7 +106,7 @@ EXPLAIN SHOW INDEXES
 ----
 Explained Query (fast path):
   Project (#3..=#6)
-    Filter NOT("s%" ~~(#0)) AND (3 = bigint_to_numeric(#1))
+    Filter NOT("s%" ~~(#0)) AND (#1 = "u3")
       ReadExistingIndex mz_internal.mz_show_indexes_ind
 
 Used Indexes:
@@ -123,8 +119,7 @@ EXPLAIN SHOW SINKS
 ----
 Explained Query (fast path):
   Project (#3, #4, #6)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_sinks_ind
+    ReadExistingIndex mz_internal.mz_show_sinks_ind lookup_value=("u3")
 
 Used Indexes:
   - mz_internal.mz_show_sinks_ind
@@ -136,8 +131,7 @@ EXPLAIN SHOW TYPES
 ----
 Explained Query (fast path):
   Project (#3)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_types_ind
+    ReadExistingIndex mz_internal.mz_show_types_ind lookup_value=("u3")
 
 Used Indexes:
   - mz_internal.mz_show_types_ind
@@ -149,8 +143,7 @@ EXPLAIN SHOW OBJECTS
 ----
 Explained Query (fast path):
   Project (#3, #4)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_all_objects_ind
+    ReadExistingIndex mz_internal.mz_show_all_objects_ind lookup_value=("u3")
 
 Used Indexes:
   - mz_internal.mz_show_all_objects_ind
@@ -200,8 +193,7 @@ EXPLAIN SHOW SECRETS
 ----
 Explained Query (fast path):
   Project (#2)
-    Filter (3 = bigint_to_numeric(#0))
-      ReadExistingIndex mz_internal.mz_show_secrets_ind
+    ReadExistingIndex mz_internal.mz_show_secrets_ind lookup_value=("u3")
 
 Used Indexes:
   - mz_internal.mz_show_secrets_ind
@@ -232,10 +224,10 @@ Explained Query:
         ArrangeBy keys=[[#0]]
           Get mz_catalog.mz_clusters
         ArrangeBy keys=[[#0]]
-          Project (#0, #15)
+          Project (#0, #17)
             Filter (#3) IS NOT NULL
-              Map (((uint8_to_double(#14) / uint8_to_double(#10)) * 100))
-                Join on=(#0 = #11 AND #3 = #6) type=differential
+              Map (((uint8_to_double(#15) / uint8_to_double(#10)) * 100))
+                Join on=(#0 = #12 AND #3 = #6) type=differential
                   ArrangeBy keys=[[#0]]
                     Get mz_catalog.mz_cluster_replicas
                   ArrangeBy keys=[[#0]]

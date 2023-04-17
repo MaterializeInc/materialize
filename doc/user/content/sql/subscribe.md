@@ -41,8 +41,8 @@ The following options are valid within the `WITH` clause.
 
 | Option name | Value type | Default | Describes                                                                                                                         |
 | ----------- | ---------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `SNAPSHOT`  | `boolean`  | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot) below. |
-| `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress) below.                                              |
+| `SNAPSHOT`  | `boolean`  | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot). |
+| `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress).                                              |
 
 ## Details
 

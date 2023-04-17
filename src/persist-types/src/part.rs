@@ -21,7 +21,7 @@ use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{ColumnFormat, Data, DataType, Schema};
-use crate::stats::{DynStats, StatsFn};
+use crate::stats::{DynStats, StatsFn, StructStats};
 
 /// A columnar representation of one blob's worth of data.
 #[derive(Debug, Default)]
@@ -60,6 +60,21 @@ impl Part {
                 .map(|(name, col)| (name.as_str(), col))
                 .collect(),
         }
+    }
+
+    /// Computes a [StructStats] for the key columns.
+    pub fn key_stats<K, KS: Schema<K>>(&self, schema: &KS) -> Result<StructStats, String> {
+        let mut stats = StructStats {
+            len: self.len(),
+            cols: Default::default(),
+        };
+        let mut cols = self.key_ref();
+        for (name, _typ, stats_fn) in schema.columns() {
+            let col_stats = cols.stats(&name, stats_fn)?;
+            stats.cols.insert(name, col_stats);
+        }
+        cols.finish()?;
+        Ok(stats)
     }
 
     pub(crate) fn to_arrow(&self) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {

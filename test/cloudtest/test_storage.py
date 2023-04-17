@@ -18,6 +18,45 @@ from materialize.cloudtest.k8s import cluster_pod_name, cluster_service_name
 from materialize.cloudtest.wait import wait
 
 
+def get_value_from_label(
+    mz: MaterializeApplication, cluster_id: str, label: str
+) -> str:
+    return mz.kubectl(
+        "get",
+        "pods",
+        f"--selector=cluster.environmentd.materialize.cloud/cluster-id={cluster_id}",
+        "-o",
+        "jsonpath='{.items[*].metadata.labels." + label + "}'",
+    )
+
+
+def get_cluster_workers(mz: MaterializeApplication, cluster_id: str) -> str:
+    return get_value_from_label(
+        mz, cluster_id, r"cluster\.environmentd\.materialize\.cloud/workers"
+    )
+
+
+def get_cluster_scale(mz: MaterializeApplication, cluster_id: str) -> str:
+    return get_value_from_label(
+        mz, cluster_id, r"cluster\.environmentd\.materialize\.cloud/scale"
+    )
+
+
+def get_cluster_size(mz: MaterializeApplication, cluster_id: str) -> str:
+    return get_value_from_label(
+        mz, cluster_id, r"cluster\.environmentd\.materialize\.cloud/size"
+    )
+
+
+def get_cluster_and_replica_id(
+    mz: MaterializeApplication, mz_table: str, name: str
+) -> tuple[str, str]:
+    [cluster_id, replica_id] = mz.environmentd.sql_query(
+        f"SELECT s.cluster_id, r.id FROM {mz_table} s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{name}'"
+    )[0]
+    return cluster_id, replica_id
+
+
 def test_source_creation(mz: MaterializeApplication) -> None:
     """Test that creating multiple sources causes multiple storage clusters to be spawned."""
     mz.testdrive.run(
@@ -46,9 +85,7 @@ def test_source_creation(mz: MaterializeApplication) -> None:
     )
 
     for source in ["source1", "source2"]:
-        [cluster_id, replica_id] = mz.environmentd.sql_query(
-            f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{source}'"
-        )[0]
+        [cluster_id, replica_id] = get_cluster_and_replica_id(mz, "mz_sources", source)
 
         storage_cluster = cluster_pod_name(cluster_id, replica_id)
         wait(condition="condition=Ready", resource=storage_cluster)
@@ -77,12 +114,15 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
             """
         )
     )
-    [cluster_id, replica_id] = mz.environmentd.sql_query(
-        f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 'resize_source'"
-    )[0]
-    storage_cluster = cluster_pod_name(cluster_id, replica_id)
+    [cluster_id, replica_id] = get_cluster_and_replica_id(
+        mz, "mz_sources", "resize_source"
+    )
+    storage_cluster_name = cluster_pod_name(cluster_id, replica_id)
+    wait(condition="condition=Ready", resource=storage_cluster_name)
 
-    wait(condition="condition=Ready", resource=storage_cluster)
+    assert get_cluster_workers(mz, cluster_id) == "'1'"
+    assert get_cluster_scale(mz, cluster_id) == "'1'"
+    assert get_cluster_size(mz, cluster_id) == "'1'"
 
     mz.testdrive.run(
         input=dedent(
@@ -94,18 +134,29 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    wait(condition="condition=Ready", resource=storage_cluster)
+    wait(
+        condition="condition=Ready",
+        resource="pod",
+        label="cluster.environmentd.materialize.cloud/workers=16",
+    )
 
-    # NB: We'd like to do the following, but jsonpath gives us no way to express it!
-    # TODO: revisit or handroll a retry loop
-    # wait(condition=f"jsonpath=metadata.labels.storage.environmentd.materialize.cloud/size=16", resource=storage_cluster)
+    wait(condition="delete", resource=storage_cluster_name)
+
+    assert get_cluster_workers(mz, cluster_id) == "'16'"
+    assert get_cluster_scale(mz, cluster_id) == "'1'"
+    assert get_cluster_size(mz, cluster_id) == "'16'"
+
+    [cluster_id, replica_id] = get_cluster_and_replica_id(
+        mz, "mz_sources", "resize_source"
+    )
+    storage_cluster_name = cluster_pod_name(cluster_id, replica_id)
 
     mz.environmentd.sql("DROP SOURCE resize_source")
-    wait(condition="delete", resource=storage_cluster)
+    wait(condition="delete", resource=storage_cluster_name)
 
 
 @pytest.mark.parametrize("failpoint", [False, True])
-@pytest.mark.skip(reason="Failpoints mess up the Mz intance #18000")
+@pytest.mark.skip(reason="Failpoints mess up the Mz instance #18000")
 def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
     print("Starting test_source_shutdown")
     if failpoint:
@@ -140,9 +191,8 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
         )
     )
 
-    [cluster_id, replica_id] = mz.environmentd.sql_query(
-        f"SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 'source1'"
-    )[0]
+    [cluster_id, replica_id] = get_cluster_and_replica_id(mz, "mz_sources", "source1")
+
     storage_cluster_pod = cluster_pod_name(cluster_id, replica_id)
     storage_cluster_svc = cluster_service_name(cluster_id, replica_id)
 
@@ -164,20 +214,8 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
     not_exists(storage_cluster_svc)
 
 
-@pytest.mark.skip(
-    reason="follow-up task in https://github.com/MaterializeInc/cloud/issues/4929"
-)
 def test_sink_resizing(mz: MaterializeApplication) -> None:
     """Test that resizing a given sink causes the storage cluster to be replaced."""
-
-    def get_num_workers(mz: MaterializeApplication) -> str:
-        return mz.kubectl(
-            "get",
-            "pods",
-            "--selector=environmentd.materialize.cloud/namespace=storage",
-            "-o",
-            r"jsonpath='{.items[*].metadata.labels.storage\.environmentd\.materialize\.cloud/size}'",
-        )
 
     mz.testdrive.run(
         input=dedent(
@@ -203,21 +241,22 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
             """
         )
     )
-    [cluster_id, replica_id] = mz.environmentd.sql_query(
-        f"SELECT s.cluster_id, r.id FROM mz_sinks s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 'resize_sink'"
-    )[0]
     assert id is not None
-    storage_cluster = cluster_pod_name(cluster_id, replica_id)
 
-    assert get_num_workers(mz) == "'2'"
+    [cluster_id, replica_id] = get_cluster_and_replica_id(mz, "mz_sinks", "resize_sink")
+    storage_cluster_name = cluster_pod_name(cluster_id, replica_id)
 
-    wait(condition="condition=Ready", resource=storage_cluster)
+    wait(condition="condition=Ready", resource=storage_cluster_name)
+
+    assert get_cluster_workers(mz, cluster_id) == "'2'"
+    assert get_cluster_scale(mz, cluster_id) == "'1'"
+    assert get_cluster_size(mz, cluster_id) == "'2'"
 
     mz.testdrive.run(
         input=dedent(
             """
             > ALTER SINK resize_sink
-              SET (SIZE '16');
+              SET (SIZE '4-4');
             """
         ),
         no_reset=True,
@@ -226,10 +265,17 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
     wait(
         condition="condition=Ready",
         resource="pod",
-        label="storage.environmentd.materialize.cloud/size=16",
+        label="cluster.environmentd.materialize.cloud/workers=4",
     )
 
-    assert get_num_workers(mz) == "'16'"
+    wait(condition="delete", resource=storage_cluster_name)
+
+    assert get_cluster_workers(mz, cluster_id) == "'4 4 4 4'"
+    assert get_cluster_scale(mz, cluster_id) == "'4 4 4 4'"
+    assert get_cluster_size(mz, cluster_id) == "'4-4 4-4 4-4 4-4'"
+
+    [cluster_id, replica_id] = get_cluster_and_replica_id(mz, "mz_sinks", "resize_sink")
+    storage_cluster_name = cluster_pod_name(cluster_id, replica_id)
 
     mz.environmentd.sql("DROP SINK resize_sink")
-    wait(condition="delete", resource=storage_cluster)
+    wait(condition="delete", resource=storage_cluster_name)

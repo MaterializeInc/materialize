@@ -132,7 +132,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--internal-sql-listen-addr=0.0.0.0:6877",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
-            # Materializel too! If you are adding a command-line option that is
+            # Materialize too! If you are adding a command-line option that is
             # only supported on newer releases, do not add it here. Add it as a
             # version-gated argument below, using `self._meets_minimum_version`.
         ]

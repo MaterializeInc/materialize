@@ -463,6 +463,9 @@ where
                         ("cluster-id".into(), cluster_id.to_string()),
                         ("type".into(), "cluster".into()),
                         ("replica-role".into(), role_label.into()),
+                        ("scale".into(), location.allocation.scale.to_string()),
+                        ("workers".into(), location.allocation.workers.to_string()),
+                        ("size".into(), location.size.to_string()),
                     ]),
                     availability_zone: Some(location.availability_zone),
                     // This constrains the orchestrator (for those orchestrators that support

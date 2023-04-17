@@ -29,6 +29,7 @@ message ProtoBasicTopKPlan {
     optional uint64 limit = 3;
     uint64 offset = 4;
     uint64 arity = 5;
+    repeated uint64 buckets = 6;
 }
 
 message ProtoMonotonicTop1Plan {

@@ -29,16 +29,7 @@ impl PartStats {
         schemas: &Schemas<K, V>,
         part: &Part,
     ) -> Result<Self, String> {
-        let mut key = StructStats {
-            len: part.len(),
-            cols: Default::default(),
-        };
-        let mut key_cols = part.key_ref();
-        for (name, _typ, stats_fn) in schemas.key.columns() {
-            let col_stats = key_cols.stats(&name, stats_fn)?;
-            key.cols.insert(name, col_stats);
-        }
-        key_cols.finish()?;
+        let key = part.key_stats(schemas.key.as_ref())?;
         Ok(PartStats { key })
     }
 

@@ -31,6 +31,7 @@ _src_name_  | The name for the source.
 **IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
 **CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
+**FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas in the publication.
 **FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
@@ -57,7 +58,9 @@ For this reason, you must configure the upstream PostgreSQL database to support 
 
 #### Creating a source
 
-To avoid creating multiple replication slots in the upstream PostgreSQL database and minimize the required bandwidth, Materialize ingests the raw replication stream data for either all tables (`FOR ALL TABLES`) or a specified subset of tables (`FOR TABLES`) included in a specific publication.
+To avoid creating multiple replication slots in the upstream PostgreSQL database
+and minimize the required bandwidth, Materialize ingests the raw replication
+stream data for some specific set of tables in your publication.
 
 ```sql
 CREATE SOURCE mz_source
@@ -253,6 +256,15 @@ CREATE SOURCE mz_source
     FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
     FOR ALL TABLES
     WITH (SIZE = '3xsmall');
+```
+
+_Create subsources for all tables from specific schemas included in the PostgreSQL publication_
+
+```sql
+CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+  FOR SCHEMAS (public, project)
+  WITH (SIZE = '3xsmall');
 ```
 
 _Create subsources for specific tables included in the PostgreSQL publication_
