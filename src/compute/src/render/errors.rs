@@ -78,11 +78,15 @@ where
 #[derive(Clone)]
 pub(super) struct ErrorLogger {
     token: Option<Weak<()>>,
+    dataflow_name: String,
 }
 
 impl ErrorLogger {
-    pub fn new(token: Option<Weak<()>>) -> Self {
-        Self { token }
+    pub fn new(token: Option<Weak<()>>, dataflow_name: String) -> Self {
+        Self {
+            token,
+            dataflow_name,
+        }
     }
 
     fn token_alive(&self) -> bool {
@@ -118,7 +122,10 @@ impl ErrorLogger {
     ///
     /// Use this method to notify about errors that cannot be caused by dataflow shutdown.
     pub fn log_always(&self, message: &'static str, details: &str) {
-        tracing::warn!("[customer-data] {message} ({details})");
+        tracing::warn!(
+            dataflow = self.dataflow_name,
+            "[customer-data] {message} ({details})"
+        );
         tracing::error!(message);
     }
 
@@ -126,7 +133,10 @@ impl ErrorLogger {
     ///
     /// Use this method to notify about errors that are certainly caused by bugs in Materialize.
     pub fn soft_panic_or_log(&self, message: &'static str, details: &str) {
-        tracing::warn!("[customer-data] {message} ({details})");
+        tracing::warn!(
+            dataflow = self.dataflow_name,
+            "[customer-data] {message} ({details})"
+        );
         mz_ore::soft_panic_or_log!("{}", message);
     }
 }

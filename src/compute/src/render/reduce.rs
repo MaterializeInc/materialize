@@ -280,16 +280,12 @@ where
         S: Scope<Timestamp = G::Timestamp>,
     {
         let error_logger = self.error_logger();
-        let debug_name = self.debug_name.to_string();
 
         // We must have more than one arrangement to collate.
         if arrangements.len() <= 1 {
             error_logger.soft_panic_or_log(
                 "Incorrect number of arrangements in reduce collation",
-                &format!(
-                    "len={len}, debug_name={debug_name}",
-                    len = arrangements.len(),
-                ),
+                &format!("len={}", arrangements.len()),
             );
         }
 
@@ -380,8 +376,7 @@ where
                         error_logger.log(
                             message,
                             &format!(
-                                "key={key:?}, debug_name={debug_name}, \
-                                 n_aggregates_requested={requested}, \
+                                "key={key:?}, n_aggregates_requested={requested}, \
                                  n_distinct_aggregate_types={n_distinct_aggregate_types}",
                                 requested = input.len(),
                             ),
@@ -414,10 +409,7 @@ where
                         // We cannot properly reconstruct a row if aggregates are missing.
                         // This situation is not expected, so we log an error if it occurs.
                         let message = "Missing value for key in ReduceCollation";
-                        error_logger.log(
-                            message,
-                            &format!("typ={typ:?}, key={key:?}, debug_name={debug_name}"),
-                        );
+                        error_logger.log(message, &format!("typ={typ:?}, key={key:?}"));
                         output.push((EvalError::Internal(message.to_string()).into(), 1));
                         return;
                     }
@@ -430,7 +422,7 @@ where
                     }
 
                     let message = "Rows too large for key in ReduceCollation";
-                    error_logger.log(message, &format!("key={key:?}, debug_name={debug_name}"));
+                    error_logger.log(message, &format!("key={key:?}"));
                     output.push((EvalError::Internal(message.to_string()).into(), 1));
                 },
             );
@@ -446,7 +438,6 @@ where
         S: Scope<Timestamp = G::Timestamp>,
     {
         let error_logger = self.error_logger();
-        let debug_name = self.debug_name.to_string();
 
         let (output, errors) = collection
             .arrange_named::<RowSpine<_, _, _, _>>("Arranged DistinctBy")
@@ -465,10 +456,7 @@ where
                             continue;
                         }
                         let message = "Non-positive multiplicity in DistinctBy";
-                        error_logger.log(
-                            message,
-                            &format!("row={row:?}, count={count}, debug_name={debug_name}"),
-                        );
+                        error_logger.log(message, &format!("row={row:?}, count={count}"));
                         output.push((EvalError::Internal(message.to_string()).into(), 1));
                         return;
                     }
@@ -488,7 +476,6 @@ where
         S: Scope<Timestamp = G::Timestamp>,
     {
         let error_logger = self.error_logger();
-        let debug_name = self.debug_name.to_string();
 
         let (negated_result, errs) = collection
             .arrange_named::<RowSpine<Row, _, _, _>>("Arranged DistinctBy Retractions input")
@@ -499,10 +486,7 @@ where
                             continue;
                         }
                         let message = "Non-positive multiplicity in DistinctBy Retractions";
-                        error_logger.log(
-                            message,
-                            &format!("row={row:?}, count={count}, debug_name={debug_name}"),
-                        );
+                        error_logger.log(message, &format!("row={row:?}, count={count}"));
                         output.push((Err(message.to_string()), 1));
                         return;
                     }
@@ -553,11 +537,7 @@ where
         if aggrs.len() <= 1 {
             self.error_logger().soft_panic_or_log(
                 "Too few aggregations when building basic aggregates",
-                &format!(
-                    "len={len}, debug_name={name}",
-                    len = aggrs.len(),
-                    name = self.debug_name,
-                ),
+                &format!("len={}", aggrs.len()),
             )
         }
         let mut err_output = None;
@@ -665,7 +645,6 @@ where
         // rationale around using a second reduction here.
         if validating && err_output.is_none() {
             let error_logger = self.error_logger();
-            let debug_name = self.debug_name.to_string();
 
             let errs = arranged.reduce_abelian::<_, ErrValSpine<_, _, _>>(
                 "ReduceInaccumulable Error Check",
@@ -679,10 +658,7 @@ where
                         }
 
                         let message = "Non-positive accumulation in ReduceInaccumulable";
-                        error_logger.log(
-                            message,
-                            &format!("value={value:?}, count={count}, debug_name={debug_name}"),
-                        );
+                        error_logger.log(message, &format!("value={value:?}, count={count}"));
                         target.push((EvalError::Internal(message.to_string()).into(), 1));
                         return;
                     }
@@ -703,7 +679,6 @@ where
         R: MaybeValidatingRow<(), String>,
     {
         let error_logger = self.error_logger();
-        let debug_name = self.debug_name.to_string();
 
         input
             .arrange_named::<RowSpine<(Row, Row), _, _, _>>("Arranged ReduceInaccumulable")
@@ -718,10 +693,7 @@ where
 
                             let message =
                                 "Non-positive accumulation in ReduceInaccumulable DISTINCT";
-                            error_logger.log(
-                                message,
-                                &format!("value={value:?}, count={count}, debug_name={debug_name}"),
-                            );
+                            error_logger.log(message, &format!("value={value:?}, count={count}"));
                             t.push((err(message.to_string()), 1));
                             return;
                         }
@@ -823,7 +795,6 @@ where
             // Build a series of stages for the reduction
             // Arrange the final result into (key, Row)
             let error_logger = self.error_logger();
-            let debug_name = self.debug_name.to_string();
             let arranged =
                 partial.arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arrange ReduceMinsMaxes");
             // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
@@ -843,10 +814,7 @@ where
                                 }
 
                                 let message = "Non-positive accumulation in ReduceMinsMaxes";
-                                error_logger.log(
-                                    message,
-                                    &format!("val={val:?}, count={count}, debug_name={debug_name}"),
-                                );
+                                error_logger.log(message, &format!("val={val:?}, count={count}"));
                                 target.push((EvalError::Internal(message.to_string()).into(), 1));
                                 return;
                             }
@@ -895,7 +863,6 @@ where
         R: MaybeValidatingRow<Vec<Row>, (Row, u64)>,
     {
         let error_logger = self.error_logger();
-        let debug_name = self.debug_name.to_string();
         let arranged_input = input
             .arrange_named::<RowSpine<_, Vec<Row>, _, _>>("Arranged MinsMaxesHierarchical input");
 
@@ -911,10 +878,7 @@ where
                             }
                             error_logger.log(
                                 "Non-positive accumulation in MinsMaxesHierarchical",
-                                &format!(
-                                    "key={key:?}, value={value:?}, count={count}, \
-                                     debug_name={debug_name}"
-                                ),
+                                &format!("key={key:?}, value={value:?}, count={count}"),
                             );
                             // After complaining, output an error here so that we can eventually
                             // report it in an error stream.
@@ -973,11 +937,10 @@ where
         let consolidated = collection
             .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated ReduceMonotonic input");
         let error_logger = self.error_logger();
-        let debug_name = self.debug_name.to_string();
         let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
             error_logger.log(
                 "Non-monotonic input to ReduceMonotonic",
-                &format!("data={data:?}, diff={diff}, debug_name={debug_name}"),
+                &format!("data={data:?}, diff={diff}"),
             );
             let m = "tried to build a monotonic reduction on non-monotonic input".to_string();
             (EvalError::Internal(m).into(), 1)
@@ -1036,11 +999,10 @@ where
             self.error_logger().soft_panic_or_log(
                 "Incorrect numbers of aggregates in accummulable reduction rendering",
                 &format!(
-                    "full_aggrs={}, simple_aggrs={}, distinct_aggrs={}, debug_name={}",
+                    "full_aggrs={}, simple_aggrs={}, distinct_aggrs={}",
                     full_aggrs.len(),
                     simple_aggrs.len(),
                     distinct_aggrs.len(),
-                    self.debug_name,
                 ),
             );
         }
@@ -1294,7 +1256,6 @@ where
         };
 
         let error_logger = self.error_logger();
-        let debug_name = self.debug_name.to_string();
         let err_full_aggrs = full_aggrs.clone();
         let (arranged_output, arranged_errs) = collection
             .arrange_named::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable")
@@ -1506,7 +1467,7 @@ where
                         if total == 0 && !accum.is_zero() {
                             error_logger.log(
                                 "Net-zero records with non-zero accumulation in ReduceAccumulable",
-                                &format!("aggr={aggr:?}, accum={accum:?}, debug_name={debug_name}"),
+                                &format!("aggr={aggr:?}, accum={accum:?}"),
                             );
                             let message = format!(
                                 "Invalid data in source, saw net-zero records for key {key} \
@@ -1521,9 +1482,7 @@ where
                                 if accum.is_negative() {
                                     error_logger.log(
                                     "Invalid negative unsigned aggregation in ReduceAccumulable",
-                                    &format!(
-                                        "aggr={aggr:?}, accum={accum:?}, debug_name={debug_name}"
-                                    ),
+                                    &format!("aggr={aggr:?}, accum={accum:?}"),
                                 );
                                     let message = format!(
                                         "Invalid data in source, saw negative accumulation with \

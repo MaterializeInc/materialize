@@ -258,15 +258,11 @@ where
             );
 
             let error_logger = self.error_logger();
-            let debug_name = self.debug_name.to_string();
             let (oks, errs) =
                 stage.map_fallible("Demuxing Errors", move |((k, h), result)| match result {
                     Err(v) => {
                         let message = "Negative multiplicities in TopK";
-                        error_logger.log(
-                            message,
-                            &format!("k={k:?}, h={h}, v={v:?}, debug_name={debug_name}"),
-                        );
+                        error_logger.log(message, &format!("k={k:?}, h={h}, v={v:?}"));
                         Err(EvalError::Internal(message.to_string()).into())
                     }
                     Ok(t) => Ok(((k, h), t)),
@@ -318,11 +314,10 @@ where
         let consolidated = collection
             .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTop1 input");
         let error_logger = self.error_logger();
-        let debug_name = self.debug_name.to_string();
         let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
             error_logger.log(
                 "Non-monotonic input to MonotonicTop1",
-                &format!("data={data:?}, diff={diff}, debug_name={debug_name}"),
+                &format!("data={data:?}, diff={diff}"),
             );
             let m = "tried to build monotonic top-1 on non-monotonic input".to_string();
             (EvalError::Internal(m).into(), 1)

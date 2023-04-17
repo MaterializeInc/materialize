@@ -171,7 +171,7 @@ where
     }
 
     pub(super) fn error_logger(&self) -> ErrorLogger {
-        ErrorLogger::new(self.shutdown_token.clone())
+        ErrorLogger::new(self.shutdown_token.clone(), self.debug_name.clone())
     }
 }
 
