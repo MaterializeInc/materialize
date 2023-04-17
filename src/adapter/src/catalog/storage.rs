@@ -686,6 +686,7 @@ async fn migrate(
                             database_ns: Some(DatabaseNamespace::User),
                             name: value.name.clone(),
                             owner_id: value.owner_id,
+                            privileges: value.privileges.clone(),
                         };
                         Some(new_value)
                     }
@@ -1221,7 +1222,7 @@ impl Connection {
             .await?
             .into_iter()
             .map(|(k, v)| Database {
-                id: DatabaseId::from(k.id),
+                id: DatabaseId::from(k),
                 name: v.name,
                 owner_id: v.owner_id.expect("owner ID not migrated"),
                 privileges: v.privileges.expect("privileges not migrated"),
@@ -1236,9 +1237,9 @@ impl Connection {
             .await?
             .into_iter()
             .map(|(k, v)| Schema {
-                id: SchemaId::from(k.id),
+                id: SchemaId::from(k),
                 name: v.name,
-                database_id: v.database_id.map(DatabaseId::new),
+                database_id: v.database_id.map(DatabaseId::User),
                 owner_id: v.owner_id.expect("owner ID not migrated"),
                 privileges: v.privileges.expect("privileges not migrated"),
             })
