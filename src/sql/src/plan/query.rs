@@ -3122,11 +3122,19 @@ fn plan_using_constraint(
         // Unlike regular table aliases, a `join_using_alias` should not hide the
         // names of the joined relations.
         if let Some(alias_name) = alias {
-            new_items.push(ScopeItem::from_name(Some(PartialItemName {
+            let new_item = PartialItemName {
                 database: None,
                 schema: None,
                 item: alias_name.clone().to_string(),
-            }), column_name.clone().to_string()));
+            };
+
+            for partial_item_name in both_scope.table_names() {
+                if partial_item_name.matches(&new_item) {
+                    sql_bail!("table name \"{}\" specified more than once", new_item)
+                }
+            }
+
+            new_items.push(ScopeItem::from_name(Some(new_item), column_name.clone().to_string()));
 
             // Should be able to use either `lhs` or `rhs` here since the column
             // is available in both scopes
