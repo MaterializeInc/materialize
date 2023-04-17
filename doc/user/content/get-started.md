@@ -12,45 +12,31 @@ aliases:
   - /install/
 ---
 
-[//]: # "TODO(morsapaes) Once we're GA, add details about signing up and logging
-into a Materialize account"
+This guide walks you through getting started with Materialize, including:
 
-This guide walks you through getting started with Materialize, covering:
+- Connecting a streaming data source
 
-* Connecting to a streaming data source
+- Computing real-time results with indexes and materialized views
 
-* Getting familiar with views, indexes and materialized views
+- Simulating failure to see active replication in action
 
-* Exploring common patterns like joins and time-windowing
+- Scaling up or down based on computational needs
 
-* Simulating a failure to see active replication in action
+## Before you begin
 
-{{< note >}}
-Ready to get hands-on with Materialize? [Sign up](https://materialize.com/register/) to get started! 🚀
-{{</ note >}}
+Materialize is wire-compatible with PostgreSQL, which means it integrates with most SQL clients and [other third-party tools](/integrations/) that support PostgreSQL.
 
-## Set up
-
-### Connect to Materialize
-
-Open a terminal window and connect to Materialize using [a compatible CLI](/integrations/sql-clients/), like `psql`. If you already have a compatible CLI installed, use the connection string provided in the Materialize UI to connect:
-
-```bash
-psql "postgres://user%40domain.com@host:6875/materialize"
-```
-
-Otherwise, install `psql` using the following instructions:
+In this guide, you'll use [`psql`](https://www.postgresql.org/docs/current/app-psql.html) to interact with Materialize, so make sure you have it installed locally.
 
 {{< tabs >}}
 {{< tab "macOS">}}
 
-Install `libpq` using [Homebrew](https://brew.sh/):
+Using [Homebrew](https://brew.sh/), install `libpq` and symlink the `psql` binary to `/usr/local/bin`:
 
 ```bash
 brew install libpq
 ```
 
-Then symlink the `psql` binary to your `/usr/local/bin` directory:
 ```bash
 brew link --force libpq
 ```
@@ -59,10 +45,13 @@ brew link --force libpq
 
 {{< tab "Linux">}}
 
-Install the `postgresql-client` package using [apt](https://linuxize.com/post/how-to-use-apt-command/):
+Using [`apt`](https://linuxize.com/post/how-to-use-apt-command/), install the `postgresql-client` package:
 
 ```bash
 sudo apt-get update
+```
+
+```bash
 sudo apt-get install postgresql-client
 ```
 
@@ -73,237 +62,472 @@ Download and install the [PostgreSQL installer](https://www.postgresql.org/downl
 {{< /tab >}}
 {{< /tabs >}}
 
-### Prepare your environment
+## Step 1. Start a free trial
 
-Before getting started, let's prepare an isolated environment for experimenting that guarantees we won't interfere with other workloads running in your database. As a first step, create a new [cluster](/overview/key-concepts/#clusters) with dedicated physical resources:
+With a free trial, you get 14 days of free access to Materialize resources worth up to 4 credits per hour. This limit should accommodate most trial scenarios. For more details, see [Free trial FAQs](/free-trial-faqs/).
 
-```sql
-CREATE CLUSTER quickstart REPLICAS (small_replica (SIZE = '2xsmall'));
-```
+{{< note >}}
+If you already have a Materialize account, skip to the [next step](#step-2-prepare-your-environment).
+{{</ note >}}
 
-And make it our active cluster:
+1. [Sign up for a Materialize trial](https://materialize.com/register/) using your business email address.
 
-```sql
-SET cluster = quickstart;
-```
+1. Activate your Materialize account.
 
-Now that **physical isolation** is out of the way, let's also take care of **logical isolation** and create a new schema to make sure we don't run into [namespacing](/sql/namespaces/) annoyances (like naming collisions):
+    Once your account is ready, you'll receive an email from Materialize asking you to activate your account. In the process, you'll create credentials for logging into the Materialize UI.
 
-```sql
-CREATE SCHEMA qck;
+## Step 2. Prepare your environment
 
-SET search_path = qck;
-```
+In Materialize, a [cluster](/overview/key-concepts/#clusters) is an **isolated environment**, similar to a virtual warehouse in Snowflake. Within a cluster, you have [replicas](/overview/key-concepts/#cluster-replicas), which are the **physical resources** for doing computational work. Clusters are completely isolated from each other, so replicas can be sized based on the specific task of the cluster, whether that is ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
 
-## Explore a streaming source
+For this guide, you'll create 2 clusters, one for ingesting source data and the other for computing and serving query results. Each cluster will contain a single replica at first (you'll explore the value of adding replicas later).
 
-Materialize allows you to work with streaming data from multiple external data sources, like [Kafka](/sql/create-source/kafka/) and [PostgreSQL](/sql/create-source/postgres/). You write arbitrarily complex **SQL queries**; Materialize takes care of keeping the results up to date as new data arrives.
+1. In the [Materialize UI](https://console.materialize.com/), enable the region where you want to run Materialize.
 
-[//]: # "TODO(morsapaes) Add a diagram + description of the data to the
-Quickstarts landing page, then link below"
+    Region setup will take a few minutes.
 
-To get you started, we provide a Kafka cluster with sample data that you can use to explore and learn the basics.
+1. On the **Connect** screen, create a new app password and then copy the `psql` command.
 
-### Create a source
+    The app password will be displayed only once, so be sure to copy the password somewhere safe. If you forget your password, you can create a new one.
 
-The first step is to declare where to find and how to connect to the sample Kafka cluster. For this, we need three Materialize concepts: [secrets](/sql/create-secret/), [connections](/sql/create-connection/) and [sources](/overview/key-concepts/#sources).
+1. Open a new terminal window, run the `psql` command, and enter your app password.
 
-1. **Create secrets.** Secrets allow you to store sensitive credentials securely in Materialize. To retrieve the access credentials, navigate to the [Materialize UI](https://cloud.materialize.com/showSourceCredentials) and replace the placeholders below with the provided values.
+    In the SQL shell, you'll be connected to a [pre-installed `default` cluster](/sql/show-clusters/#pre-installed-clusters) from which you can get started.
+
+1. Use the [`CREATE CLUSTER`](/sql/create-cluster/) command to create two new clusters, each with a single replica:
 
     ```sql
-    CREATE SECRET kafka_user AS '<KAFKA-USER>';
-    CREATE SECRET kafka_password AS '<KAFKA-PASSWORD>';
-    CREATE SECRET csr_user AS '<CSR-USER>';
-    CREATE SECRET csr_password AS '<CSR-PASSWORD>';
-    ```
-
-1. **Create connections.** Connections describe how to connect and authenticate to an external system you want Materialize to read data from. In this case, we want to [create a connection](/sql/create-connection/#kafka) to a Kafka cluster.
-
-    ```sql
-    CREATE CONNECTION kafka_connection TO KAFKA (
-      BROKER 'pkc-n00kk.us-east-1.aws.confluent.cloud:9092',
-      SASL MECHANISMS = 'PLAIN',
-      SASL USERNAME = SECRET kafka_user,
-      SASL PASSWORD = SECRET kafka_password
-    );
-    ```
-
-    In addition to Kafka, we need a connection to a Schema Registry that Materialize will use to fetch the schema of our sample data.
-
-    ```sql
-    CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
-      URL 'https://psrc-ko92v.us-east-2.aws.confluent.cloud:443',
-      USERNAME = SECRET csr_user,
-      PASSWORD = SECRET csr_password
-    );
-    ```
-
-    Once created, these connections can be reused across multiple `CREATE SOURCE` statements.
-
-1. **Create sources.** Now that we have the details to connect, we can create a source for each Kafka topic we want to use.
-
-    ```sql
-    CREATE SOURCE purchases
-      FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.purchases')
-      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-      ENVELOPE DEBEZIUM
-      WITH (SIZE = '3xsmall');
+    CREATE CLUSTER ingest_qck REPLICAS (r1 (SIZE = '2xsmall'));
     ```
 
     ```sql
-    CREATE SOURCE items
-      FROM KAFKA CONNECTION kafka_connection (TOPIC 'mysql.shop.items')
-      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-      ENVELOPE DEBEZIUM
-      WITH (SIZE = '3xsmall');
+    CREATE CLUSTER compute_qck REPLICAS (r1 (SIZE = '2xsmall'));
     ```
 
-    To list the sources we just created:
+    The `2xsmall` replica size is sufficient for the data ingestion and computation in this getting started scenario.
+
+1. Use the [`SHOW CLUSTER REPLICAS`](https://materialize.com/docs/sql/show-cluster-replicas/) command to check the status of the replicas:
+
+    ```sql
+    SHOW CLUSTER REPLICAS WHERE CLUSTER = 'compute_qck';
+    ```
+    <p></p>
+
+    ```noftm
+       cluster   | replica |  size   | ready
+    -------------+---------+---------+-------
+     compute_qck | r1      | 2xsmall | t
+    (2 rows)
+    ```
+
+    Once the `r1` replica is ready (`ready=t`), move on to the next step.
+
+## Step 3. Ingest streaming data
+
+Materialize supports streaming data from multiple external sources, including [Kafka](/sql/create-source/kafka/) and [PostgreSQL](/sql/create-source/postgres/). The process for integrating a source typically involves configuring the source's network and creating connection objects in Materialize.
+
+For this guide, you'll use a [built-in load generator](/sql/create-source/load-generator/#auction) that simulates an auction house, where users bid on an ongoing series of auctions.
+
+1. Use the [`CREATE SOURCE`](/sql/create-source/load-generator/) command to create the auction house source:
+
+    ```sql
+    CREATE SOURCE auction_house
+      IN CLUSTER ingest_qck
+      FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms')
+      FOR ALL TABLES;
+    ```
+
+    Note that the `IN CLUSTER` clause attaches this source to the existing `ingest_qck` cluster, but it's also possible to create a cluster and replica at the time of source creation using the [`WITH SIZE`](/sql/create-source/load-generator/#with-options) option.
+
+1. Now that you've created a source, Materialize starts ingesting data into durable storage, automatically splitting the stream into multiple _subsources_ that represent different tables. Use the [`SHOW SOURCES`](/sql/show-sources/) command to get an idea of the data being generated:
 
     ```sql
     SHOW SOURCES;
     ```
+    <p></p>
 
     ```nofmt
-       name    | type  |  size
-    -----------+-------+---------
-     items     | kafka | 3xsmall
-     purchases | kafka | 3xsmall
+              name          |      type      | size
+    ------------------------+----------------+------
+     accounts               | subsource      |
+     auction_house          | load-generator |
+     auction_house_progress | subsource      |
+     auctions               | subsource      |
+     bids                   | subsource      |
+     organizations          | subsource      |
+     users                  | subsource      |
+    (7 rows)
     ```
 
-    Creating a source will prompt Materialize to **start ingesting data** from the specified topics into durable storage.
+    In addition to the `auction_house` load generator source and its subsources, you'll see `auction_house_progress`, which Materialize creates so you can [monitor source ingestion](/sql/create-source/load-generator/#monitoring-source-progress).
 
-### Transform data
+    <!-- NOT SURE IF THIS IS CORRECT: In production scenarios, it's important to note that Materialize takes an [initial snapshot](/ops/troubleshooting/#has-my-source-ingested-its-initial-snapshot) of a source that must complete before Materialize can guarantee correct results.   -->
 
-With data being ingested into Materialize, we can start building SQL statements to transform it into something actionable.
-
-1. Create a [view](/overview/key-concepts/#non-materialized-views) `item_purchases` that calculates rolling aggregations for each item in the inventory:
+1. Before moving on, look at the schema of the source data you'll be working with:
 
     ```sql
-    CREATE VIEW item_purchases AS
-      SELECT
-        item_id,
-        SUM(quantity) AS items_sold,
-        SUM(purchase_price) AS revenue,
-        COUNT(id) AS orders,
-        MAX(created_at::timestamp) AS latest_order
-      FROM purchases
-      GROUP BY item_id;
+    SHOW COLUMNS FROM auctions;
     ```
+    <p></p>
 
-    As in other databases, a view doesn't store the results of the query, but simply provides an alias for the embedded `SELECT` statement.
-
-    To keep the results of this view incrementally maintained **in memory** within our cluster, we'll create an [index](/sql/create-index).
-
-1. Create an index `item_purchases_idx`:
-
-   ```sql
-   CREATE INDEX item_purchases_idx ON qck.item_purchases (item_id);
-   ```
-
-1. To see the results:
+    ```nofmt
+       name   | nullable |           type
+    ----------+----------+--------------------------
+     id       | f        | bigint
+     seller   | f        | bigint
+     item     | f        | text
+     end_time | f        | timestamp with time zone
+    (4 rows)
+    ```
 
     ```sql
-    SELECT * FROM item_purchases LIMIT 10;
+    SHOW COLUMNS FROM bids;
+    ```
+    <p></p>
 
-    --Lookups will be fast because of the index on item_id!
-    SELECT * FROM item_purchases WHERE item_id = 768;
+    ```nofmt
+        name    | nullable |           type
+    ------------+----------+--------------------------
+     id         | f        | bigint
+     buyer      | f        | bigint
+     auction_id | f        | bigint
+     amount     | f        | integer
+     bid_time   | f        | timestamp with time zone
+    (5 rows)
     ```
 
-    Regardless of how complex the underlying view definition is, querying an **indexed** view is computationally free because the results are pre-computed and available in memory. Using indexes can help decrease query time, as well as optimize other operations that depend on the view (like joins).
+## Step 4. Compute real-time results
 
-### Enrich data with joins
+With auction data streaming in, you can now explore the unique value of Materialize: computing real-time results over fast-changing data.
 
-Materialize efficiently supports [all types of SQL joins](/sql/join/#examples) under all the conditions you would expect from a relational database, including maintaining strong [consistency guarantees](/overview/isolation-level/).
-
-Now that we are keeping track of purchases in the `item_purchases` indexed view, let's enrich this view with the reference item information streaming in from the `items` source.
-
-1. Create a [materialized view](/overview/key-concepts/#materialized-views) `item_summary` that joins `item_purchases` and `items` based on the item identifier:
+1. Switch to your `compute_qck` cluster:
 
     ```sql
-      CREATE MATERIALIZED VIEW item_summary AS
-      SELECT
-          ip.item_id AS item_id,
-          i.name AS item_name,
-          i.category AS item_category,
-          SUM(ip.items_sold) AS items_sold,
-          SUM(ip.revenue) AS revenue,
-          SUM(ip.orders) AS orders,
-          ip.latest_order AS latest_order
-      FROM item_purchases ip
-      JOIN items i ON ip.item_id = i.id
-      GROUP BY item_id, item_name, item_category, latest_order;
+    SET CLUSTER = compute_qck;
     ```
 
-    Unlike a view, the results of a materialized view are **persisted and incrementally updated** in durable storage as new data arrives. Because the storage layer is shared across all clusters, materialized views allow you to **share data** between different environments.
-
-1. To see the results:
+1. Enable `psql`'s timing feature so you can see how quickly results are returned:
 
     ```sql
-    SELECT * FROM item_summary ORDER BY revenue DESC LIMIT 5;
+    \timing
     ```
 
-### Work with time windows
-
-In streaming, time keeps ticking along — unlike in batch, where data is frozen at query time. [Temporal filters](/sql/patterns/temporal-filters/) allow you to define time-windows over otherwise unbounded streams of data.
-
-1. Create a view `item_summary_5min` that keeps track of any items that had orders in the past 5 minutes:
+1. First, create a [**view**](/overview/key-concepts/#non-materialized-views):
 
     ```sql
-    CREATE VIEW item_summary_5min AS
-    SELECT *
-    FROM item_summary
-    WHERE mz_now() >= latest_order
-    AND mz_now() < latest_order + INTERVAL '5' MINUTE;
+    CREATE VIEW avg_bids AS
+      SELECT auctions.item, avg(bids.amount) AS average_bid
+      FROM bids
+      JOIN auctions ON bids.auction_id = auctions.id
+      WHERE bids.bid_time < auctions.end_time
+      GROUP BY auctions.item;
     ```
 
-    “In the past 5 minutes” is a moving target that changes as time ticks along. The `mz_now()` function is used to keep track of the logical time for your query (similarly to `now()` in other databases, as explained more in-depth in ["now and mz_now functions"](/sql/functions/now_and_mz_now/)). As time advances, records progressively falling outside this 5-minute window will be expired, and new records that satisfy the time constraint will be used in the view.
+    This view joins data from `auctions` and `bids` to get the average price of bids that arrived befored their auctions closed.
 
+    Note that, as in other SQL databases, a view in Materialize is simply an alias for the embedded `SELECT` statement. Materialize computes the results of the query only when the view is called.
 
-1. To see the results, let's use `SUBSCRIBE` instead of a vanilla `SELECT`:
+1. Query the view a few times:
 
     ```sql
-    COPY (
-        SUBSCRIBE (
-            SELECT item_name, item_category, revenue
-            FROM item_summary_5min
-    )) TO STDOUT;
+    SELECT * FROM avg_bids;
     ```
+    <p></p>
 
-    To cancel out of the subscription, press **CTRL+C**.
 
-## Break something!
+    ```nofmt
+            item        |    average_bid
+    --------------------+-------------------
+     Custom Art         | 50.10550599815441
+     Gift Basket        | 50.51195882531032
+     City Bar Crawl     | 50.02785145888594
+     Best Pizza in Town | 50.20555741546703
+     Signed Memorabilia | 49.34376098418278
+    (5 rows)
 
-1. From a different terminal window, open a new connection to Materialize.
-
-1. Add an additional replica to the `quickstart` cluster:
+    Time: 738.987 ms
+    ```
 
     ```sql
-    CREATE CLUSTER REPLICA quickstart.bigger SIZE = 'xsmall';
+    SELECT * FROM avg_bids;
+    ```
+    <p></p>
+
+
+    ```nofmt
+            item        |    average_bid
+    --------------------+--------------------
+     Custom Art         | 50.135432589422194
+     Gift Basket        | 50.485373134328356
+     City Bar Crawl     |  50.03637566137566
+     Best Pizza in Town |  50.16190159574468
+     Signed Memorabilia | 49.354624781849914
+    (5 rows)
+
+    Time: 707.403 ms
     ```
 
-1. To simulate a failure, drop the `small_replica`:
+    You'll see the average bid change as new auction data streams into Materialize. However, the view retrieves data from durable storage and computes results at query-time, so latency is high and would be much higher with a production dataset.
+
+1. Next, create an [**index**](/overview/key-concepts/#indexes) on the view:
 
     ```sql
-    DROP CLUSTER REPLICA quickstart.small_replica;
+    CREATE INDEX avg_bids_idx ON avg_bids (item);
     ```
 
-    If you switch to the terminal window running the `SUBSCRIBE` command, you'll see that results are still being pushed out to the client!
+    🚀🚀🚀 This is where Materialize becomes a true [streaming database](https://materialize.com/guides/streaming-database/). When you use an index, **Materialize incrementally computes the results of the indexed query in memory as new data arrives**.
+
+1. Query the view again:
+
+    ```sql
+    SELECT * FROM avg_bids;
+    ```
+    <p></p>
+
+    ```nofmt
+            item        |    average_bid
+    --------------------+--------------------
+     Custom Art         | 49.783986655546286
+     Gift Basket        |  49.93436483689761
+     City Bar Crawl     |  49.93733653007847
+     Best Pizza in Town |  50.43617136074242
+     Signed Memorabilia |  50.09202958093673
+    (5 rows)
+
+    Time: 26.403 ms
+    ```
+
+    You'll see the average bids continue to change, but now that the view is indexed and results are pre-computed and stored in memory, latency is down to 26 milliseconds!
+
+1. One thing to note about indexes is that they exist only in the cluster where they are created. To experience this, switch to the `default` cluster and query the view again:
+
+    ```sql
+    SET CLUSTER = default;
+    ```
+
+     ```sql
+    SELECT * FROM avg_bids;
+    ```
+    <p></p>
+
+    ```nofmt
+            item        |    average_bid
+    --------------------+--------------------
+     Custom Art         |  49.76620397600282
+     Gift Basket        | 49.850028105677346
+     City Bar Crawl     |  50.08233974737339
+     Best Pizza in Town |  50.46824567514223
+     Signed Memorabilia |  50.12977674688315
+    (5 rows)
+
+    Time: 846.322 ms
+    ```
+
+    Latency is high again because the index you created on the view exists only inside the `compute_qck` cluster. In the `default` cluster, where you are currently, you don't have access to the index's pre-computed results. Instead, the view once again retrieves data from durable storage and computes the results at query-time.
+
+1. In many cases, you'll want results to be accessible from multiple clusters, however. To achieve this, you use [materialized views](/overview/key-concepts/#materialized-views).
+
+    Like an index, a materialized view incrementally computes the results of a query as new data arrives. But unlike an index, **a materialized view persists its results to durable storage** that is accessible to all clusters.
+
+    To see this in action, confirm that you are in the `default` cluster and then create a materialized view:
+
+    ```sql
+    SHOW CLUSTER;
+    ```
+    <p></p>
+
+    ```noftm
+     cluster
+    ---------
+     default
+    (1 row)
+    ```
+
+    ```sql
+    CREATE MATERIALIZED VIEW num_bids AS
+      SELECT auctions.item, count(bids.id) AS number_of_bids
+      FROM bids
+      JOIN auctions ON bids.auction_id = auctions.id
+      WHERE bids.bid_time < auctions.end_time
+      GROUP BY auctions.item;
+    ```
+
+    The `SELECT` in this materialized view joins data from `auctions` and `bids`, but this time to get the number of eligible bids per item.
+
+1. Switch to the `compute_qck` cluster and query the materialized view:
+
+    ```sql
+    SET CLUSTER = compute_qck;
+    ```
+
+    ```sql
+    SELECT * FROM num_bids;
+    ```
+    <p></p>
+
+    ```nofmt
+            item        | number_of_bids
+    --------------------+----------------
+     Custom Art         |          10634
+     Gift Basket        |          11266
+     City Bar Crawl     |          10292
+     Best Pizza in Town |          10498
+     Signed Memorabilia |          10801
+    (5 rows)
+
+    Time: 790.384 ms
+    ```
+
+    As you can see, although the materialized view was created in the `default` cluster, its results are available from other clusters as well because they are in shared, durable storage.
+
+1.  If retrieving a materialized view's results from storage is too slow, you can create an index on the materialized view as well:
+
+    ```sql
+    CREATE INDEX num_bids_idx ON num_bids (item);
+    ```
+
+    ```sql
+    SELECT * FROM num_bids;
+    ```
+    <p></p>
+
+    ```nofmt
+            item        | number_of_bids
+    --------------------+----------------
+     Custom Art         |          14373
+     Gift Basket        |          15271
+     City Bar Crawl     |          14294
+     Best Pizza in Town |          14606
+     Signed Memorabilia |          14843
+    (5 rows)
+
+    Time: 32.064 ms
+    ```
+
+    Now that the materialzed view serves results from memory, latency is low again.
+
+## Step 5. Survive failures
+
+Earlier, when you created your clusters, you gave each cluster one [replica](/overview/key-concepts/#cluster-replicas), that is, one physical resource. For the `ingest_qck` cluster, that's the max number of replicas allowed, as clusters for sources can have only one replica. For the `compute_qck` cluster, however, you can increase the number of replicas for greater tolerance to replica failure.
+
+Each replica in a non-source cluster is a logical clone, doing the same computation and holding the same results in memory. This design provides Materialize with active replication, and so long as one replica is still reachable, the cluster continues making progress.
+
+Let's see this in action.
+
+1. Add a second replica to the `compute_qck` cluster:
+
+    ```sql
+    CREATE CLUSTER REPLICA compute_qck.r2 SIZE = '2xsmall';
+    ```
+
+1. Check the status of the new replica:
+
+    ```sql
+    SHOW CLUSTER REPLICAS WHERE CLUSTER = 'compute_qck';
+    ```
+    <p></p>
+
+    ```noftm
+       cluster   | replica |  size   | ready
+    -------------+---------+---------+-------
+     compute_qck | r1      | 2xsmall | t
+     compute_qck | r2      | 2xsmall | t
+    (2 rows)
+    ```
+
+1. Once the `r2` replica is ready (`ready=t`), drop the `r1` replica to simulate a failure:
+
+    ```sql
+    DROP CLUSTER REPLICA compute_qck.r1;
+    ```
+
+1. Query the indexed view that you created in `compute_qck` earlier:
+
+    ```sql
+    SELECT * FROM avg_bids;
+    ```
+    <p></p>
+
+    ```nofmt
+            item        |    average_bid
+    --------------------+--------------------
+     Custom Art         | 49.770776201263864
+     Gift Basket        |   49.8909070204407
+     City Bar Crawl     | 50.056635368698046
+     Best Pizza in Town |  50.50023551577956
+     Signed Memorabilia |  50.11854192264935
+    (5 rows)
+
+    Time: 23.537 ms
+    ```
+
+    As you can see, the results are available despite the failure of one of the cluster's replicas.
+
+## Step 6. Scale up or down
+
+In addition to using replicas to increase fault tolerance, you can add and remove replicas to scale resources up or down according to the needs of a cluster. For example, let's say the `2xsmall` replica in the `compute_qck` cluster is running low on memory.
+
+1. Add the next largest replica, `xsmall`:
+
+    ```sql
+    CREATE CLUSTER REPLICA compute_qck.r3 SIZE = 'xsmall';
+    ```
+
+1. Use the [`SHOW CLUSTER REPLICAS`](https://materialize.com/docs/sql/show-cluster-replicas/) command to check the status of the new replica:
+
+    ```sql
+    SHOW CLUSTER REPLICAS WHERE CLUSTER = 'compute_qck';
+    ```
+    <p></p>
+
+    ```noftm
+       cluster   | replica |  size   | ready
+    -------------+---------+---------+-------
+     compute_qck | r2      | 2xsmall | t
+     compute_qck | r3      | xsmall  | t
+    (2 rows)
+    ```
+
+1. Once the `r3` replica is ready (`ready=t`), it's safe to remove the `r2` replica:
+
+    ```sql
+    DROP CLUSTER REPLICA compute_qck.r2;
+    ```
+
+1. Again, because replicas in a cluster are logical clones, the new replica returns results just like the old replica:
+
+    ```sql
+    SELECT * FROM avg_bids;
+    ```
+    <p></p>
+
+    ```nofmt
+            item        |    average_bid
+    --------------------+-------------------
+     Custom Art         | 49.82171985815603
+     Gift Basket        | 49.81225672519678
+     City Bar Crawl     | 50.16030259365994
+     Best Pizza in Town | 50.32564214192425
+     Signed Memorabilia | 49.96557507282196
+    (5 rows)
+
+    Time: 31.655 ms
+    ```
+
+## Step 7. Clean up
+
+Once you're done exploring the auction house source, remember to clean up your environment:
+
+```sql
+DROP CLUSTER ingest_qck CASCADE;
+```
+
+```sql
+DROP CLUSTER compute_qck CASCADE;
+```
 
 ## What's next?
 
-That's it! You just created your first transformations on streaming data using common SQL patterns, and tried to break Materialize! We encourage you to continue exploring the sample Kafka source, or try one of the use-case specific quickstarts. If you’re done for the time being, remember to clean up the environment:
-
-```sql
-DROP SCHEMA qck CASCADE;
-
-DROP CLUSTER quickstart;
-
--- Reset the session variables to their original values,
--- so you can keep exploring
-RESET search_path;
-
-RESET cluster;
-```
-
-For a more comprehensive overview of the basic concepts behind Materialize, take a break and read through ["What is Materialize?"](/overview/what-is-materialize).
+- Learn more about the [key concepts of Materialize](/overview/key-concepts/)
+- Integrate a [streaming data source](https://materialize.com/docs/sql/create-source/)
+- Explore [when to use indexes and materialized views](https://materialize.com/blog/views-indexes/)
