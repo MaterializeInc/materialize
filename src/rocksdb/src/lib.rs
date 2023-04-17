@@ -84,7 +84,7 @@
 
 #![warn(missing_docs)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use rocksdb::{
@@ -246,119 +246,11 @@ where
         }
 
         // The buffer can be small here, as all interactions with it take `&mut self`.
-        let (tx, mut rx): (mpsc::Sender<Command<K, V>>, _) = mpsc::channel(10);
+        let (tx, rx): (mpsc::Sender<Command<K, V>>, _) = mpsc::channel(10);
 
         let instance_path = instance_path.to_owned();
 
-        // TODO(guswynn): retry retryable rocksdb errors.
-        std::thread::spawn(move || {
-            let db: DB = DB::open(&options.as_rocksdb_options(), &instance_path).unwrap();
-            let wo = options.as_rocksdb_write_options();
-
-            let mut encoded_keys = Vec::new();
-            let mut encoded_values = Vec::new();
-
-            while let Some(cmd) = rx.blocking_recv() {
-                let (batch, response_sender) = match cmd {
-                    Command::Shutdown { done_sender } => {
-                        db.cancel_all_background_work(true);
-                        drop(db);
-                        let _ = done_sender.send(());
-                        return;
-                    }
-                    Command::Upsert {
-                        batch,
-                        response_sender,
-                    } => (batch, response_sender),
-                };
-
-                encoded_keys.clear();
-                encoded_values.clear();
-                for up in batch.iter() {
-                    encoded_keys.push({
-                        let mut encode_buf = Vec::<u8>::new();
-                        up.key.encode(&mut encode_buf);
-                        encode_buf
-                    });
-                    encoded_values.push(up.val.as_ref().map(|val| {
-                        let mut encode_buf = Vec::<u8>::new();
-                        val.encode(&mut encode_buf);
-                        encode_buf
-                    }));
-                }
-
-                let batch_size = batch.len();
-
-                // Perform the multi_get and record metrics, if there wasn't an error.
-                let now = Instant::now();
-                let gets = db.multi_get(encoded_keys.iter().map(|k| k.as_slice()));
-                let latency = now.elapsed();
-
-                let gets: Result<Vec<_>, _> = gets.into_iter().collect();
-                let gets = match gets {
-                    Ok(gets) => {
-                        metrics.multi_get_latency.observe(latency.as_secs_f64());
-                        metrics
-                            .multi_get_batch_size
-                            .observe(f64::cast_lossy(batch_size));
-                        gets
-                    }
-                    Err(e) => {
-                        let _ = response_sender.send(Err(Error::RocksDB(e)));
-                        return;
-                    }
-                };
-
-                let mut result = Vec::new();
-                let mut writes = rocksdb::WriteBatch::default();
-
-                // TODO(guswynn): sort by key before writing.
-                for (UpsertValue { key, val }, encoded_key, encoded_value, previous_value) in
-                    itertools::multizip((batch, encoded_keys.iter(), encoded_values.iter(), gets))
-                {
-                    match encoded_value {
-                        Some(update) => {
-                            writes.put(encoded_key.as_slice(), update.as_slice());
-                        }
-                        None => writes.delete(encoded_key.as_slice()),
-                    }
-                    let previous_value = match previous_value.map(|v| V::decode(&v)).transpose() {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let _ = response_sender.send(Err(Error::DecodeError(e)));
-                            return;
-                        }
-                    };
-
-                    result.push(UpsertResult {
-                        key,
-                        val,
-                        previous_value,
-                    });
-                }
-                // Perform the multi_get and record metrics, if there wasn't an error.
-                let now = Instant::now();
-                match db.write_opt(writes, &wo) {
-                    Ok(()) => {
-                        let latency = now.elapsed();
-                        metrics.write_latency.observe(latency.as_secs_f64());
-                        metrics
-                            .write_batch_size
-                            .observe(f64::cast_lossy(batch_size));
-                    }
-                    Err(e) => {
-                        let _ = response_sender.send(Err(Error::RocksDB(e)));
-                        return;
-                    }
-                }
-
-                let _ = response_sender.send(Ok(result));
-            }
-
-            // Gracefully cleanup if the `RocksDBInstance` has gone away.
-            db.cancel_all_background_work(true);
-            drop(db);
-        });
+        std::thread::spawn(move || rocksdb_core_loop(options, instance_path, rx, metrics));
 
         Ok(Self { tx })
     }
@@ -400,4 +292,122 @@ where
 
         Ok(())
     }
+}
+
+// TODO(guswynn): retry retryable rocksdb errors.
+fn rocksdb_core_loop<K, V>(
+    options: Options,
+    instance_path: PathBuf,
+    mut cmd_rx: mpsc::Receiver<Command<K, V>>,
+    metrics: RocksDBMetrics,
+) where
+    K: Codec + Send + Sync + 'static,
+    V: Codec + Send + Sync + 'static,
+{
+    let db: DB = DB::open(&options.as_rocksdb_options(), &instance_path).unwrap();
+    let wo = options.as_rocksdb_write_options();
+
+    let mut encoded_keys = Vec::new();
+    let mut encoded_values = Vec::new();
+
+    while let Some(cmd) = cmd_rx.blocking_recv() {
+        let (batch, response_sender) = match cmd {
+            Command::Shutdown { done_sender } => {
+                db.cancel_all_background_work(true);
+                drop(db);
+                let _ = done_sender.send(());
+                return;
+            }
+            Command::Upsert {
+                batch,
+                response_sender,
+            } => (batch, response_sender),
+        };
+
+        encoded_keys.clear();
+        encoded_values.clear();
+        for up in batch.iter() {
+            encoded_keys.push({
+                let mut encode_buf = Vec::<u8>::new();
+                up.key.encode(&mut encode_buf);
+                encode_buf
+            });
+            encoded_values.push(up.val.as_ref().map(|val| {
+                let mut encode_buf = Vec::<u8>::new();
+                val.encode(&mut encode_buf);
+                encode_buf
+            }));
+        }
+
+        let batch_size = batch.len();
+
+        // Perform the multi_get and record metrics, if there wasn't an error.
+        let now = Instant::now();
+        let gets = db.multi_get(encoded_keys.iter().map(|k| k.as_slice()));
+        let latency = now.elapsed();
+
+        let gets: Result<Vec<_>, _> = gets.into_iter().collect();
+        let gets = match gets {
+            Ok(gets) => {
+                metrics.multi_get_latency.observe(latency.as_secs_f64());
+                metrics
+                    .multi_get_batch_size
+                    .observe(f64::cast_lossy(batch_size));
+                gets
+            }
+            Err(e) => {
+                let _ = response_sender.send(Err(Error::RocksDB(e)));
+                return;
+            }
+        };
+
+        let mut result = Vec::new();
+        let mut writes = rocksdb::WriteBatch::default();
+
+        // TODO(guswynn): sort by key before writing.
+        for (UpsertValue { key, val }, encoded_key, encoded_value, previous_value) in
+            itertools::multizip((batch, encoded_keys.iter(), encoded_values.iter(), gets))
+        {
+            match encoded_value {
+                Some(update) => {
+                    writes.put(encoded_key.as_slice(), update.as_slice());
+                }
+                None => writes.delete(encoded_key.as_slice()),
+            }
+            let previous_value = match previous_value.map(|v| V::decode(&v)).transpose() {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = response_sender.send(Err(Error::DecodeError(e)));
+                    return;
+                }
+            };
+
+            result.push(UpsertResult {
+                key,
+                val,
+                previous_value,
+            });
+        }
+        // Perform the multi_get and record metrics, if there wasn't an error.
+        let now = Instant::now();
+        match db.write_opt(writes, &wo) {
+            Ok(()) => {
+                let latency = now.elapsed();
+                metrics.write_latency.observe(latency.as_secs_f64());
+                metrics
+                    .write_batch_size
+                    .observe(f64::cast_lossy(batch_size));
+            }
+            Err(e) => {
+                let _ = response_sender.send(Err(Error::RocksDB(e)));
+                return;
+            }
+        }
+
+        let _ = response_sender.send(Ok(result));
+    }
+
+    // Gracefully cleanup if the `RocksDBInstance` has gone away.
+    db.cancel_all_background_work(true);
+    drop(db);
 }
