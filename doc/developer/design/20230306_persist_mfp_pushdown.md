@@ -157,81 +157,37 @@ This is the technical part of the design.
 ## Filtering Parts
 [filtering parts]: #filtering-parts
 
-Pushing down an MFP will require Persist to offer a new interface so that Compute can filter 
-at the part level, rather than row level.
+Thanks to our part statistics, we know the range of possible values any particular column may have.
+To decide whether we can filter a part or not, though, we need to know the range of possible values of _the output of the MFP's filter:_ if we can prove that the filter will never return `true` or an error value, it's safe to skip the entire part.
 
-Below is a (strawman!) proposal for accessing the statistics within a part:
-
-```rust
-/// Provides access to statistics stored for each Persist part (S3 data blob).
-///
-/// Statistics are best-effort, and individual stats may be omitted at any
-/// time, e.g. if persist cannot determine them accurately, if the values are
-/// too large to store in Consensus, if the statistics data is larger than
-/// the part, etc.
-struct SourceDataPartStats<K: Codec, V: Codec> {
-    // internal details, etc.
-    stats: PartStats<K, V>,
-    relation_desc: RelationDesc,
-    temp_storage: RowArena,
-}
-
-impl<K: Codec, V: Codec> SourceDataPartStats<K, V> {
-    /// The number of updates (Rows + errors) in the part.
-    pub fn len(&self) -> usize {
-        todo!()
+Using the range of possible input values to compute the range of possible output values is a well-known static analysis problem, and it's commonly solved via [abstract interpretation](https://en.wikipedia.org/wiki/Abstract_interpretation). In practice, this involves:
+- Choosing an "abstract set" to approximate your data type. For part filters, we can use roughly:
+    ```rust
+    /// Approximating a range of possible non-null datums.
+    enum Values<'a> {
+      Empty, // No non-null datums.
+      Within(Datum<'a>, Datum<'a>), // An inclusive range.
+      All, // Includes all datums.
     }
-
-    /// The number of errors in the part.
-    pub fn err_count(&self) -> usize {
-        todo!()
+    
+    /// Approximating a set of possible `Result<Datum, Err>`;
+    /// ie. the result of `MirScalarExpr::eval`.
+    pub struct ResultSpec<'a> {
+      nullable: bool, // Could this result be null?
+      fallible: bool, // Could this result be an error?
+      values: Values<'a>, // What range of non-null values may be included?
     }
+    ```
+    This is meant to be compact enough to compute efficiently, but still precise enough to produce interesting results for many expressions.
+- Writing an "interpreter" - for every possible expression, we need to be able to evaluate that expression as an instance of our `ResultSpec`. (As compared to the normal concrete interpreter, where the expression is evaluated as an ordinary `Result`.)
+  - `Literal`s are interpreted directly: eg. `Datum::Null` becomes `ResultSpec { nullable: true, ..}`.
+  - For `Column`s, we know the set of possible values from the statistics. For `UnmaterializableFunc`s like `mz_now()`, we can also provide a range of possible values up front.
+  - The various `Func`s are the tricky case: given an arbitrary function, there's no way to compute the `ResultSpec` of possible outputs from the `ResultSpec`s of the inputs. However, if we know the function is _monotonic_, then we can map the input range to an output range just by mapping the endpoints! Conveniently, nearly all the functions that are relevant to temporal filters are monotonic in at least one argument: arithmetic, casts, `date_trunc`, etc. We propose annotating these functions with a `monotonic` annotation so they can be correctly handled by our interpreter. (To be conservative, we assume un-annotated functions might return any value, including nulls or errors.)
 
-    /// The part's minimum value for the named column, if available.
-    /// A return value of `None` indicates that Persist did not / was
-    /// not able to calculate a minimum for this column.
-    pub fn col_min<'a>(&'a self, name: &str) -> Option<Datum<'a>> {
-        todo!()
-    }
-
-    /// (ditto above, but for the maximum column value)
-    pub fn col_max<'a>(&'a self, name: &str) -> Option<Datum<'a>> {
-        todo!()
-    }
-
-    /// The part's null count for the named column, if available. A
-    /// return value of `None` indicates that Persist did not / was
-    /// not able to calculate the null count for this column.
-    pub fn col_null_count(&self, name: &str) -> Option<usize> {
-        todo!()
-    }
-
-    /// A prefix of column values for the minimum Row in the part. A
-    /// return of `None` indicates that Persist did not / was not able
-    /// to calculate the minimum row. A `Some(usize)` indicates how many
-    /// columns are in the prefix. The prefix may be less than the full
-    /// row if persist cannot determine/store an individual column, for
-    /// the same reasons that `col_min`/`col_max` may omit values.
-    pub fn row_min(&self, row: &mut Row) -> Option<usize> {
-        todo!()
-    }
-
-    /// (ditto above, but for the maximum row)
-    pub fn row_max(&self, row: &mut Row) -> Option<usize> {
-        todo!()
-    }
-}
-```
-
-We additionally define a new trait, `PartFilter` that is used to return whether a given part should
-be fetched, using the above interface to source statistics data about the part. Pushing down an MFP
-would mean implementing this trait, and passing it in to `persist_source`:
-
-```rust
-pub trait PartFilter<K: Codec, V: Codec> {
-    fn should_fetch<S: SourceDataPartStats<K, V>>(&self, part: &S) -> bool;
-}
-```
+To evaluate an MFP for a particular part in the persist source, we:
+- Calculate the `ResultSpec` for each column using our stats.
+- Evaluate the MFP using the machinery above, returning a `ResultSpec` that captures the possible outputs of the filter.
+- If the filter might return `true` or an error, we keep the part; otherwise, we filter it out.
 
 # Rollout
 [rollout]: #rollout
