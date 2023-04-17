@@ -890,6 +890,32 @@ async fn migrate(
             })?;
             Ok(())
         },
+        // Modify the grantor of all role membership to be mz_system.
+        // See plan_grant_role for more details.
+        //
+        // Introduced in v0.52.0
+        //
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.55.0
+        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
+            // This might create a bunch of invalid audit-log updates, but it isn't possible to
+            // modify old audit events. It's also probably unlikely that anyone has been using
+            // role membership.
+            txn.roles.update(|_role_key, role_value| {
+                let mut role_value = role_value.clone();
+                for grantor in role_value
+                    .role
+                    .membership
+                    .as_mut()
+                    .expect("role membership not migrated")
+                    .map
+                    .values_mut()
+                {
+                    *grantor = MZ_SYSTEM_ROLE_ID;
+                }
+                Some(role_value)
+            })?;
+            Ok(())
+        },
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:

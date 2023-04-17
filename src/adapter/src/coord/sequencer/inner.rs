@@ -1426,6 +1426,11 @@ impl Coordinator {
                 ops.push(catalog::Op::RevokeRole {
                     role_id: **dropped_role_id,
                     member_id: role.id(),
+                    grantor_id: *role
+                        .membership
+                        .map
+                        .get(*dropped_role_id)
+                        .expect("included in keys above"),
                 })
             }
         }
@@ -1455,10 +1460,11 @@ impl Coordinator {
                     let name = role.name();
                     dropped_roles.insert(*id, name);
                     // We must revoke all role memberships that the dropped roles belongs to.
-                    for group_id in role.membership.map.keys() {
+                    for (group_id, grantor_id) in &role.membership.map {
                         ops.push(catalog::Op::RevokeRole {
                             role_id: *group_id,
                             member_id: *id,
+                            grantor_id: *grantor_id,
                         });
                     }
                 }
@@ -3701,6 +3707,7 @@ impl Coordinator {
         RevokeRolePlan {
             role_id,
             member_ids,
+            grantor_id,
         }: RevokeRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog();
@@ -3718,7 +3725,11 @@ impl Coordinator {
                     member_name,
                 });
             } else {
-                ops.push(catalog::Op::RevokeRole { role_id, member_id });
+                ops.push(catalog::Op::RevokeRole {
+                    role_id,
+                    member_id,
+                    grantor_id,
+                });
             }
         }
 

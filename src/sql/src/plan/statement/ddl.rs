@@ -114,6 +114,7 @@ use crate::plan::{
     MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan,
     Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
 };
+use crate::session::user::SYSTEM_USER;
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -4213,7 +4214,16 @@ pub fn plan_grant_role(
         member_names,
     }: GrantRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let grantor_id = scx.catalog.active_role_id().clone();
+    // In PostgreSQL, the grantor must either be a role with ADMIN OPTION on the role being granted,
+    // or the bootstrap superuser. We do not have ADMIN OPTION implemented and 'mz_system' is our
+    // equivalent of the bootstrap superuser. Therefore the grantor is always 'mz_system'.
+    // For more details see:
+    // https://github.com/postgres/postgres/blob/064eb89e83ea0f59426c92906329f1e6c423dfa4/src/backend/commands/user.c#L2180-L2238
+    let grantor_id = scx
+        .catalog
+        .resolve_role(&SYSTEM_USER.name)
+        .expect("system user must exist")
+        .id();
     Ok(Plan::GrantRole(GrantRolePlan {
         role_id: role_name.id,
         member_ids: member_names
@@ -4232,18 +4242,31 @@ pub fn describe_revoke_role(
 }
 
 pub fn plan_revoke_role(
-    _: &StatementContext,
+    scx: &StatementContext,
     RevokeRoleStatement {
         role_name,
         member_names,
     }: RevokeRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    // In PostgreSQL, the same role membership can be granted multiple times by different grantors.
+    // When revoking a role membership, only the membership granted by the specified grantor is
+    // revoked. The grantor must either be a role with ADMIN OPTION on the role being granted,
+    // or the bootstrap superuser. We do not have ADMIN OPTION implemented and 'mz_system' is our
+    // equivalent of the bootstrap superuser. Therefore the grantor is always 'mz_system'.
+    // For more details see:
+    // https://github.com/postgres/postgres/blob/064eb89e83ea0f59426c92906329f1e6c423dfa4/src/backend/commands/user.c#L2180-L2238
+    let grantor_id = scx
+        .catalog
+        .resolve_role(&SYSTEM_USER.name)
+        .expect("system user must exist")
+        .id();
     Ok(Plan::RevokeRole(RevokeRolePlan {
         role_id: role_name.id,
         member_ids: member_names
             .into_iter()
             .map(|member_name| member_name.id)
             .collect(),
+        grantor_id,
     }))
 }
 

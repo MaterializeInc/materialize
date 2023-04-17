@@ -1586,6 +1586,10 @@ impl Role {
 #[serde(try_from = "BTreeMap<String, RoleId>")]
 pub struct RoleMembership {
     /// Key is the role that some role is a member of, value is the grantor role ID.
+    // TODO(jkosh44) This structure does not allow a role to have multiple of the same membership
+    // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
+    // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
+    // migration.
     pub map: BTreeMap<RoleId, RoleId>,
 }
 
@@ -5632,14 +5636,22 @@ impl Catalog {
                         audit_events,
                         EventType::Grant,
                         ObjectType::Role,
-                        EventDetails::GrantRoleV1(mz_audit_log::GrantRoleV1 {
+                        EventDetails::GrantRoleV2(mz_audit_log::GrantRoleV2 {
                             role_id: role_id.to_string(),
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
+                            executed_by: session
+                                .map(|session| session.role_id())
+                                .unwrap_or(&MZ_SYSTEM_ROLE_ID)
+                                .to_string(),
                         }),
                     )?;
                 }
-                Op::RevokeRole { role_id, member_id } => {
+                Op::RevokeRole {
+                    role_id,
+                    member_id,
+                    grantor_id,
+                } => {
                     state.ensure_not_reserved_role(&member_id)?;
                     state.ensure_not_reserved_role(&role_id)?;
                     builtin_table_updates
@@ -5656,9 +5668,14 @@ impl Catalog {
                         audit_events,
                         EventType::Revoke,
                         ObjectType::Role,
-                        EventDetails::RevokeRoleV1(mz_audit_log::RevokeRoleV1 {
+                        EventDetails::RevokeRoleV2(mz_audit_log::RevokeRoleV2 {
                             role_id: role_id.to_string(),
                             member_id: member_id.to_string(),
+                            grantor_id: grantor_id.to_string(),
+                            executed_by: session
+                                .map(|session| session.role_id())
+                                .unwrap_or(&MZ_SYSTEM_ROLE_ID)
+                                .to_string(),
                         }),
                     )?;
                 }
@@ -6604,6 +6621,7 @@ pub enum Op {
     RevokeRole {
         role_id: RoleId,
         member_id: RoleId,
+        grantor_id: RoleId,
     },
     UpdateClusterReplicaStatus {
         event: ClusterEvent,
