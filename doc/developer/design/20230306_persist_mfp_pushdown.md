@@ -63,7 +63,9 @@ we'll often have accumulated considerable numbers of older, larger parts that ar
 # Reference explanation
 [reference-explanation]: #reference-explanation
 
-TODO: how statistics are calculated.
+## Calculating statistics
+
+TODO
 
 ## Filtering Parts
 [filtering parts]: #filtering-parts
@@ -99,6 +101,12 @@ To evaluate an MFP for a particular part in the persist source, we:
 - Calculate the `ResultSpec` for each column using our stats.
 - Evaluate the MFP using the machinery above, returning a `ResultSpec` that captures the possible outputs of the filter.
 - If the filter might return `true` or an error, we keep the part; otherwise, we filter it out.
+
+## JSON columns
+
+TODO - justify, describe both halves of the implementation
+
+# Rollout
 
 ## Testing and observability
 [testing-and-observability]: #testing-and-observability
@@ -175,7 +183,7 @@ with minimal impact on read performance.
 Understanding schemas at the persistent data level gives us a building block [to explore schema evolution at
 the Persist level](https://github.com/MaterializeInc/materialize/issues/16625).
 
-### Internal Improvements
+### Internal improvements
 
 Less tangible motivation for this work is that by columnarizing and summarizing parts, we will have a forcing
 function to progress some lesser-seen concerns within Persist. Examples of this include how proper columnar
