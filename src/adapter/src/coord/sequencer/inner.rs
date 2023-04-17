@@ -3672,7 +3672,8 @@ impl Coordinator {
         let catalog = self.catalog();
         let mut ops = Vec::new();
         for member_id in member_ids {
-            let member_membership: BTreeSet<_> = catalog.get_role(&member_id).membership();
+            let member_membership: BTreeSet<_> =
+                catalog.get_role(&member_id).membership().keys().collect();
             if member_membership.contains(&role_id) {
                 let role_name = catalog.get_role(&role_id).name().to_string();
                 let member_name = catalog.get_role(&member_id).name().to_string();
@@ -3713,7 +3714,8 @@ impl Coordinator {
         let catalog = self.catalog();
         let mut ops = Vec::new();
         for member_id in member_ids {
-            let member_membership: BTreeSet<_> = catalog.get_role(&member_id).membership();
+            let member_membership: BTreeSet<_> =
+                catalog.get_role(&member_id).membership().keys().collect();
             if !member_membership.contains(&role_id) {
                 let role_name = catalog.get_role(&role_id).name().to_string();
                 let member_name = catalog.get_role(&member_id).name().to_string();

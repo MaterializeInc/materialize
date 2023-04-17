@@ -3443,6 +3443,17 @@ fn plan_drop_role(
             if &id == scx.catalog.active_role_id() {
                 sql_bail!("current role cannot be dropped");
             }
+            for role in scx.catalog.get_roles() {
+                for (member_id, grantor_id) in role.membership() {
+                    if &id == grantor_id {
+                        let member_role = scx.catalog.get_role(member_id);
+                        sql_bail!(
+                            "cannot drop role {}: still depended up by membership of role {} in role {}",
+                            name.as_str(), role.name(), member_role.name()
+                        );
+                    }
+                }
+            }
             Ok(Some(role.id()))
         }
         Err(_) if if_exists => {

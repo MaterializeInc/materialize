@@ -622,10 +622,10 @@ impl CatalogState {
                 membership.insert(cur_id.clone());
                 let role = self.get_role(cur_id);
                 soft_assert!(
-                    !role.membership().contains(id),
+                    !role.membership().keys().contains(id),
                     "circular membership exists in the catalog"
                 );
-                queue.extend(role.membership().into_iter());
+                queue.extend(role.membership().keys());
             }
         }
         membership
@@ -7015,6 +7015,16 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_role(id)
     }
 
+    fn get_roles(&self) -> Vec<&dyn CatalogRole> {
+        // `as` is ok to use to cast to a trait object.
+        #[allow(clippy::as_conversions)]
+        self.state
+            .roles_by_id
+            .values()
+            .map(|role| role as &dyn CatalogRole)
+            .collect()
+    }
+
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
         self.state.collect_role_membership(id)
     }
@@ -7222,12 +7232,8 @@ impl mz_sql::catalog::CatalogRole for Role {
         self.attributes.create_cluster
     }
 
-    fn membership(&self) -> BTreeSet<&RoleId> {
-        self.membership
-            .map
-            .iter()
-            .map(|(role_id, _grantor_id)| role_id)
-            .collect()
+    fn membership(&self) -> &BTreeMap<RoleId, RoleId> {
+        &self.membership.map
     }
 }
 

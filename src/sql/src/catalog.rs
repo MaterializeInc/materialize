@@ -155,6 +155,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Panics if `id` does not specify a valid role.
     fn get_role(&self, id: &RoleId) -> &dyn CatalogRole;
 
+    /// Gets all roles.
+    fn get_roles(&self) -> Vec<&dyn CatalogRole>;
+
     /// Collects all role IDs that `id` is transitively a member of.
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId>;
 
@@ -458,8 +461,11 @@ pub trait CatalogRole {
     /// Indicates whether the role has the cluster creation attribute.
     fn create_cluster(&self) -> bool;
 
-    /// Returns all role IDs that this role is an immediate a member of.
-    fn membership(&self) -> BTreeSet<&RoleId>;
+    /// Returns all role IDs that this role is an immediate a member of, and the grantor of that
+    /// membership.
+    ///
+    /// Key is the role that some role is a member of, value is the grantor role ID.
+    fn membership(&self) -> &BTreeMap<RoleId, RoleId>;
 }
 
 /// A cluster in a [`SessionCatalog`].
