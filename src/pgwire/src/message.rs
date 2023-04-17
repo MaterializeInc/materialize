@@ -362,6 +362,7 @@ impl ErrorResponse {
             AdapterError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Transform(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::UnallowedOnCluster { .. } => SqlState::INTERNAL_ERROR,
             AdapterError::Unauthorized(_) => SqlState::INSUFFICIENT_PRIVILEGE,
             AdapterError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,

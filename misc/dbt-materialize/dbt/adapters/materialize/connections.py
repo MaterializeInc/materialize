@@ -23,7 +23,7 @@ from dbt.events import AdapterLogger
 from dbt.semver import versions_compatible
 
 # If you bump this version, bump it in README.md too.
-SUPPORTED_MATERIALIZE_VERSIONS = ">=0.28.0"
+SUPPORTED_MATERIALIZE_VERSIONS = ">=0.49.0"
 
 logger = AdapterLogger("Materialize")
 
@@ -64,21 +64,21 @@ class MaterializeConnectionManager(PostgresConnectionManager):
 
         cursor = connection.handle.cursor()
 
-        # Upon connection, dbt performs introspection queries that should run in
-        # the mz_introspection cluster for optimal performance. Each materialization
-        # should then handle falling back to the default connection cluster if no
-        # cluster configuration is specified at the model level.
-        mz_introspection_cluster = "mz_introspection"
-        logger.debug("Switching to cluster '{}'".format(mz_introspection_cluster))
-        cursor.execute("SET cluster = %s" % mz_introspection_cluster)
-
-        cursor.execute("SELECT mz_version()")
+        # Check for the current DB version using the "mz_introspection" cluster in case "default"
+        # doesn't exist.
+        cursor.execute("SHOW mz_version")
         mz_version = cursor.fetchone()[0].split()[0].strip("v")
+
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
             raise dbt.exceptions.DbtRuntimeError(
                 f"Detected unsupported Materialize version {mz_version}\n"
                 f"  Supported versions: {SUPPORTED_MATERIALIZE_VERSIONS}"
             )
+
+        # Make sure 'auto_route_introspection_queries' is enabled.
+        var_name = "auto_route_introspection_queries"
+        logger.debug(f"Enabling {var_name}")
+        cursor.execute(f"SET {var_name} = true")
 
         return connection
 
