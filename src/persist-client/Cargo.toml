@@ -71,7 +71,7 @@ humantime = "2.1.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["network", "tracing_", "test"] }
-num_cpus = "1.14.0"
+num_cpus = "1.15.0"
 num_enum = "0.5.7"
 serde_json = "1.0.89"
 tempfile = "3.2.0"
