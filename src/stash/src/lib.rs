@@ -945,7 +945,7 @@ where
         }
     }
 
-    /// Migrates k, v pairs. `f` is a function that can return `Some((K, V))` if the value should
+    /// Migrates k, v pairs. `f` is a function that can return `Some((K, V))` if the key and value should
     /// be updated, otherwise `None`. Returns the number of changed entries.
     ///
     /// Returns an error if the uniqueness check failed.
