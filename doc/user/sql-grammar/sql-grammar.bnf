@@ -112,7 +112,9 @@ create_source_load_generator ::=
   ('IN CLUSTER' cluster_name)?
   'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'TPCH')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
-  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
+  (
+    'FOR ALL TABLES' |
+    'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
@@ -124,7 +126,10 @@ create_source_postgres ::=
   ('IN CLUSTER' cluster_name)?
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   '(' 'PUBLICATION' publication_name ( ( ',' 'TEXT COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? )? ) ')'
-  ('FOR ALL TABLES' | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')
+  ('FOR ALL TABLES'
+    | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')'
+    | 'FOR SCHEMAS' '(' schema_name (',' schema_name )* ')'
+  )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_type ::=

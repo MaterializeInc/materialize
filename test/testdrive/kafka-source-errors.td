@@ -52,5 +52,5 @@ contains: FOR ALL TABLES is only valid for multi-output sources
 # Check that for tables() clause is rejected
 ! CREATE SOURCE bad_definition2
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
-  FORMAT BYTES FOR TABLES(t1);
-contains: FOR TABLES (..) is only valid for multi-output sources
+  FORMAT BYTES FOR TABLES (t1);
+contains: FOR TABLES (t1) is only valid for multi-output sources

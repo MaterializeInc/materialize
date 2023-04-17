@@ -12,6 +12,4 @@ CREATE USER debezium WITH SUPERUSER PASSWORD 'debezium';
 GRANT ALL PRIVILEGES ON DATABASE "postgres" TO debezium;
 GRANT ALL PRIVILEGES ON SCHEMA "public" TO debezium;
 
-CREATE PUBLICATION mz_source;
-CREATE PUBLICATION mz_source_alter_add_col;
-CREATE PUBLICATION mz_source_alter_drop_constraint;
+CREATE PUBLICATION mz_source FOR ALL TABLES;

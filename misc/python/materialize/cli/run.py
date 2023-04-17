@@ -117,6 +117,7 @@ def main() -> int:
     parser.add_argument(
         "--coverage",
         help="Build with coverage",
+        default=False,
         action="store_true",
     )
     args = parser.parse_intermixed_args()

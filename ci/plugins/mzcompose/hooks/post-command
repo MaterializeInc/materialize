@@ -13,11 +13,48 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-ci_unimportant_heading "Upload log artifacts"
-
 run() {
     bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
+
+export_cov() {
+    bin/ci-builder run stable rust-cov export \
+      --ignore-filename-regex=.cargo/ \
+      --ignore-filename-regex=target/release/ \
+      --ignore-filename-regex=/cargo/ \
+      --ignore-filename-regex=/mnt/build/ \
+      --ignore-filename-regex=/rustc/ \
+      --format=lcov "$1" --instr-profile=coverage/"$BUILDKITE_JOB_ID".profdata src/ \
+      > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
+}
+
+if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+    ci_unimportant_heading "Generate coverage information"
+
+    # Currently no coverage for unit tests, do we want it?
+    if [ -n "$(find . -name '*.profraw')" ]; then
+        find . -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
+        find . -name '*.profraw' -delete
+
+        ls -lha coverage/
+        ARGS=()
+        for program in clusterd environmentd sqllogictest; do
+            if [ -f coverage/"$program" ]; then
+              export_cov coverage/"$program"
+              ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
+            fi
+        done
+        rm coverage/"$BUILDKITE_JOB_ID".profdata
+        if [ "${#ARGS[@]}" != 0 ]; then
+          bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
+          rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
+          bin/ci-builder run stable xz -0 coverage/"$BUILDKITE_JOB_ID".lcov
+          buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.xz
+        fi
+    fi
+fi
+
+ci_unimportant_heading "Upload log artifacts"
 
 run logs --no-color > services.log
 # shellcheck disable=SC2024
@@ -29,7 +66,7 @@ docker ps -a --no-trunc > docker-ps-a.log
 
 artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log sar.log)
 for artifact in "${artifacts[@]}"; do
-  buildkite-agent artifact upload "$artifact"
+    buildkite-agent artifact upload "$artifact"
 done
 
 bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"

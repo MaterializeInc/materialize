@@ -33,6 +33,7 @@ def workflow_default(c: Composition) -> None:
         restart_mz_during_snapshot,
         restart_pg_during_replication,
         restart_mz_during_replication,
+        fix_pg_schema_while_mz_restarts,
     ]:
         print(f">>> Running scenario {scenario.__name__}")
         begin(c)
@@ -124,3 +125,15 @@ def restart_mz_during_replication(c: Composition) -> None:
     restart_mz(c)
 
     c.run("testdrive", "delete-rows-t2.td")
+
+
+def fix_pg_schema_while_mz_restarts(c: Composition) -> None:
+    c.run(
+        "testdrive",
+        "delete-rows-t1.td",
+        "delete-rows-t2.td",
+        "alter-table.td",
+        "verify-data.td",
+        "alter-table-fix.td",
+    )
+    restart_mz(c)

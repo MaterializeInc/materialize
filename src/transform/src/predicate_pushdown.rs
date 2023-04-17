@@ -349,6 +349,7 @@ impl PredicatePushdown {
                             limit: _,
                             offset: _,
                             monotonic: _,
+                            expected_group_size: _,
                         } => {
                             let mut retain = Vec::new();
                             let mut push_down = Vec::new();

@@ -92,6 +92,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rand::seq::SliceRandom;
 use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 
@@ -314,7 +315,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             // availability zone installed.
             default_availability_zone: config
                 .availability_zones
-                .first()
+                .choose(&mut rand::thread_rng())
                 .cloned()
                 .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
         },

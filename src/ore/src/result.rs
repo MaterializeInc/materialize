@@ -17,7 +17,7 @@
 
 use std::convert::Infallible;
 
-use crate::display::DisplayExt;
+use crate::error::ErrorExt;
 
 /// Extension methods for [`std::result::Result`].
 pub trait ResultExt<T, E> {
@@ -29,16 +29,17 @@ pub trait ResultExt<T, E> {
 
     /// Formats an [`Err`] value as a detailed error message, preserving any context information.
     ///
-    /// This is equivalent to `format!("{:#}", err)`, except that it's easier to type.
-    fn err_to_string(&self) -> Option<String>
+    /// This is equivalent to `format!("{}", err.display_with_causes())`, except that it's easier to
+    /// type.
+    fn err_to_string_with_causes(&self) -> Option<String>
     where
-        E: std::fmt::Display;
+        E: std::error::Error;
 
-    /// Maps a `Result<T, E>` to `Result<T, String>` by converting the [`Err`] result into a string
-    /// using the "alternate" formatting.
-    fn map_err_to_string(self) -> Result<T, String>
+    /// Maps a `Result<T, E>` to `Result<T, String>` by converting the [`Err`] result into a string,
+    /// along with the chain of source errors, if any.
+    fn map_err_to_string_with_causes(self) -> Result<T, String>
     where
-        E: std::fmt::Display;
+        E: std::error::Error;
 
     /// Safely unwraps a `Result<T, Infallible>`, where [`Infallible`] is a type that represents when
     /// an error cannot occur.
@@ -55,19 +56,18 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
         self.map_err(|e| e.into())
     }
 
-    fn err_to_string(&self) -> Option<String>
+    fn err_to_string_with_causes(&self) -> Option<String>
     where
-        E: std::fmt::Display,
+        E: std::error::Error,
     {
-        // WIP: Do we want to change these as well?
-        self.as_ref().err().map(DisplayExt::to_string_alt)
+        self.as_ref().err().map(ErrorExt::to_string_with_causes)
     }
 
-    fn map_err_to_string(self) -> Result<T, String>
+    fn map_err_to_string_with_causes(self) -> Result<T, String>
     where
-        E: std::fmt::Display,
+        E: std::error::Error,
     {
-        self.map_err(|e| DisplayExt::to_string_alt(&e))
+        self.map_err(|e| ErrorExt::to_string_with_causes(&e))
     }
 
     fn infallible_unwrap(self) -> T
@@ -94,25 +94,49 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
 mod test {
     use std::fmt::Display;
 
+    use anyhow::anyhow;
+
     use super::*;
 
     #[test]
-    fn prints_err_alternate_repr() {
-        struct Foo;
-        impl Display for Foo {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                if f.alternate() {
-                    write!(f, "success")
-                } else {
-                    write!(f, "fail")
-                }
-            }
+    fn prints_error_chain() {
+        let error = anyhow!("root");
+        let error = error.context("context");
+        let error = TestError { inner: error };
+        let res: Result<(), _> = Err(error);
+
+        assert_eq!(
+            res.err_to_string_with_causes(),
+            Some("test error: context: root".to_string())
+        );
+
+        let error = anyhow!("root");
+        let error = error.context("context");
+        let error = TestError { inner: error };
+        let res: Result<(), _> = Err(error);
+
+        assert_eq!(
+            res.map_err_to_string_with_causes(),
+            Err("test error: context: root".to_string())
+        );
+    }
+
+    #[derive(Debug)]
+    struct TestError {
+        inner: anyhow::Error,
+    }
+
+    impl Display for TestError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            // We don't print our causes.
+            write!(f, "test error")?;
+            Ok(())
         }
+    }
 
-        let res: Result<(), Foo> = Err(Foo);
-        assert_eq!(Some("success".to_string()), res.err_to_string());
-
-        let res: Result<(), Foo> = Err(Foo);
-        assert_eq!(Err("success".to_string()), res.map_err_to_string());
+    impl std::error::Error for TestError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(self.inner.as_ref())
+        }
     }
 }

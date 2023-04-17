@@ -233,7 +233,10 @@ impl DatumToPersist for ProtoDatumToPersist {
         StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
             let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
             assert_eq!(null_count, 0);
-            Ok(Box::new(PrimitiveStats { lower, upper }))
+            Ok(Box::new(BytesStats::Primitive(PrimitiveStats {
+                lower,
+                upper,
+            })))
         });
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         let proto = ProtoDatum::from(datum);
@@ -259,7 +262,7 @@ impl DatumToPersist for NullableProtoDatumToPersist {
             let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
             Ok(Box::new(OptionStats {
                 none: null_count,
-                some: PrimitiveStats { lower, upper },
+                some: BytesStats::Primitive(PrimitiveStats { lower, upper }),
             }))
         });
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
@@ -835,6 +838,7 @@ impl RustType<ProtoRow> for Row {
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
     use mz_persist_types::Codec;
+    use proptest::prelude::*;
     use uuid::Uuid;
 
     use crate::adt::array::ArrayDimension;
@@ -997,5 +1001,36 @@ mod tests {
             mz_persist_types::parquet::validate_roundtrip(&schema, &row),
             Ok(())
         );
+    }
+
+    fn scalar_type_columnar_roundtrip(scalar_type: ScalarType) {
+        use mz_persist_types::parquet::validate_roundtrip;
+        let mut rows = Vec::new();
+        for datum in scalar_type.interesting_datums() {
+            rows.push(Row::pack(std::iter::once(datum)));
+        }
+
+        // Non-nullable version of the column.
+        let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
+        for row in rows.iter() {
+            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
+        }
+
+        // Nullable version of the column.
+        let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
+        rows.push(Row::pack(std::iter::once(Datum::Null)));
+        for row in rows.iter() {
+            assert_eq!(validate_roundtrip(&schema, row), Ok(()));
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn all_scalar_types_columnar_roundtrip() {
+        mz_ore::test::init_logging();
+        proptest!(|(scalar_type in any::<ScalarType>())| {
+            // The proptest! macro interferes with rustfmt.
+            scalar_type_columnar_roundtrip(scalar_type)
+        });
     }
 }

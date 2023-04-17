@@ -91,9 +91,11 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     git \
     gnupg2 \
     jq \
+    lcov \
     libclang-dev \
     libpq-dev \
     lld \
+    llvm \
     make \
     openssh-client \
     pkg-config \
