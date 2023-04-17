@@ -147,8 +147,9 @@ pub fn check_plan(
     }
 
     // Validate that the current session has the required attributes to execute the provided plan.
+    // Note: role attributes are not inherited by role membership.
     if let Some(required_attribute) = generate_required_plan_attribute(plan) {
-        if !required_attribute.check_roles(&role_membership, catalog) {
+        if !required_attribute.check_role(role_id, catalog) {
             return Err(AdapterError::Unauthorized(UnauthorizedError::Attribute {
                 action: plan.name().to_string(),
                 attribute: required_attribute,
@@ -279,17 +280,6 @@ impl Attribute {
             Attribute::CreateDB => role.create_db(),
             Attribute::CreateCluster => role.create_cluster(),
         }
-    }
-
-    /// Reports whether any role has the privilege granted by the attribute.
-    fn check_roles<'a>(
-        &self,
-        role_ids: impl IntoIterator<Item = &'a RoleId>,
-        catalog: &impl SessionCatalog,
-    ) -> bool {
-        role_ids
-            .into_iter()
-            .any(|role_id| self.check_role(role_id, catalog))
     }
 }
 
