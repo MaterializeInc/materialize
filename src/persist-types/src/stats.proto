@@ -74,6 +74,9 @@ message ProtoJsonStats {
     ProtoPrimitiveStats numeric = 4;
     uint64 list = 5;
     map<string, ProtoJsonStats> map = 6;
+    // The inverse of what you might normally imagine, for backwards-compatibility.
+    // TODO(mfp): make this more uniform.
+    bool no_maps = 7;
 }
 
 message ProtoBytesStats {

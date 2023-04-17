@@ -160,6 +160,10 @@ pub struct JsonStats {
     /// Recursive statistics about the set of keys present in any maps/objects
     /// in the column, or None if there were no maps/objects.
     pub map: BTreeMap<String, JsonStats>,
+    /// True if maps may be present. (This is _almost_ redundant
+    /// with the above, but handles the case where a map may not have any fields
+    /// or fields have been pruned.)
+    pub maps: bool,
 }
 
 impl std::fmt::Debug for JsonStats {
@@ -171,6 +175,7 @@ impl std::fmt::Debug for JsonStats {
             numeric,
             list,
             map,
+            maps,
         } = self;
         let mut f = &mut f.debug_tuple("json");
         if json_nulls > &0 {
@@ -190,6 +195,9 @@ impl std::fmt::Debug for JsonStats {
         }
         if !map.is_empty() {
             f = f.field(map);
+        }
+        if *maps {
+            f = f.field(&"maps")
         }
         f.finish()
     }
@@ -612,6 +620,7 @@ mod impls {
                     .iter()
                     .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
                     .collect(),
+                no_maps: !self.maps.into_proto(),
             }
         }
 
@@ -627,6 +636,7 @@ mod impls {
                 numeric: proto.numeric.into_rust()?,
                 list: proto.list.into_rust()?,
                 map,
+                maps: !proto.no_maps.into_rust()?,
             })
         }
     }
