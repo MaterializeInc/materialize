@@ -5441,10 +5441,14 @@ impl Catalog {
                         audit_events,
                         EventType::Grant,
                         ObjectType::Role,
-                        EventDetails::GrantRoleV1(mz_audit_log::GrantRoleV1 {
+                        EventDetails::GrantRoleV2(mz_audit_log::GrantRoleV2 {
                             role_id: role_id.to_string(),
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
+                            executed_by: session
+                                .map(|session| session.role_id())
+                                .unwrap_or(&MZ_SYSTEM_ROLE_ID)
+                                .to_string(),
                         }),
                     )?;
                 }
@@ -5473,6 +5477,10 @@ impl Catalog {
                             role_id: role_id.to_string(),
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
+                            executed_by: session
+                                .map(|session| session.role_id())
+                                .unwrap_or(&MZ_SYSTEM_ROLE_ID)
+                                .to_string(),
                         }),
                     )?;
                 }
