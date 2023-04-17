@@ -5769,186 +5769,127 @@ impl Catalog {
                         update_item(state, builtin_table_updates, id, to_name, to_item)?;
                     }
                 }
-                Op::UpdateOwner { id, new_owner } => {
-                    /// Update privileges to reflect the new owner. Based off of PostgreSQL's
-                    /// implementation:
-                    /// https://github.com/postgres/postgres/blob/43a33ef54e503b61f269d088f2623ba3b9484ad7/src/backend/utils/adt/acl.c#L1078-L1177
-                    fn update_privilege_owners(
-                        privileges: &mut Vec<MzAclItem>,
-                        old_owner: RoleId,
-                        new_owner: RoleId,
-                    ) {
-                        let mut new_present = false;
-                        for privilege in privileges.iter_mut() {
-                            // Old owner's granted privilege are updated to be granted by the new
-                            // owner.
-                            if privilege.grantor == old_owner {
-                                privilege.grantor = new_owner;
-                            } else if privilege.grantor == new_owner {
-                                new_present = true;
-                            }
-                            // Old owner's privileges is given to the new owner.
-                            if privilege.grantee == old_owner {
-                                privilege.grantee = new_owner;
-                            } else if privilege.grantee == new_owner {
-                                new_present = true;
-                            }
+                Op::UpdateOwner { id, new_owner } => match id {
+                    ObjectId::Cluster(id) => {
+                        let cluster_name = state.get_cluster(id).name().to_string();
+                        if id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyCluster(cluster_name),
+                            )));
                         }
-
-                        // If the old privilege list contained references to the new owner, we may
-                        // have created duplicate entries. Here we try and consolidate them. This
-                        // is inspired by PostgreSQL's algorithm but not identical.
-                        if new_present {
-                            // Group privileges by (grantee, grantor).
-                            let privilege_map: BTreeMap<_, Vec<_>> = privileges.into_iter().fold(
-                                BTreeMap::new(),
-                                |mut accum, privilege| {
-                                    accum
-                                        .entry((privilege.grantee, privilege.grantor))
-                                        .or_default()
-                                        .push(privilege);
-                                    accum
-                                },
-                            );
-                            // Consolidate and update all privileges.
-                            *privileges = privilege_map
-                                .into_iter()
-                                .map(|((grantee, grantor), values)|
-                                    // Combine the acl_mode of all mz_aclitems with the same grantee and grantor.
-                                    values.into_iter().fold(
-                                        MzAclItem::empty(grantee, grantor),
-                                        |mut accum, mz_aclitem| {
-                                            accum.acl_mode =
-                                                accum.acl_mode.union(mz_aclitem.acl_mode);
-                                            accum
-                                        },
-                                    ))
-                                .collect();
-                        }
+                        builtin_table_updates.push(state.pack_cluster_update(&cluster_name, -1));
+                        let cluster = state.get_cluster_mut(id);
+                        Self::update_privilege_owners(
+                            &mut cluster.privileges,
+                            cluster.owner_id,
+                            new_owner,
+                        );
+                        cluster.owner_id = new_owner;
+                        tx.update_cluster(id, cluster)?;
+                        builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
                     }
-                    match id {
-                        ObjectId::Cluster(id) => {
-                            let cluster_name = state.get_cluster(id).name().to_string();
-                            if id.is_system() {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyCluster(cluster_name),
-                                )));
-                            }
-                            builtin_table_updates
-                                .push(state.pack_cluster_update(&cluster_name, -1));
-                            let cluster = state.get_cluster_mut(id);
-                            update_privilege_owners(
-                                &mut cluster.privileges,
-                                cluster.owner_id,
-                                new_owner,
-                            );
-                            cluster.owner_id = new_owner;
-                            tx.update_cluster(id, cluster)?;
-                            builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                        let cluster = state.get_cluster(cluster_id);
+                        if cluster_id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyCluster(cluster.name().to_string()),
+                            )));
                         }
-                        ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                            let cluster = state.get_cluster(cluster_id);
-                            if cluster_id.is_system() {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyCluster(cluster.name().to_string()),
-                                )));
-                            }
-                            let replica_name = cluster
-                                .replicas_by_id
-                                .get(&replica_id)
-                                .expect("catalog out of sync")
-                                .name
-                                .clone();
-                            if is_reserved_name(&replica_name) {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReservedReplicaName(replica_name),
-                                )));
-                            }
-                            builtin_table_updates.push(state.pack_cluster_replica_update(
-                                cluster_id,
-                                &replica_name,
-                                -1,
-                            ));
-                            let cluster = state.get_cluster_mut(cluster_id);
-                            let replica = cluster
-                                .replicas_by_id
-                                .get_mut(&replica_id)
-                                .expect("catalog out of sync");
-                            replica.owner_id = new_owner;
-                            tx.update_cluster_replica(cluster_id, replica_id, replica)?;
-                            builtin_table_updates.push(state.pack_cluster_replica_update(
-                                cluster_id,
-                                &replica_name,
-                                1,
-                            ));
+                        let replica_name = cluster
+                            .replicas_by_id
+                            .get(&replica_id)
+                            .expect("catalog out of sync")
+                            .name
+                            .clone();
+                        if is_reserved_name(&replica_name) {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReservedReplicaName(replica_name),
+                            )));
                         }
-                        ObjectId::Database(id) => {
-                            let database = state.get_database(&id);
-                            builtin_table_updates.push(state.pack_database_update(database, -1));
-                            let database = state.get_database_mut(&id);
-                            update_privilege_owners(
-                                &mut database.privileges,
-                                database.owner_id,
-                                new_owner,
-                            );
-                            database.owner_id = new_owner;
-                            let database = state.get_database(&id);
-                            tx.update_database(id, database)?;
-                            builtin_table_updates.push(state.pack_database_update(database, 1));
-                        }
-                        ObjectId::Schema((database_id, schema_id)) => {
-                            builtin_table_updates.push(state.pack_schema_update(
-                                &ResolvedDatabaseSpecifier::Id(database_id),
-                                &schema_id,
-                                -1,
-                            ));
-                            let database = state.get_database_mut(&database_id);
-                            let schema = database
-                                .schemas_by_id
-                                .get_mut(&schema_id)
-                                .expect("catalog out of sync");
-                            update_privilege_owners(
-                                &mut schema.privileges,
-                                schema.owner_id,
-                                new_owner,
-                            );
-                            schema.owner_id = new_owner;
-                            tx.update_schema(Some(database_id), schema_id, schema)?;
-                            builtin_table_updates.push(state.pack_schema_update(
-                                &ResolvedDatabaseSpecifier::Id(database_id),
-                                &schema_id,
-                                1,
-                            ));
-                        }
-                        ObjectId::Item(id) => {
-                            if id.is_system() {
-                                let entry = state.get_entry(&id);
-                                let full_name = state.resolve_full_name(
-                                    entry.name(),
-                                    session.map(|session| session.conn_id()),
-                                );
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyItem(full_name.to_string()),
-                                )));
-                            }
-                            builtin_table_updates.extend(state.pack_item_update(id, -1));
-                            let entry = state.get_entry_mut(&id);
-                            update_privilege_owners(
-                                &mut entry.privileges,
-                                entry.owner_id,
-                                new_owner,
-                            );
-                            entry.owner_id = new_owner;
-                            tx.update_item(
-                                id,
-                                &entry.name().item,
-                                &Self::serialize_item(entry.item()),
-                            )?;
-                            builtin_table_updates.extend(state.pack_item_update(id, 1));
-                        }
-                        ObjectId::Role(_) => unreachable!("roles have no owner"),
+                        builtin_table_updates.push(state.pack_cluster_replica_update(
+                            cluster_id,
+                            &replica_name,
+                            -1,
+                        ));
+                        let cluster = state.get_cluster_mut(cluster_id);
+                        let replica = cluster
+                            .replicas_by_id
+                            .get_mut(&replica_id)
+                            .expect("catalog out of sync");
+                        replica.owner_id = new_owner;
+                        tx.update_cluster_replica(cluster_id, replica_id, replica)?;
+                        builtin_table_updates.push(state.pack_cluster_replica_update(
+                            cluster_id,
+                            &replica_name,
+                            1,
+                        ));
                     }
-                }
+                    ObjectId::Database(id) => {
+                        let database = state.get_database(&id);
+                        builtin_table_updates.push(state.pack_database_update(database, -1));
+                        let database = state.get_database_mut(&id);
+                        Self::update_privilege_owners(
+                            &mut database.privileges,
+                            database.owner_id,
+                            new_owner,
+                        );
+                        database.owner_id = new_owner;
+                        let database = state.get_database(&id);
+                        tx.update_database(id, database)?;
+                        builtin_table_updates.push(state.pack_database_update(database, 1));
+                    }
+                    ObjectId::Schema((database_id, schema_id)) => {
+                        builtin_table_updates.push(state.pack_schema_update(
+                            &ResolvedDatabaseSpecifier::Id(database_id),
+                            &schema_id,
+                            -1,
+                        ));
+                        let database = state.get_database_mut(&database_id);
+                        let schema = database
+                            .schemas_by_id
+                            .get_mut(&schema_id)
+                            .expect("catalog out of sync");
+                        Self::update_privilege_owners(
+                            &mut schema.privileges,
+                            schema.owner_id,
+                            new_owner,
+                        );
+                        schema.owner_id = new_owner;
+                        tx.update_schema(Some(database_id), schema_id, schema)?;
+                        builtin_table_updates.push(state.pack_schema_update(
+                            &ResolvedDatabaseSpecifier::Id(database_id),
+                            &schema_id,
+                            1,
+                        ));
+                    }
+                    ObjectId::Item(id) => {
+                        if id.is_system() {
+                            let entry = state.get_entry(&id);
+                            let full_name = state.resolve_full_name(
+                                entry.name(),
+                                session.map(|session| session.conn_id()),
+                            );
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyItem(full_name.to_string()),
+                            )));
+                        }
+                        builtin_table_updates.extend(state.pack_item_update(id, -1));
+                        let entry = state.get_entry_mut(&id);
+                        Self::update_privilege_owners(
+                            &mut entry.privileges,
+                            entry.owner_id,
+                            new_owner,
+                        );
+                        entry.owner_id = new_owner;
+                        tx.update_item(
+                            id,
+                            &entry.name().item,
+                            &Self::serialize_item(entry.item()),
+                        )?;
+                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    }
+                    ObjectId::Role(_) => unreachable!("roles have no owner"),
+                },
                 Op::UpdateClusterReplicaStatus { event } => {
                     builtin_table_updates.push(state.pack_cluster_replica_status_update(
                         event.cluster_id,
@@ -6126,6 +6067,63 @@ impl Catalog {
             Ok(())
         }
         Ok(())
+    }
+
+    /// Update privileges to reflect the new owner. Based off of PostgreSQL's
+    /// implementation:
+    /// https://github.com/postgres/postgres/blob/43a33ef54e503b61f269d088f2623ba3b9484ad7/src/backend/utils/adt/acl.c#L1078-L1177
+    fn update_privilege_owners(
+        privileges: &mut Vec<MzAclItem>,
+        old_owner: RoleId,
+        new_owner: RoleId,
+    ) {
+        let mut new_present = false;
+        for privilege in privileges.iter_mut() {
+            // Old owner's granted privilege are updated to be granted by the new
+            // owner.
+            if privilege.grantor == old_owner {
+                privilege.grantor = new_owner;
+            } else if privilege.grantor == new_owner {
+                new_present = true;
+            }
+            // Old owner's privileges is given to the new owner.
+            if privilege.grantee == old_owner {
+                privilege.grantee = new_owner;
+            } else if privilege.grantee == new_owner {
+                new_present = true;
+            }
+        }
+
+        // If the old privilege list contained references to the new owner, we may
+        // have created duplicate entries. Here we try and consolidate them. This
+        // is inspired by PostgreSQL's algorithm but not identical.
+        if new_present {
+            // Group privileges by (grantee, grantor).
+            let privilege_map: BTreeMap<_, Vec<_>> =
+                privileges
+                    .into_iter()
+                    .fold(BTreeMap::new(), |mut accum, privilege| {
+                        accum
+                            .entry((privilege.grantee, privilege.grantor))
+                            .or_default()
+                            .push(privilege);
+                        accum
+                    });
+            // Consolidate and update all privileges.
+            *privileges = privilege_map
+                .into_iter()
+                .map(|((grantee, grantor), values)|
+                    // Combine the acl_mode of all mz_aclitems with the same grantee and grantor.
+                    values.into_iter().fold(
+                        MzAclItem::empty(grantee, grantor),
+                        |mut accum, mz_aclitem| {
+                            accum.acl_mode =
+                                accum.acl_mode.union(mz_aclitem.acl_mode);
+                            accum
+                        },
+                    ))
+                .collect();
+        }
     }
 
     pub async fn consolidate(&self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
@@ -7352,6 +7350,8 @@ mod tests {
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
+    use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+    use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names;
@@ -8354,5 +8354,81 @@ mod tests {
                 item => panic!("expected view, got {}", item.typ()),
             }
         }
+    }
+
+    #[test]
+    fn test_update_privilege_owners() {
+        let old_owner = RoleId::User(1);
+        let new_owner = RoleId::User(2);
+        let other_role = RoleId::User(3);
+
+        // older owner exists as grantor.
+        let mut privileges = vec![
+            MzAclItem {
+                grantee: other_role,
+                grantor: old_owner,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: other_role,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT,
+            },
+        ];
+        Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
+        assert_eq!(
+            vec![MzAclItem {
+                grantee: other_role,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
+            }],
+            privileges
+        );
+
+        // older owner exists as grantee.
+        let mut privileges = vec![
+            MzAclItem {
+                grantee: old_owner,
+                grantor: other_role,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: new_owner,
+                grantor: other_role,
+                acl_mode: AclMode::SELECT,
+            },
+        ];
+        Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
+        assert_eq!(
+            vec![MzAclItem {
+                grantee: new_owner,
+                grantor: other_role,
+                acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
+            }],
+            privileges
+        );
+
+        // older owner exists as grantee and grantor.
+        let mut privileges = vec![
+            MzAclItem {
+                grantee: old_owner,
+                grantor: old_owner,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: new_owner,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT,
+            },
+        ];
+        Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
+        assert_eq!(
+            vec![MzAclItem {
+                grantee: new_owner,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
+            }],
+            privileges
+        );
     }
 }
