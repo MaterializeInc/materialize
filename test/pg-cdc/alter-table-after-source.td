@@ -437,10 +437,12 @@ TRUNCATE truncate_table;
 > SELECT * from drop_table;
 1 1
 
+# If we drop the table and then trigger a schema change on any other table in the publication, we'll
+# detect that it was dropped.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE drop_table;
+ALTER TABLE truncate_table ADD column f3 int;
+INSERT INTO truncate_table VALUES (1, 1, 1);
 
-# This should error but we don't have a mechanism that does that yet.
-# #18519
-> SELECT * FROM drop_table;
-1 1
+! SELECT * FROM drop_table;
+contains:dropped
