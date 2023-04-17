@@ -19,7 +19,7 @@ use mz_controller::clusters::{
     ReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -105,7 +105,7 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DATABASES),
             row: Row::pack_slice(&[
-                Datum::UInt64(database.id.0),
+                Datum::String(&database.id.to_string()),
                 Datum::UInt32(database.oid),
                 Datum::String(database.name()),
                 Datum::String(&database.owner_id.to_string()),
@@ -124,7 +124,7 @@ impl CatalogState {
         let (database_id, schema) = match database_spec {
             ResolvedDatabaseSpecifier::Ambient => (None, &self.ambient_schemas_by_id[schema_id]),
             ResolvedDatabaseSpecifier::Id(id) => (
-                Some(id.0),
+                Some(id.to_string()),
                 &self.database_by_id[id].schemas_by_id[schema_id],
             ),
         };
@@ -145,9 +145,9 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SCHEMAS),
             row: Row::pack_slice(&[
-                Datum::UInt64(schema_id.0),
+                Datum::String(&schema_id.to_string()),
                 Datum::UInt32(schema.oid),
-                Datum::from(database_id),
+                Datum::from(database_id.as_deref()),
                 Datum::String(&schema.name.schema),
                 Datum::String(&schema.owner_id.to_string()),
                 privileges,
@@ -293,9 +293,12 @@ impl CatalogState {
         diff: Diff,
     ) -> BuiltinTableUpdate {
         let event = self.get_cluster_status(cluster_id, replica_id, process_id);
-        let status = match event.status {
-            ClusterStatus::Ready => "ready",
-            ClusterStatus::NotReady => "not-ready",
+        let status = event.status.as_kebab_case_str();
+
+        let not_ready_reason = match event.status {
+            ClusterStatus::Ready => None,
+            ClusterStatus::NotReady(None) => None,
+            ClusterStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("oom-killed"),
         };
 
         // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
@@ -307,6 +310,7 @@ impl CatalogState {
                 Datum::String(&replica_id.to_string()),
                 Datum::UInt64(process_id),
                 Datum::String(status),
+                not_ready_reason.into(),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),
             diff,
@@ -461,7 +465,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -490,7 +494,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(source_desc_name),
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
@@ -536,7 +540,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(match connection.connection {
                     mz_storage_client::types::connections::Connection::Kafka { .. } => "kafka",
@@ -685,7 +689,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&query_string),
                 Datum::String(&owner_id.to_string()),
@@ -724,7 +728,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&mview.cluster_id.to_string()),
                 Datum::String(&query_string),
@@ -771,7 +775,7 @@ impl CatalogState {
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(oid),
-                    Datum::UInt64(schema_id.into()),
+                    Datum::String(&schema_id.to_string()),
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
@@ -874,7 +878,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
                 Datum::String(&owner_id.to_string()),
@@ -957,7 +961,7 @@ impl CatalogState {
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(func_impl_details.oid),
-                    Datum::UInt64(schema_id.into()),
+                    Datum::String(&schema_id.to_string()),
                     Datum::String(name),
                     arg_type_ids,
                     Datum::from(
@@ -1035,7 +1039,7 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_SECRETS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -1161,6 +1165,8 @@ impl CatalogState {
                     u64::cast_from(process_id).into(),
                     (*cpu_nano_cores).into(),
                     (*memory_bytes).into(),
+                    // TODO(guswynn): disk usage will be filled in later.
+                    Datum::Null,
                 ])
             },
         );
@@ -1197,6 +1203,8 @@ impl CatalogState {
                         u64::cast_from(*workers).into(),
                         cpu_limit.as_nanocpus().into(),
                         memory_bytes.into(),
+                        // TODO(guswynn): disk size will be filled in later.
+                        Datum::Null,
                     ]);
                     BuiltinTableUpdate { id, row, diff: 1 }
                 },

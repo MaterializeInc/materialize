@@ -16,6 +16,7 @@ use anyhow::anyhow;
 use futures::future::BoxFuture;
 use maplit::btreeset;
 use mz_transform::Optimizer;
+use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{event, warn, Level};
@@ -235,8 +236,9 @@ impl Coordinator {
                                 source_status_collection_id,
                             )
                         }
+                        // Subsources use source statuses.
+                        DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
-                        DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
                         }
@@ -454,11 +456,15 @@ impl Coordinator {
             .values()
             .min()
             .expect("Must have at least one availability zone");
-        let first_argmin = n_replicas_per_az
+        let argmins = n_replicas_per_az
             .iter()
-            .find_map(|(k, v)| (*v == min).then_some(k))
-            .expect("Must have at least one availability zone");
-        first_argmin.clone()
+            .filter_map(|(k, v)| (*v == min).then_some(k))
+            .collect::<Vec<_>>();
+        let arbitrary_argmin = argmins
+            .choose(&mut rand::thread_rng())
+            .expect("Must have at least one value corresponding to `min`");
+
+        (*arbitrary_argmin).clone()
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

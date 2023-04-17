@@ -174,6 +174,15 @@ CREATE SOURCE mz_source
     WITH (SIZE = '3xsmall');
 ```
 
+_Create subsources for all tables in specific schemas included in the Postgres publication_
+
+```sql
+CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+  FOR SCHEMAS (public, project)
+  WITH (SIZE = '3xsmall');
+```
+
 _Create subsources for specific tables included in the Postgres publication_
 
 ```sql

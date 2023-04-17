@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::Context;
+use mz_ore::error::ErrorExt;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use std::cell::RefCell;
@@ -25,7 +26,6 @@ use mz_avro::{
     AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
     ValueOrReader,
 };
-use mz_ore::result::ResultExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, Row, RowPacker};
@@ -381,7 +381,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
         })?;
 
         let n = numeric::twos_complement_be_to_numeric(&mut buf, scale)
-            .map_err_to_string()
+            .map_err(|e| e.to_string_with_causes())
             .map_err(DecodeError::Custom)?;
 
         if n.is_special()
@@ -443,7 +443,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             ValueOrReader::Value(val) => {
                 JsonbPacker::new(self.packer)
                     .pack_serde_json(val.clone())
-                    .map_err_to_string()
+                    .map_err(|e| e.to_string_with_causes())
                     .map_err(DecodeError::Custom)?;
             }
             ValueOrReader::Reader { len, r } => {
@@ -451,7 +451,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
                 r.read_exact(self.buf)?;
                 JsonbPacker::new(self.packer)
                     .pack_slice(self.buf)
-                    .map_err_to_string()
+                    .map_err(|e| e.to_string_with_causes())
                     .map_err(DecodeError::Custom)?;
             }
         }

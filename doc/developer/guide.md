@@ -110,7 +110,7 @@ Then, download and extract the Confluent Platform tarball:
 ```shell
 INSTALL_DIR=$HOME/confluent  # You can choose somewhere else if you like.
 mkdir $INSTALL_DIR
-curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xC $INSTALL_DIR --strip-components=1
+curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xzC $INSTALL_DIR --strip-components=1
 echo export CONFLUENT_HOME=$(cd $INSTALL_DIR && pwd) >> ~/.bashrc
 source ~/.bashrc
 confluent local services start

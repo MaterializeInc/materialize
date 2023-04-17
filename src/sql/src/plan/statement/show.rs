@@ -280,9 +280,9 @@ pub fn show_schemas<'a>(
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let database_id = match from {
-        Some(ResolvedDatabaseName::Database { id, .. }) => id.0,
+        Some(ResolvedDatabaseName::Database { id, .. }) => id.to_string(),
         None => match scx.active_database() {
-            Some(id) => id.0,
+            Some(id) => id.to_string(),
             None => sql_bail!("no database specified and no active database"),
         },
         Some(ResolvedDatabaseName::Error) => {
@@ -292,7 +292,7 @@ pub fn show_schemas<'a>(
     let query = format!(
         "SELECT name
         FROM mz_catalog.mz_schemas
-        WHERE database_id IS NULL OR database_id = {database_id}",
+        WHERE database_id IS NULL OR database_id = '{database_id}'",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -350,7 +350,7 @@ fn show_connections<'a>(
     let query = format!(
         "SELECT name, type
         FROM mz_catalog.mz_connections
-        WHERE schema_id = {schema_spec}",
+        WHERE schema_id = '{schema_spec}'",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -364,7 +364,7 @@ fn show_tables<'a>(
     let query = format!(
         "SELECT name
         FROM mz_catalog.mz_tables
-        WHERE schema_id = {schema_spec}",
+        WHERE schema_id = '{schema_spec}'",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -378,7 +378,7 @@ fn show_sources<'a>(
     let query = format!(
         "SELECT name, type, size
         FROM mz_catalog.mz_sources
-        WHERE schema_id = {schema_spec}"
+        WHERE schema_id = '{schema_spec}'"
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -392,7 +392,7 @@ fn show_views<'a>(
     let query = format!(
         "SELECT name
         FROM mz_catalog.mz_views
-        WHERE schema_id = {schema_spec}"
+        WHERE schema_id = '{schema_spec}'"
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -404,7 +404,7 @@ fn show_materialized_views<'a>(
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
-    let mut where_clause = format!("schema_id = {schema_spec}");
+    let mut where_clause = format!("schema_id = '{schema_spec}'");
 
     if let Some(cluster) = in_cluster {
         write!(where_clause, " AND cluster_id = '{}'", cluster.id)
@@ -433,7 +433,7 @@ fn show_sinks<'a>(
     let query = format!(
         "SELECT sinks.name, sinks.type, sinks.size
          FROM mz_catalog.mz_sinks AS sinks
-         WHERE schema_id = {schema_spec}",
+         WHERE schema_id = '{schema_spec}'",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -447,7 +447,7 @@ fn show_types<'a>(
     let query = format!(
         "SELECT name
         FROM mz_catalog.mz_types
-        WHERE schema_id = {schema_spec}",
+        WHERE schema_id = '{schema_spec}'",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -461,7 +461,7 @@ fn show_all_objects<'a>(
     let query = format!(
         "SELECT name, type
         FROM mz_catalog.mz_objects
-        WHERE schema_id = {schema_spec}",
+        WHERE schema_id = '{schema_spec}'",
     );
     ShowSelect::new(scx, query, filter, None, None)
 }
@@ -478,7 +478,7 @@ pub fn show_indexes<'a>(
     if on_object.is_none() && from_schema.is_none() && in_cluster.is_none() {
         query_filter.push("on_id NOT LIKE 's%'".into());
         let schema_spec = scx.resolve_active_schema().map(|spec| spec.clone())?;
-        query_filter.push(format!("schema_id = {}", schema_spec));
+        query_filter.push(format!("schema_id = '{schema_spec}'"));
     }
 
     if let Some(on_object) = &on_object {
@@ -499,7 +499,7 @@ pub fn show_indexes<'a>(
 
     if let Some(schema) = from_schema {
         let schema_spec = schema.schema_spec();
-        query_filter.push(format!("schema_id = {}", schema_spec));
+        query_filter.push(format!("schema_id = '{schema_spec}'"));
     }
 
     if let Some(cluster) = in_cluster {
@@ -586,7 +586,7 @@ pub fn show_secrets<'a>(
     let query = format!(
         "SELECT name
         FROM mz_catalog.mz_secrets
-        WHERE schema_id = {schema_spec}",
+        WHERE schema_id = '{schema_spec}'",
     );
 
     ShowSelect::new(scx, query, filter, None, None)

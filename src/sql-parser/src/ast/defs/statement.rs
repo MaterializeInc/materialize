@@ -638,7 +638,9 @@ impl_display_t!(CreateSourceSubsource);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReferencedSubsources<T: AstInfo> {
     /// A subset defined with FOR TABLES (...)
-    Subset(Vec<CreateSourceSubsource<T>>),
+    SubsetTables(Vec<CreateSourceSubsource<T>>),
+    /// A subset defined with FOR SCHEMAS (...)
+    SubsetSchemas(Vec<Ident>),
     /// FOR ALL TABLES
     All,
 }
@@ -646,9 +648,14 @@ pub enum ReferencedSubsources<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ReferencedSubsources<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Subset(subsources) => {
+            Self::SubsetTables(subsources) => {
                 f.write_str("FOR TABLES (");
                 f.write_node(&display::comma_separated(subsources));
+                f.write_str(")");
+            }
+            Self::SubsetSchemas(schemas) => {
+                f.write_str("FOR SCHEMAS (");
+                f.write_node(&display::comma_separated(schemas));
                 f.write_str(")");
             }
             Self::All => f.write_str("FOR ALL TABLES"),

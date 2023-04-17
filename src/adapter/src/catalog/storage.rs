@@ -183,6 +183,7 @@ async fn migrate(
             txn.databases.insert(
                 DatabaseKey {
                     id: MATERIALIZE_DATABASE_ID,
+                    ns: None,
                 },
                 DatabaseValue {
                     name: "materialize".into(),
@@ -221,9 +222,11 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: MZ_CATALOG_SCHEMA_ID,
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: None,
+                    database_ns: None,
                     name: "mz_catalog".into(),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID),
                     privileges: Some(vec![
@@ -238,9 +241,11 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: PG_CATALOG_SCHEMA_ID,
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: None,
+                    database_ns: None,
                     name: "pg_catalog".into(),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID),
                     privileges: Some(vec![
@@ -255,9 +260,11 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: PUBLIC_SCHEMA_ID,
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: Some(MATERIALIZE_DATABASE_ID),
+                    database_ns: None,
                     name: "public".into(),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID),
                     privileges: Some(vec![
@@ -295,9 +302,11 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: MZ_INTERNAL_SCHEMA_ID,
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: None,
+                    database_ns: None,
                     name: "mz_internal".into(),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID),
                     privileges: Some(vec![
@@ -312,9 +321,11 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: INFORMATION_SCHEMA_ID,
+                    ns: None,
                 },
                 SchemaValue {
                     database_id: None,
+                    database_ns: None,
                     name: "information_schema".into(),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID),
                     privileges: Some(vec![
@@ -624,6 +635,87 @@ async fn migrate(
                     }
                 }
                 Some(replica_value)
+            })?;
+
+            Ok(())
+        },
+        // Namespacing database ids and schema ids by User or System. Currently
+        // everything exists in the "User" schema.
+        //
+        // Introduced in v0.51.0
+        //
+        // TODO(parkertimmerman): Once we support more complex migrations, we
+        // should make DatabaseKey and SchemaKey more idomatic enums.
+        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
+            // Migrate all of our DatabaseKeys.
+            txn.databases.migrate(|key, value| {
+                match key.ns {
+                    // Set all keys without a namespace to the User namespace.
+                    None => {
+                        let new_key = DatabaseKey {
+                            id: key.id,
+                            ns: Some(DatabaseNamespace::User),
+                        };
+
+                        Some((new_key, value.clone()))
+                    }
+                    // If a namespace is already set, there is nothing to do.
+                    Some(_) => None,
+                }
+            })?;
+
+            // Migrate all of our SchemaKeys and SchemaValues
+            txn.schemas.migrate(|key, value| {
+                let new_key = match key.ns {
+                    // Set all keys without a namespace to the User namespace.
+                    None => {
+                        let new_key = SchemaKey {
+                            id: key.id,
+                            ns: Some(SchemaNamespace::User),
+                        };
+                        Some(new_key)
+                    }
+                    // If a namespace is already set, there is nothing to do.
+                    Some(_) => None,
+                };
+                let new_value = match value.database_ns {
+                    // Set all values without a database namespace to the User namespace.
+                    None => {
+                        let new_value = SchemaValue {
+                            database_id: value.database_id,
+                            database_ns: Some(DatabaseNamespace::User),
+                            name: value.name.clone(),
+                            owner_id: value.owner_id,
+                            privileges: value.privileges.clone(),
+                        };
+                        Some(new_value)
+                    }
+                    // If a namespace is already set, there is nothing to do.
+                    Some(_) => None,
+                };
+
+                match (new_key, new_value) {
+                    (Some(n_k), None) => Some((n_k, value.clone())),
+                    (None, Some(n_v)) => Some((key.clone(), n_v)),
+                    (Some(n_k), Some(n_v)) => Some((n_k, n_v)),
+                    (None, None) => None,
+                }
+            })?;
+
+            // Migrate all of our existing items, to set the Schema Namespace
+            txn.items.update(|_key, value| {
+                match value.schema_ns {
+                    // Set all schema namespaces to User.
+                    None => {
+                        let mut new_value = value.clone();
+                        let prev = new_value.schema_ns.replace(SchemaNamespace::User);
+                        assert!(prev.is_none(), "Logic changed, should be None");
+
+                        Some(new_value)
+                    }
+                    // If a schema namespace is already set, there is nothing to do.
+                    Some(_) => None,
+                }
             })?;
 
             Ok(())
@@ -1130,7 +1222,7 @@ impl Connection {
             .await?
             .into_iter()
             .map(|(k, v)| Database {
-                id: DatabaseId::new(k.id),
+                id: DatabaseId::from(k),
                 name: v.name,
                 owner_id: v.owner_id.expect("owner ID not migrated"),
                 privileges: v.privileges.expect("privileges not migrated"),
@@ -1145,9 +1237,9 @@ impl Connection {
             .await?
             .into_iter()
             .map(|(k, v)| Schema {
-                id: SchemaId::new(k.id),
+                id: SchemaId::from(k),
                 name: v.name,
-                database_id: v.database_id.map(DatabaseId::new),
+                database_id: v.database_id.map(DatabaseId::User),
                 owner_id: v.owner_id.expect("owner ID not migrated"),
                 privileges: v.privileges.expect("privileges not migrated"),
             })
@@ -1624,7 +1716,11 @@ impl<'a> Transaction<'a> {
         let schemas = self.schemas.items();
         let mut items = Vec::new();
         self.items.for_values(|k, v| {
-            let schema = match schemas.get(&SchemaKey { id: v.schema_id }) {
+            let schema_key = SchemaKey {
+                id: v.schema_id,
+                ns: v.schema_ns,
+            };
+            let schema = match schemas.get(&schema_key) {
                 Some(schema) => schema,
                 None => panic!(
                     "corrupt stash! unknown schema id {}, for item with key \
@@ -1634,22 +1730,27 @@ impl<'a> Transaction<'a> {
             };
             let database_spec = match schema.database_id {
                 Some(id) => {
-                    if databases.get(&DatabaseKey { id }).is_none() {
+                    let key = DatabaseKey {
+                        id,
+                        ns: schema.database_ns,
+                    };
+                    if databases.get(&key).is_none() {
                         panic!(
-                            "corrupt stash! unknown database id {id}, for item with key \
+                            "corrupt stash! unknown database id {key:?}, for item with key \
                         {k:?} and value {v:?}"
                         );
                     }
-                    ResolvedDatabaseSpecifier::from(id)
+                    ResolvedDatabaseSpecifier::from(DatabaseId::from(key))
                 }
                 None => ResolvedDatabaseSpecifier::Ambient,
             };
+            let schema_id = SchemaId::from(schema_key);
             items.push(Item {
                 id: k.gid,
                 name: QualifiedItemName {
                     qualifiers: ItemQualifiers {
                         database_spec,
-                        schema_spec: SchemaSpecifier::from(v.schema_id),
+                        schema_spec: SchemaSpecifier::from(schema_id),
                     },
                     item: v.name.clone(),
                 },
@@ -1671,7 +1772,7 @@ impl<'a> Transaction<'a> {
             .push((StorageUsageKey { metric }, (), 1));
     }
 
-    pub fn insert_database(
+    pub fn insert_user_database(
         &mut self,
         database_name: &str,
         owner_id: RoleId,
@@ -1679,21 +1780,26 @@ impl<'a> Transaction<'a> {
     ) -> Result<DatabaseId, Error> {
         let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
         match self.databases.insert(
-            DatabaseKey { id },
+            DatabaseKey {
+                id,
+                // TODO(parkertimmerman): Support creating databases in the System namespace.
+                ns: Some(DatabaseNamespace::User),
+            },
             DatabaseValue {
                 name: database_name.to_string(),
                 owner_id: Some(owner_id),
                 privileges: Some(privileges),
             },
         ) {
-            Ok(_) => Ok(DatabaseId::new(id)),
+            // TODO(parkertimmerman): Support creating databases in the System namespace.
+            Ok(_) => Ok(DatabaseId::User(id)),
             Err(_) => Err(Error::new(ErrorKind::DatabaseAlreadyExists(
                 database_name.to_owned(),
             ))),
         }
     }
 
-    pub fn insert_schema(
+    pub fn insert_user_schema(
         &mut self,
         database_id: DatabaseId,
         schema_name: &str,
@@ -1701,16 +1807,23 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
     ) -> Result<SchemaId, Error> {
         let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
+        let db = DatabaseKey::from(database_id);
         match self.schemas.insert(
-            SchemaKey { id },
+            SchemaKey {
+                id,
+                // TODO(parkertimmerman): Support creating schemas in the System namespace.
+                ns: Some(SchemaNamespace::User),
+            },
             SchemaValue {
-                database_id: Some(database_id.0),
+                database_id: Some(db.id),
+                database_ns: db.ns,
                 name: schema_name.to_string(),
                 owner_id: Some(owner_id),
                 privileges: Some(privileges),
             },
         ) {
-            Ok(_) => Ok(SchemaId::new(id)),
+            // TODO(parkertimmerman): Support creating schemas in the System namespace.
+            Ok(_) => Ok(SchemaId::User(id)),
             Err(_) => Err(Error::new(ErrorKind::SchemaAlreadyExists(
                 schema_name.to_owned(),
             ))),
@@ -1875,10 +1988,12 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
     ) -> Result<(), Error> {
+        let schema_key = SchemaKey::from(schema_id);
         match self.items.insert(
             ItemKey { gid: id },
             ItemValue {
-                schema_id: schema_id.0,
+                schema_id: schema_key.id,
+                schema_ns: schema_key.ns,
                 name: item_name.to_string(),
                 definition: item,
                 owner_id: Some(owner_id),
@@ -1911,7 +2026,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
-        let prev = self.databases.set(DatabaseKey { id: id.0 }, None)?;
+        let prev = self.databases.set(DatabaseKey::from(*id), None)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -1924,11 +2039,11 @@ impl<'a> Transaction<'a> {
         database_id: &DatabaseId,
         schema_id: &SchemaId,
     ) -> Result<(), Error> {
-        let prev = self.schemas.set(SchemaKey { id: schema_id.0 }, None)?;
+        let prev = self.schemas.set(SchemaKey::from(*schema_id), None)?;
         if prev.is_some() {
             Ok(())
         } else {
-            Err(SqlCatalogError::UnknownSchema(format!("{}.{}", database_id.0, schema_id.0)).into())
+            Err(SqlCatalogError::UnknownSchema(format!("{}.{}", database_id, schema_id)).into())
         }
     }
 
@@ -2023,6 +2138,7 @@ impl<'a> Transaction<'a> {
             if k.gid == id {
                 Some(ItemValue {
                     schema_id: v.schema_id,
+                    schema_ns: v.schema_ns,
                     name: item_name.to_string(),
                     definition: item.clone(),
                     owner_id: v.owner_id,
@@ -2055,6 +2171,7 @@ impl<'a> Transaction<'a> {
             if let Some((item_name, item)) = items.get(&k.gid) {
                 Some(ItemValue {
                     schema_id: v.schema_id,
+                    schema_ns: v.schema_ns,
                     name: item_name.clone(),
                     definition: item.clone(),
                     owner_id: v.owner_id,
@@ -2216,7 +2333,7 @@ impl<'a> Transaction<'a> {
         database: &catalog::Database,
     ) -> Result<(), Error> {
         let n = self.databases.update(|k, _v| {
-            if k.id == id.0 {
+            if id == DatabaseId::from(*k) {
                 Some(DatabaseValue {
                     name: database.name().to_string(),
                     owner_id: Some(database.owner_id),
@@ -2247,9 +2364,15 @@ impl<'a> Transaction<'a> {
         schema: &catalog::Schema,
     ) -> Result<(), Error> {
         let n = self.schemas.update(|k, _v| {
-            if k.id == schema_id.0 {
+            let (db_id, db_ns) = match database_id {
+                None => (None, None),
+                Some(DatabaseId::System(id)) => (Some(id), Some(DatabaseNamespace::System)),
+                Some(DatabaseId::User(id)) => (Some(id), Some(DatabaseNamespace::User)),
+            };
+            if schema_id == SchemaId::from(*k) {
                 Some(SchemaValue {
-                    database_id: database_id.map(|id| id.0),
+                    database_id: db_id,
+                    database_ns: db_ns,
                     name: schema.name().schema.clone(),
                     owner_id: Some(schema.owner_id),
                     privileges: Some(schema.privileges.clone()),
@@ -2737,9 +2860,45 @@ pub struct ClusterIntrospectionSourceIndexValue {
     index_id: u64,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(
+    Default, Debug, Clone, Copy, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash,
+)]
+pub enum DatabaseNamespace {
+    #[default]
+    User,
+    System,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DatabaseKey {
     id: u64,
+    // TODO(parkertimmerman) Remove option in v0.53.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ns: Option<DatabaseNamespace>,
+}
+
+impl From<DatabaseKey> for DatabaseId {
+    fn from(value: DatabaseKey) -> Self {
+        match value.ns {
+            None | Some(DatabaseNamespace::User) => DatabaseId::User(value.id),
+            Some(DatabaseNamespace::System) => DatabaseId::System(value.id),
+        }
+    }
+}
+
+impl From<DatabaseId> for DatabaseKey {
+    fn from(value: DatabaseId) -> Self {
+        match value {
+            DatabaseId::User(id) => DatabaseKey {
+                id,
+                ns: Some(DatabaseNamespace::User),
+            },
+            DatabaseId::System(id) => DatabaseKey {
+                id,
+                ns: Some(DatabaseNamespace::System),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -2766,14 +2925,53 @@ pub struct DatabaseValue {
     privileges: Option<Vec<MzAclItem>>,
 }
 
-#[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(
+    Default, Debug, Copy, Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash,
+)]
+pub enum SchemaNamespace {
+    #[default]
+    User,
+    System,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SchemaKey {
     id: u64,
+    // TODO(parkertimmerman) Remove option in v0.53.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ns: Option<SchemaNamespace>,
+}
+
+impl From<SchemaKey> for SchemaId {
+    fn from(value: SchemaKey) -> Self {
+        match value.ns {
+            None | Some(SchemaNamespace::User) => SchemaId::User(value.id),
+            Some(SchemaNamespace::System) => SchemaId::System(value.id),
+        }
+    }
+}
+
+impl From<SchemaId> for SchemaKey {
+    fn from(value: SchemaId) -> Self {
+        match value {
+            SchemaId::User(id) => SchemaKey {
+                id,
+                ns: Some(SchemaNamespace::User),
+            },
+            SchemaId::System(id) => SchemaKey {
+                id,
+                ns: Some(SchemaNamespace::System),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct SchemaValue {
     database_id: Option<u64>,
+    // TODO(parkertimmerman) Remove option in v0.53.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database_ns: Option<DatabaseNamespace>,
     name: String,
     // TODO(jkosh44) Remove option in v0.50.0
     owner_id: Option<RoleId>,
@@ -2789,6 +2987,9 @@ pub struct ItemKey {
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Debug)]
 pub struct ItemValue {
     schema_id: u64,
+    // TODO(parkertimmerman) Remove option in v0.53.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema_ns: Option<SchemaNamespace>,
     name: String,
     definition: SerializedCatalogItem,
     // TODO(jkosh44) Remove option in v0.50.0
@@ -2893,3 +3094,40 @@ pub static ALL_COLLECTIONS: &[&str] = &[
     COLLECTION_AUDIT_LOG.name(),
     COLLECTION_STORAGE_USAGE.name(),
 ];
+
+#[cfg(test)]
+mod test {
+    use super::{DatabaseKey, DatabaseNamespace};
+
+    #[test]
+    fn test_database_key_roundtrips() {
+        let k_none = DatabaseKey { id: 42, ns: None };
+        let k_user = DatabaseKey {
+            id: 24,
+            ns: Some(DatabaseNamespace::User),
+        };
+        let k_sys = DatabaseKey {
+            id: 0,
+            ns: Some(DatabaseNamespace::System),
+        };
+
+        for key in [k_none, k_user, k_sys] {
+            let og_json = serde_json::to_string(&key).expect("valid key");
+
+            // Make sure our type roundtrips.
+            let after: DatabaseKey = serde_json::from_str(&og_json).expect("valid json");
+            assert_eq!(after, key);
+
+            // Our JSON should roundtrip too.
+            let af_json = serde_json::to_string(&after).expect("valid key");
+            assert_eq!(og_json, af_json);
+        }
+
+        let json_none = serde_json::json!({ "id": 42 }).to_string();
+
+        let key: DatabaseKey = serde_json::from_str(&json_none).expect("valid json");
+        let json_after = serde_json::to_string(&key).expect("valid key");
+
+        assert_eq!(json_none, json_after);
+    }
+}

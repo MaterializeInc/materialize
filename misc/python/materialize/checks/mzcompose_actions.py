@@ -87,7 +87,7 @@ class ConfigureMz(MzcomposeAction):
         if self.base_version >= MzVersion(0, 47, 0):
             input += "ALTER SYSTEM SET enable_rbac_checks TO true;\n"
 
-        if self.base_version >= MzVersion(0, 50, 0):
+        if self.base_version >= MzVersion.parse("0.51.0-dev"):
             input += "ALTER SYSTEM SET enable_ld_rbac_checks TO true;\n"
 
         self.handle = e.testdrive(input=input)

@@ -50,6 +50,7 @@ impl TopK {
             limit,
             offset,
             monotonic,
+            expected_group_size,
         } = relation
         {
             while let MirRelationExpr::TopK {
@@ -59,6 +60,7 @@ impl TopK {
                 limit: inner_limit,
                 offset: inner_offset,
                 monotonic: inner_monotonic,
+                expected_group_size: inner_expected_group_size,
             } = &mut **input
             {
                 // We can fuse two chained TopK operators as long as they share the
@@ -92,6 +94,17 @@ impl TopK {
 
                     *offset += *inner_offset;
                     *monotonic = *inner_monotonic;
+
+                    // Expected group size is only a hint, and setting it small when the group size
+                    // might actually be large would be bad.
+                    //
+                    // rust-lang/rust#70086 would allow a.zip_with(b, max) here.
+                    *inner_expected_group_size =
+                        match (&expected_group_size, &inner_expected_group_size) {
+                            (Some(a), Some(b)) => Some(std::cmp::max(*a, *b)),
+                            _ => None,
+                        };
+
                     **input = inner_input.take_dangerous();
                 } else {
                     break;

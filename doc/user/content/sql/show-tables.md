@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
 `SHOW TABLES` returns a list of all tables available to your Materialize instances.
 
 ## Syntax

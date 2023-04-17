@@ -49,6 +49,7 @@ impl TopKElision {
             limit,
             offset,
             monotonic: _,
+            expected_group_size: _,
         } = relation
         {
             if limit.is_none() && *offset == 0 {

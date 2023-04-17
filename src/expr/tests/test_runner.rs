@@ -152,7 +152,7 @@ mod test {
             .unwrap()
             .to_string()
             .parse::<usize>()
-            .map_err_to_string()?;
+            .map_err_to_string_with_causes()?;
         let mut mfp = MapFilterProject::new(input_arity);
         while let Some(command) = deserialize_optional::<MFPTestCommand, _, _>(
             &mut input_stream,

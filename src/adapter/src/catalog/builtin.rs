@@ -1389,7 +1389,7 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
@@ -1403,9 +1403,9 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_schemas",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
-        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("database_id", ScalarType::UInt64.nullable(true))
+        .with_column("database_id", ScalarType::String.nullable(true))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column(
@@ -1456,7 +1456,7 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column(
@@ -1471,7 +1471,7 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
@@ -1496,7 +1496,7 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("connection_id", ScalarType::String.nullable(true))
@@ -1516,7 +1516,7 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
         .with_column("connection_id", ScalarType::String.nullable(true))
@@ -1532,7 +1532,7 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
@@ -1548,7 +1548,7 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false))
@@ -1565,7 +1565,7 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("category", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
@@ -1640,7 +1640,7 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column(
             "argument_type_ids",
@@ -1697,7 +1697,7 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("schema_id", ScalarType::UInt64.nullable(false))
+        .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column(
@@ -1726,6 +1726,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
+        .with_column("reason", ScalarType::String.nullable(true))
         .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
     is_retained_metrics_object: false,
 });
@@ -1738,7 +1739,8 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
         .with_column("processes", ScalarType::UInt64.nullable(false))
         .with_column("workers", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(false)),
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(false))
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: true,
 });
 
@@ -1793,7 +1795,7 @@ FROM mz_sources
 LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
 WHERE
     -- This is a convenient way to filter out system sources, like the status_history table itself.
-    mz_sources.id NOT LIKE 's%' and mz_sources.type != 'subsource'",
+    mz_sources.id NOT LIKE 's%'",
 };
 
 pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -1867,7 +1869,8 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(true))
-        .with_column("memory_bytes", ScalarType::UInt64.nullable(true)),
+        .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: true,
 });
 
@@ -2116,36 +2119,39 @@ channel_addresses(id, worker_id, address, from_index, to_index) AS (
      INNER JOIN mz_internal.mz_dataflow_addresses_per_worker mda
      USING (id, worker_id)
 ),
-operator_addresses(channel_id, worker_id, from_address, to_address) AS (
-     SELECT id AS channel_id, worker_id,
+channel_operator_addresses(id, worker_id, from_address, to_address) AS (
+     SELECT id, worker_id,
             address || from_index AS from_address,
             address || to_index AS to_address
      FROM channel_addresses
+),
+operator_addresses(id, worker_id, address) AS (
+     SELECT id, worker_id, address
+     FROM mz_internal.mz_dataflow_addresses_per_worker mda
+     INNER JOIN mz_internal.mz_dataflow_operators_per_worker mdo
+     USING (id, worker_id)
 )
-SELECT channel_id AS id,
-       oa.worker_id,
+SELECT coa.id,
+       coa.worker_id,
        from_ops.id AS from_operator_id,
-       to_ops.id AS to_operator_id
-FROM operator_addresses oa
-     INNER JOIN mz_internal.mz_dataflow_addresses_per_worker mda_from
-         ON oa.from_address = mda_from.address AND
-            oa.worker_id = mda_from.worker_id
-     INNER JOIN mz_internal.mz_dataflow_operators_per_worker from_ops
-         ON mda_from.id = from_ops.id AND
-            oa.worker_id = from_ops.worker_id
-     INNER JOIN mz_internal.mz_dataflow_addresses_per_worker mda_to
-         ON oa.to_address = mda_to.address AND
-            oa.worker_id = mda_to.worker_id
-     INNER JOIN mz_internal.mz_dataflow_operators_per_worker to_ops
-         ON mda_to.id = to_ops.id AND
-            oa.worker_id = to_ops.worker_id",
+       coa.from_address AS from_operator_address,
+       to_ops.id AS to_operator_id,
+       coa.to_address AS to_operator_address
+FROM channel_operator_addresses coa
+     LEFT OUTER JOIN operator_addresses from_ops
+          ON coa.from_address = from_ops.address AND
+             coa.worker_id = from_ops.worker_id
+     LEFT OUTER JOIN operator_addresses to_ops
+          ON coa.to_address = to_ops.address AND
+             coa.worker_id = to_ops.worker_id
+",
 };
 
 pub const MZ_DATAFLOW_CHANNEL_OPERATORS: BuiltinView = BuiltinView {
     name: "mz_dataflow_channel_operators",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_dataflow_channel_operators AS
-SELECT id, from_operator_id, to_operator_id
+SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
 FROM mz_internal.mz_dataflow_channel_operators_per_worker
 WHERE worker_id = 0",
 };
@@ -2854,7 +2860,8 @@ SELECT
     r.id AS replica_id,
     m.process_id,
     m.cpu_nano_cores::float8 / s.cpu_nano_cores * 100 AS cpu_percent,
-    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent
+    m.memory_bytes::float8 / s.memory_bytes * 100 AS memory_percent,
+    m.disk_bytes::float8 / s.disk_bytes * 100 AS disk_percent
 FROM
     mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
