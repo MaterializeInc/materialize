@@ -10,7 +10,7 @@
 
 The scope will be limited to only allow `ORDER BY TIMESTAMP` (ascending order).
 
-- In a key-compacted Kafka copic, value = NULL is taken to mean that it’s a delete tombstone and that the corresponding key should be removed. If we want to borrow that tombstone semantic for our more flexible upsert source, it would make sense to limit the `ORDER BY` columns to only the metadata columns.
+- In a key-compacted Kafka topic, value = NULL is taken to mean that it’s a delete tombstone and that the corresponding key should be removed. If we want to borrow that tombstone semantic for our more flexible upsert source, it would make sense to limit the `ORDER BY` columns to only the metadata columns.
 - Limiting it to only `TIMESTAMP` because
     - `OFFSET` is already default. We can make it explicit though if we want.
     - `PARTITION`, `KEY`, `TOPIC`, would not make for meaningful orderings:
