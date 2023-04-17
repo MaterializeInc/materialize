@@ -708,21 +708,6 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-/// This is separate from the [`AUTO_ROUTE_INTROSPECTION_QUERIES`] `ServerVar` so we can
-/// independently roll out this feature via LaunchDarkly without effecting user's ability
-/// to disable the behavior for there sessions.
-pub const ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_auto_route_introspection_queries"),
-    value: &false,
-    description:
-        "Whether the feature to force queries that depends only on system tables to run on the mz_introspection cluster, is enabled (Materialize).",
-    internal: true,
-    safe: true,
-};
-
-/// This is separate from the [`ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES`] `ServerVar` so we
-/// can independently roll out this feature via LaunchDarkly. Users can set this var as
-/// a session variable, while we can control the feature overall with the former.
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
     value: &true,
@@ -1461,7 +1446,6 @@ impl Default for SystemVars {
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
-            .with_var(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
             .with_var(&PG_REPLICATION_KEEPALIVES_IDLE)
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
@@ -1793,13 +1777,6 @@ impl SystemVars {
     /// Returns the `enable_rbac_checks` configuration parameter.
     pub fn enable_rbac_checks(&self) -> bool {
         *self.expect_value(&ENABLE_RBAC_CHECKS)
-    }
-
-    /// Returns the `enable_auto_route_introspection_queries` configuration parameter.
-    ///
-    /// Note: this is generally intended to be set via LaunchDarkly
-    pub fn enable_auto_route_introspection_queries(&self) -> bool {
-        *self.expect_value(&ENABLE_AUTO_ROUTE_INTROSPECTION_QUERIES)
     }
 }
 
