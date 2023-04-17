@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
 `SHOW DATABASES` returns a list of all databases available to your Materialize
 instances.
 
