@@ -53,8 +53,8 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
         while True:
             (status, reason) = mz.environmentd.sql_query("""
 SELECT status, reason FROM mz_internal.mz_cluster_replica_statuses mcrs
-JOIN mz_internal.mz_cluster_replicas mcr ON mcrs.replica_id = mcr.id
-JOIN mz_internal.mz_clusters mc ON mcr.cluster_id = mc.id
+JOIN mz_cluster_replicas mcr ON mcrs.replica_id = mcr.id
+JOIN mz_clusters mc ON mcr.cluster_id = mc.id
 WHERE mc.name = 'default'
             """)[0]
             if status == 'not-ready':
