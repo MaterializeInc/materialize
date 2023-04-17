@@ -11,6 +11,22 @@ mode cockroach
 
 reset-server
 
+# Enable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE materialize CREATEDB CREATECLUSTER CREATEROLE;
+----
+COMPLETE 0
+
 # Test mz_aclitem type and functions
 
 statement ok
@@ -152,11 +168,6 @@ SELECT mz_internal.make_mz_aclitem('u1', 's1', 'asdfa ljefioj')
 
 # Test default privileges
 
-simple conn=mz_system,user=mz_system
-ALTER ROLE materialize CREATEDB CREATECLUSTER;
-----
-COMPLETE 0
-
 ## Create some helper views
 
 statement ok
@@ -229,7 +240,7 @@ statement ok
 CREATE TABLE t (a INT);
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='t'
+SELECT name, privilege FROM item_privileges WHERE name = 't'
 ----
 t  materialize=arwd/materialize
 
@@ -237,7 +248,7 @@ statement ok
 CREATE VIEW v AS SELECT 1;
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='v'
+SELECT name, privilege FROM item_privileges WHERE name = 'v'
 ----
 v  materialize=r/materialize
 
@@ -245,7 +256,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT 1;
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='mv'
+SELECT name, privilege FROM item_privileges WHERE name = 'mv'
 ----
 mv  materialize=r/materialize
 
@@ -253,7 +264,7 @@ statement ok
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='s'
+SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  materialize=r/materialize
 
@@ -261,7 +272,7 @@ statement ok
 CREATE TYPE ty AS LIST (ELEMENT TYPE=bool);
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='ty'
+SELECT name, privilege FROM item_privileges WHERE name = 'ty'
 ----
 ty  =U/materialize
 ty  materialize=U/materialize
@@ -270,7 +281,7 @@ statement ok
 CREATE SECRET se AS decode('c2VjcmV0Cg==', 'base64');
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='se'
+SELECT name, privilege FROM item_privileges WHERE name = 'se'
 ----
 se  materialize=U/materialize
 
@@ -278,7 +289,7 @@ statement ok
 CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092');
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='conn'
+SELECT name, privilege FROM item_privileges WHERE name = 'conn'
 ----
 conn  materialize=U/materialize
 
@@ -286,7 +297,7 @@ statement ok
 CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
 
 query TT
-SELECT * FROM cluster_privileges WHERE name ='c'
+SELECT * FROM cluster_privileges WHERE name = 'c'
 ----
 c  materialize=UC/materialize
 
@@ -294,12 +305,12 @@ statement ok
 CREATE DATABASE d;
 
 query TT
-SELECT * FROM database_privileges WHERE name ='d'
+SELECT * FROM database_privileges WHERE name = 'd'
 ----
 d  materialize=UC/materialize
 
 query TT
-SELECT * FROM schema_privileges WHERE name ='public' ORDER BY name
+SELECT * FROM schema_privileges WHERE name = 'public' ORDER BY name
 ----
 public  =U/mz_system
 public  =U/materialize
@@ -310,15 +321,17 @@ statement ok
 CREATE SCHEMA sch;
 
 query TT
-SELECT * FROM schema_privileges WHERE name ='sch'
+SELECT * FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
 
 # Changing the owner of an object should change the grantor of all privileges to the new owner and
 # transfer the privileges of the old owner to the new owner.
 
-statement ok
+simple conn=mz_system,user=mz_system
 CREATE ROLE joe
+----
+COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 ALTER TABLE t OWNER TO joe
@@ -356,7 +369,7 @@ ALTER SOURCE s OWNER TO joe
 COMPLETE 0
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='s'
+SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  joe=r/joe
 
@@ -366,7 +379,7 @@ ALTER TYPE ty OWNER TO joe
 COMPLETE 0
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='ty'
+SELECT name, privilege FROM item_privileges WHERE name = 'ty'
 ----
 ty  =U/joe
 ty  joe=U/joe
@@ -377,7 +390,7 @@ ALTER SECRET se OWNER TO joe
 COMPLETE 0
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='se'
+SELECT name, privilege FROM item_privileges WHERE name = 'se'
 ----
 se  joe=U/joe
 
@@ -387,7 +400,7 @@ ALTER CONNECTION conn OWNER TO joe
 COMPLETE 0
 
 query TT
-SELECT name, privilege FROM item_privileges WHERE name ='conn'
+SELECT name, privilege FROM item_privileges WHERE name = 'conn'
 ----
 conn  joe=U/joe
 
@@ -397,7 +410,7 @@ ALTER CLUSTER c OWNER TO joe
 COMPLETE 0
 
 query TT
-SELECT * FROM cluster_privileges WHERE name ='c'
+SELECT * FROM cluster_privileges WHERE name = 'c'
 ----
 c  joe=UC/joe
 
@@ -407,7 +420,7 @@ ALTER DATABASE d OWNER TO joe
 COMPLETE 0
 
 query TT
-SELECT * FROM database_privileges WHERE name ='d'
+SELECT * FROM database_privileges WHERE name = 'd'
 ----
 d  joe=UC/joe
 
@@ -417,18 +430,906 @@ ALTER SCHEMA sch OWNER TO joe
 COMPLETE 0
 
 query TT
-SELECT * FROM schema_privileges WHERE name ='sch'
+SELECT * FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=UC/joe
 
-statement error GRANT PRIVILEGE not yet supported
-GRANT SELECT ON TABLE t TO joe
+## Switch the owners back to materialize
 
-statement error GRANT PRIVILEGE not yet supported
-GRANT SELECT ON TABLE t TO PUBLIC
+simple conn=mz_system,user=mz_system
+ALTER TABLE t OWNER TO materialize
+----
+COMPLETE 0
 
-statement error REVOKE PRIVILEGE not yet supported
-REVOKE SELECT ON TABLE t FROM joe
+simple conn=mz_system,user=mz_system
+ALTER VIEW v OWNER TO materialize
+----
+COMPLETE 0
 
-statement error REVOKE PRIVILEGE not yet supported
-REVOKE SELECT ON TABLE t FROM PUBLIC
+simple conn=mz_system,user=mz_system
+ALTER MATERIALIZED VIEW mv OWNER TO materialize
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SOURCE s OWNER TO materialize
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER TYPE ty OWNER TO materialize
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SECRET se OWNER TO materialize
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CONNECTION conn OWNER TO materialize
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER c OWNER TO materialize
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER DATABASE d OWNER TO materialize
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA sch OWNER TO materialize
+----
+COMPLETE 0
+
+# Test GRANT and REVOKE
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE other
+----
+COMPLETE 0
+
+## Table
+
+statement ok
+GRANT SELECT on TABLE t TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't'
+----
+t  joe=r/materialize
+t  materialize=arwd/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT SELECT on TABLE t TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't'
+----
+t  joe=r/materialize
+t  materialize=arwd/materialize
+
+statement ok
+GRANT SELECT, INSERT, UPDATE on TABLE t TO PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't'
+----
+t  =arw/materialize
+t  joe=r/materialize
+t  materialize=arwd/materialize
+
+simple conn=joe1,user=joe
+GRANT SELECT on TABLE t TO other
+----
+db error: ERROR: must be owner of TABLE materialize.public.t
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE SELECT on TABLE t FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't'
+----
+t  =arw/materialize
+t  materialize=arwd/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE SELECT on TABLE t FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't'
+----
+t  =arw/materialize
+t  materialize=arwd/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE INSERT, UPDATE ON TABLE t FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't'
+----
+t  =r/materialize
+t  materialize=arwd/materialize
+
+statement error invalid privilege types USAGE, CREATE for TABLE
+GRANT USAGE, CREATE ON TABLE t TO joe
+
+## View
+
+statement ok
+GRANT SELECT on TABLE v TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v'
+----
+v  joe=r/materialize
+v  materialize=r/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT SELECT on TABLE v TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v'
+----
+v  joe=r/materialize
+v  materialize=r/materialize
+
+statement ok
+GRANT SELECT on TABLE v TO PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v'
+----
+v  =r/materialize
+v  joe=r/materialize
+v  materialize=r/materialize
+
+simple conn=joe2,user=joe
+GRANT SELECT on TABLE v TO other
+----
+db error: ERROR: must be owner of VIEW materialize.public.v
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE SELECT on TABLE v FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v'
+----
+v  =r/materialize
+v  materialize=r/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE SELECT on TABLE v FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v'
+----
+v  =r/materialize
+v  materialize=r/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE SELECT ON TABLE v FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v'
+----
+v  materialize=r/materialize
+
+statement error invalid privilege types INSERT, UPDATE, DELETE, USAGE, CREATE for VIEW
+GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE v TO joe
+
+## Materialized View
+
+statement ok
+GRANT SELECT on TABLE mv TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv'
+----
+mv  joe=r/materialize
+mv  materialize=r/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT SELECT on TABLE mv TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv'
+----
+mv  joe=r/materialize
+mv  materialize=r/materialize
+
+statement ok
+GRANT SELECT on TABLE mv TO PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv'
+----
+mv  =r/materialize
+mv  joe=r/materialize
+mv  materialize=r/materialize
+
+simple conn=joe3,user=joe
+GRANT SELECT on TABLE mv TO other
+----
+db error: ERROR: must be owner of MATERIALIZED VIEW materialize.public.mv
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE SELECT on TABLE mv FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv'
+----
+mv  =r/materialize
+mv  materialize=r/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE SELECT on TABLE mv FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv'
+----
+mv  =r/materialize
+mv  materialize=r/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE SELECT ON TABLE mv FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'mv'
+----
+mv  materialize=r/materialize
+
+statement error invalid privilege types INSERT, UPDATE, DELETE, USAGE, CREATE for MATERIALIZED VIEW
+GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE mv TO joe
+
+## Source
+
+statement ok
+GRANT SELECT on TABLE s TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's'
+----
+s  joe=r/materialize
+s  materialize=r/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT SELECT on TABLE s TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's'
+----
+s  joe=r/materialize
+s  materialize=r/materialize
+
+statement ok
+GRANT SELECT on TABLE s TO PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's'
+----
+s  =r/materialize
+s  joe=r/materialize
+s  materialize=r/materialize
+
+simple conn=joe4,user=joe
+GRANT SELECT on TABLE s TO other
+----
+db error: ERROR: must be owner of SOURCE materialize.public.s
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE SELECT on TABLE s FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's'
+----
+s  =r/materialize
+s  materialize=r/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE SELECT on TABLE s FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's'
+----
+s  =r/materialize
+s  materialize=r/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE SELECT ON TABLE s FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 's'
+----
+s  materialize=r/materialize
+
+statement error invalid privilege types INSERT, UPDATE, DELETE, USAGE, CREATE for SOURCE
+GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE s TO joe
+
+## Type
+
+statement ok
+GRANT USAGE on TYPE ty TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  joe=U/materialize
+ty  materialize=U/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT USAGE on TYPE ty TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  joe=U/materialize
+ty  materialize=U/materialize
+
+simple conn=joe5,user=joe
+GRANT USAGE on TYPE ty TO other
+----
+db error: ERROR: must be owner of TYPE materialize.public.ty
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE USAGE on TYPE ty FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  materialize=U/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE USAGE on TYPE ty FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  materialize=U/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE USAGE ON TYPE ty FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'ty'
+----
+ty  materialize=U/materialize
+
+statement ok
+GRANT USAGE on TYPE ty TO PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'ty'
+----
+ty  =U/materialize
+ty  materialize=U/materialize
+
+statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE, CREATE for TYPE
+GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON TYPE ty TO joe
+
+## Secret
+
+statement ok
+GRANT USAGE on SECRET se TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'se'
+----
+se  joe=U/materialize
+se  materialize=U/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT USAGE on SECRET se TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'se'
+----
+se  joe=U/materialize
+se  materialize=U/materialize
+
+statement ok
+GRANT USAGE on SECRET se TO PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'se'
+----
+se  =U/materialize
+se  joe=U/materialize
+se  materialize=U/materialize
+
+simple conn=joe6,user=joe
+GRANT USAGE on SECRET se TO other
+----
+db error: ERROR: must be owner of SECRET materialize.public.se
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE USAGE on SECRET se FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'se'
+----
+se  =U/materialize
+se  materialize=U/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE USAGE on SECRET se FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'se'
+----
+se  =U/materialize
+se  materialize=U/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE USAGE ON SECRET se FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'se'
+----
+se  materialize=U/materialize
+
+statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE, CREATE for SECRET
+GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON SECRET se TO joe
+
+## Connection
+
+statement ok
+GRANT USAGE on CONNECTION conn TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'conn'
+----
+conn  joe=U/materialize
+conn  materialize=U/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT USAGE on CONNECTION conn TO joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'conn'
+----
+conn  joe=U/materialize
+conn  materialize=U/materialize
+
+statement ok
+GRANT USAGE on CONNECTION conn TO PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'conn'
+----
+conn  =U/materialize
+conn  joe=U/materialize
+conn  materialize=U/materialize
+
+simple conn=joe7,user=joe
+GRANT USAGE on CONNECTION conn TO other
+----
+db error: ERROR: must be owner of CONNECTION materialize.public.conn
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE USAGE on CONNECTION conn FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'conn'
+----
+conn  =U/materialize
+conn  materialize=U/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE USAGE on CONNECTION conn FROM joe
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'conn'
+----
+conn  =U/materialize
+conn  materialize=U/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE USAGE ON CONNECTION conn FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'conn'
+----
+conn  materialize=U/materialize
+
+statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE, CREATE for CONNECTION
+GRANT INSERT, SELECT, UPDATE, DELETE, CREATE ON CONNECTION conn TO joe
+
+## Cluster
+
+statement ok
+GRANT USAGE on CLUSTER c TO joe
+
+query TT
+SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
+----
+c  joe=U/materialize
+c  materialize=UC/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT USAGE on CLUSTER c TO joe
+
+query TT
+SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
+----
+c  joe=U/materialize
+c  materialize=UC/materialize
+
+statement ok
+GRANT USAGE, CREATE on CLUSTER c TO PUBLIC
+
+query TT
+SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
+----
+c  =UC/materialize
+c  joe=U/materialize
+c  materialize=UC/materialize
+
+simple conn=joe8,user=joe
+GRANT USAGE on CLUSTER c TO other
+----
+db error: ERROR: must be owner of CLUSTER c
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE USAGE on CLUSTER c FROM joe
+
+query TT
+SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
+----
+c  =UC/materialize
+c  materialize=UC/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE USAGE on CLUSTER c FROM joe
+
+query TT
+SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
+----
+c  =UC/materialize
+c  materialize=UC/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE CREATE, USAGE ON CLUSTER c FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM cluster_privileges WHERE name = 'c'
+----
+c  materialize=UC/materialize
+
+statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for CLUSTER
+GRANT INSERT, SELECT, UPDATE, DELETE ON CLUSTER c TO joe
+
+## Database
+
+statement ok
+GRANT USAGE on DATABASE d TO joe
+
+query TT
+SELECT name, privilege FROM database_privileges WHERE name = 'd'
+----
+d  joe=U/materialize
+d  materialize=UC/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT USAGE on DATABASE d TO joe
+
+query TT
+SELECT name, privilege FROM database_privileges WHERE name = 'd'
+----
+d  joe=U/materialize
+d  materialize=UC/materialize
+
+statement ok
+GRANT USAGE, CREATE on DATABASE d TO PUBLIC
+
+query TT
+SELECT name, privilege FROM database_privileges WHERE name = 'd'
+----
+d  =UC/materialize
+d  joe=U/materialize
+d  materialize=UC/materialize
+
+simple conn=joe9,user=joe
+GRANT USAGE on DATABASE d TO other
+----
+db error: ERROR: must be owner of DATABASE d
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE USAGE on DATABASE d FROM joe
+
+query TT
+SELECT name, privilege FROM database_privileges WHERE name = 'd'
+----
+d  =UC/materialize
+d  materialize=UC/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE USAGE on DATABASE d FROM joe
+
+query TT
+SELECT name, privilege FROM database_privileges WHERE name = 'd'
+----
+d  =UC/materialize
+d  materialize=UC/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE CREATE, USAGE ON DATABASE d FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM database_privileges WHERE name = 'd'
+----
+d  materialize=UC/materialize
+
+statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for DATABASE
+GRANT INSERT, SELECT, UPDATE, DELETE ON DATABASE d TO joe
+
+## Schema
+
+statement ok
+GRANT USAGE on SCHEMA sch TO joe
+
+query TT
+SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
+----
+sch  joe=U/materialize
+sch  materialize=UC/materialize
+
+### Duplicate grants have no effect
+statement ok
+GRANT USAGE on SCHEMA sch TO joe
+
+query TT
+SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
+----
+sch  joe=U/materialize
+sch  materialize=UC/materialize
+
+statement ok
+GRANT USAGE, CREATE on SCHEMA sch TO PUBLIC
+
+query TT
+SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
+----
+sch  =UC/materialize
+sch  joe=U/materialize
+sch  materialize=UC/materialize
+
+simple conn=joe10,user=joe
+GRANT USAGE on SCHEMA sch TO other
+----
+db error: ERROR: must be owner of SCHEMA materialize.sch
+
+statement error role "joe" cannot be dropped because some objects depend on it
+DROP ROLE joe
+
+statement ok
+REVOKE USAGE on SCHEMA sch FROM joe
+
+query TT
+SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
+----
+sch  =UC/materialize
+sch  materialize=UC/materialize
+
+### Duplicate revokes have no effect
+statement ok
+REVOKE USAGE on SCHEMA sch FROM joe
+
+query TT
+SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
+----
+sch  =UC/materialize
+sch  materialize=UC/materialize
+
+statement ok
+DROP ROLE joe
+
+statement ok
+CREATE ROLE joe
+
+statement ok
+REVOKE CREATE, USAGE ON SCHEMA sch FROM PUBLIC
+
+query TT
+SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
+----
+sch  materialize=UC/materialize
+
+statement error invalid privilege types SELECT, INSERT, UPDATE, DELETE for SCHEMA
+GRANT INSERT, SELECT, UPDATE, DELETE ON SCHEMA sch TO joe
+
+simple conn=mz_system,user=mz_system
+GRANT INSERT ON TABLE mz_views TO joe
+----
+db error: ERROR: system item 'mz_catalog.mz_views' cannot be modified
+
+simple conn=mz_system,user=mz_system
+REVOKE INSERT ON TABLE mz_views FROM joe
+----
+db error: ERROR: system item 'mz_catalog.mz_views' cannot be modified
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON TABLE mz_objects TO joe
+----
+db error: ERROR: system item 'mz_catalog.mz_objects' cannot be modified
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON TABLE mz_objects FROM joe
+----
+db error: ERROR: system item 'mz_catalog.mz_objects' cannot be modified
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON TABLE mz_internal.mz_sink_statuses TO joe
+----
+db error: ERROR: system item 'mz_internal.mz_sink_statuses' cannot be modified
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON TABLE mz_internal.mz_sink_statuses FROM joe
+----
+db error: ERROR: system item 'mz_internal.mz_sink_statuses' cannot be modified
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE bool TO joe
+----
+db error: ERROR: system item 'pg_catalog.bool' cannot be modified
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON TYPE bool FROM joe
+----
+db error: ERROR: system item 'pg_catalog.bool' cannot be modified
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON CLUSTER mz_system TO joe
+----
+db error: ERROR: system cluster 'mz_system' cannot be modified
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON CLUSTER mz_introspection TO joe
+----
+db error: ERROR: system cluster 'mz_introspection' cannot be modified
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON CLUSTER mz_system FROM joe
+----
+db error: ERROR: system cluster 'mz_system' cannot be modified
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON CLUSTER mz_introspection FROM joe
+----
+db error: ERROR: system cluster 'mz_introspection' cannot be modified
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA pg_catalog TO joe
+----
+db error: ERROR: system schema 'pg_catalog' cannot be modified
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON SCHEMA pg_catalog FROM joe
+----
+db error: ERROR: system schema 'pg_catalog' cannot be modified
+
+## Test misc error scenarios
+
+statement error unknown database 't'
+GRANT SELECT ON DATABASE t TO joe
+
+statement error invalid privilege types USAGE for TABLE
+GRANT SELECT, USAGE ON TABLE t TO joe
+
+# Disable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
+----
+COMPLETE 0

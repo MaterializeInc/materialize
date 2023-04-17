@@ -421,6 +421,18 @@ impl Coordinator {
             Plan::RotateKeys(RotateKeysPlan { id }) => {
                 tx.send(self.sequence_rotate_keys(&session, id).await, session);
             }
+            Plan::GrantPrivilege(plan) => {
+                tx.send(
+                    self.sequence_grant_privilege(&mut session, plan).await,
+                    session,
+                );
+            }
+            Plan::RevokePrivilege(plan) => {
+                tx.send(
+                    self.sequence_revoke_privilege(&mut session, plan).await,
+                    session,
+                );
+            }
             Plan::GrantRole(plan) => {
                 tx.send(self.sequence_grant_role(&mut session, plan).await, session);
             }

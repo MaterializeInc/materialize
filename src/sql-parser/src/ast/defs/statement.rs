@@ -2912,7 +2912,7 @@ impl_display_t!(GrantPrivilegeStatement);
 /// `REVOKE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RevokePrivilegeStatement<T: AstInfo> {
-    /// The privileges being granted.
+    /// The privileges being revoked.
     pub privileges: Vec<Privilege>,
     /// The type of object.
     ///

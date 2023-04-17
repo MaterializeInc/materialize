@@ -2067,7 +2067,7 @@ impl<'a> Transaction<'a> {
                     name: cluster.name().to_string(),
                     linked_object_id: cluster.linked_object_id(),
                     owner_id: cluster.owner_id,
-                    privileges: Some(cluster.privileges.clone()),
+                    privileges: Some(MzAclItem::flatten(cluster.privileges())),
                 })
             } else {
                 None
@@ -2129,7 +2129,7 @@ impl<'a> Transaction<'a> {
                 Some(DatabaseValue {
                     name: database.name().to_string(),
                     owner_id: database.owner_id,
-                    privileges: Some(database.privileges.clone()),
+                    privileges: Some(MzAclItem::flatten(database.privileges())),
                 })
             } else {
                 None
@@ -2167,7 +2167,7 @@ impl<'a> Transaction<'a> {
                     database_ns: db_ns,
                     name: schema.name().schema.clone(),
                     owner_id: schema.owner_id,
-                    privileges: Some(schema.privileges.clone()),
+                    privileges: Some(MzAclItem::flatten(schema.privileges())),
                 })
             } else {
                 None

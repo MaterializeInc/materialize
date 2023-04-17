@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
@@ -56,10 +57,11 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantRolePlan, IndexOption,
-    InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
-    ReadThenWritePlan, ResetVariablePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
+    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan, GrantRolePlan,
+    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
+    QueryWhen, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
+    SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::Var;
@@ -1495,7 +1497,7 @@ impl Coordinator {
         dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
         fn privilege_check(
-            privileges: &Vec<MzAclItem>,
+            privileges: &BTreeMap<RoleId, Vec<MzAclItem>>,
             dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
             object_type: ObjectType,
@@ -1503,24 +1505,26 @@ impl Coordinator {
             catalog: &Catalog,
         ) {
             let object_type = object_type.to_string().to_lowercase();
-            for privilege in privileges {
-                if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
-                    let grantor_name = catalog.get_role(&privilege.grantor).name();
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!(
+            for (_, privileges) in privileges {
+                for privilege in privileges {
+                    if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
+                        let grantor_name = catalog.get_role(&privilege.grantor).name();
+                        dependent_objects
+                            .entry(role_name.to_string())
+                            .or_default()
+                            .push(format!(
                             "privileges on {object_type} {object_name} granted by {grantor_name}",
                         ));
-                }
-                if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
-                    let grantee_name = catalog.get_role(&privilege.grantee).name();
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!(
+                    }
+                    if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
+                        let grantee_name = catalog.get_role(&privilege.grantee).name();
+                        dependent_objects
+                            .entry(role_name.to_string())
+                            .or_default()
+                            .push(format!(
                             "privileges granted on {object_type} {object_name} to {grantee_name}"
                         ));
+                    }
                 }
             }
         }
@@ -3658,6 +3662,98 @@ impl Coordinator {
         let desc = ps.desc().clone();
         let revision = ps.catalog_revision;
         session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
+    }
+
+    pub(super) async fn sequence_grant_privilege(
+        &mut self,
+        session: &mut Session,
+        GrantPrivilegePlan {
+            acl_mode,
+            object_id,
+            grantee,
+            grantor,
+        }: GrantPrivilegePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.catalog()
+            .ensure_not_reserved_object(&object_id, session.conn_id())?;
+
+        let privileges = self
+            .catalog()
+            .get_privileges(&object_id, session.conn_id())
+            .expect("cannot grant privileges on objects without privileges");
+        let existing_privilege = privileges
+            .get(&grantee)
+            .and_then(|privileges| {
+                privileges
+                    .into_iter()
+                    .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+            })
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
+        // The granted privileges already exists so we can return early.
+        if existing_privilege.acl_mode.contains(acl_mode) {
+            return Ok(ExecuteResponse::GrantedPrivilege);
+        }
+
+        let op = catalog::Op::GrantPrivilege {
+            object_id,
+            privilege: MzAclItem {
+                grantee,
+                grantor,
+                acl_mode,
+            },
+        };
+        self.catalog_transact(Some(session), vec![op])
+            .await
+            .map(|_| ExecuteResponse::GrantedPrivilege)
+    }
+
+    pub(super) async fn sequence_revoke_privilege(
+        &mut self,
+        session: &mut Session,
+        RevokePrivilegePlan {
+            acl_mode,
+            object_id,
+            revokee,
+            grantor,
+        }: RevokePrivilegePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.catalog()
+            .ensure_not_reserved_object(&object_id, session.conn_id())?;
+
+        let privileges = self
+            .catalog()
+            .get_privileges(&object_id, session.conn_id())
+            .expect("cannot revoke privileges on objects without privileges");
+        let existing_privilege = privileges
+            .get(&revokee)
+            .and_then(|privileges| {
+                privileges
+                    .into_iter()
+                    .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+            })
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(revokee, grantor)));
+        // The revoked privileges don't exists so we can return early.
+        if existing_privilege
+            .acl_mode
+            .intersection(acl_mode)
+            .is_empty()
+        {
+            return Ok(ExecuteResponse::RevokedPrivilege);
+        }
+
+        let op = catalog::Op::RevokePrivilege {
+            object_id,
+            privilege: MzAclItem {
+                grantee: revokee,
+                grantor,
+                acl_mode,
+            },
+        };
+        self.catalog_transact(Some(session), vec![op])
+            .await
+            .map(|_| ExecuteResponse::RevokedPrivilege)
     }
 
     pub(super) async fn sequence_grant_role(

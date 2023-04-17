@@ -797,9 +797,11 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::DiscardedAll
         | ExecuteResponse::DroppedObject(_)
         | ExecuteResponse::EmptyQuery
+        | ExecuteResponse::GrantedPrivilege
         | ExecuteResponse::GrantedRole
         | ExecuteResponse::Inserted(_)
         | ExecuteResponse::Raised
+        | ExecuteResponse::RevokedPrivilege
         | ExecuteResponse::RevokedRole
         | ExecuteResponse::SetVariable { .. }
         | ExecuteResponse::StartedTransaction { .. }
