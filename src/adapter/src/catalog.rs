@@ -6071,7 +6071,7 @@ impl Catalog {
 
     /// Update privileges to reflect the new owner. Based off of PostgreSQL's
     /// implementation:
-    /// https://github.com/postgres/postgres/blob/43a33ef54e503b61f269d088f2623ba3b9484ad7/src/backend/utils/adt/acl.c#L1078-L1177
+    /// <https://github.com/postgres/postgres/blob/43a33ef54e503b61f269d088f2623ba3b9484ad7/src/backend/utils/adt/acl.c#L1078-L1177>
     fn update_privilege_owners(
         privileges: &mut Vec<MzAclItem>,
         old_owner: RoleId,
