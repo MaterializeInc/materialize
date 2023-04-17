@@ -29,15 +29,20 @@ use serde::Serialize;
 
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_pgrepr::oid;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, NameReference, RoleAttributes, TypeReference,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
+use mz_sql_parser::ast::ObjectType;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
 
+use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
+use crate::rbac;
 
 pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
 pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
@@ -169,6 +174,7 @@ pub struct BuiltinCluster {
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
+    pub privileges: Vec<MzAclItem>,
 }
 
 #[derive(Clone, Debug)]
@@ -1386,7 +1392,11 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1397,7 +1407,11 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("database_id", ScalarType::String.nullable(true))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1444,7 +1458,11 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1456,7 +1474,11 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("type", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1481,7 +1503,11 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true))
         .with_column("cluster_id", ScalarType::String.nullable(true))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: true,
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1509,7 +1535,11 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1522,7 +1552,11 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1534,7 +1568,11 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("category", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1637,7 +1675,11 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 
@@ -1657,7 +1699,11 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("owner_id", ScalarType::String.nullable(false)),
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1680,6 +1726,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
+        .with_column("reason", ScalarType::String.nullable(true))
         .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
     is_retained_metrics_object: false,
 });
@@ -1923,33 +1970,33 @@ GROUP BY object_id, collection_timestamp",
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
     schema: MZ_CATALOG_SCHEMA,
-    sql: "CREATE VIEW mz_catalog.mz_relations (id, oid, schema_id, name, type, owner_id) AS
-      SELECT id, oid, schema_id, name, 'table', owner_id FROM mz_catalog.mz_tables
-UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id FROM mz_catalog.mz_sources
-UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id FROM mz_catalog.mz_views
-UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id FROM mz_catalog.mz_materialized_views",
+    sql: "CREATE VIEW mz_catalog.mz_relations (id, oid, schema_id, name, type, owner_id, privileges) AS
+      SELECT id, oid, schema_id, name, 'table', owner_id, privileges FROM mz_catalog.mz_tables
+UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, privileges FROM mz_catalog.mz_sources
+UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id, privileges FROM mz_catalog.mz_views
+UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, privileges FROM mz_catalog.mz_materialized_views",
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
     name: "mz_objects",
     schema: MZ_CATALOG_SCHEMA,
     sql:
-        "CREATE VIEW mz_catalog.mz_objects (id, oid, schema_id, name, type, owner_id) AS
-    SELECT id, oid, schema_id, name, type, owner_id FROM mz_catalog.mz_relations
+        "CREATE VIEW mz_catalog.mz_objects (id, oid, schema_id, name, type, owner_id, privileges) AS
+    SELECT id, oid, schema_id, name, type, owner_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
-    SELECT id, oid, schema_id, name, 'sink', owner_id FROM mz_catalog.mz_sinks
+    SELECT id, oid, schema_id, name, 'sink', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_sinks
 UNION ALL
-    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id
+    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, NULL::mz_aclitem[]
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 UNION ALL
-    SELECT id, oid, schema_id, name, 'connection', owner_id FROM mz_catalog.mz_connections
+    SELECT id, oid, schema_id, name, 'connection', owner_id, privileges FROM mz_catalog.mz_connections
 UNION ALL
-    SELECT id, oid, schema_id, name, 'type', owner_id FROM mz_catalog.mz_types
+    SELECT id, oid, schema_id, name, 'type', owner_id, privileges FROM mz_catalog.mz_types
 UNION ALL
-    SELECT id, oid, schema_id, name, 'function', owner_id FROM mz_catalog.mz_functions
+    SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
-    SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret', owner_id FROM mz_catalog.mz_secrets",
+    SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
 };
 
 pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
@@ -3374,6 +3421,10 @@ pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
 
 pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
     name: &*SYSTEM_USER.name,
+    privileges: vec![rbac::owner_privilege(
+        ObjectType::Cluster,
+        MZ_SYSTEM_ROLE_ID,
+    )],
 });
 
 pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
@@ -3384,6 +3435,19 @@ pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
 
 pub static MZ_INTROSPECTION_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
     name: &*INTROSPECTION_USER.name,
+    privileges: vec![
+        MzAclItem {
+            grantee: RoleId::Public,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE,
+        },
+        MzAclItem {
+            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE.union(AclMode::CREATE),
+        },
+        rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
+    ],
 });
 
 pub static MZ_INTROSPECTION_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =

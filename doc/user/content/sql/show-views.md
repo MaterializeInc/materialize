@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
 `SHOW VIEWS` returns a list of views in your Materialize instances.
 
 ## Syntax
