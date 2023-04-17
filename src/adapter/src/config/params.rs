@@ -159,7 +159,6 @@ mod tests {
         let vars = SystemVars::default();
         let sync = SynchronizedParameters::new(vars);
 
-        // A smoke test to ensure the variables we want to get synced, are getting synced
-        assert!(sync.is_synchronized("enable_auto_route_introspection_queries"));
+        assert!(!sync.synchronized().is_empty());
     }
 }

@@ -376,15 +376,15 @@ Explained Query:
           %1[#0]Kef » %0:mz_schemas[#0]Kef
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Project (#0, #3) // { arity: 2 }
-            Get mz_catalog.mz_schemas // { arity: 5 }
+            Get mz_catalog.mz_schemas // { arity: 6 }
         ArrangeBy keys=[[#0]] // { arity: 3 }
           Union // { arity: 3 }
-            Project (#2, #3, #6) // { arity: 3 }
-              Map ("view") // { arity: 7 }
-                Get mz_catalog.mz_views // { arity: 6 }
             Project (#2, #3, #7) // { arity: 3 }
-              Map ("materialized-view") // { arity: 8 }
-                Get mz_catalog.mz_materialized_views // { arity: 7 }
+              Map ("view") // { arity: 8 }
+                Get mz_catalog.mz_views // { arity: 7 }
+            Project (#2, #3, #8) // { arity: 3 }
+              Map ("materialized-view") // { arity: 9 }
+                Get mz_catalog.mz_materialized_views // { arity: 8 }
 
 Source mz_catalog.mz_views
   filter=(true)

@@ -18,6 +18,9 @@ prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
+[dev-dependencies]
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
+
 [build-dependencies]
 prost-build = "0.11.2"
 protobuf-src = "1.1.0"

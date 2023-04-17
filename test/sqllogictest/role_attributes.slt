@@ -432,44 +432,14 @@ DROP CLUSTER foo;
 ----
 COMPLETE 0
 
-# Test that the attribute check apply through role membership
+# Test that role attributes are not inherited through role membership
 
-# Parent
+## Parent
 
 simple conn=mz_system,user=mz_system
-ALTER ROLE joe NOCREATEROLE NOCREATEDB NOCREATECLUSTER
+ALTER ROLE joe NOCREATEROLE NOCREATEDB NOCREATECLUSTER;
 ----
 COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE ROLE bar;
-----
-db error: ERROR: permission denied to create role
-DETAIL: You must have the CREATEROLE attribute to create role
-
-simple conn=joe,user=joe
-ALTER ROLE foo CREATECLUSTER;
-----
-db error: ERROR: permission denied to alter role
-DETAIL: You must have the CREATEROLE attribute to alter role
-
-simple conn=joe,user=joe
-DROP ROLE foo;
-----
-db error: ERROR: permission denied to drop roles
-DETAIL: You must have the CREATEROLE attribute to drop roles
-
-simple conn=joe,user=joe
-CREATE DATABASE foo;
-----
-db error: ERROR: permission denied to create database
-DETAIL: You must have the CREATEDB attribute to create database
-
-simple conn=joe,user=joe
-CREATE CLUSTER foo REPLICAS (r1 (size '1'));
-----
-db error: ERROR: permission denied to create cluster
-DETAIL: You must have the CREATECLUSTER attribute to create cluster
 
 simple conn=mz_system,user=mz_system
 CREATE ROLE joe_parent CREATEROLE CREATEDB CREATECLUSTER
@@ -484,52 +454,47 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE ROLE bar;
 ----
-COMPLETE 0
+db error: ERROR: permission denied to create role
+DETAIL: You must have the CREATEROLE attribute to create role
 
 simple conn=joe,user=joe
 ALTER ROLE foo CREATECLUSTER;
 ----
-COMPLETE 0
+db error: ERROR: permission denied to alter role
+DETAIL: You must have the CREATEROLE attribute to alter role
 
 simple conn=joe,user=joe
 DROP ROLE foo;
 ----
-COMPLETE 0
+db error: ERROR: permission denied to drop roles
+DETAIL: You must have the CREATEROLE attribute to drop roles
 
 simple conn=joe,user=joe
 CREATE DATABASE foo;
 ----
-COMPLETE 0
+db error: ERROR: permission denied to create database
+DETAIL: You must have the CREATEDB attribute to create database
 
 simple conn=joe,user=joe
 CREATE CLUSTER foo REPLICAS (r1 (size '1'));
 ----
-COMPLETE 0
+db error: ERROR: permission denied to create cluster
+DETAIL: You must have the CREATECLUSTER attribute to create cluster
 
-simple conn=mz_system,user=mz_system
-DROP ROLE bar;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-CREATE ROLE foo;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-DROP DATABASE foo;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-DROP CLUSTER foo;
-----
-COMPLETE 0
-
-# Grandparent
+## Grandparent
 
 simple conn=mz_system,user=mz_system
 ALTER ROLE joe_parent NOCREATEROLE NOCREATEDB NOCREATECLUSTER
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE joe_grandparent CREATEROLE CREATEDB CREATECLUSTER
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT joe_grandparent TO joe_parent
 ----
 COMPLETE 0
 
@@ -563,61 +528,6 @@ CREATE CLUSTER foo REPLICAS (r1 (size '1'));
 db error: ERROR: permission denied to create cluster
 DETAIL: You must have the CREATECLUSTER attribute to create cluster
 
-simple conn=mz_system,user=mz_system
-CREATE ROLE joe_grandparent CREATEROLE CREATEDB CREATECLUSTER
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-GRANT joe_grandparent TO joe_parent
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE ROLE bar;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-ALTER ROLE foo CREATECLUSTER;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-DROP ROLE foo;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE DATABASE foo;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE CLUSTER foo REPLICAS (r1 (size '1'));
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-DROP ROLE bar;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-CREATE ROLE foo;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-DROP DATABASE foo;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-DROP CLUSTER foo;
-----
-COMPLETE 0
-
 # Check if INHERIT works
 
 simple conn=mz_system,user=mz_system
@@ -627,61 +537,6 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 CREATE ROLE joeson INHERIT
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-GRANT joe to joeson
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER ROLE joe CREATEROLE CREATEDB CREATECLUSTER
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE ROLE bar;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-ALTER ROLE foo CREATECLUSTER;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-DROP ROLE foo;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE DATABASE foo;
-----
-COMPLETE 0
-
-simple conn=joe,user=joe
-CREATE CLUSTER foo REPLICAS (r1 (size '1'));
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-DROP ROLE bar;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-CREATE ROLE foo;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-DROP DATABASE foo;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-DROP CLUSTER foo;
 ----
 COMPLETE 0
 

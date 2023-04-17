@@ -39,15 +39,8 @@ pub fn auto_run_on_introspection<'a, 's>(
     session: &'s mut Session,
     depends_on: impl IntoIterator<Item = GlobalId>,
 ) -> Option<&'a Cluster> {
-    // We consider the feature to be enabled if we're in unsafe mode (e.g. testing) or
-    // the LaunchDarkly flag is set (e.g. in prod).
-    let feature_enabled = catalog.unsafe_mode()
-        || catalog
-            .system_config()
-            .enable_auto_route_introspection_queries();
-
-    // Bail if the feature isn't enabled, or the user has disabled it via the SessionVar.
-    if !feature_enabled || !session.vars().auto_route_introspection_queries() {
+    // Bail if the user has disabled it via the SessionVar.
+    if !session.vars().auto_route_introspection_queries() {
         return None;
     }
 

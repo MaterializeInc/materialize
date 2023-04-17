@@ -14,6 +14,7 @@ use std::fmt::Formatter;
 use itertools::Itertools;
 
 use mz_ore::str::StrExt;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier, SchemaSpecifier};
@@ -21,6 +22,7 @@ use mz_sql::plan::{AlterOwnerPlan, CreateMaterializedViewPlan, CreateViewPlan, P
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
 
+use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use crate::catalog::Catalog;
 use crate::command::Command;
 use crate::session::Session;
@@ -145,8 +147,9 @@ pub fn check_plan(
     }
 
     // Validate that the current session has the required attributes to execute the provided plan.
+    // Note: role attributes are not inherited by role membership.
     if let Some(required_attribute) = generate_required_plan_attribute(plan) {
-        if !required_attribute.check_roles(&role_membership, catalog) {
+        if !required_attribute.check_role(role_id, catalog) {
             return Err(AdapterError::Unauthorized(UnauthorizedError::Attribute {
                 action: plan.name().to_string(),
                 attribute: required_attribute,
@@ -277,17 +280,6 @@ impl Attribute {
             Attribute::CreateDB => role.create_db(),
             Attribute::CreateCluster => role.create_cluster(),
         }
-    }
-
-    /// Reports whether any role has the privilege granted by the attribute.
-    fn check_roles<'a>(
-        &self,
-        role_ids: impl IntoIterator<Item = &'a RoleId>,
-        catalog: &impl SessionCatalog,
-    ) -> bool {
-        role_ids
-            .into_iter()
-            .any(|role_id| self.check_role(role_id, catalog))
     }
 }
 
@@ -423,5 +415,63 @@ fn ownership_err(
         Err(UnauthorizedError::Ownership { objects })
     } else {
         Ok(())
+    }
+}
+
+pub(crate) const fn all_object_privileges(object_type: ObjectType) -> AclMode {
+    const TABLE_ACL_MODE: AclMode = AclMode::INSERT
+        .union(AclMode::SELECT)
+        .union(AclMode::UPDATE)
+        .union(AclMode::DELETE);
+    const USAGE_CREATE_ACL_MODE: AclMode = AclMode::USAGE.union(AclMode::CREATE);
+    const EMPTY_ACL_MODE: AclMode = AclMode::empty();
+    match object_type {
+        ObjectType::Table => TABLE_ACL_MODE,
+        ObjectType::View => AclMode::SELECT,
+        ObjectType::MaterializedView => AclMode::SELECT,
+        ObjectType::Source => AclMode::SELECT,
+        ObjectType::Sink => EMPTY_ACL_MODE,
+        ObjectType::Index => EMPTY_ACL_MODE,
+        ObjectType::Type => AclMode::USAGE,
+        ObjectType::Role => EMPTY_ACL_MODE,
+        ObjectType::Cluster => USAGE_CREATE_ACL_MODE,
+        ObjectType::ClusterReplica => EMPTY_ACL_MODE,
+        ObjectType::Secret => AclMode::USAGE,
+        ObjectType::Connection => AclMode::USAGE,
+        ObjectType::Database => USAGE_CREATE_ACL_MODE,
+        ObjectType::Schema => USAGE_CREATE_ACL_MODE,
+        ObjectType::Func => EMPTY_ACL_MODE,
+    }
+}
+
+pub(crate) const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAclItem {
+    MzAclItem {
+        grantee: owner_id,
+        grantor: owner_id,
+        acl_mode: all_object_privileges(object_type),
+    }
+}
+
+pub(crate) const fn default_catalog_privilege(object_type: ObjectType) -> MzAclItem {
+    let acl_mode = match object_type {
+        ObjectType::Table
+        | ObjectType::View
+        | ObjectType::MaterializedView
+        | ObjectType::Source => AclMode::SELECT,
+        ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
+        ObjectType::Sink
+        | ObjectType::Index
+        | ObjectType::Role
+        | ObjectType::Cluster
+        | ObjectType::ClusterReplica
+        | ObjectType::Secret
+        | ObjectType::Connection
+        | ObjectType::Database
+        | ObjectType::Func => AclMode::empty(),
+    };
+    MzAclItem {
+        grantee: RoleId::Public,
+        grantor: MZ_SYSTEM_ROLE_ID,
+        acl_mode,
     }
 }
