@@ -10,6 +10,7 @@
 import threading
 import time
 from io import StringIO
+from typing import Optional
 
 from pg8000 import Connection
 
@@ -44,6 +45,40 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
             pass
         time.sleep(0.2)
 
+# Test that an OOMing cluster replica generates expected entries in
+# `mz_cluster_replica_statuses`
+
+def test_oom_clusterd(mz: MaterializeApplication) -> None:
+    def verify_status(status: str, reason: Optional[str]) -> None:
+        while True:
+            (status, reason) = mz.environmentd.sql_query("""
+SELECT status, reason FROM mz_internal.mz_cluster_replica_statuses mcrs
+JOIN mz_internal.mz_cluster_replicas mcr ON mcrs.replica_id = mcr.id
+JOIN mz_internal.mz_clusters mc ON mcr.cluster_id = mc.id
+WHERE mc.name = 'default'
+            """)[0]
+            if status == 'not-ready':
+                break
+            time.sleep(1)            
+
+    
+    mz.environmentd.sql("DROP VIEW IF EXISTS v CASCADE")
+    # Once we create an index on this view, it is practically guaranteed to OOM
+    mz.environmentd.sql("""
+CREATE VIEW v AS
+SELECT repeat('abc' || x || y, 1000000) FROM
+(SELECT * FROM generate_series(1, 1000000)) a(x),
+(SELECT * FROM generate_series(1, 1000000)) b(y)
+    """)
+    mz.environmentd.sql("CREATE DEFAULT INDEX i ON v")
+    mz.environmentd.sql("SET cluster=mz_introspection")
+    
+    # Wait for the cluster pod to OOM
+    verify_status('not-ready', 'oom-killed')
+    
+    mz.environmentd.sql("DROP VIEW v CASCADE")
+    # Now that we've dropped the problematic view, the replica should come back
+    verify_status('ready', None)
 
 # Test that a crashed (and restarted) cluster replica generates expected notice
 # events.
