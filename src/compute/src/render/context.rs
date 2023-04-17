@@ -11,6 +11,7 @@
 //! dataflow.
 
 use std::collections::BTreeMap;
+use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
@@ -25,6 +26,8 @@ use mz_compute_client::plan::AvailableCollections;
 use timely::communication::message::RefOrMut;
 use timely::container::columnation;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{scopes::Child, Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -37,6 +40,8 @@ use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
+
+use super::errors::ErrorLogger;
 
 // Local type definition to avoid the horror in signatures.
 pub(crate) type KeyArrangement<S, K, V> =
@@ -89,6 +94,8 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
+    /// An optional token that operators can probe to know whether the dataflow is shutting down.
+    pub shutdown_token: Option<Weak<()>>,
 }
 
 impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
@@ -114,6 +121,7 @@ where
             as_of_frontier,
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
+            shutdown_token: None,
         }
     }
 }
@@ -160,6 +168,10 @@ where
     /// Look up a collection bundle by an identifier.
     pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, V, T>> {
         self.bindings.get(&id).cloned()
+    }
+
+    pub(super) fn error_logger(&self) -> ErrorLogger {
+        ErrorLogger::new(self.shutdown_token.clone())
     }
 }
 
@@ -745,8 +757,6 @@ where
     }
 }
 
-use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::Capability;
 struct PendingWork<C>
 where
     C: Cursor,
