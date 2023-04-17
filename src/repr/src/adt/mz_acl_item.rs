@@ -147,6 +147,14 @@ pub struct MzAclItem {
 }
 
 impl MzAclItem {
+    pub fn empty(grantee: RoleId, grantor: RoleId) -> MzAclItem {
+        MzAclItem {
+            grantee,
+            grantor,
+            acl_mode: AclMode::empty(),
+        }
+    }
+
     pub fn encode_binary(&self) -> Vec<u8> {
         let mut res = Vec::with_capacity(Self::binary_size());
         res.extend_from_slice(&self.grantee.encode_binary());
