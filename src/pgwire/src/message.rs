@@ -384,7 +384,7 @@ impl ErrorResponse {
                 SqlState::INTERNAL_ERROR
             }
             AdapterError::ConcurrentRoleDrop(_) => SqlState::UNDEFINED_OBJECT,
-            AdapterError::DependentObjectOwnership(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+            AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::VarError(e) => match e {
                 VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
                 VarError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,

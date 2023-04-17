@@ -2462,6 +2462,11 @@ impl CatalogEntry {
     pub fn owner_id(&self) -> &RoleId {
         &self.owner_id
     }
+
+    /// Returns the privileges of the entry.
+    pub fn privileges(&self) -> &Vec<MzAclItem> {
+        &self.privileges
+    }
 }
 
 struct AllocatedBuiltinSystemIds<T> {
