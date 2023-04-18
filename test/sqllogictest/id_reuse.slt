@@ -20,11 +20,11 @@ CREATE SCHEMA foo
 query TT rowsort
 SELECT id, name FROM mz_schemas
 ----
-u1 mz_catalog
-u2 pg_catalog
+s1 mz_catalog
+s2 pg_catalog
 u3 public
-u4 mz_internal
-u5 information_schema
+s4 mz_internal
+s5 information_schema
 u6 foo
 
 statement ok
@@ -36,11 +36,11 @@ CREATE schema bar
 query TT rowsort
 SELECT id, name FROM mz_schemas
 ----
-u1 mz_catalog
-u2 pg_catalog
+s1 mz_catalog
+s2 pg_catalog
 u3 public
-u4 mz_internal
-u5 information_schema
+s4 mz_internal
+s5 information_schema
 u7 bar
 
 statement ok
