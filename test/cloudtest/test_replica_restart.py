@@ -51,7 +51,7 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 
 
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
-    def verify_status(status: str, reason: Optional[str]) -> None:
+    def verify_status(expected_status: str, expected_reason: Optional[str]) -> None:
         while True:
             (status, reason) = mz.environmentd.sql_query(
                 """
@@ -61,7 +61,7 @@ JOIN mz_clusters mc ON mcr.cluster_id = mc.id
 WHERE mc.name = 'default'
             """
             )[0]
-            if status == "not-ready":
+            if status == expected_status and reason == expected_reason:
                 break
             time.sleep(1)
 
