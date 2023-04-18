@@ -232,6 +232,13 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             if frontier.is_empty() {
                 // Indicates that we may drop `id`, as there are no more valid times to read.
 
+                // Ignore drop commands on worker 0, to simulate delay.
+                let worker = self.timely_worker.index();
+                if worker == 0 {
+                    return;
+                }
+                println!("[{worker}] dropping tokens for collection {id}");
+
                 let is_subscribe = self.compute_state.sink_tokens.contains_key(&id)
                     && !self.compute_state.sink_write_frontiers.contains_key(&id);
 

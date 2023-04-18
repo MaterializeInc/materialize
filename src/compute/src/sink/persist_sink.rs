@@ -271,7 +271,8 @@ where
     // Only one worker is responsible for determining batch descriptions. All
     // workers must write batches with the same description, to ensure that they
     // can be combined into one batch that gets appended to Consensus state.
-    let hashed_id = sink_id.hashed();
+    // Make sure the active worker is always worker 0.
+    let hashed_id = 0_u64;
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
     // Only the "active" operator will mint batches. All other workers have an
@@ -825,6 +826,10 @@ where
                         let minimum_batch_updates =
                             persist_clients.cfg().sink_minimum_batch_updates();
                         let batch_or_data = if correction.len() >= minimum_batch_updates {
+                            println!(
+                                "[{worker_index}] writing {} updates",
+                                to_append.clone().count()
+                            );
                             let batch = write
                                 .batch(
                                     to_append.map(|(data, time, diff)| {
@@ -910,7 +915,8 @@ where
     // frontier and learn about the persist frontier advancing.
     let (mut _output, output_stream) = append_op.new_output();
 
-    let hashed_id = sink_id.hashed();
+    // Make sure the active worker is always worker 0.
+    let hashed_id = 0_u64;
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
     // This operator wants to completely control the frontier on it's output
@@ -1128,6 +1134,9 @@ where
                 let (batch_lower, batch_upper) = done_batch_metadata;
 
                 let mut to_append = batches.iter_mut().collect::<Vec<_>>();
+                if to_append.len() > 0 {
+                    println!("appending {}", to_append.len());
+                }
 
                 let result = write
                     .compare_and_append_batch(
