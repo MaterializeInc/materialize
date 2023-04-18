@@ -170,8 +170,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     ) -> Result<&dyn CatalogCluster<'a>, CatalogError>;
 
     /// Resolves the named cluster replica.
-    ///
-    /// If the provided name is `None`, resolves the currently active cluster.
     fn resolve_cluster_replica<'a, 'b>(
         &'a self,
         cluster_replica_name: &'b QualifiedReplica,
