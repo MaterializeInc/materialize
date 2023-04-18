@@ -63,6 +63,9 @@ WHERE mc.name = 'default'
             )[0]
             if status == expected_status and reason == expected_reason:
                 break
+            else:
+                print(f"Got {status}, {reason}; expected {expected_status}, {expected_reason}");
+            
             time.sleep(1)
 
     mz.environmentd.sql("DROP VIEW IF EXISTS v CASCADE")
