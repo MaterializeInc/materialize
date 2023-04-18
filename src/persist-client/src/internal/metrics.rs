@@ -528,11 +528,11 @@ impl CmdMetrics {
     ) -> Result<R, E>
     where
         F: std::future::Future<Output = Result<R, E>>,
-        CmdFn: FnOnce(CmdCasMismatchMetric) -> F,
+        CmdFn: FnOnce() -> F,
     {
         self.started.inc();
         let start = Instant::now();
-        let res = cmd_fn(CmdCasMismatchMetric(self.cas_mismatch.clone())).await;
+        let res = cmd_fn().await;
         self.seconds.inc_by(start.elapsed().as_secs_f64());
         match res.as_ref() {
             Ok(_) => {
