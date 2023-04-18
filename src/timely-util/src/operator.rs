@@ -145,9 +145,9 @@ where
     /// and each time is the current Timely timestamp.
     fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)>;
 
-    /// Wraps the stream with a passthrough operator that will be shut down when the provided
-    /// token cannot be upgraded anymore. After shutdown all data flowing into the operator will be
-    /// dropped.
+    /// Wraps the stream with an operator that passes through all received inputs as long as the
+    /// provided token can be upgraded. Once the token cannot be upgraded anymore, all data flowing
+    /// into the operator is dropped.
     fn with_token(&self, token: Weak<()>) -> Stream<G, D1>;
 }
 
@@ -214,9 +214,9 @@ where
         IE: Fn(D1, R) -> (E, R) + 'static,
         R: num_traits::sign::Signed;
 
-    /// Wraps the collection with a passthrough operator that will be shut down when the provided
-    /// token cannot be upgraded anymore. After shutdown all data flowing into the operator will be
-    /// dropped.
+    /// Wraps the collection with an operator that passes through all received inputs as long as
+    /// the provided token can be upgraded. Once the token cannot be upgraded anymore, all data
+    /// flowing into the operator is dropped.
     fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
 }
 
@@ -403,24 +403,17 @@ where
     }
 
     fn with_token(&self, token: Weak<()>) -> Stream<G, D1> {
-        let mut builder = OperatorBuilderRc::new("WithToken".to_owned(), self.scope());
-
-        let mut input = builder.new_input(self, Pipeline);
-        let (mut output, stream) = builder.new_output();
-
-        let mut vector = Default::default();
-        builder.build(move |_capability| {
-            move |_frontier| {
-                let mut output = output.activate();
-                while let Some((cap, data)) = input.next() {
+        self.unary(Pipeline, "WithToken", move |_cap, _info| {
+            let mut vector = Default::default();
+            move |input, output| {
+                input.for_each(|cap, data| {
                     if token.upgrade().is_some() {
                         data.swap(&mut vector);
                         output.session(&cap).give_container(&mut vector);
                     }
-                }
+                });
             }
-        });
-        stream
+        })
     }
 }
 
