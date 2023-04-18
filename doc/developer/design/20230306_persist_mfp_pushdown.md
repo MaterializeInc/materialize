@@ -4,7 +4,12 @@
 # Summary
 [summary]: #summary
 
-TODO
+Queries against large collections in Materialize can be very expensive:
+readers generally need to fetch all the data in the collection as of the query time,
+even if they're only interested in a small subset.
+By pushing down filters into the Persist source,
+we can dramatically improve performance for certain subsets of queries,
+especially those that filter down to a narrow window of time.
 
 # Motivation
 [motivation]: #motivation
@@ -13,7 +18,7 @@ Blobs written by Persist today are a black box: we have no way to characterize t
 This requires us to fetch every part no matter what question is being asked of the data.
 
 By introducing types and capturing statistic metadata on parts, Persist can
-more selectively filter which parts are fed into a dataflow, before even reading them from Blob storage.
+determine which parts are relevant to a query before even reading them from Blob storage.
 When reading data with the appropriate locality, MFP pushdown will enable faster dataflow rehydration and faster ad-hoc / exploratory queries in ways that are not currently achievable.
 
 # Explanation
@@ -144,12 +149,18 @@ We should validate that the real-world latency improvements our users will see a
 `TRANSFORM USING` has been discussed as another way to enable append-only workloads.
 While some use-cases can be addressed with either feature, filter pushdown has the advantage of not altering how the data is written.
 
-We've explored various approaches to extracting part filters from the MFP data, including matching on the top-level structure of the filter. However, the simpler approaches aren't able to cope with many real-world temporal filters.
+We've explored various approaches to extracting part filters from the MFP data, including matching on the top-level structure of the filter.
+However, real-world temporal filters are often complex: even the basic examples in our temporal filters documentation fairly deep nesting.
 
-TODO
+TODO: anything else?
 
 # Unresolved questions
 [unresolved-questions]: #unresolved-questions
+
+We've reserved the right to drop statistics when they grow to large...
+but we haven't yet defined what counts as too large, or exactly which statistics will be dropped.
+We plan to tweak our approach here as we go, based on observed production behaviour.
+(And may add a dynamic configuration to be able to adjust it more easily.)
 
 TODO
 
@@ -158,16 +169,22 @@ TODO
 
 ## Better support for non-temporal filters
 
-Filtering on a prefix of the `(key, value)` columns. This is due to how parts within Persist are sorted
+This document has focussed on temporal filters, particularly for append only datasets.
+However, we also believe that we can effectively push down filters on a prefix of the `(key, value)` columns.
+This is due to how parts within Persist are sorted
 by `(key, value, ts)` in column/lexicographic ordering. In practice, the default column order is unlikely to
-  be immediately useful for most collections, and column ordering would likely need to be user-specifiable
-  to take full advantage of this property.
+be immediately useful for most collections, and column ordering would likely need to be user-specifiable
+to take full advantage of this property.
 
 ## Columnar on-disk format
 
+Now that we understand the schema of the data being written to Persist, we could push that structure all the way down to the Parquet storage layer.
+While this unlocks a number of possible optimizations, it does not block filter pushdown, so we plan to take it on as future work.
+
 ### Projection pushdown
 
-TODO
+Persist will fetch and deserialize an entire part file, even if certain columns will be filtered out immediately in the source.
+Breaking out individual dataset columns into individual columns at the Persist layer will make it possible to avoid fetching or deserializing them at query time.
 
 ### Logical Sharding
 
@@ -185,9 +202,8 @@ the Persist level](https://github.com/MaterializeInc/materialize/issues/16625).
 
 ### Internal improvements
 
-Less tangible motivation for this work is that by columnarizing and summarizing parts, we will have a forcing
-function to progress some lesser-seen concerns within Persist. Examples of this include how proper columnar
-storage will reduce allocations and memory pressure caused by Persist (something we're already grappling with),
-and how storing statistics will require a more long-term scalable solution to how we store metadata. These are
-problems we know we must stay on top of, and working through the building blocks for MFP pushdown will help frame
+Columnarizing and summarizing parts may help us improve some non-user-facing aspects of Persist.
+Proper columnar storage will reduce allocations and memory pressure,
+and storing statistics may inspire a more long-term scalable solution to how we store metadata. These are
+problems we know we must stay on top of, and revisiting our storage format should help us frame
 a long-term vision to solving them.
