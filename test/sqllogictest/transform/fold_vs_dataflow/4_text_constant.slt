@@ -1,0 +1,84 @@
+mode cockroach
+
+# -------------------------------
+# ILIKE operator
+# -------------------------------
+
+statement ok
+CREATE TABLE t_data (f1 TEXT);
+
+statement ok
+INSERT INTO t_data VALUES ('ABCDEF'), ('abcdef'), ('aBcDeF'), ('AbCdEf');
+
+query T
+SELECT * FROM t_data WHERE f1 ILIKE '%bCd%'  ORDER BY f1;
+----
+AbCdEf
+
+query T multiline
+EXPLAIN SELECT * FROM t_data WHERE f1 ILIKE '%bCd%';
+----
+Explained Query:
+  Filter "%bCd%" ~~(#0)
+    Get materialize.public.t_data
+
+Source materialize.public.t_data
+  filter=("%bCd%" ~~(#0))
+
+EOF
+
+# -------------------------------
+# Further text operators
+# -------------------------------
+
+statement ok
+CREATE VIEW v_using_constant_folding (f1, f2, f3, f4, f1ls, f1rs) AS
+SELECT
+ 'ABCDef', 'CD', 'cd', 'XX', ' ABCDef', 'ABCDef ';
+
+query TTTTTTTTTTTTTTTTTT
+SELECT
+ f1 || f4,
+ BTRIM(f1ls), LTRIM(f1ls),
+ BTRIM(f1rs), RTRIM(f1rs),
+ UPPER(f1), LOWER(f1),
+ SUBSTRING(f1, 1),
+ REPLACE(f1, f2, f3),
+ POSITION(f2 IN f1),
+ SPLIT_PART(f1, f2, 1),
+ TRANSLATE(f1, 'C', 'Z'),
+ LPAD(f1, 10),
+ LPAD(f1, 10, f2),
+ REGEXP_MATCH(f1, f2),
+ REGEXP_MATCH(f1, f3, 'i') AS case_insensitive,
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM v_using_constant_folding;
+----
+ABCDefXX  ABCDef  ABCDef  ABCDef  ABCDef  ABCDEF  abcdef  ABCDef  ABcdef  3  AB  ABZDef      ABCDef  CDCDABCDef  {CD}  {CD}  ABCDef  [238, 226, 119, 230, 210, 45, 158, 105, 232, 127, 11, 125, 76, 10, 244, 149, 96, 158, 231, 207, 230, 136, 216, 56, 30, 157, 228, 74, 89, 49, 203, 21, 238, 196, 151, 235, 205, 247, 59, 41, 81, 87, 67, 152, 170, 149, 41, 38, 39, 103, 214, 97, 156, 131, 169, 93, 142, 69, 43, 29, 72, 113, 255, 236]
+
+query T multiline
+EXPLAIN
+SELECT
+ f1 || f4,
+ BTRIM(f1ls), LTRIM(f1ls),
+ BTRIM(f1rs), RTRIM(f1rs),
+ UPPER(f1), LOWER(f1),
+ SUBSTRING(f1, 1),
+ REPLACE(f1, f2, f3),
+ POSITION(f2 IN f1),
+ SPLIT_PART(f1, f2, 1),
+ TRANSLATE(f1, 'C', 'Z'),
+ LPAD(f1, 10),
+ LPAD(f1, 10, f2),
+ REGEXP_MATCH(f1, f2),
+ REGEXP_MATCH(f1, f3, 'i') AS case_insensitive,
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM v_using_constant_folding;
+----
+Explained Query (fast path):
+  Constant
+    - ("ABCDefXX", "ABCDef", "ABCDef", "ABCDef", "ABCDef", "ABCDEF", "abcdef", "ABCDef", "ABcdef", 3, "AB", "ABZDef", "    ABCDef", "CDCDABCDef", {"CD"}, {"CD"}, 0x414243446566, 0xeee277e6d22d9e69e87f0b7d4c0af495609ee7cfe688d8381e9de44a5931cb15eec497ebcdf73b2951574398aa9529262767d6619c83a95d8e452b1d4871ffec)
+
+EOF

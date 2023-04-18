@@ -1,0 +1,33 @@
+mode cockroach
+
+# -------------------------------
+# repeat row (=> this panics!)
+# -------------------------------
+
+statement ok
+CREATE TABLE t_base (data int, diff bigint);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+# statement ok
+# CREATE VIEW v_using_constant_folding AS
+ #  SELECT data FROM (
+                      #     SELECT * FROM (
+#         VALUES (1, 9223372036854775807),
+#                (1, 9223372036854775807)
+#         ) AS t_base(data, diff),
+#         repeat_row(diff)
+# );
+
+# query I
+# SELECT SUM(data) FROM v_using_constant_folding;
+# ----
+
+# query T multiline
+# EXPLAIN SELECT * FROM v_using_constant_folding;
+# ----
+# EOF

@@ -1,0 +1,27 @@
+mode cockroach
+
+# -------------------------------
+# repeat row (=> this panics!)
+# -------------------------------
+
+statement ok
+CREATE TABLE t_base (data int, diff bigint);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+# statement ok
+# CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
+#  SELECT data FROM t_base, repeat_row(diff);
+
+# query I
+# SELECT SUM(data) FROM mv_using_dataflow_rendering;
+# ----
+
+# query T multiline
+# EXPLAIN SELECT SUM(data) FROM mv_using_dataflow_rendering;
+# ----
+# EOF

@@ -1,0 +1,70 @@
+mode cockroach
+
+# -------------------------------
+# non-aggregate functions with big numbers
+# -------------------------------
+
+statement ok
+CREATE TABLE t_using_dataflow_rendering (real1 REAL, double1 DOUBLE PRECISION, numeric1 NUMERIC, tint1 INT2, tint2 INT2);
+
+statement ok
+INSERT INTO t_using_dataflow_rendering VALUES
+ (1e38::real, 1e38::double, 1e38::numeric, (-32767)::INT2, (-1)::INT2),
+ (2, 2, 2, 32767::INT2, 1::INT2);
+
+query IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
+SELECT
+ real1, real1 + 1, real1 - 1,
+ real1 + 0, double1 + 0, numeric1 + 0,
+ real1 + real1, double1 + double1, numeric1 + numeric1,
+ SQRT(real1), SQRT(double1), SQRT(numeric1),
+ SQRT(real1 + real1), SQRT(double1 + double1), SQRT(numeric1 + numeric1),
+ tint1 / tint2, tint2 / tint1,
+ COALESCE(real1, NULL), COALESCE(double1, NULL), COALESCE(numeric1, NULL),
+ GREATEST(real1, 1), GREATEST(double1, 1), GREATEST(numeric1, 1),
+ LEAST(real1, 1e38::real), LEAST(double1, 1e38::double), LEAST(numeric1, 1e38::numeric),
+ NULLIF(real1, 1e38::real), NULLIF(double1, 1e38::double), NULLIF(numeric1, 1e38::numeric),
+ real1 <= 1e38::real, double1 <= 1e38::double, numeric1 <= 1e38::numeric,
+ real1 >= 1e38::real, double1 >= 1e38::double, numeric1 >= 1e38::numeric,
+ real1 < 1e38::real, double1 < 1e38::double, numeric1 < 1e38::numeric,
+ real1 > 1e38::real, double1 > 1e38::double, numeric1 > 1e38::numeric,
+ real1 = 1e38::real, double1 = 1e38::double, numeric1 = 1e38::numeric,
+ CASE WHEN 1=1 THEN real1 ELSE -1 END, CASE WHEN 1=1 THEN double1 ELSE -1 END, CASE WHEN 1=1 THEN numeric1 ELSE -1 END
+FROM t_using_dataflow_rendering
+ORDER BY real1;
+----
+2  3  1  2  2  2  4  4  4  1  1  1  2  2  2  32767  0  2  2  2  2  2  2  2  2  2  2  2  2  1  1  1  0  0  0  1  1  1  0  0  0  0  0  0  2  2  2
+9223372036854775807  9223372036854775807  9223372036854775807  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  200000000000000000000000000000000000000  9223372036854775807  9223372036854775807  10000000000000000000  9223372036854775807  9223372036854775807  14142135623730950488  32767  0  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  NULL  NULL  NULL  1  1  1  1  1  1  0  0  0  0  0  0  1  1  1  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000
+
+query error
+SELECT
+ (tint1 + tint2) / tint2
+FROM t_using_dataflow_rendering;
+
+query T multiline
+EXPLAIN
+SELECT
+ real1, real1 + 1, real1 - 1,
+ real1 + 0, double1 + 0, numeric1 + 0,
+ real1 + real1, double1 + double1, numeric1 + numeric1,
+ SQRT(real1), SQRT(double1), SQRT(numeric1),
+ SQRT(real1 + real1), SQRT(double1 + double1), SQRT(numeric1 + numeric1),
+ tint1 / tint2, tint2 / tint1,
+ COALESCE(real1, NULL), COALESCE(double1, NULL), COALESCE(numeric1, NULL),
+ GREATEST(real1, 1), GREATEST(double1, 1), GREATEST(numeric1, 1),
+ LEAST(real1, 1e38::real), LEAST(double1, 1e38::double), LEAST(numeric1, 1e38::numeric),
+ NULLIF(real1, 1e38::real), NULLIF(double1, 1e38::double), NULLIF(numeric1, 1e38::numeric),
+ real1 <= 1e38::real, double1 <= 1e38::double, numeric1 <= 1e38::numeric,
+ real1 >= 1e38::real, double1 >= 1e38::double, numeric1 >= 1e38::numeric,
+ real1 < 1e38::real, double1 < 1e38::double, numeric1 < 1e38::numeric,
+ real1 > 1e38::real, double1 > 1e38::double, numeric1 > 1e38::numeric,
+ real1 = 1e38::real, double1 = 1e38::double, numeric1 = 1e38::numeric,
+ CASE WHEN 1=1 THEN real1 ELSE -1 END, CASE WHEN 1=1 THEN double1 ELSE -1 END, CASE WHEN 1=1 THEN numeric1 ELSE -1 END
+FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Project (#0, #5..=#20, #0..=#2, #21..=#26, #28, #30, #32..=#44, #27, #29, #31, #0..=#2)
+    Map ((#0 + 1), (#0 - 1), (#0 + 0), (#1 + 0), (#2 + 0), (#0 + #0), (#1 + #1), (#2 + #2), sqrtf64(real_to_double(#0)), sqrtf64(#1), sqrtnumeric(#2), sqrtf64(real_to_double(#10)), sqrtf64(#11), sqrtnumeric(#12), (#3 / #4), (#4 / #3), greatest(#0, 1), greatest(#1, 1), greatest(#2, 1), least(#0, 100000000000000000000000000000000000000), least(#1, 100000000000000000000000000000000000000), least(#2, 100000000000000000000000000000000000000), (#0 = 100000000000000000000000000000000000000), case when #27 then null else #0 end, (#1 = 100000000000000000000000000000000000000), case when #29 then null else #1 end, (#2 = 100000000000000000000000000000000000000), case when #31 then null else #2 end, (#0 <= 100000000000000000000000000000000000000), (#1 <= 100000000000000000000000000000000000000), (#2 <= 100000000000000000000000000000000000000), (#0 >= 100000000000000000000000000000000000000), (#1 >= 100000000000000000000000000000000000000), (#2 >= 100000000000000000000000000000000000000), (#0 < 100000000000000000000000000000000000000), (#1 < 100000000000000000000000000000000000000), (#2 < 100000000000000000000000000000000000000), (#0 > 100000000000000000000000000000000000000), (#1 > 100000000000000000000000000000000000000), (#2 > 100000000000000000000000000000000000000))
+      Get materialize.public.t_using_dataflow_rendering
+
+EOF

@@ -1,0 +1,104 @@
+mode cockroach
+
+# -------------------------------
+# ILIKE operator
+# -------------------------------
+
+statement ok
+CREATE TABLE t_data (f1 TEXT);
+
+statement ok
+INSERT INTO t_data VALUES ('ABCDEF'), ('abcdef'), ('aBcDeF'), ('AbCdEf');
+
+statement ok
+CREATE TABLE t_operator (op_val TEXT);
+
+statement ok
+INSERT INTO t_operator VALUES ('%bCd%');
+
+query T
+SELECT * FROM t_data WHERE f1 ILIKE (SELECT op_val FROM t_operator) ORDER BY f1;
+----
+ABCDEF
+AbCdEf
+aBcDeF
+abcdef
+
+query T multiline
+EXPLAIN SELECT * FROM t_data WHERE f1 ILIKE (SELECT op_val FROM t_operator);
+----
+Explained Query:
+  Project (#0)
+    Filter (#0 ilike #1)
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          Get materialize.public.t_data
+        ArrangeBy keys=[[]]
+          Union
+            Get materialize.public.t_operator
+            Map (error("more than one record produced in subquery"))
+              Project ()
+                Filter (#0 > 1)
+                  Reduce aggregates=[count(*)]
+                    Project ()
+                      Get materialize.public.t_operator
+
+EOF
+
+# -------------------------------
+# Further text operators
+# -------------------------------
+
+statement ok
+CREATE TABLE t_using_dataflow_rendering (f1 TEXT, f2 TEXT, f3 TEXT, f4 TEXT, f1ls TEXT, f1rs TEXT);
+
+statement ok
+INSERT INTO t_using_dataflow_rendering VALUES ('ABCDef', 'CD', 'cd', 'XX', ' ABCDef', 'ABCDef ');
+
+query TTTTTTTTTTTTTTTTTT
+SELECT
+ f1 || f4,
+ BTRIM(f1ls), LTRIM(f1ls),
+ BTRIM(f1rs), RTRIM(f1rs),
+ UPPER(f1), LOWER(f1),
+ SUBSTRING(f1, 1),
+ REPLACE(f1, f2, f3),
+ POSITION(f2 IN f1),
+ SPLIT_PART(f1, f2, 1),
+ TRANSLATE(f1, 'C', 'Z'),
+ LPAD(f1, 10),
+ LPAD(f1, 10, f2),
+ REGEXP_MATCH(f1, f2),
+ REGEXP_MATCH(f1, f3, 'i') AS case_insensitive,
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM t_using_dataflow_rendering;
+----
+ABCDefXX  ABCDef  ABCDef  ABCDef  ABCDef  ABCDEF  abcdef  ABCDef  ABcdef  3  AB  ABZDef      ABCDef  CDCDABCDef  {CD}  {CD}  ABCDef  [238, 226, 119, 230, 210, 45, 158, 105, 232, 127, 11, 125, 76, 10, 244, 149, 96, 158, 231, 207, 230, 136, 216, 56, 30, 157, 228, 74, 89, 49, 203, 21, 238, 196, 151, 235, 205, 247, 59, 41, 81, 87, 67, 152, 170, 149, 41, 38, 39, 103, 214, 97, 156, 131, 169, 93, 142, 69, 43, 29, 72, 113, 255, 236]
+
+query T multiline
+EXPLAIN
+SELECT
+ f1 || f4,
+ BTRIM(f1ls), LTRIM(f1ls),
+ BTRIM(f1rs), RTRIM(f1rs),
+ UPPER(f1), LOWER(f1),
+ SUBSTRING(f1, 1),
+ REPLACE(f1, f2, f3),
+ POSITION(f2 IN f1),
+ SPLIT_PART(f1, f2, 1),
+ TRANSLATE(f1, 'C', 'Z'),
+ LPAD(f1, 10),
+ LPAD(f1, 10, f2),
+ REGEXP_MATCH(f1, f2),
+ REGEXP_MATCH(f1, f3, 'i') AS case_insensitive,
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Project (#6..=#23)
+    Map ((#0 || #3), btrim(#4), ltrim(#4), btrim(#5), rtrim(#5), upper(#0), lower(#0), substr(#0, 1), replace(#0, #1, #2), position(#1, #0), split_string(#0, #1, 1), translate(#0, "C", "Z"), lpad(#0, 10), lpad(#0, 10, #1), regexp_match(#0, #1), regexp_match(#0, #2, "i"), text_to_bytea(#0), digest(#22, "sha512"))
+      Get materialize.public.t_using_dataflow_rendering
+
+EOF
