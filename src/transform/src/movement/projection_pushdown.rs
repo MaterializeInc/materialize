@@ -127,7 +127,12 @@ impl ProjectionPushdown {
                 )?;
                 desired_projection.clone()
             }
-            MirRelationExpr::LetRec { ids, values, body } => {
+            MirRelationExpr::LetRec {
+                ids,
+                values,
+                max_iters: _,
+                body,
+            } => {
                 // Determine the recursive IDs in this LetRec binding.
                 let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
 

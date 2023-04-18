@@ -12,6 +12,7 @@
 #![warn(missing_debug_implementations)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU64;
 
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
@@ -211,6 +212,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
         ids: Vec<LocalId>,
         /// The collection that should be bound to `id`.
         values: Vec<Plan<T>>,
+        /// Maximum number of iterations. See further info on the MIR `LetRec`.
+        max_iters: Vec<Option<NonZeroU64>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
         body: Box<Plan<T>>,
@@ -590,9 +593,15 @@ impl RustType<ProtoPlan> for Plan {
                     body: Some(body.into_proto()),
                 }
                 .into()),
-                Plan::LetRec { ids, values, body } => LetRec(
+                Plan::LetRec {
+                    ids,
+                    values,
+                    max_iters,
+                    body,
+                } => LetRec(
                     ProtoPlanLetRec {
                         ids: ids.into_proto(),
+                        max_iters: max_iters.into_proto(),
                         values: values.into_proto(),
                         body: Some(body.into_proto()),
                     }
@@ -729,11 +738,19 @@ impl RustType<ProtoPlan> for Plan {
                 value: proto.value.into_rust_if_some("ProtoPlanLet::value")?,
                 body: proto.body.into_rust_if_some("ProtoPlanLet::body")?,
             },
-            LetRec(proto) => Plan::LetRec {
-                ids: proto.ids.into_rust()?,
-                values: proto.values.into_rust()?,
-                body: proto.body.into_rust_if_some("ProtoPlanLetRec::body")?,
-            },
+            LetRec(proto) => {
+                let ids: Vec<LocalId> = proto.ids.into_rust()?;
+                let values: Vec<Plan> = proto.values.into_rust()?;
+                let max_iters: Vec<Option<NonZeroU64>> = proto.max_iters.into_rust()?;
+                assert_eq!(ids.len(), values.len());
+                assert_eq!(ids.len(), max_iters.len());
+                Plan::LetRec {
+                    ids,
+                    values,
+                    max_iters,
+                    body: proto.body.into_rust_if_some("ProtoPlanLetRec::body")?,
+                }
+            }
             Mfp(proto) => Plan::Mfp {
                 input: proto.input.into_rust_if_some("ProtoPlanMfp::input")?,
                 input_key_val: input_kv_try_into(proto.input_key_val)?,
@@ -1095,7 +1112,14 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     b_keys,
                 )
             }
-            MirRelationExpr::LetRec { ids, values, body } => {
+            MirRelationExpr::LetRec {
+                ids,
+                values,
+                max_iters,
+                body,
+            } => {
+                assert_eq!(ids.len(), values.len());
+                assert_eq!(ids.len(), max_iters.len());
                 // Plan the values using only the available arrangements, but
                 // introduce any resulting arrangements bound to each `id`.
                 // Arrangements made available cannot be used by prior bindings,
@@ -1122,9 +1146,15 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         // then we insert the `ArrangeBy` on the `body` of the inner `LetRec`,
                         // instead of on top of the inner `LetRec`.
                         lir_value = match lir_value {
-                            Plan::LetRec { ids, values, body } => Plan::LetRec {
+                            Plan::LetRec {
                                 ids,
                                 values,
+                                max_iters,
+                                body,
+                            } => Plan::LetRec {
+                                ids,
+                                values,
+                                max_iters,
                                 body: Box::new(Plan::ArrangeBy {
                                     input: body,
                                     forms,
@@ -1161,6 +1191,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     Plan::LetRec {
                         ids: ids.clone(),
                         values: lir_values,
+                        max_iters: max_iters.clone(),
                         body: Box::new(body),
                     },
                     b_keys,
@@ -1865,7 +1896,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         })
                         .collect()
                 }
-                Plan::LetRec { ids, values, body } => {
+                Plan::LetRec {
+                    ids,
+                    values,
+                    max_iters,
+                    body,
+                } => {
                     let mut values_parts: Vec<Vec<Self>> = vec![Vec::new(); parts];
                     for value in values.into_iter() {
                         for (index, part) in value.partition_among(parts).into_iter().enumerate() {
@@ -1879,6 +1915,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         .map(|(values, body)| Plan::LetRec {
                             values,
                             body: Box::new(body),
+                            max_iters: max_iters.clone(),
                             ids: ids.clone(),
                         })
                         .collect()
@@ -2026,6 +2063,7 @@ impl<T> CollectionPlan for Plan<T> {
             Plan::LetRec {
                 ids: _,
                 values,
+                max_iters: _,
                 body,
             } => {
                 for value in values.iter() {

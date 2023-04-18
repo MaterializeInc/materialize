@@ -4620,7 +4620,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a query expression, i.e. a `SELECT` statement optionally
-    /// preceeded with some `WITH` CTE declarations and optionally followed
+    /// preceded with some `WITH` CTE declarations and optionally followed
     /// by `ORDER BY`. Unlike some other parse_... methods, this one doesn't
     /// expect the initial keyword to be already consumed
     fn parse_query(&mut self) -> Result<Query<Raw>, ParserError> {
@@ -4628,9 +4628,18 @@ impl<'a> Parser<'a> {
             let cte_block = if parser.parse_keyword(WITH) {
                 if parser.parse_keyword(MUTUALLY) {
                     parser.expect_keyword(RECURSIVE)?;
-                    CteBlock::MutuallyRecursive(
-                        parser.parse_comma_separated(Parser::parse_cte_mut_rec)?,
-                    )
+                    let options = if parser.consume_token(&Token::LParen) {
+                        let options =
+                            parser.parse_comma_separated(Self::parse_mut_rec_block_option)?;
+                        parser.expect_token(&Token::RParen)?;
+                        options
+                    } else {
+                        vec![]
+                    };
+                    CteBlock::MutuallyRecursive(MutRecBlock {
+                        options,
+                        ctes: parser.parse_comma_separated(Parser::parse_cte_mut_rec)?,
+                    })
                 } else {
                     // TODO: optional RECURSIVE
                     CteBlock::Simple(parser.parse_comma_separated(Parser::parse_cte)?)
@@ -4642,6 +4651,15 @@ impl<'a> Parser<'a> {
             let body = parser.parse_query_body(SetPrecedence::Zero)?;
 
             parser.parse_query_tail(cte_block, body)
+        })
+    }
+
+    fn parse_mut_rec_block_option(&mut self) -> Result<MutRecBlockOption<Raw>, ParserError> {
+        self.expect_keywords(&[ITERATION, LIMIT])?;
+        let name = MutRecBlockOptionName::IterLimit;
+        Ok(MutRecBlockOption {
+            name,
+            value: self.parse_optional_option_value()?,
         })
     }
 

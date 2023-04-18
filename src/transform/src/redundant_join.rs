@@ -107,7 +107,12 @@ impl RedundantJoin {
                     Ok(result)
                 }
 
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    max_iters: _,
+                    body,
+                } => {
                     // As a first approximation, we naively extend the `lets`
                     // context with the empty vec![] for each id.
                     for id in ids.iter() {

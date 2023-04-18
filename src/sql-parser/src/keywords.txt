@@ -182,6 +182,7 @@ Introspection
 Is
 Isnull
 Isolation
+Iteration
 Join
 Json
 Kafka
