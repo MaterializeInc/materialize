@@ -1570,14 +1570,41 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
     /// Convert the dataflow description into one that uses render plans.
     #[tracing::instrument(
-        target = "optimizer"
+        target = "optimizer",
         level = "debug",
         skip_all,
-        fields(path.segment = "mir_to_lir")
+        fields(path.segment = "finalize_dataflow")
     )]
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         enable_monotonic_oneshot_selects: bool,
+    ) -> Result<DataflowDescription<Self>, String> {
+        // First, we lower the dataflow description from MIR to LIR.
+        let mut dataflow = Self::lower_dataflow(desc)?;
+
+        // Subsequently, we perform plan refinements for the dataflow.
+        Self::refine_source_mfps(&mut dataflow);
+
+        if enable_monotonic_oneshot_selects {
+            Self::refine_single_time_dataflow(&mut dataflow);
+        }
+
+        mz_repr::explain::trace_plan(&dataflow);
+
+        Ok(dataflow)
+    }
+
+    /// Lowers the dataflow description from MIR to LIR. To this end, the
+    /// method collects all available arrangements and based on this information
+    /// creates plans for every object to be built for the dataflow.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment ="mir_to_lir")
+    )]
+    fn lower_dataflow(
+        desc: DataflowDescription<OptimizedMirRelationExpr>,
     ) -> Result<DataflowDescription<Self>, String> {
         // Collect available arrangements by identifier.
         let mut arrangements = BTreeMap::new();
@@ -1620,7 +1647,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
-        let mut dataflow = DataflowDescription {
+        let dataflow = DataflowDescription {
             source_imports: desc.source_imports,
             index_imports: desc.index_imports,
             objects_to_build,
@@ -1631,12 +1658,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             debug_name: desc.debug_name,
         };
 
-        // perform plan refinements for the dataflow
-        Plan::refine_source_mfps(&mut dataflow);
-        if enable_monotonic_oneshot_selects {
-            Plan::refine_single_time_dataflow(&mut dataflow);
-        }
-
         mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)
@@ -1644,6 +1665,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
     /// Refines the source instance descriptions for sources imported by `dataflow` to
     /// push down common MFP expressions.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_source_mfps")
+    )]
     fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
         // Extract MFPs from Get operators for sources, and extract what we can for the source.
         // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
@@ -1691,11 +1718,18 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 source.arguments.operators = Some(mfp);
             }
         }
+        mz_repr::explain::trace_plan(dataflow);
     }
 
     /// Refines the plans of objects to be built as part of `dataflow` to take advantage
     /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
     /// one-shot SELECT query.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_single_time_dataflow")
+    )]
     fn refine_single_time_dataflow(dataflow: &mut DataflowDescription<Self>) {
         // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
         if !dataflow.is_single_time() {
@@ -1737,6 +1771,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 }
             }
         }
+        mz_repr::explain::trace_plan(dataflow);
     }
 
     /// Partitions the plan into `parts` many disjoint pieces.

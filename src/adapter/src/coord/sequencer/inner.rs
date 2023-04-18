@@ -2591,8 +2591,8 @@ impl Coordinator {
                 _ => None,
             };
 
-            // Execute the `optimize/mir_to_lir` stage.
-            let dataflow_plan = catch_unwind(no_errors, "mir_to_lir", || {
+            // Execute the `optimize/finalize_dataflow` stage.
+            let dataflow_plan = catch_unwind(no_errors, "finalize_dataflow", || {
                 Plan::<mz_repr::Timestamp>::finalize_dataflow(
                     dataflow,
                     self.catalog()
