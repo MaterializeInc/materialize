@@ -10,9 +10,9 @@ TODO
 [motivation]: #motivation
 
 Blobs written by Persist today are a black box: we have no way to characterize their contents without pulling down every part from Blob storage and decoding every row they contain.
-This requires us to fetch every part no matter what question is being asked of the data. 
+This requires us to fetch every part no matter what question is being asked of the data.
 
-By introducing types and capturing statistic metadata on parts, Persist can 
+By introducing types and capturing statistic metadata on parts, Persist can
 more selectively filter which parts are fed into a dataflow, before even reading them from Blob storage.
 When reading data with the appropriate locality, MFP pushdown will enable faster dataflow rehydration and faster ad-hoc / exploratory queries in ways that are not currently achievable.
 
@@ -29,7 +29,7 @@ TODO: description of Row's Schema implementation.
 ## Part Statistics
 
 When Persist writes a batch to Blob storage, it will compute basic statistics over its columns, when possible,
-and write this data alongside existing metadata in Consensus. To start, we will collect a column's 
+and write this data alongside existing metadata in Consensus. To start, we will collect a column's
 non-null min and max values and null count, as well as the min/max Row within the part.
 
 Statistics are optional: Persist may not be able to compute min/max values for all types, and we may need to drop statistics to keep metadata from getting too big.
@@ -47,13 +47,13 @@ When stats are not present, this analysis needs to be conservative: if we don't 
 
 ## Filtering & Locality
 
-Having column statistics is a necessary building block to filter out parts before fetching them, but it is not guaranteed to be effective in actual queries unless there is some degree of locality to the filtered 
+Having column statistics is a necessary building block to filter out parts before fetching them, but it is not guaranteed to be effective in actual queries unless there is some degree of locality to the filtered
 column values across parts in Blob storage.
 (If the data that matches our filter is evenly distributed across parts, we'll end up needing to fetch every part no matter how clever our analysis is!)
 
 In our first implementation, we plan to focus on _temporal filters_: ie. filters on columns that are correlated with wall-clock time.
 These filters tend to have very good locality, thanks to how Persist ingests and compacts data over time --
-the newest, and 
+the newest, and
 typically smallest, parts will contain the most recent updates, allowing one to filter out the older/larger
 parts and their data effectively. This is particularly effective for fetching recent data from append-only sources;
 we'll often have accumulated considerable numbers of older, larger parts that are no longer relevant to the filter.
@@ -82,7 +82,7 @@ Using the range of possible input values to compute the range of possible output
       Within(Datum<'a>, Datum<'a>), // An inclusive range.
       All, // Includes all datums.
     }
-    
+
     /// Approximating a set of possible `Result<Datum, Err>`;
     /// ie. the result of `MirScalarExpr::eval`.
     pub struct ResultSpec<'a> {
