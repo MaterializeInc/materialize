@@ -832,7 +832,6 @@ impl Coordinator {
                     new_databases += 1;
                 }
                 Op::CreateSchema { database_id, .. } => {
-                    // Users can't create schemas in the ambient database.
                     if let ResolvedDatabaseSpecifier::Id(database_id) = database_id {
                         *new_schemas_per_database.entry(database_id).or_insert(0) += 1;
                     }
@@ -906,8 +905,10 @@ impl Coordinator {
                         ObjectId::Database(_) => {
                             new_databases -= 1;
                         }
-                        ObjectId::Schema((database_id, _)) => {
-                            *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
+                        ObjectId::Schema((database_spec, _)) => {
+                            if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
+                                *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
+                            }
                         }
                         ObjectId::Role(_) => {
                             new_roles -= 1;

@@ -251,7 +251,7 @@ impl From<Option<String>> for RawDatabaseSpecifier {
 }
 
 /// An id of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
@@ -702,7 +702,7 @@ pub enum ObjectId {
     Cluster(ClusterId),
     ClusterReplica((ClusterId, ReplicaId)),
     Database(DatabaseId),
-    Schema((DatabaseId, SchemaId)),
+    Schema((ResolvedDatabaseSpecifier, SchemaId)),
     Role(RoleId),
     Item(GlobalId),
 }
@@ -726,7 +726,7 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_database_id called on {self:?}"),
         }
     }
-    pub fn unwrap_schema_id(self) -> (DatabaseId, SchemaId) {
+    pub fn unwrap_schema_id(self) -> (ResolvedDatabaseSpecifier, SchemaId) {
         match self {
             ObjectId::Schema(id) => id,
             _ => panic!("ObjectId::unwrap_schema_id called on {self:?}"),

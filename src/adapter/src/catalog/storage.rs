@@ -287,10 +287,10 @@ async fn migrate(
                         id,
                         EventType::Create,
                         ObjectType::Schema,
-                        EventDetails::SchemaV1(mz_audit_log::SchemaV1 {
+                        EventDetails::SchemaV2(mz_audit_log::SchemaV2 {
                             id: PUBLIC_SCHEMA_ID.to_string(),
                             name: "public".into(),
-                            database_name: "materialize".into(),
+                            database_name: Some("materialize".into()),
                         }),
                         None,
                         now,
@@ -2062,14 +2062,18 @@ impl<'a> Transaction<'a> {
 
     pub fn remove_schema(
         &mut self,
-        database_id: &DatabaseId,
+        database_id: &Option<DatabaseId>,
         schema_id: &SchemaId,
     ) -> Result<(), Error> {
         let prev = self.schemas.set(SchemaKey::from(*schema_id), None)?;
         if prev.is_some() {
             Ok(())
         } else {
-            Err(SqlCatalogError::UnknownSchema(format!("{}.{}", database_id, schema_id)).into())
+            let database_name = match database_id {
+                Some(id) => format!("{id}."),
+                None => "".to_string(),
+            };
+            Err(SqlCatalogError::UnknownSchema(format!("{}.{}", database_name, schema_id)).into())
         }
     }
 
