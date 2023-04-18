@@ -12,6 +12,7 @@ transaction_isolation                       | `strict serializable`     | The tr
 
 Name                                        | Default value             |  Description  |
 --------------------------------------------|---------------------------|---------------|
+auto_route_introspection_queries            | `true`                    | Boolean flag indicating whether to force queries that depend only on system tables to run on the `mz_introspection` cluster for improved performance.
 application_name                            |                           | The application name to be reported in statistics and logs. This variable is typically set by an application upon connection to Materialize (e.g. `psql`).
 client_encoding                             | `UTF8`                    | The client's character set encoding. The only supported value is `UTF-8`.
 client_min_messages                         | `notice`                  | The message levels that are sent to the client. <br/><br/> Accepts values: `debug5`, `debug4`, `debug3`, `debug2`, `debug1`, `log`, `notice`, `warning`, `error`. Each level includes all the levels that follow it.
