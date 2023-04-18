@@ -22,9 +22,8 @@ use timely::dataflow::operators::generic::{
     operator::{self, Operator},
     InputHandle, OperatorInfo, OutputHandle,
 };
-use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
 use timely::Data;
 
 use crate::buffer::ConsolidateBuffer;
@@ -148,7 +147,7 @@ where
 
     /// Wraps the stream with a passthrough operator that will be shut down when the provided
     /// token cannot be upgraded anymore. After shutdown all data flowing into the operator will be
-    /// dropped and the frontier will immediately advance to the empty antichain.
+    /// dropped.
     fn with_token(&self, token: Weak<()>) -> Stream<G, D1>;
 }
 
@@ -217,7 +216,7 @@ where
 
     /// Wraps the collection with a passthrough operator that will be shut down when the provided
     /// token cannot be upgraded anymore. After shutdown all data flowing into the operator will be
-    /// dropped and the frontier will immediately advance to the empty antichain.
+    /// dropped.
     fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
 }
 
@@ -407,25 +406,18 @@ where
         let mut builder = OperatorBuilderRc::new("WithToken".to_owned(), self.scope());
 
         let mut input = builder.new_input(self, Pipeline);
-        let (mut output, stream) = builder.new_output_connection(vec![Antichain::new()]);
+        let (mut output, stream) = builder.new_output();
 
         let mut vector = Default::default();
-        builder.build(move |mut caps| {
-            let mut cap_set = CapabilitySet::from_elem(caps.pop().unwrap());
-            move |frontiers| {
-                if token.upgrade().is_none() {
-                    input.for_each(|_, _| {});
-                    cap_set.downgrade(&[]);
-                    return;
-                }
+        builder.build(move |_capability| {
+            move |_frontier| {
                 let mut output = output.activate();
                 while let Some((cap, data)) = input.next() {
-                    data.swap(&mut vector);
-                    output
-                        .session(&cap_set.delayed(cap.time()))
-                        .give_container(&mut vector);
+                    if token.upgrade().is_some() {
+                        data.swap(&mut vector);
+                        output.session(&cap).give_container(&mut vector);
+                    }
                 }
-                cap_set.downgrade(&frontiers[0].frontier())
             }
         });
         stream
