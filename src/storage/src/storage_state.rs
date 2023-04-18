@@ -491,9 +491,23 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Handle any received commands.
             let mut cmds = vec![];
             let mut empty = false;
+            let mut network_operational = true;
             while !empty {
                 match command_rx.try_recv() {
-                    Ok(cmd) => cmds.push(cmd),
+                    Ok(cmd) => {
+                        // Simulate network delay
+                        if let StorageCommand::AllowCompaction(ref cmds) = cmd {
+                            if cmds.iter().any(|(_, frontier)| frontier.is_empty()) {
+                                println!("making storage network not operational");
+                                network_operational = false;
+                            }
+                        }
+                        if network_operational {
+                            cmds.push(cmd);
+                        } else {
+                            println!("storage ignoring {cmd:?}");
+                        }
+                    }
                     Err(TryRecvError::Empty) => empty = true,
                     Err(TryRecvError::Disconnected) => {
                         empty = true;
