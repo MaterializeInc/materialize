@@ -223,6 +223,22 @@ class Owners(Check):
                 > SELECT mz_cluster_replicas.name, mz_roles.name FROM mz_cluster_replicas JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id WHERE mz_cluster_replicas.name LIKE 'owner_cluster_r%'
                 owner_cluster_r1 owner_role_01
 
+                > SELECT mz_connections.name, mz_roles.name FROM mz_connections JOIN mz_roles ON mz_connections.owner_id = mz_roles.id WHERE mz_connections.name LIKE 'owner_%'
+                owner_csr_conn1 owner_role_01
+                owner_csr_conn2 owner_role_01
+                owner_csr_conn3 owner_role_01
+                owner_csr_conn4 owner_role_02
+                owner_csr_conn5 owner_role_01
+                owner_csr_conn6 owner_role_02
+                owner_csr_conn7 owner_role_03
+                owner_kafka_conn1 owner_role_01
+                owner_kafka_conn2 owner_role_01
+                owner_kafka_conn3 owner_role_01
+                owner_kafka_conn4 owner_role_02
+                owner_kafka_conn5 owner_role_01
+                owner_kafka_conn6 owner_role_02
+                owner_kafka_conn7 owner_role_03
+
                 > SELECT name, unnest(privileges)::text FROM mz_databases WHERE name LIKE 'owner_db%'
                 owner_db1 owner_role_01=UC/owner_role_01
                 owner_db2 owner_role_01=UC/owner_role_01
@@ -302,6 +318,21 @@ class Owners(Check):
                 > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'owner_cluster%'
                 owner_cluster1 owner_role_01=UC/owner_role_01
 
+                > SELECT name, unnest(privileges)::text FROM mz_connections WHERE name LIKE 'owner_%'
+                owner_csr_conn1 owner_role_01=U/owner_role_01
+                owner_csr_conn2 owner_role_01=U/owner_role_01
+                owner_csr_conn3 owner_role_01=U/owner_role_01
+                owner_csr_conn4 owner_role_02=U/owner_role_02
+                owner_csr_conn5 owner_role_01=U/owner_role_01
+                owner_csr_conn6 owner_role_02=U/owner_role_02
+                owner_csr_conn7 owner_role_03=U/owner_role_03
+                owner_kafka_conn1 owner_role_01=U/owner_role_01
+                owner_kafka_conn2 owner_role_01=U/owner_role_01
+                owner_kafka_conn3 owner_role_01=U/owner_role_01
+                owner_kafka_conn4 owner_role_02=U/owner_role_02
+                owner_kafka_conn5 owner_role_01=U/owner_role_01
+                owner_kafka_conn6 owner_role_02=U/owner_role_02
+                owner_kafka_conn7 owner_role_03=U/owner_role_03
                 """
             )
             + self._drop_objects("owner_role_01", 5)
