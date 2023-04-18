@@ -8,8 +8,6 @@ aliases:
     - /sql/show-sink
 ---
 
-{{< show-command-note >}}
-
 `SHOW SINKS` returns a list of all sinks available to your Materialize instances.
 
 ## Syntax

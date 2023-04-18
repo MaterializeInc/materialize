@@ -38,6 +38,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
@@ -235,8 +236,9 @@ impl Coordinator {
                                 source_status_collection_id,
                             )
                         }
+                        // Subsources use source statuses.
+                        DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                         DataSourceDesc::Progress => (DataSource::Progress, None),
-                        DataSourceDesc::Source => (DataSource::Other, None),
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
                         }
@@ -1399,7 +1401,7 @@ impl Coordinator {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
 
-        let mut dropped_roles = plan
+        let mut dropped_roles: BTreeMap<_, _> = plan
             .ids
             .iter()
             .filter_map(|id| match id {
@@ -1411,6 +1413,9 @@ impl Coordinator {
                 (*id, name)
             })
             .collect();
+        for role_id in dropped_roles.keys() {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
         self.validate_dropped_role_ownership(&dropped_roles)?;
         // If any role is a member of a dropped role, then we must revoke that membership.
         let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
@@ -1421,6 +1426,11 @@ impl Coordinator {
                 ops.push(catalog::Op::RevokeRole {
                     role_id: **dropped_role_id,
                     member_id: role.id(),
+                    grantor_id: *role
+                        .membership
+                        .map
+                        .get(*dropped_role_id)
+                        .expect("included in keys above"),
                 })
             }
         }
@@ -1450,10 +1460,11 @@ impl Coordinator {
                     let name = role.name();
                     dropped_roles.insert(*id, name);
                     // We must revoke all role memberships that the dropped roles belongs to.
-                    for group_id in role.membership.map.keys() {
+                    for (group_id, grantor_id) in &role.membership.map {
                         ops.push(catalog::Op::RevokeRole {
                             role_id: *group_id,
                             member_id: *id,
+                            grantor_id: *grantor_id,
                         });
                     }
                 }
@@ -1483,29 +1494,88 @@ impl Coordinator {
         &self,
         dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
+        fn privilege_check(
+            privileges: &Vec<MzAclItem>,
+            dropped_roles: &BTreeMap<RoleId, &str>,
+            dependent_objects: &mut BTreeMap<String, Vec<String>>,
+            object_type: ObjectType,
+            object_name: &str,
+            catalog: &Catalog,
+        ) {
+            let object_type = object_type.to_string().to_lowercase();
+            for privilege in privileges {
+                if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
+                    let grantor_name = catalog.get_role(&privilege.grantor).name();
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
+                            "privileges on {object_type} {object_name} granted by {grantor_name}",
+                        ));
+                }
+                if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
+                    let grantee_name = catalog.get_role(&privilege.grantee).name();
+                    dependent_objects
+                        .entry(role_name.to_string())
+                        .or_default()
+                        .push(format!(
+                            "privileges granted on {object_type} {object_name} to {grantee_name}"
+                        ));
+                }
+            }
+        }
+
         let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for entry in self.catalog.entries() {
             if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("{} {}", entry.item().typ(), entry.name().item));
+                    .push(format!(
+                        "owner of {} {}",
+                        entry.item().typ(),
+                        entry.name().item
+                    ));
             }
+            privilege_check(
+                entry.privileges(),
+                dropped_roles,
+                &mut dependent_objects,
+                entry.item().typ().into(),
+                &entry.name().item,
+                self.catalog(),
+            );
         }
         for database in self.catalog.databases() {
             if let Some(role_name) = dropped_roles.get(&database.owner_id) {
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("database {}", database.name()));
+                    .push(format!("owner of database {}", database.name()));
             }
+            privilege_check(
+                &database.privileges,
+                dropped_roles,
+                &mut dependent_objects,
+                ObjectType::Database,
+                database.name(),
+                self.catalog(),
+            );
             for schema in database.schemas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("schema {}", schema.name().schema));
+                        .push(format!("owner of schema {}", schema.name().schema));
                 }
+                privilege_check(
+                    &schema.privileges,
+                    dropped_roles,
+                    &mut dependent_objects,
+                    ObjectType::Schema,
+                    &schema.name().schema,
+                    self.catalog(),
+                );
             }
         }
         for cluster in self.catalog.clusters() {
@@ -1513,20 +1583,28 @@ impl Coordinator {
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("cluster {}", cluster.name()));
+                    .push(format!("owner of cluster {}", cluster.name()));
             }
+            privilege_check(
+                &cluster.privileges,
+                dropped_roles,
+                &mut dependent_objects,
+                ObjectType::Cluster,
+                cluster.name(),
+                self.catalog(),
+            );
             for replica in cluster.replicas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("cluster replica {}", replica.name));
+                        .push(format!("owner of cluster replica {}", replica.name));
                 }
             }
         }
 
         if !dependent_objects.is_empty() {
-            Err(AdapterError::DependentObjectOwnership(dependent_objects))
+            Err(AdapterError::DependentObject(dependent_objects))
         } else {
             Ok(())
         }
@@ -3594,7 +3672,8 @@ impl Coordinator {
         let catalog = self.catalog();
         let mut ops = Vec::new();
         for member_id in member_ids {
-            let member_membership: BTreeSet<_> = catalog.get_role(&member_id).membership();
+            let member_membership: BTreeSet<_> =
+                catalog.get_role(&member_id).membership().keys().collect();
             if member_membership.contains(&role_id) {
                 let role_name = catalog.get_role(&role_id).name().to_string();
                 let member_name = catalog.get_role(&member_id).name().to_string();
@@ -3629,12 +3708,14 @@ impl Coordinator {
         RevokeRolePlan {
             role_id,
             member_ids,
+            grantor_id,
         }: RevokeRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog();
         let mut ops = Vec::new();
         for member_id in member_ids {
-            let member_membership: BTreeSet<_> = catalog.get_role(&member_id).membership();
+            let member_membership: BTreeSet<_> =
+                catalog.get_role(&member_id).membership().keys().collect();
             if !member_membership.contains(&role_id) {
                 let role_name = catalog.get_role(&role_id).name().to_string();
                 let member_name = catalog.get_role(&member_id).name().to_string();
@@ -3646,7 +3727,11 @@ impl Coordinator {
                     member_name,
                 });
             } else {
-                ops.push(catalog::Op::RevokeRole { role_id, member_id });
+                ops.push(catalog::Op::RevokeRole {
+                    role_id,
+                    member_id,
+                    grantor_id,
+                });
             }
         }
 

@@ -285,14 +285,14 @@ class PgDisruption:
                 DROP PUBLICATION IF EXISTS mz_source;
                 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-                CREATE TABLE t1 (f1 INTEGER PRIMARY KEY, f2 integer[]);
-                INSERT INTO t1 VALUES (1, NULL);
-                ALTER TABLE t1 REPLICA IDENTITY FULL;
-                INSERT INTO t1 VALUES (2, NULL);
+                CREATE TABLE source1 (f1 INTEGER PRIMARY KEY, f2 integer[]);
+                INSERT INTO source1 VALUES (1, NULL);
+                ALTER TABLE source1 REPLICA IDENTITY FULL;
+                INSERT INTO source1 VALUES (2, NULL);
 
-                > CREATE SOURCE "source1"
+                > CREATE SOURCE "pg_source"
                   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-                  FOR TABLES ("t1");
+                  FOR TABLES ("source1");
                 """
             )
         )
@@ -319,14 +319,14 @@ class PgDisruption:
             dedent(
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO t1 VALUES (3);
+                INSERT INTO source1 VALUES (3);
 
                 > SELECT status, error
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
 
-                > SELECT f1 FROM t1;
+                > SELECT f1 FROM source1;
                 1
                 2
                 3
@@ -376,7 +376,7 @@ disruptions: List[Disruption] = [
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DROP PUBLICATION mz_source;
-                INSERT INTO t1 VALUES (3, NULL);
+                INSERT INTO source1 VALUES (3, NULL);
                 """
             )
         ),
@@ -387,7 +387,7 @@ disruptions: List[Disruption] = [
     PgDisruption(
         name="alter-postgres",
         breakage=lambda c, _: alter_pg_table(c),
-        expected_error="source table t1 with oid .+ has been altered",
+        expected_error="source table source1 with oid .+ has been altered",
         fixage=None,
     ),
     PgDisruption(
@@ -422,8 +422,8 @@ def alter_pg_table(c: Composition) -> None:
         dedent(
             """
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
-                 ALTER TABLE t1 DROP COLUMN f1;
-                 INSERT INTO t1 VALUES (NULL)
+                 ALTER TABLE source1 DROP COLUMN f1;
+                 INSERT INTO source1 VALUES (NULL)
                  """
         )
     )
@@ -434,7 +434,7 @@ def unsupported_pg_table(c: Composition) -> None:
         dedent(
             """
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
-                 INSERT INTO t1 VALUES (3, '{{1},{2}}')
+                 INSERT INTO source1 VALUES (3, '{{1},{2}}')
                  """
         )
     )

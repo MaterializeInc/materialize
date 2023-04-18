@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
 `SHOW TYPES` returns a list of the data types in your Materialize instance. By default, only custom types are returned.
 
 ## Syntax

@@ -33,14 +33,13 @@ use mz_expr::{MfpPlan, MfpPushdown};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
 use mz_repr::{
-    Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena,
-    Timestamp,
+    Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp,
 };
 use tracing::error;
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
-use crate::types::sources::{SourceData, SOURCE_DATA_ERROR};
+use crate::types::sources::{RelationDescHack, SourceData};
 
 pub use mz_persist_client::operators::shard_source::FlowControl;
 use mz_timely_util::buffer::ConsolidateBuffer;
@@ -131,7 +130,7 @@ where
 {
     let name = source_id.to_string();
     let mfp_pushdown = map_filter_project.as_ref().map(|x| MfpPushdown::new(*x));
-    let desc = metadata.relation_desc.clone();
+    let desc = RelationDescHack::new(&metadata.relation_desc);
     let (fetched, token) = shard_source(
         &mut scope.clone(),
         &name,
@@ -312,9 +311,9 @@ impl PendingWork {
 }
 
 #[derive(Debug)]
-struct PersistSourceDataStatsImpl<'a> {
-    desc: &'a RelationDesc,
-    stats: &'a PartStats,
+pub(crate) struct PersistSourceDataStatsImpl<'a> {
+    pub(crate) desc: &'a RelationDescHack,
+    pub(crate) stats: &'a PartStats,
 }
 
 fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> {
@@ -345,7 +344,7 @@ impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
         let num_oks = self
             .stats
             .key
-            .col::<Option<Vec<u8>>>(SOURCE_DATA_ERROR)
+            .col::<Option<Vec<u8>>>(RelationDescHack::SOURCE_DATA_ERROR)
             .expect("stats type should match column")
             .map(|x| x.none);
         num_oks.map(|num_oks| num_results - num_oks)
@@ -362,8 +361,11 @@ impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
             }
         }
 
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
+        if self.len() <= self.col_null_count(idx) {
+            return None;
+        }
+        let name = self.desc.0.get_name(idx);
+        let typ = &self.desc.0.typ().column_types[idx];
         let stats = self.stats.key.cols.get(name.as_str())?;
         typ.to_persist(ColMin(stats.as_ref(), arena))
     }
@@ -379,8 +381,11 @@ impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
             }
         }
 
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
+        if self.len() <= self.col_null_count(idx) {
+            return None;
+        }
+        let name = self.desc.0.get_name(idx);
+        let typ = &self.desc.0.typ().column_types[idx];
         let stats = self.stats.key.cols.get(name.as_str())?;
         typ.to_persist(ColMax(stats.as_ref(), arena))
     }
@@ -395,10 +400,10 @@ impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
             }
         }
 
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
-        let stats = self.stats.key.cols.get(name.as_str())?;
-        typ.to_persist(ColNullCount(stats.as_ref()))
+        let name = self.desc.0.get_name(idx);
+        let typ = &self.desc.0.typ().column_types[idx];
+        let stats = self.stats.key.cols.get(name.as_str());
+        typ.to_persist(ColNullCount(stats?.as_ref()))
     }
 
     fn row_min(&self, _row: &mut Row) -> Option<usize> {

@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -105,8 +103,8 @@ use tracing::warn;
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
-    LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
-    ServiceEvent, ServiceStatus,
+    LabelSelectionLogic, NamespacedOrchestrator, NotReadyReason, Orchestrator, Service,
+    ServiceConfig, ServiceEvent, ServiceStatus,
 };
 use mz_orchestrator::{LabelSelector as MzLabelSelector, ServiceProcessMetrics};
 
@@ -857,6 +855,22 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
                 .clone();
 
+            let oomed = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_ref())
+                .map(|container_statuses| {
+                    container_statuses.iter().any(|cs| {
+                        cs.last_state
+                            .as_ref()
+                            .and_then(|last_state| last_state.terminated.as_ref())
+                            .and_then(|terminated| terminated.reason.as_ref())
+                            .map(|reason| reason == "OOMKilled")
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+
             let (pod_ready, last_probe_time) = pod
                 .status
                 .and_then(|status| status.conditions)
@@ -867,7 +881,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let status = if pod_ready {
                 ServiceStatus::Ready
             } else {
-                ServiceStatus::NotReady
+                ServiceStatus::NotReady(oomed.then_some(NotReadyReason::OomKilled))
             };
             let time = if let Some(time) = last_probe_time {
                 time.0

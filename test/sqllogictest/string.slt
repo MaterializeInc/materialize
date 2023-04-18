@@ -1432,3 +1432,87 @@ INSERT INTO gh18095_1 VALUES('''%ꆔA?')
 query T
 SELECT FROM gh18095_1 JOIN gh18095_0 ON (gh18095_1.c0)LIKE((gh18095_1.c0)::VARCHAR(4));
 ----
+
+### translate ###
+
+# NULL inputs
+
+query I
+SELECT translate(NULL, 'one', 'two')
+----
+NULL
+
+query I
+SELECT translate('one', NULL, 'two')
+----
+NULL
+
+query I
+SELECT translate('one', 'two', NULL)
+----
+NULL
+
+query I
+SELECT translate('one', NULL, NULL)
+----
+NULL
+
+query I
+SELECT translate(NULL, 'one', NULL)
+----
+NULL
+
+query I
+SELECT translate(NULL, NULL, 'one')
+----
+NULL
+
+query I
+SELECT translate(NULL, NULL, NULL)
+----
+NULL
+
+# replace single occurrence of a single char
+
+query T
+SELECT translate('foe', 'f', 't')
+----
+toe
+
+# replace multiple occurrences of a single char
+
+query T
+SELECT translate('hello', 'l', 'x')
+----
+hexxo
+
+# remove extra occurrences when len(from) > len(to)
+
+query T
+SELECT translate('ffl', 'fl', 't')
+----
+tt
+
+query I
+SELECT translate('[1]', '[]', '')::numeric
+----
+1
+
+# ignore extra occurences when len(to) > len(from)
+
+query T
+SELECT translate('something', 'sth', 'xfvlg')
+----
+xomefving
+
+# ignore non-matching extra occurrences
+
+query T
+SELECT translate('ffl', 'fx', 't')
+----
+ttl
+
+query T
+SELECT translate('hello', 'fl', 'tx')
+----
+hexxo
