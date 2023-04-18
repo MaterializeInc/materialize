@@ -832,7 +832,7 @@ impl Coordinator {
                     new_databases += 1;
                 }
                 Op::CreateSchema { database_id, .. } => {
-                    if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
+                    if let ResolvedDatabaseSpecifier::Id(database_id) = database_id {
                         *new_schemas_per_database.entry(database_id).or_insert(0) += 1;
                     }
                 }
