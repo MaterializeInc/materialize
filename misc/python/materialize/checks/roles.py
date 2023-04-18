@@ -57,11 +57,14 @@ class CreateRole(Check):
                 create_role1
                 create_role2
                 """
+                # TODO(def-) Grantor information is currently not stable during
+                # upgrades due to https://github.com/MaterializeInc/materialize/pull/18780
+                # Reenable on next release
                 + self._if_can_grant_revoke(
                     """
-                > SELECT role.name, member.name, grantor.name from mz_role_members JOIN mz_roles role ON mz_role_members.role_id = role.id JOIN mz_roles member ON mz_role_members.member = member.id JOIN mz_roles grantor ON mz_role_members.grantor = grantor.id WHERE role.name LIKE 'create_role%';
-                create_role1 materialize mz_system
-                create_role2 materialize mz_system
+                > SELECT role.name, member.name from mz_role_members JOIN mz_roles role ON mz_role_members.role_id = role.id JOIN mz_roles member ON mz_role_members.member = member.id JOIN mz_roles grantor ON mz_role_members.grantor = grantor.id WHERE role.name LIKE 'create_role%';
+                create_role1 materialize
+                create_role2 materialize
                 """
                 )
             )
