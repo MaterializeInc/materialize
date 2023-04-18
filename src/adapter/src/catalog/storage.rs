@@ -17,9 +17,7 @@ use futures::future::BoxFuture;
 use itertools::{max, Itertools};
 use serde::{Deserialize, Serialize};
 
-use mz_audit_log::{
-    EventDetails, EventType, EventV1, ObjectType, VersionedEvent, VersionedStorageUsage,
-};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -36,7 +34,7 @@ use mz_sql::names::{
     SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
 use mz_sql_parser::ast::Statement;
-use mz_stash::{AppendBatch, Data, Id, Stash, StashError, TableTransaction, TypedCollection};
+use mz_stash::{AppendBatch, Id, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::builtin::{
@@ -44,9 +42,7 @@ use crate::catalog::builtin::{
     MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{
-    is_public_role, is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping,
-};
+use crate::catalog::{is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping};
 use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
 use crate::coord::timeline;
 use crate::{catalog, rbac};
@@ -180,6 +176,16 @@ async fn migrate(
                     role: (&*MZ_INTROSPECTION_ROLE).into(),
                 },
             )?;
+            txn.roles.insert(
+                RoleKey { id: RoleId::Public },
+                RoleValue {
+                    role: SerializedRole {
+                        name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
+                        attributes: Some(RoleAttributes::new()),
+                        membership: Some(RoleMembership::new()),
+                    },
+                },
+            )?;
             txn.databases.insert(
                 DatabaseKey {
                     id: MATERIALIZE_DATABASE_ID,
@@ -187,7 +193,7 @@ async fn migrate(
                 },
                 DatabaseValue {
                     name: "materialize".into(),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         MzAclItem {
                             grantee: RoleId::Public,
@@ -228,7 +234,7 @@ async fn migrate(
                     database_id: None,
                     database_ns: None,
                     name: "mz_catalog".into(),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
                         rbac::owner_privilege(
@@ -247,7 +253,7 @@ async fn migrate(
                     database_id: None,
                     database_ns: None,
                     name: "pg_catalog".into(),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
                         rbac::owner_privilege(
@@ -266,7 +272,7 @@ async fn migrate(
                     database_id: Some(MATERIALIZE_DATABASE_ID),
                     database_ns: None,
                     name: "public".into(),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         MzAclItem {
                             grantee: RoleId::Public,
@@ -308,7 +314,7 @@ async fn migrate(
                     database_id: None,
                     database_ns: None,
                     name: "mz_internal".into(),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
                         rbac::owner_privilege(
@@ -327,7 +333,7 @@ async fn migrate(
                     database_id: None,
                     database_ns: None,
                     name: "information_schema".into(),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID),
+                    owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
                         rbac::owner_privilege(
@@ -340,7 +346,7 @@ async fn migrate(
             let default_cluster = ClusterValue {
                 name: "default".into(),
                 linked_object_id: None,
-                owner_id: Some(MZ_SYSTEM_ROLE_ID),
+                owner_id: MZ_SYSTEM_ROLE_ID,
                 privileges: Some(vec![
                     MzAclItem {
                         grantee: RoleId::Public,
@@ -357,7 +363,7 @@ async fn migrate(
                 cluster_id: DEFAULT_USER_CLUSTER_ID,
                 name: DEFAULT_CLUSTER_REPLICA_NAME.into(),
                 config: default_cluster_replica_config(bootstrap_args),
-                owner_id: Some(MZ_SYSTEM_ROLE_ID),
+                owner_id: MZ_SYSTEM_ROLE_ID,
             };
             txn.clusters.insert(
                 ClusterKey {
@@ -425,220 +431,9 @@ async fn migrate(
         |_, _, _| Ok(()),
         |_, _, _| Ok(()),
         |_, _, _| Ok(()),
-        // Role memberships were added to role definitions.
-        //
-        // Introduced in v0.46.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.49.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            txn.roles.update(|_role_key, role_value| {
-                let mut role_value = role_value.clone();
-                if role_value.role.membership.is_none() {
-                    role_value.role.membership = Some(RoleMembership::new());
-                }
-                Some(role_value)
-            })?;
-            Ok(())
-        },
-        // The PUBLIC psuedo role was added.
-        //
-        // Introduced in v0.48.0
-        //
-        // TODO(jkosh44) Can be coalesced into the first migration in v0.50.0
-        |txn: &mut Transaction<'_>, now, _bootstrap_args| {
-            // Delete any existing PUBLIC role.
-            let roles = txn
-                .roles
-                .delete(|_role_key, role_value| is_public_role(role_value.role.name.as_str()));
-            assert!(roles.len() <= 1, "duplicate roles are not allowed");
-            for (role_key, role_value) in roles {
-                let id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-                txn.audit_log_updates.push((
-                    AuditLogKey {
-                        event: VersionedEvent::V1(EventV1 {
-                            id,
-                            event_type: EventType::Drop,
-                            object_type: ObjectType::Role,
-                            details: EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                                id: role_key.id.to_string(),
-                                name: role_value.role.name,
-                            }),
-                            user: None,
-                            occurred_at: now,
-                        }),
-                    },
-                    (),
-                    1,
-                ));
-            }
-
-            txn.roles.insert(
-                RoleKey { id: RoleId::Public },
-                RoleValue {
-                    role: SerializedRole {
-                        name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-                        attributes: Some(RoleAttributes::new()),
-                        membership: Some(RoleMembership::new()),
-                    },
-                },
-            )?;
-            Ok(())
-        },
-        // Object owners were added to object definitions.
-        //
-        // Introduced in v0.47.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.50.0
-        |txn: &mut Transaction<'_>, now, _bootstrap_args| {
-            // Delete the system role id allocator. All system role ids will need
-            // to be hard-coded going forward.
-            txn.id_allocator
-                .delete(|id_alloc_key, _| id_alloc_key.name == "system_role");
-
-            // Delete all system roles so we can re-insert them with known IDs.
-            let sys_roles = txn.roles.delete(|role_key, _| role_key.id.is_system());
-            assert_eq!(2, sys_roles.len(), "unexpected number of system roles");
-            txn.roles.insert(
-                RoleKey {
-                    id: MZ_SYSTEM_ROLE_ID,
-                },
-                RoleValue {
-                    role: (&*MZ_SYSTEM_ROLE).into(),
-                },
-            )?;
-            txn.roles.insert(
-                RoleKey {
-                    id: MZ_INTROSPECTION_ROLE_ID,
-                },
-                RoleValue {
-                    role: (&*MZ_INTROSPECTION_ROLE).into(),
-                },
-            )?;
-
-            // We need a default owner for all existing objects. So we just create a new role for
-            // this purpose named "default_owner".
-            let default_owner_name = "default_owner";
-            let default_owner_id = match txn
-                .roles
-                .items()
-                .iter()
-                .filter(|(_, role_value)| role_value.role.name == default_owner_name)
-                .next()
-            {
-                Some((_, _)) => {
-                    panic!(
-                        "Migration failed! Role named `default_owner` already exists. Please \
-                    contact @jkosh44 (joe@materialize.com) and let him know. In order to fix this \
-                    we'll need to ask the client to delete the `default_owner` role."
-                    );
-                }
-                None => {
-                    let role_id = txn.insert_user_role(SerializedRole {
-                        name: default_owner_name.to_string(),
-                        attributes: Some(RoleAttributes::new()),
-                        membership: Some(RoleMembership::new()),
-                    })?;
-                    let audit_id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
-                    txn.audit_log_updates.push((
-                        AuditLogKey {
-                            event: VersionedEvent::new(
-                                audit_id,
-                                EventType::Create,
-                                ObjectType::Role,
-                                EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
-                                    id: role_id.to_string(),
-                                    name: default_owner_name.to_string(),
-                                }),
-                                None,
-                                now,
-                            ),
-                        },
-                        (),
-                        1,
-                    ));
-                    role_id
-                }
-            };
-
-            txn.databases.update(|database_key, database_value| {
-                let mut database_value = database_value.clone();
-                if database_value.owner_id.is_none() {
-                    if database_key.id == MATERIALIZE_DATABASE_ID {
-                        database_value.owner_id = Some(MZ_SYSTEM_ROLE_ID);
-                    } else {
-                        database_value.owner_id = Some(default_owner_id);
-                    }
-                }
-                Some(database_value)
-            })?;
-
-            txn.schemas.update(|schema_key, schema_value| {
-                let mut schema_value = schema_value.clone();
-                if schema_value.owner_id.is_none() {
-                    if [
-                        MZ_CATALOG_SCHEMA_ID,
-                        PG_CATALOG_SCHEMA_ID,
-                        PUBLIC_SCHEMA_ID,
-                        MZ_INTERNAL_SCHEMA_ID,
-                        INFORMATION_SCHEMA_ID,
-                    ]
-                    .into_iter()
-                    .any(|schema_id| schema_id == schema_key.id)
-                    {
-                        schema_value.owner_id = Some(MZ_SYSTEM_ROLE_ID);
-                    } else {
-                        schema_value.owner_id = Some(default_owner_id);
-                    }
-                }
-                Some(schema_value)
-            })?;
-
-            txn.items.update(|item_key, item_value| {
-                let mut item_value = item_value.clone();
-                if item_value.owner_id.is_none() {
-                    if item_key.gid.is_system() {
-                        item_value.owner_id = Some(MZ_SYSTEM_ROLE_ID);
-                    } else {
-                        item_value.owner_id = Some(default_owner_id);
-                    }
-                }
-                Some(item_value)
-            })?;
-
-            txn.clusters.update(|cluster_key, cluster_value| {
-                let mut cluster_value = cluster_value.clone();
-                if cluster_value.owner_id.is_none() {
-                    if cluster_key.id == DEFAULT_USER_CLUSTER_ID
-                        || BUILTIN_CLUSTERS
-                            .iter()
-                            .any(|cluster| cluster.name == cluster_value.name)
-                    {
-                        cluster_value.owner_id = Some(MZ_SYSTEM_ROLE_ID);
-                    } else {
-                        cluster_value.owner_id = Some(default_owner_id);
-                    }
-                }
-                Some(cluster_value)
-            })?;
-
-            txn.cluster_replicas.update(|replica_key, replica_value| {
-                let mut replica_value = replica_value.clone();
-                if replica_value.owner_id.is_none() {
-                    if replica_key.id == DEFAULT_REPLICA_ID
-                        || BUILTIN_CLUSTER_REPLICAS
-                            .iter()
-                            .any(|replica| replica.name == replica_value.name)
-                    {
-                        replica_value.owner_id = Some(MZ_SYSTEM_ROLE_ID);
-                    } else {
-                        replica_value.owner_id = Some(default_owner_id);
-                    }
-                }
-                Some(replica_value)
-            })?;
-
-            Ok(())
-        },
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
         // Namespacing database ids and schema ids by User or System. Currently
         // everything exists in the "User" schema.
         //
@@ -744,10 +539,7 @@ async fn migrate(
                         .expect("populated above")
                         .push(rbac::owner_privilege(
                             mz_sql_parser::ast::ObjectType::Database,
-                            database_value
-                                .owner_id
-                                .clone()
-                                .expect("owner_id not migrated"),
+                            database_value.owner_id.clone(),
                         ));
                 }
                 Some(database_value)
@@ -783,10 +575,7 @@ async fn migrate(
                         .expect("populated above")
                         .push(rbac::owner_privilege(
                             mz_sql_parser::ast::ObjectType::Schema,
-                            schema_value
-                                .owner_id
-                                .clone()
-                                .expect("owner_id not migrated"),
+                            schema_value.owner_id.clone(),
                         ));
                 }
                 Some(schema_value)
@@ -831,7 +620,7 @@ async fn migrate(
                         // All types default to PUBLIC usage privileges.
                         item_value.privileges = Some(vec![MzAclItem {
                             grantee: RoleId::Public,
-                            grantor: item_value.owner_id.clone().expect("owner_id not migrated"),
+                            grantor: item_value.owner_id.clone(),
                             acl_mode: AclMode::USAGE,
                         }]);
                     } else {
@@ -843,7 +632,7 @@ async fn migrate(
                         .expect("populated above")
                         .push(rbac::owner_privilege(
                             object_type,
-                            item_value.owner_id.clone().expect("owner_id not migrated"),
+                            item_value.owner_id.clone(),
                         ))
                 }
                 Some(item_value)
@@ -880,10 +669,7 @@ async fn migrate(
                         .expect("populated above")
                         .push(rbac::owner_privilege(
                             mz_sql_parser::ast::ObjectType::Cluster,
-                            cluster_value
-                                .owner_id
-                                .clone()
-                                .expect("owner_id not migrated"),
+                            cluster_value.owner_id.clone(),
                         ));
                 }
                 Some(cluster_value)
@@ -935,12 +721,6 @@ async fn migrate(
         // midway failure).
     ];
 
-    // Before the pre-migration validity check, fix the broken collections.
-    //
-    // Released with version 0.50. Remove in a future version so that we can remove some then
-    // unneeded Option types.
-    fix_incorrect_retractions(stash).await?;
-
     let mut txn = transaction(stash).await?;
     for (i, migration) in migrations
         .iter()
@@ -954,59 +734,6 @@ async fn migrate(
     add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
     txn.commit_fix_migration_retractions().await?;
 
-    Ok(())
-}
-
-// Some releases added fields to structs (which is only possible by using an Option, otherwise
-// serializing the old data into the new struct would always fail). If a storage transaction ever
-// then mutated one of those (either in a migration or user action), a retraction would be emitted
-// for the old row. However, the retraction wouldn't match any on-disk rows because on-disk didn't
-// contain the new field, and the retraction rows would contain something like `field: null` (the
-// default serde_json Rust encoding for a None Option). Thus we'd end up with: a +1 diff for the old
-// row, a -1 diff retracting a non-existent row, and a +1 diff for the new row.
-//
-// Interestingly, this doesn't cause any correctness issues on restart because, since we consolidate
-// in Rust, the +1 diff of the old row and -1 retraction DO cancel eachother out because the Option
-// in both cases has been populated to None, which consolidate removes. We do need to fix the
-// on-disk data so we can remove the theoretically unneeded Option.
-async fn fix_incorrect_retractions(stash: &mut Stash) -> Result<(), StashError> {
-    let consolidate_ids = stash
-        .with_transaction(|tx| {
-            Box::pin(async move {
-                async fn fix<'tx, K, V>(
-                    tx: &'tx mz_stash::Transaction<'tx>,
-                    typed: &TypedCollection<K, V>,
-                    ids: &mut Vec<Id>,
-                ) -> Result<(), StashError>
-                where
-                    K: Data,
-                    V: Data,
-                {
-                    let col = typed.from_tx(tx).await?;
-                    if tx.collection_fix_unconsolidated_rows(col).await? {
-                        ids.push(col.id);
-                    }
-                    Ok(())
-                }
-                let mut ids = Vec::new();
-                // The only collections that broke are ones that added an Option field. We don't
-                // need to run the fix function (which does a full scan) on everything.
-                fix(&tx, &COLLECTION_DATABASE, &mut ids).await?;
-                fix(&tx, &COLLECTION_SCHEMA, &mut ids).await?;
-                fix(&tx, &COLLECTION_ROLE, &mut ids).await?;
-                fix(&tx, &COLLECTION_ITEM, &mut ids).await?;
-                fix(&tx, &COLLECTION_CLUSTERS, &mut ids).await?;
-                fix(&tx, &COLLECTION_CLUSTER_REPLICAS, &mut ids).await?;
-                Ok(ids)
-            })
-        })
-        .await?;
-
-    // Wait for consolidation so we know the rows are no longer on disk, and so we can use updated Rust
-    // structs for next release.
-    for id in consolidate_ids {
-        stash.consolidate_now(id).await?;
-    }
     Ok(())
 }
 
@@ -1250,7 +977,7 @@ impl Connection {
             .map(|(k, v)| Database {
                 id: DatabaseId::from(k),
                 name: v.name,
-                owner_id: v.owner_id.expect("owner ID not migrated"),
+                owner_id: v.owner_id,
                 privileges: v.privileges.expect("privileges not migrated"),
             })
             .collect())
@@ -1266,7 +993,7 @@ impl Connection {
                 id: SchemaId::from(k),
                 name: v.name,
                 database_id: v.database_id.map(DatabaseId::User),
-                owner_id: v.owner_id.expect("owner ID not migrated"),
+                owner_id: v.owner_id,
                 privileges: v.privileges.expect("privileges not migrated"),
             })
             .collect())
@@ -1297,7 +1024,7 @@ impl Connection {
                 id: k.id,
                 name: v.name,
                 linked_object_id: v.linked_object_id,
-                owner_id: v.owner_id.expect("owner ID not migrated"),
+                owner_id: v.owner_id,
                 privileges: v.privileges.expect("privileges not migrated"),
             })
             .collect())
@@ -1314,7 +1041,7 @@ impl Connection {
                 replica_id: k.id,
                 name: v.name,
                 serialized_config: v.config,
-                owner_id: v.owner_id.expect("owner ID not migrated"),
+                owner_id: v.owner_id,
             })
             .collect())
     }
@@ -1500,7 +1227,7 @@ impl Connection {
             cluster_id,
             name,
             config: config.clone().into(),
-            owner_id: Some(owner_id),
+            owner_id,
         };
         COLLECTION_CLUSTER_REPLICAS
             .upsert_key(&mut self.stash, key, |_| Ok::<_, Error>(val))
@@ -1781,7 +1508,7 @@ impl<'a> Transaction<'a> {
                     item: v.name.clone(),
                 },
                 definition: v.definition.clone(),
-                owner_id: v.owner_id.expect("owner ID not migrated"),
+                owner_id: v.owner_id,
                 privileges: v.privileges.clone().expect("privileges not migrated"),
             });
         });
@@ -1813,7 +1540,7 @@ impl<'a> Transaction<'a> {
             },
             DatabaseValue {
                 name: database_name.to_string(),
-                owner_id: Some(owner_id),
+                owner_id,
                 privileges: Some(privileges),
             },
         ) {
@@ -1844,7 +1571,7 @@ impl<'a> Transaction<'a> {
                 database_id: Some(db.id),
                 database_ns: db.ns,
                 name: schema_name.to_string(),
-                owner_id: Some(owner_id),
+                owner_id,
                 privileges: Some(privileges),
             },
         ) {
@@ -1918,7 +1645,7 @@ impl<'a> Transaction<'a> {
             ClusterValue {
                 name: cluster_name.to_string(),
                 linked_object_id,
-                owner_id: Some(owner_id),
+                owner_id,
                 privileges: Some(privileges),
             },
         ) {
@@ -1961,7 +1688,7 @@ impl<'a> Transaction<'a> {
                 cluster_id,
                 name: replica_name.into(),
                 config: config.clone(),
-                owner_id: Some(owner_id),
+                owner_id,
             },
         ) {
             let cluster = self
@@ -2022,7 +1749,7 @@ impl<'a> Transaction<'a> {
                 schema_ns: schema_key.ns,
                 name: item_name.to_string(),
                 definition: item,
-                owner_id: Some(owner_id),
+                owner_id,
                 privileges: Some(privileges),
             },
         ) {
@@ -2300,7 +2027,7 @@ impl<'a> Transaction<'a> {
                 Some(ClusterValue {
                     name: cluster.name().to_string(),
                     linked_object_id: cluster.linked_object_id(),
-                    owner_id: Some(cluster.owner_id),
+                    owner_id: cluster.owner_id,
                     privileges: Some(cluster.privileges.clone()),
                 })
             } else {
@@ -2333,7 +2060,7 @@ impl<'a> Transaction<'a> {
                     cluster_id,
                     name: replica.name.clone(),
                     config: replica.config.clone().into(),
-                    owner_id: Some(replica.owner_id),
+                    owner_id: replica.owner_id,
                 })
             } else {
                 None
@@ -2362,7 +2089,7 @@ impl<'a> Transaction<'a> {
             if id == DatabaseId::from(*k) {
                 Some(DatabaseValue {
                     name: database.name().to_string(),
-                    owner_id: Some(database.owner_id),
+                    owner_id: database.owner_id,
                     privileges: Some(database.privileges.clone()),
                 })
             } else {
@@ -2400,7 +2127,7 @@ impl<'a> Transaction<'a> {
                     database_id: db_id,
                     database_ns: db_ns,
                     name: schema.name().schema.clone(),
-                    owner_id: Some(schema.owner_id),
+                    owner_id: schema.owner_id,
                     privileges: Some(schema.privileges.clone()),
                 })
             } else {
@@ -2868,8 +2595,7 @@ pub struct ClusterKey {
 pub struct ClusterValue {
     name: String,
     linked_object_id: Option<GlobalId>,
-    // TODO(jkosh44) Remove option in v0.50.0
-    owner_id: Option<RoleId>,
+    owner_id: RoleId,
     // TODO(jkosh44) Remove option in v0.54.0
     privileges: Option<Vec<MzAclItem>>,
 }
@@ -2938,15 +2664,13 @@ pub struct ClusterReplicaValue {
     cluster_id: ClusterId,
     name: String,
     config: SerializedReplicaConfig,
-    // TODO(jkosh44) Remove option in v0.50.0
-    owner_id: Option<RoleId>,
+    owner_id: RoleId,
 }
 
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
 pub struct DatabaseValue {
     name: String,
-    // TODO(jkosh44) Remove option in v0.50.0
-    owner_id: Option<RoleId>,
+    owner_id: RoleId,
     // TODO(jkosh44) Remove option in v0.54.0
     privileges: Option<Vec<MzAclItem>>,
 }
@@ -2999,8 +2723,7 @@ pub struct SchemaValue {
     #[serde(skip_serializing_if = "Option::is_none")]
     database_ns: Option<DatabaseNamespace>,
     name: String,
-    // TODO(jkosh44) Remove option in v0.50.0
-    owner_id: Option<RoleId>,
+    owner_id: RoleId,
     // TODO(jkosh44) Remove option in v0.54.0
     privileges: Option<Vec<MzAclItem>>,
 }
@@ -3018,8 +2741,7 @@ pub struct ItemValue {
     schema_ns: Option<SchemaNamespace>,
     name: String,
     definition: SerializedCatalogItem,
-    // TODO(jkosh44) Remove option in v0.50.0
-    owner_id: Option<RoleId>,
+    owner_id: RoleId,
     // TODO(jkosh44) Remove option in v0.54.0
     privileges: Option<Vec<MzAclItem>>,
 }

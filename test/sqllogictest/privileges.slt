@@ -13,6 +13,9 @@ reset-server
 
 # Test mz_aclitem type and functions
 
+statement ok
+CREATE ROLE test_role
+
 query T
 SELECT mz_internal.make_mz_aclitem('u1', 'u2', 'CREATE')
 ----
@@ -26,12 +29,12 @@ u1=UC/u2
 query T
 SELECT mz_internal.make_mz_aclitem('u1', 'u2', 'CREATE')::text
 ----
-default_owner=C/materialize
+materialize=C/test_role
 
 query T
 SELECT mz_internal.make_mz_aclitem('u1', 'u2', 'CREATE, USAGE')::text
 ----
-default_owner=UC/materialize
+materialize=UC/test_role
 
 query T
 SELECT mz_internal.make_mz_aclitem('p', 'u2', 'CREATE')
@@ -46,12 +49,12 @@ SELECT mz_internal.make_mz_aclitem('p', 'u2', 'CREATE, USAGE')
 query T
 SELECT mz_internal.make_mz_aclitem('p', 'u2', 'SELECT')::text
 ----
-=r/materialize
+=r/test_role
 
 query T
 SELECT mz_internal.make_mz_aclitem('p', 'u2', 'INSERT, SELECT')::text
 ----
-=ar/materialize
+=ar/test_role
 
 query error mz_aclitem grantor cannot be PUBLIC role
 SELECT mz_internal.make_mz_aclitem('u1', 'p', 'CREATE')
@@ -124,12 +127,12 @@ true
 query T
 SELECT mz_internal.make_mz_aclitem('u99991', 'u2', 'CREATE')::text
 ----
-u99991=C/materialize
+u99991=C/test_role
 
 query T
 SELECT mz_internal.make_mz_aclitem('u1', 'u87398', 'CREATE')::text
 ----
-default_owner=C/u87398
+materialize=C/u87398
 
 query T
 SELECT mz_internal.make_mz_aclitem('u3251', 's345', 'CREATE')::text
