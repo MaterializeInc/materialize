@@ -228,7 +228,7 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: MZ_CATALOG_SCHEMA_ID,
-                    ns: None,
+                    ns: Some(SchemaNamespace::System),
                 },
                 SchemaValue {
                     database_id: None,
@@ -247,7 +247,7 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: PG_CATALOG_SCHEMA_ID,
-                    ns: None,
+                    ns: Some(SchemaNamespace::System),
                 },
                 SchemaValue {
                     database_id: None,
@@ -308,7 +308,7 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: MZ_INTERNAL_SCHEMA_ID,
-                    ns: None,
+                    ns: Some(SchemaNamespace::System),
                 },
                 SchemaValue {
                     database_id: None,
@@ -327,7 +327,7 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: INFORMATION_SCHEMA_ID,
-                    ns: None,
+                    ns: Some(SchemaNamespace::System),
                 },
                 SchemaValue {
                     database_id: None,
@@ -699,6 +699,41 @@ async fn migrate(
                     *grantor = MZ_SYSTEM_ROLE_ID;
                 }
                 Some(role_value)
+            })?;
+            Ok(())
+        },
+        // Update system schemas so they have system IDs.
+        //
+        // Introduced in v0.52.0
+        //
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.55.0
+        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
+            let system_schema_names: BTreeSet<_> = [
+                MZ_CATALOG_SCHEMA_ID,
+                PG_CATALOG_SCHEMA_ID,
+                MZ_INTERNAL_SCHEMA_ID,
+                INFORMATION_SCHEMA_ID,
+            ]
+            .into_iter()
+            .collect();
+            txn.schemas.migrate(|schema_key, schema_value| {
+                if system_schema_names.contains(&schema_key.id) {
+                    if let SchemaNamespace::User = &schema_key
+                        .ns
+                        .as_ref()
+                        .expect("schema namespace not migrated")
+                    {
+                        let new_key = SchemaKey {
+                            id: schema_key.id,
+                            ns: Some(SchemaNamespace::System),
+                        };
+                        Some((new_key, schema_value.clone()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             })?;
             Ok(())
         },
