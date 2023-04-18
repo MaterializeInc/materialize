@@ -101,7 +101,7 @@
 //! if/when the errors are retracted.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
@@ -127,12 +127,13 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::source::persist_source::FlowControl;
 use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::{self, ProbeNotify};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::logging::compute::LogImportFrontiers;
-use crate::typedefs::ErrSpine;
+use crate::typedefs::{ErrSpine, RowKeySpine};
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 
@@ -647,22 +648,30 @@ where
                 let (oks, err) = bundle.collection.clone().unwrap();
                 self.insert_id(Id::Local(*id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
+
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                use crate::typedefs::RowKeySpine;
-                oks_v.set(&oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation"));
+                let mut oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation");
+                if let Some(token) = &self.shutdown_token {
+                    oks = oks.with_token(Weak::clone(token));
+                }
+                oks_v.set(&oks);
+
                 // Set err variable to the distinct elements of `err`.
                 // Distinctness is important, as we otherwise might add the same error each iteration,
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
-                err_v.set(
-                    &err.arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
-                        .reduce_abelian::<_, ErrSpine<_, _, _>>(
-                            "Distinct recursive err",
-                            move |_k, _s, t| t.push(((), 1)),
-                        )
-                        .as_collection(|k, _| k.clone()),
-                );
+                let mut errs = err
+                    .arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
+                    .reduce_abelian::<_, ErrSpine<_, _, _>>(
+                        "Distinct recursive err",
+                        move |_k, _s, t| t.push(((), 1)),
+                    )
+                    .as_collection(|k, _| k.clone());
+                if let Some(token) = &self.shutdown_token {
+                    errs = errs.with_token(Weak::clone(token));
+                }
+                err_v.set(&errs);
             }
             // Now extract each of the bindings into the outer scope.
             for id in ids.into_iter() {
