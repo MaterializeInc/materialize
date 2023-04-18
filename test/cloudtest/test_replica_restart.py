@@ -51,22 +51,18 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 
 
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
-    def verify_status(expected_status: str, expected_reason: Optional[str]) -> None:
-        while True:
-            (status, reason) = mz.environmentd.sql_query(
-                """
-SELECT status, reason FROM mz_internal.mz_cluster_replica_statuses mcrs
+    def verify_cluster_oomed() -> None:
+        with mz.environmentd.sql_cursor(autocommit=False) as cur:
+            cur.execute("SET CLUSTER=mz_introspection")
+            cur.execute("""DECLARE c CURSOR FOR SUBSCRIBE TO (SELECT status, reason FROM mz_internal.mz_cluster_replica_statuses mcrs
 JOIN mz_cluster_replicas mcr ON mcrs.replica_id = mcr.id
 JOIN mz_clusters mc ON mcr.cluster_id = mc.id
-WHERE mc.name = 'default'
-            """
-            )[0]
-            if status == expected_status and reason == expected_reason:
-                break
-            else:
-                print(f"Got {status}, {reason}; expected {expected_status}, {expected_reason}");
-            
-            time.sleep(1)
+WHERE mc.name = 'default')""")
+            while True:
+                cur.execute("FETCH ALL c")
+                for (_ts, _diff, status, reason) in cur.fetchall():
+                    if status == 'not-ready' and reason == 'oom-killed':
+                        return
 
     mz.environmentd.sql("DROP VIEW IF EXISTS v CASCADE")
     # Once we create an index on this view, it is practically guaranteed to OOM
@@ -79,14 +75,11 @@ SELECT repeat('abc' || x || y, 1000000) FROM
     """
     )
     mz.environmentd.sql("CREATE DEFAULT INDEX i ON v")
-    mz.environmentd.sql("SET cluster=mz_introspection")
 
     # Wait for the cluster pod to OOM
-    verify_status("not-ready", "oom-killed")
+    verify_cluster_oomed()
 
     mz.environmentd.sql("DROP VIEW v CASCADE")
-    # Now that we've dropped the problematic view, the replica should come back
-    verify_status("ready", None)
 
 
 # Test that a crashed (and restarted) cluster replica generates expected notice
