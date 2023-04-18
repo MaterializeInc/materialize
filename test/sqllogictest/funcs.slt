@@ -387,29 +387,34 @@ SELECT cbrt(NULL)
 NULL
 
 query R
-SELECT cbrt(1.23783::float)
+SELECT cbrt(1.23783::float)::float4
 ----
-1.0737100084353584
+1.07371
 
 query R
-SELECT cbrt(1.23783::double)
+SELECT cbrt(1.23783::double)::float4
 ----
-1.0737100084353584
+1.07371
 
 query R
-SELECT cbrt(1.23783::decimal(15,5))
+SELECT cbrt(1.23783::decimal(15,5))::float4
 ----
-1.0737100084353584
+1.07371
 
 query R
-SELECT cbrt(-8::double)
+SELECT cbrt(-8::double)::float4
 ----
 -2
 
 query R
-SELECT cbrt(3::int)
+SELECT cbrt(3::int)::float4
 ----
-1.4422495703074083
+1.4422495
+
+query R
+SELECT cbrt(27::int)::float4
+----
+3
 
 # Test coalesce.
 query I

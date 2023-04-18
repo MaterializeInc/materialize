@@ -18,6 +18,11 @@ ALTER SYSTEM SET enable_rbac_checks TO true;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
 ALTER ROLE materialize CREATEDB CREATECLUSTER CREATEROLE;
 ----
 COMPLETE 0
@@ -934,8 +939,14 @@ CREATE TABLE t (a INT);
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of table t
+owner: privileges on table t granted by owner
+owner: privileges granted on table t to owner
 
 simple conn=owner1,user=owner
 DROP TABLE t;
@@ -958,8 +969,13 @@ CREATE INDEX ind ON t(a);
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of index ind
+owner: privileges on index ind granted by owner
+owner: privileges granted on index ind to owner
 
 simple conn=owner2,user=owner
 DROP INDEX ind;
@@ -982,8 +998,20 @@ create SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of source s_progress
+owner: privileges on source s_progress granted by owner
+owner: privileges granted on source s_progress to owner
+owner: owner of source s
+owner: privileges on source s granted by owner
+owner: privileges granted on source s to owner
+owner: owner of cluster materialize_public_s
+owner: privileges on cluster materialize_public_s granted by owner
+owner: privileges granted on cluster materialize_public_s to owner
+owner: owner of cluster replica linked
 
 simple conn=owner3,user=owner
 DROP SOURCE s;
@@ -1003,8 +1031,13 @@ CREATE VIEW v AS SELECT 1;
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of view v
+owner: privileges on view v granted by owner
+owner: privileges granted on view v to owner
 
 simple conn=owner4,user=owner
 DROP VIEW v;
@@ -1024,8 +1057,13 @@ CREATE MATERIALIZED VIEW mvv AS SELECT 1;
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of materialized view mvv
+owner: privileges on materialized view mvv granted by owner
+owner: privileges granted on materialized view mvv to owner
 
 simple conn=owner5,user=owner
 DROP MATERIALIZED VIEW mvv;
@@ -1045,8 +1083,13 @@ CREATE CONNECTION c TO KAFKA (BROKER 'localhost:9092');
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of connection c
+owner: privileges on connection c granted by owner
+owner: privileges granted on connection c to owner
 
 simple conn=owner6,user=owner
 DROP CONNECTION c;
@@ -1066,8 +1109,14 @@ CREATE TYPE ty AS LIST (ELEMENT TYPE=bool);
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of type ty
+owner: privileges on type ty granted by owner
+owner: privileges granted on type ty to owner
+owner: privileges granted on type ty to public
 
 simple conn=owner7,user=owner
 DROP TYPE ty;
@@ -1087,8 +1136,13 @@ CREATE SECRET se AS decode('c2VjcmV0Cg==', 'base64');
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of secret se
+owner: privileges on secret se granted by owner
+owner: privileges granted on secret se to owner
 
 simple conn=owner8,user=owner
 DROP SECRET se;
@@ -1108,8 +1162,17 @@ CREATE DATABASE db;
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of database db
+owner: privileges on database db granted by owner
+owner: privileges granted on database db to owner
+owner: owner of schema public
+owner: privileges on schema public granted by owner
+owner: privileges granted on schema public to owner
+owner: privileges granted on schema public to public
 
 simple conn=owner9,user=owner
 DROP DATABASE db;
@@ -1129,8 +1192,13 @@ CREATE SCHEMA sc;
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of schema sc
+owner: privileges on schema sc granted by owner
+owner: privileges granted on schema sc to owner
 
 simple conn=owner10,user=owner
 DROP SCHEMA sc;
@@ -1150,8 +1218,14 @@ CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of cluster clus
+owner: privileges on cluster clus granted by owner
+owner: privileges granted on cluster clus to owner
+owner: owner of cluster replica r1
 
 simple conn=owner11,user=owner
 DROP CLUSTER clus;
@@ -1171,8 +1245,11 @@ CREATE CLUSTER REPLICA default.r2 SIZE '1';
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of cluster replica r2
 
 simple conn=owner12,user=owner
 DROP CLUSTER REPLICA default.r2;
@@ -1197,16 +1274,29 @@ CREATE VIEW v AS SELECT 1
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of table t
+owner: privileges on table t granted by owner
+owner: privileges granted on table t to owner
+owner: owner of view v
+owner: privileges on view v granted by owner
+owner: privileges granted on view v to owner
 
 simple conn=owner13,user=owner
 DROP TABLE t
 ----
 COMPLETE 0
 
-statement error role "owner" cannot be dropped because some objects depend on it
+simple conn=materialize,user=materialize
 DROP ROLE owner
+----
+db error: ERROR: role "owner" cannot be dropped because some objects depend on it
+DETAIL: owner: owner of view v
+owner: privileges on view v granted by owner
+owner: privileges granted on view v to owner
 
 simple conn=owner13,user=owner
 DROP VIEW v
@@ -1354,5 +1444,10 @@ DROP MATERIALIZED VIEW mv;
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
 ----
 COMPLETE 0

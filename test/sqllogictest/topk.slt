@@ -60,6 +60,24 @@ TX  Houston
 TX  San_Antonio
 TX  Dallas
 
+# EXPECTED GROUP SIZE hint should not affect the results
+query TT rowsort
+SELECT state, name FROM
+    (SELECT DISTINCT state FROM cities) grp,
+    LATERAL (SELECT name FROM cities WHERE state = grp.state
+             OPTIONS (EXPECTED GROUP SIZE = 1)
+             ORDER BY pop DESC NULLS LAST LIMIT 3)
+----
+AZ  Phoenix
+CA  Los_Angeles
+CA  San_Francisco
+CA  San_Jose
+IL  Chicago
+NY  New_York
+TX  Dallas
+TX  Houston
+TX  San_Antonio
+
 mode standard
 
 query T multiline
@@ -131,5 +149,19 @@ Explained Query:
       TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=1 monotonic=false // { arity: 2 }
         Project (#1, #2) // { arity: 2 }
           Get materialize.public.cities // { arity: 3 }
+
+EOF
+
+query T multiline
+EXPLAIN WITH(arity, join_impls) SELECT state, name FROM
+    (SELECT DISTINCT state FROM cities) grp,
+    LATERAL (SELECT name FROM cities WHERE state = grp.state
+             OPTIONS (EXPECTED GROUP SIZE = 1)
+             ORDER BY pop DESC NULLS LAST LIMIT 3)
+----
+Explained Query:
+  Project (#1, #0) // { arity: 2 }
+    TopK group_by=[#1] order_by=[#2 desc nulls_last] limit=3 monotonic=false exp_group_size=1 // { arity: 3 }
+      Get materialize.public.cities // { arity: 3 }
 
 EOF

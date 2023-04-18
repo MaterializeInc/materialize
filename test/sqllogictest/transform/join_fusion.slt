@@ -177,7 +177,7 @@ Explained Query:
                         Project () // { arity: 0 }
                           Get l0 // { arity: 9 }
     cte l0 =
-      ReadExistingIndex materialize.public.lineitem lookup_value=(38)
+      ReadExistingIndex materialize.public.lineitem lookup_value=(38) // { arity: 9 }
 
 Used Indexes:
   - materialize.public.pk_orders_orderkey
@@ -205,10 +205,10 @@ Explained Query:
       ArrangeBy keys=[[#0, #1]] // { arity: 2 }
         Project (#2, #3) // { arity: 2 }
           Filter (#2 = (#2 % 5)) // { arity: 5 }
-            ReadExistingIndex materialize.public.orders lookup_value=(134)
+            ReadExistingIndex materialize.public.orders lookup_value=(134) // { arity: 5 }
       ArrangeBy keys=[[]] // { arity: 0 }
         Project () // { arity: 0 }
-          ReadExistingIndex materialize.public.customer lookup_value=(134)
+          ReadExistingIndex materialize.public.customer lookup_value=(134) // { arity: 4 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey
@@ -235,10 +235,10 @@ Explained Query:
           Get materialize.public.lineitem // { arity: 8 }
       ArrangeBy keys=[[#2, #3]] // { arity: 4 }
         Project (#0..=#3) // { arity: 4 }
-          ReadExistingIndex materialize.public.orders lookup_value=(229)
+          ReadExistingIndex materialize.public.orders lookup_value=(229) // { arity: 5 }
       ArrangeBy keys=[[]] // { arity: 3 }
         Project (#0..=#2) // { arity: 3 }
-          ReadExistingIndex materialize.public.customer lookup_value=(229)
+          ReadExistingIndex materialize.public.customer lookup_value=(229) // { arity: 4 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey

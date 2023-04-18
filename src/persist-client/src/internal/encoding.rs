@@ -559,7 +559,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         &self.state.collections.rollups
     }
 
-    pub fn apply_encoded_diffs<I: IntoIterator<Item = VersionedData>>(
+    pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
         &mut self,
         cfg: &PersistConfig,
         metrics: &Metrics,
@@ -1298,7 +1298,7 @@ mod tests {
             seqno: SeqNo(5),
             data: diff_proto.encode_to_vec().into(),
         };
-        state.apply_encoded_diffs(cache.cfg(), &cache.metrics, std::iter::once(encoded_diff));
+        state.apply_encoded_diffs(cache.cfg(), &cache.metrics, std::iter::once(&encoded_diff));
         assert_eq!(
             state
                 .state

@@ -185,19 +185,26 @@ class Composition:
             if "allow_host_ports" in config:
                 config.pop("allow_host_ports")
 
-            coverage_volume = "./coverage:/coverage"
-            if self.repo.rd.coverage and coverage_volume not in config.get(
-                "volumes", []
-            ):
-                # Emit coverage information to a file in a directory that is
-                # bind-mounted to the "coverage" directory on the host. We
-                # inject the configuration to all services for simplicity, but
-                # this only have an effect if the service runs instrumented Rust
-                # binaries.
-                config.setdefault("volumes", []).append(coverage_volume)
-                config.setdefault("environment", []).append(
+            if self.repo.rd.coverage:
+                coverage_volume = "./coverage:/coverage"
+                if coverage_volume not in config.get("volumes", []):
+                    # Emit coverage information to a file in a directory that is
+                    # bind-mounted to the "coverage" directory on the host. We
+                    # inject the configuration to all services for simplicity, but
+                    # this only have an effect if the service runs instrumented Rust
+                    # binaries.
+                    config.setdefault("volumes", []).append(coverage_volume)
+
+                llvm_profile_file = (
                     f"LLVM_PROFILE_FILE=/coverage/{name}-%p-%9m%c.profraw"
                 )
+                for i, env in enumerate(config.get("environment", [])):
+                    # Make sure we don't have duplicate environment entries.
+                    if env.startswith("LLVM_PROFILE_FILE="):
+                        config["environment"][i] = llvm_profile_file
+                        break
+                else:
+                    config.setdefault("environment", []).append(llvm_profile_file)
 
         # Determine mzbuild specs and inject them into services accordingly.
         deps = self.repo.resolve_dependencies(images)

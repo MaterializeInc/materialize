@@ -128,6 +128,7 @@ where
                     *ctx.as_mut() += 1;
                 }
                 MirRelationExpr::fmt_indexed_filter(f, ctx, id, literal_constraints.clone())?;
+                writeln!(f)?;
                 ctx.as_mut().reset();
                 Ok(())
             }

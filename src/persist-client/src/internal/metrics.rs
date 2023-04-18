@@ -70,6 +70,8 @@ pub struct Metrics {
     pub shards: ShardsMetrics,
     /// Metrics for auditing persist usage
     pub audit: UsageAuditMetrics,
+    /// Metrics for locking.
+    pub locks: LocksMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -110,6 +112,7 @@ impl Metrics {
             state: StateMetrics::new(registry),
             shards: ShardsMetrics::new(registry),
             audit: UsageAuditMetrics::new(registry),
+            locks: vecs.locks_metrics(),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -167,6 +170,10 @@ struct MetricsVecs {
     read_part_goodbytes: IntCounterVec,
     read_part_count: IntCounterVec,
     read_part_seconds: CounterVec,
+
+    lock_acquire_count: IntCounterVec,
+    lock_blocking_acquire_count: IntCounterVec,
+    lock_blocking_seconds: CounterVec,
 
     /// A minimal set of metrics imported into honeycomb for alerting.
     alerts_metrics: Arc<AlertsMetrics>,
@@ -313,6 +320,22 @@ impl MetricsVecs {
             read_part_seconds: registry.register(metric!(
                 name: "mz_persist_read_batch_part_seconds",
                 help: "time spent reading batch parts",
+                var_labels: ["op"],
+            )),
+
+            lock_acquire_count: registry.register(metric!(
+                name: "mz_persist_lock_acquire_count",
+                help: "count of locks acquired",
+                var_labels: ["op"],
+            )),
+            lock_blocking_acquire_count: registry.register(metric!(
+                name: "mz_persist_lock_blocking_acquire_count",
+                help: "count of locks acquired that required blocking",
+                var_labels: ["op"],
+            )),
+            lock_blocking_seconds: registry.register(metric!(
+                name: "mz_persist_lock_blocking_seconds",
+                help: "time spent blocked for a lock",
                 var_labels: ["op"],
             )),
 
@@ -464,6 +487,22 @@ impl MetricsVecs {
             part_goodbytes: self.read_part_goodbytes.with_label_values(&[op]),
             part_count: self.read_part_count.with_label_values(&[op]),
             seconds: self.read_part_seconds.with_label_values(&[op]),
+        }
+    }
+
+    fn locks_metrics(&self) -> LocksMetrics {
+        LocksMetrics {
+            applier_read_cacheable: self.lock_metrics("applier_read_cacheable"),
+            applier_read_noncacheable: self.lock_metrics("applier_read_noncacheable"),
+            applier_write: self.lock_metrics("applier_write"),
+        }
+    }
+
+    fn lock_metrics(&self, op: &str) -> LockMetrics {
+        LockMetrics {
+            acquire_count: self.lock_acquire_count.with_label_values(&[op]),
+            blocking_acquire_count: self.lock_blocking_acquire_count.with_label_values(&[op]),
+            blocking_seconds: self.lock_blocking_seconds.with_label_values(&[op]),
         }
     }
 }
@@ -974,6 +1013,8 @@ pub struct StateMetrics {
     pub(crate) apply_spine_slow_path_lenient: IntCounter,
     pub(crate) apply_spine_slow_path_lenient_adjustment: IntCounter,
     pub(crate) apply_spine_slow_path_with_reconstruction: IntCounter,
+    pub(crate) update_state_noop_path: IntCounter,
+    pub(crate) update_state_empty_path: IntCounter,
     pub(crate) update_state_fast_path: IntCounter,
     pub(crate) update_state_slow_path: IntCounter,
     pub(crate) rollup_at_seqno_migration: IntCounter,
@@ -1003,6 +1044,14 @@ impl StateMetrics {
             apply_spine_slow_path_with_reconstruction: registry.register(metric!(
                 name: "mz_persist_state_apply_spine_slow_path_with_reconstruction",
                 help: "count of spine diff applications that hit the slow path with extra spine reconstruction step",
+            )),
+            update_state_noop_path: registry.register(metric!(
+                name: "mz_persist_state_update_state_noop_path",
+                help: "count of state update applications that no-oped due to shared state",
+            )),
+            update_state_empty_path: registry.register(metric!(
+                name: "mz_persist_state_update_state_empty_path",
+                help: "count of state update applications that found no new updates",
             )),
             update_state_fast_path: registry.register(metric!(
                 name: "mz_persist_state_update_state_fast_path",
@@ -1407,6 +1456,20 @@ impl AlertsMetrics {
             )),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct LocksMetrics {
+    pub(crate) applier_read_cacheable: LockMetrics,
+    pub(crate) applier_read_noncacheable: LockMetrics,
+    pub(crate) applier_write: LockMetrics,
+}
+
+#[derive(Debug)]
+pub struct LockMetrics {
+    pub(crate) acquire_count: IntCounter,
+    pub(crate) blocking_acquire_count: IntCounter,
+    pub(crate) blocking_seconds: Counter,
 }
 
 #[derive(Debug)]

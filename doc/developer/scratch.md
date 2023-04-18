@@ -7,7 +7,7 @@ benchmarks, short-lived side projects, and so on.
 
 Scratch is *not* intended for long-term or mission-critical infrastructure, which we manage in
 the [i2 repo](https://github.com/MaterializeInc/i2). Machines created in scratch are
-therefore automatically deleted after about a week.
+therefore automatically deleted after 36 hours.
 
 ## Permissions
 All members of the engineering org should have full administrative control of
@@ -105,7 +105,7 @@ To use:
 
 This will take a few minutes to build your dev container.
 See the [guide](https://code.visualstudio.com/docs/remote/ssh) for more details.
-Because this is in scratch, it may be deleted after a week.
+Because this is in scratch, it may be deleted after 36 hours.
 If you need a longer term enviroment, use `--max-age-days` when creating the scratch instance.
 
 ### `bin/scratch mine`

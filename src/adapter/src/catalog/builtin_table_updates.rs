@@ -19,7 +19,7 @@ use mz_controller::clusters::{
     ReplicaLocation,
 };
 use mz_expr::MirScalarExpr;
-use mz_orchestrator::{CpuLimit, MemoryLimit, ServiceProcessMetrics};
+use mz_orchestrator::{CpuLimit, MemoryLimit, NotReadyReason, ServiceProcessMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -88,13 +88,28 @@ impl CatalogState {
         database: &Database,
         diff: Diff,
     ) -> BuiltinTableUpdate {
+        let mut row = Row::default();
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: database.privileges.len(),
+                }],
+                database
+                    .privileges
+                    .iter()
+                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
+            )
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        let privileges = row.unpack_first();
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DATABASES),
             row: Row::pack_slice(&[
-                Datum::UInt64(database.id.0),
+                Datum::String(&database.id.to_string()),
                 Datum::UInt32(database.oid),
                 Datum::String(database.name()),
                 Datum::String(&database.owner_id.to_string()),
+                privileges,
             ]),
             diff,
         }
@@ -109,18 +124,33 @@ impl CatalogState {
         let (database_id, schema) = match database_spec {
             ResolvedDatabaseSpecifier::Ambient => (None, &self.ambient_schemas_by_id[schema_id]),
             ResolvedDatabaseSpecifier::Id(id) => (
-                Some(id.0),
+                Some(id.to_string()),
                 &self.database_by_id[id].schemas_by_id[schema_id],
             ),
         };
+        let mut row = Row::default();
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: schema.privileges.len(),
+                }],
+                schema
+                    .privileges
+                    .iter()
+                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
+            )
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        let privileges = row.unpack_first();
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SCHEMAS),
             row: Row::pack_slice(&[
-                Datum::UInt64(schema_id.0),
+                Datum::String(&schema_id.to_string()),
                 Datum::UInt32(schema.oid),
-                Datum::from(database_id),
+                Datum::from(database_id.as_deref()),
                 Datum::String(&schema.name.schema),
                 Datum::String(&schema.owner_id.to_string()),
+                privileges,
             ]),
             diff,
         }
@@ -175,12 +205,27 @@ impl CatalogState {
     pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
         let id = self.clusters_by_name[name];
         let cluster = &self.clusters_by_id[&id];
+        let mut row = Row::default();
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: cluster.privileges.len(),
+                }],
+                cluster
+                    .privileges
+                    .iter()
+                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
+            )
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        let privileges = row.unpack_first();
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(name),
                 Datum::String(&cluster.owner_id.to_string()),
+                privileges,
             ]),
             diff,
         }
@@ -248,9 +293,12 @@ impl CatalogState {
         diff: Diff,
     ) -> BuiltinTableUpdate {
         let event = self.get_cluster_status(cluster_id, replica_id, process_id);
-        let status = match event.status {
-            ClusterStatus::Ready => "ready",
-            ClusterStatus::NotReady => "not-ready",
+        let status = event.status.as_kebab_case_str();
+
+        let not_ready_reason = match event.status {
+            ClusterStatus::Ready => None,
+            ClusterStatus::NotReady(None) => None,
+            ClusterStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("oom-killed"),
         };
 
         // TODO(#18377): Make replica IDs `NewReplicaId`s throughout the code.
@@ -262,6 +310,7 @@ impl CatalogState {
                 Datum::String(&replica_id.to_string()),
                 Datum::UInt64(process_id),
                 Datum::String(status),
+                not_ready_reason.into(),
                 Datum::TimestampTz(event.time.try_into().expect("must fit")),
             ]),
             diff,
@@ -282,15 +331,30 @@ impl CatalogState {
             .id;
         let name = &entry.name().item;
         let owner_id = entry.owner_id();
+        let mut privileges_row = Row::default();
+        privileges_row
+            .packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: entry.privileges.len(),
+                }],
+                entry
+                    .privileges
+                    .iter()
+                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
+            )
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        let privileges = privileges_row.unpack_first();
         let mut updates = match entry.item() {
             CatalogItem::Log(_) => self.pack_source_update(
-                id, oid, schema_id, name, "log", None, None, None, None, owner_id, diff,
+                id, oid, schema_id, name, "log", None, None, None, None, owner_id, privileges, diff,
             ),
             CatalogItem::Index(index) => {
                 self.pack_index_update(id, oid, name, owner_id, index, diff)
             }
             CatalogItem::Table(_) => {
-                self.pack_table_update(id, oid, schema_id, name, owner_id, diff)
+                self.pack_table_update(id, oid, schema_id, name, owner_id, privileges, diff)
             }
             CatalogItem::Source(source) => {
                 let source_type = source.source_type();
@@ -309,6 +373,7 @@ impl CatalogState {
                     envelope,
                     cluster_id.as_deref(),
                     owner_id,
+                    privileges,
                     diff,
                 );
 
@@ -325,24 +390,26 @@ impl CatalogState {
                 updates
             }
             CatalogItem::View(view) => {
-                self.pack_view_update(id, oid, schema_id, name, owner_id, view, diff)
+                self.pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff)
             }
-            CatalogItem::MaterializedView(mview) => {
-                self.pack_materialized_view_update(id, oid, schema_id, name, owner_id, mview, diff)
-            }
+            CatalogItem::MaterializedView(mview) => self.pack_materialized_view_update(
+                id, oid, schema_id, name, owner_id, privileges, mview, diff,
+            ),
             CatalogItem::Sink(sink) => {
                 self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
             }
             CatalogItem::Type(ty) => {
-                self.pack_type_update(id, oid, schema_id, name, owner_id, ty, diff)
+                self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
             }
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, owner_id, diff),
-            CatalogItem::Connection(connection) => {
-                self.pack_connection_update(id, oid, schema_id, name, owner_id, connection, diff)
+            CatalogItem::Secret(_) => {
+                self.pack_secret_update(id, schema_id, name, owner_id, privileges, diff)
             }
+            CatalogItem::Connection(connection) => self.pack_connection_update(
+                id, oid, schema_id, name, owner_id, privileges, connection, diff,
+            ),
         };
 
         if !entry.item().is_temporary() {
@@ -390,6 +457,7 @@ impl CatalogState {
         schema_id: &SchemaSpecifier,
         name: &str,
         owner_id: &RoleId,
+        privileges: Datum,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -397,9 +465,10 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
+                privileges,
             ]),
             diff,
         }]
@@ -417,6 +486,7 @@ impl CatalogState {
         envelope: Option<&str>,
         cluster_id: Option<&str>,
         owner_id: &RoleId,
+        privileges: Datum,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -424,7 +494,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(source_desc_name),
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
@@ -432,6 +502,7 @@ impl CatalogState {
                 Datum::from(envelope),
                 Datum::from(cluster_id),
                 Datum::String(&owner_id.to_string()),
+                privileges,
             ]),
             diff,
         }]
@@ -460,6 +531,7 @@ impl CatalogState {
         schema_id: &SchemaSpecifier,
         name: &str,
         owner_id: &RoleId,
+        privileges: Datum,
         connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -468,7 +540,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(match connection.connection {
                     mz_storage_client::types::connections::Connection::Kafka { .. } => "kafka",
@@ -485,6 +557,7 @@ impl CatalogState {
                     mz_storage_client::types::connections::Connection::Ssh { .. } => "ssh-tunnel",
                 }),
                 Datum::String(&owner_id.to_string()),
+                privileges,
             ]),
             diff,
         }];
@@ -564,7 +637,7 @@ impl CatalogState {
                     .iter()
                     .map(|broker| Datum::String(&broker.address)),
             )
-            .expect("kafka.brokers is 1 dimensional, and it's length is used for the array length");
+            .expect("kafka.brokers is 1 dimensional, and its length is used for the array length");
         let brokers = row.unpack_first();
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_KAFKA_CONNECTIONS),
@@ -594,6 +667,7 @@ impl CatalogState {
         schema_id: &SchemaSpecifier,
         name: &str,
         owner_id: &RoleId,
+        privileges: Datum,
         view: &View,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -615,10 +689,11 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&query_string),
                 Datum::String(&owner_id.to_string()),
+                privileges,
             ]),
             diff,
         }]
@@ -631,6 +706,7 @@ impl CatalogState {
         schema_id: &SchemaSpecifier,
         name: &str,
         owner_id: &RoleId,
+        privileges: Datum,
         mview: &MaterializedView,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -652,11 +728,12 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&mview.cluster_id.to_string()),
                 Datum::String(&query_string),
                 Datum::String(&owner_id.to_string()),
+                privileges,
             ]),
             diff,
         }]
@@ -698,7 +775,7 @@ impl CatalogState {
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(oid),
-                    Datum::UInt64(schema_id.into()),
+                    Datum::String(&schema_id.to_string()),
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
@@ -792,6 +869,7 @@ impl CatalogState {
         schema_id: &SchemaSpecifier,
         name: &str,
         owner_id: &RoleId,
+        privileges: Datum,
         typ: &Type,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
@@ -800,10 +878,11 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
                 Datum::String(&owner_id.to_string()),
+                privileges,
             ]),
             diff,
         };
@@ -873,7 +952,7 @@ impl CatalogState {
                     arg_type_ids.iter().map(|id| Datum::String(id)),
                 )
                 .expect(
-                    "arg_type_ids is 1 dimensional, and it's length is used for the array length",
+                    "arg_type_ids is 1 dimensional, and its length is used for the array length",
                 );
             let arg_type_ids = row.unpack_first();
 
@@ -882,7 +961,7 @@ impl CatalogState {
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(func_impl_details.oid),
-                    Datum::UInt64(schema_id.into()),
+                    Datum::String(&schema_id.to_string()),
                     Datum::String(name),
                     arg_type_ids,
                     Datum::from(
@@ -927,7 +1006,7 @@ impl CatalogState {
                 }],
                 arg_type_ids.iter().map(|id| Datum::String(id)),
             )
-            .expect("arg_type_ids is 1 dimensional, and it's length is used for the array length");
+            .expect("arg_type_ids is 1 dimensional, and its length is used for the array length");
         let arg_type_ids = row.unpack_first();
 
         BuiltinTableUpdate {
@@ -953,15 +1032,17 @@ impl CatalogState {
         schema_id: &SchemaSpecifier,
         name: &str,
         owner_id: &RoleId,
+        privileges: Datum,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SECRETS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::UInt64(schema_id.into()),
+                Datum::String(&schema_id.to_string()),
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
+                privileges,
             ]),
             diff,
         }]
@@ -1084,6 +1165,8 @@ impl CatalogState {
                     u64::cast_from(process_id).into(),
                     (*cpu_nano_cores).into(),
                     (*memory_bytes).into(),
+                    // TODO(guswynn): disk usage will be filled in later.
+                    Datum::Null,
                 ])
             },
         );
@@ -1120,6 +1203,8 @@ impl CatalogState {
                         u64::cast_from(*workers).into(),
                         cpu_limit.as_nanocpus().into(),
                         memory_bytes.into(),
+                        // TODO(guswynn): disk size will be filled in later.
+                        Datum::Null,
                     ]);
                     BuiltinTableUpdate { id, row, diff: 1 }
                 },

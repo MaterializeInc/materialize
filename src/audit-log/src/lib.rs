@@ -220,7 +220,9 @@ pub enum EventDetails {
     CreateSourceSinkV2(CreateSourceSinkV2),
     AlterSourceSinkV1(AlterSourceSinkV1),
     GrantRoleV1(GrantRoleV1),
+    GrantRoleV2(GrantRoleV2),
     RevokeRoleV1(RevokeRoleV1),
+    RevokeRoleV2(RevokeRoleV2),
     IdFullNameV1(IdFullNameV1),
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
@@ -310,9 +312,25 @@ pub struct GrantRoleV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct GrantRoleV2 {
+    pub role_id: String,
+    pub member_id: String,
+    pub grantor_id: String,
+    pub executed_by: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct RevokeRoleV1 {
     pub role_id: String,
     pub member_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct RevokeRoleV2 {
+    pub role_id: String,
+    pub member_id: String,
+    pub grantor_id: String,
+    pub executed_by: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -339,7 +357,9 @@ impl EventDetails {
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::GrantRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::GrantRoleV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RevokeRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::RevokeRoleV2(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }

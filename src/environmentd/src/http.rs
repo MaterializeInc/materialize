@@ -83,7 +83,7 @@ pub struct TlsConfig {
 #[derive(Debug, Clone, Copy)]
 pub enum TlsMode {
     Disable,
-    Enable,
+    Require,
 }
 
 #[derive(Clone)]
@@ -396,8 +396,8 @@ async fn http_auth<B>(
     let cert_user = match (tls_mode, &conn_protocol) {
         (TlsMode::Disable, ConnProtocol::Http) => None,
         (TlsMode::Disable, ConnProtocol::Https { .. }) => unreachable!(),
-        (TlsMode::Enable, ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
-        (TlsMode::Enable, ConnProtocol::Https { .. }) => None,
+        (TlsMode::Require, ConnProtocol::Http) => return Err(AuthError::HttpsRequired),
+        (TlsMode::Require, ConnProtocol::Https { .. }) => None,
     };
     let creds = match frontegg {
         // If no Frontegg authentication, we can use the cert's username if

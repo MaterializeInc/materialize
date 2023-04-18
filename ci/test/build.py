@@ -9,6 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 from pathlib import Path
 
 from materialize import mzbuild, spawn
@@ -16,7 +17,8 @@ from materialize.xcompile import Arch
 
 
 def main() -> None:
-    repo = mzbuild.Repository(Path("."))
+    coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+    repo = mzbuild.Repository(Path("."), coverage=coverage)
 
     # Build and push any images that are not already available on Docker Hub,
     # so they are accessible to other build agents.

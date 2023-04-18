@@ -19,23 +19,9 @@
   );
 
 > DROP SOURCE IF EXISTS mz_source CASCADE;
-> DROP SOURCE IF EXISTS mz_source_alter_add_col CASCADE;
-> DROP SOURCE IF EXISTS mz_source_alter_drop_constraint CASCADE;
 
 > CREATE SOURCE mz_source
   FROM POSTGRES
   CONNECTION pg
   (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
-
-> CREATE SOURCE mz_source_alter_add_col
-  FROM POSTGRES
-  CONNECTION pg
-  (PUBLICATION 'mz_source_alter_add_col')
-  FOR ALL TABLES;
-
-> CREATE SOURCE mz_source_alter_drop_constraint
-  FROM POSTGRES
-  CONNECTION pg
-  (PUBLICATION 'mz_source_alter_drop_constraint')
   FOR ALL TABLES;

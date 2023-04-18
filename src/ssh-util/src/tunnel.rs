@@ -28,8 +28,22 @@ use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::keys::SshKeyPair;
 
+// TODO(benesch): allow configuring the following connection parameters via
+// server configuration parameters.
+
 /// How often to check whether the SSH session is still alive.
 const CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The timeout to use when establishing the connection to the SSH server.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The idle time after which the SSH control master process should send a
+/// keepalive packet to the SSH server to determine whether the server is
+/// still alive.
+///
+/// TCP idle timeouts of 30s are common in the wild. An idle timeout of 10s
+/// is comfortably beneath that threshold without being overly chatty.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
 
 /// Specifies an SSH tunnel.
 #[derive(PartialEq, Clone)]
@@ -66,7 +80,19 @@ impl SshTunnelConfig {
         remote_host: &str,
         remote_port: u16,
     ) -> Result<SshTunnelHandle, anyhow::Error> {
-        let (mut session, local_port) = connect(self, remote_host, remote_port).await?;
+        let tunnel_id = format!(
+            "{}:{} via {}@{}:{}",
+            remote_host, remote_port, self.user, self.host, self.port,
+        );
+
+        info!(%tunnel_id, "connecting to ssh tunnel");
+        let (mut session, local_port) = match connect(self, remote_host, remote_port).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(%tunnel_id, "failed to connect to ssh tunnel: {}", e.display_with_causes());
+                return Err(e);
+            }
+        };
         let local_port = Arc::new(AtomicU16::new(local_port));
 
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
@@ -75,19 +101,12 @@ impl SshTunnelConfig {
             let local_port = Arc::clone(&local_port);
             async move {
                 scopeguard::defer! {
-                    info!(
-                        "terminating ssh tunnel ({}:{} via {}@{}:{})",
-                        remote_host,
-                        remote_port,
-                        config.user,
-                        config.host,
-                        config.port,
-                    );
+                    info!(%tunnel_id, "terminating ssh tunnel");
                 }
                 loop {
                     time::sleep(CHECK_INTERVAL).await;
                     if let Err(e) = session.check().await {
-                        warn!("ssh tunnel unhealthy: {}", e.display_with_causes());
+                        warn!(%tunnel_id, "ssh tunnel unhealthy: {}", e.display_with_causes());
                         match connect(&config, &remote_host, remote_port).await {
                             Ok((s, lp)) => {
                                 session = s;
@@ -95,6 +114,7 @@ impl SshTunnelConfig {
                             }
                             Err(e) => {
                                 warn!(
+                                    %tunnel_id,
                                     "reconnection to ssh tunnel failed: {}",
                                     e.display_with_causes()
                                 )
@@ -157,6 +177,8 @@ async fn connect(
         .user(config.user.clone())
         .port(config.port)
         .keyfile(&path)
+        .server_alive_interval(KEEPALIVE_IDLE)
+        .connect_timeout(CONNECT_TIMEOUT)
         .connect_mux(config.host.clone())
         .await?;
 
@@ -187,8 +209,8 @@ async fn connect(
         {
             Ok(_) => return Ok((session, local_port)),
             Err(err) => match err {
-                openssh::Error::SshMux(err)
-                    if err.to_string().contains("forwarding request failed") =>
+                openssh::Error::SshMux(openssh_mux_client::Error::RequestFailure(e))
+                    if &*e == "Port forwarding failed" =>
                 {
                     info!("port {local_port} already in use; testing another port");
                 }

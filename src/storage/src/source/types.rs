@@ -31,6 +31,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
 
+use crate::render::sources::OutputIndex;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::RawSourceCreationConfig;
 
@@ -72,9 +73,16 @@ pub trait SourceRender {
         connection_context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
     ) -> (
-        Collection<G, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>, Diff>,
+        Collection<
+            G,
+            (
+                usize,
+                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
+            ),
+            Diff,
+        >,
         Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusUpdate>,
+        Stream<G, (OutputIndex, HealthStatusUpdate)>,
         Rc<dyn Any>,
     );
 }
@@ -119,8 +127,9 @@ impl HealthStatus {
     }
 }
 
-impl From<HealthStatus> for HealthStatusUpdate {
-    fn from(update: HealthStatus) -> Self {
+impl HealthStatusUpdate {
+    /// Generates a non-halting [`HealthStatusUpdate`] with `update`.
+    pub(crate) fn status(update: HealthStatus) -> Self {
         HealthStatusUpdate {
             update,
             should_halt: false,
@@ -132,9 +141,6 @@ impl From<HealthStatus> for HealthStatusUpdate {
 /// conversion to Message.
 #[derive(Debug, Clone)]
 pub struct SourceMessage<Key, Value> {
-    /// The output stream this message belongs to. Later in the pipeline the stream is partitioned
-    /// based on this value and is fed to the appropriate source exports
-    pub output: usize,
     /// The time that an external system first observed the message
     ///
     /// Milliseconds since the unix epoch

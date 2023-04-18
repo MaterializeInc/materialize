@@ -13,7 +13,7 @@ use mz_persist_types::columnar::{ColumnGet, Data};
 use mz_persist_types::stats::{JsonStats, PrimitiveStats};
 use prost::Message;
 
-use crate::row::encoding::{DatumToPersist, ProtoDatumToPersist};
+use crate::row::encoding::{DatumToPersist, NullableProtoDatumToPersist};
 use crate::row::ProtoDatum;
 use crate::{Datum, Row, RowArena};
 
@@ -89,13 +89,22 @@ fn as_optional_datum<'a>(row: &'a Row) -> Option<Datum<'a>> {
 /// and max and similarly returned encoded via ProtoDatum. If the column is
 /// empty, the returned min and max will be Datum::Null, otherwise they will
 /// never be null.
-pub(crate) fn proto_datum_min_max_nulls(col: &<Vec<u8> as Data>::Col) -> (Vec<u8>, Vec<u8>, usize) {
+///
+/// NB: `Vec<u8>` and `Option<Vec<u8>>` happen to use the same type for Col.
+/// It's a bit odd to use the Option version for both, but it happens to work
+/// because the non-option version won't generate any Nulls.
+pub(crate) fn proto_datum_min_max_nulls(
+    col: &<Option<Vec<u8>> as Data>::Col,
+) -> (Vec<u8>, Vec<u8>, usize) {
     let (mut min, mut max) = (Row::default(), Row::default());
     let mut null_count = 0;
 
     let mut buf = Row::default();
     for idx in 0..col.len() {
-        ProtoDatumToPersist::decode(ColumnGet::<Vec<u8>>::get(col, idx), &mut buf.packer());
+        NullableProtoDatumToPersist::decode(
+            ColumnGet::<Option<Vec<u8>>>::get(col, idx),
+            &mut buf.packer(),
+        );
         let datum = as_optional_datum(&buf).expect("not enough datums");
         if datum == Datum::Null {
             null_count += 1;
@@ -119,15 +128,22 @@ pub(crate) fn proto_datum_min_max_nulls(col: &<Vec<u8> as Data>::Col) -> (Vec<u8
 /// Returns the JsonStats and null_count for the column of `ScalarType::Jsonb`.
 ///
 /// Each entry in the column is a single Datum encoded as a ProtoDatum.
+///
+/// NB: `Vec<u8>` and `Option<Vec<u8>>` happen to use the same type for Col.
+/// It's a bit odd to use the Option version for both, but it happens to work
+/// because the non-option version won't generate any Nulls.
 pub(crate) fn jsonb_stats_nulls(
-    col: &<Vec<u8> as Data>::Col,
+    col: &<Option<Vec<u8>> as Data>::Col,
 ) -> Result<(JsonStats, usize), String> {
     let mut stats = JsonStats::default();
     let mut null_count = 0;
 
     let mut buf = Row::default();
     for idx in 0..col.len() {
-        ProtoDatumToPersist::decode(ColumnGet::<Vec<u8>>::get(col, idx), &mut buf.packer());
+        NullableProtoDatumToPersist::decode(
+            ColumnGet::<Option<Vec<u8>>>::get(col, idx),
+            &mut buf.packer(),
+        );
         let datum = as_optional_datum(&buf).expect("not enough datums");
         // Datum::Null only shows up at the top level of Jsonb, so we handle it
         // here instead of in the recursing function.

@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-NIGHTLY_RUST_DATE=2023-04-04
+NIGHTLY_RUST_DATE=2023-04-09
 
 cd "$(dirname "$0")/.."
 
@@ -147,6 +147,7 @@ case "$cmd" in
             --env AWS_SECRET_ACCESS_KEY
             --env AWS_SESSION_TOKEN
             --env CI
+            --env CI_COVERAGE_ENABLED
             --env GITHUB_TOKEN
             --env GPG_KEY
             --env LAUNCHDARKLY_API_TOKEN

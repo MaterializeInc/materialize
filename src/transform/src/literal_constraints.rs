@@ -145,9 +145,17 @@ impl LiteralConstraints {
                         typ: mz_repr::RelationType {
                             column_types: key
                                 .iter()
-                                .map(|e| e.typ(&inp_typ.column_types))
+                                .map(|e| {
+                                    e.typ(&inp_typ.column_types)
+                                        // We make sure to not include a null in `expr_eq_literal`.
+                                        .nullable(false)
+                                })
                                 .collect(),
-                            keys: vec![],
+                            // (Note that the key inference for `MirRelationExpr::Constant` inspects
+                            // the constant values to detect keys not listed within the node, but it
+                            // can only detect a single-column key this way. A multi-column key is
+                            // common here, so we explicitly add it.)
+                            keys: vec![(0..key.len()).collect()],
                         },
                     };
 

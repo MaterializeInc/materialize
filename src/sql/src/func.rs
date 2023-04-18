@@ -2374,6 +2374,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "to_timestamp" => Scalar {
             params!(Float64) => UnaryFunc::ToTimestamp(func::ToTimestamp) => TimestampTz, 1158;
         },
+        "translate" => Scalar {
+            params!(String, String, String) => VariadicFunc::Translate => String, 878;
+        },
         "trunc" => Scalar {
             params!(Float32) => UnaryFunc::TruncFloat32(func::TruncFloat32) => Float32, oid::FUNC_TRUNC_F32_OID;
             params!(Float64) => UnaryFunc::TruncFloat64(func::TruncFloat64) => Float64, 1343;
@@ -3028,6 +3031,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
+        "is_rbac_enabled" => Scalar {
+            params!() => UnmaterializableFunc::IsRbacEnabled => Bool, oid::FUNC_IS_RBAC_ENABLED_OID;
+        },
         "make_mz_aclitem" => Scalar {
             params!(String, String, String) => VariadicFunc::MakeMzAclItem => MzAclItem, oid::FUNC_MAKE_MZ_ACL_ITEM_OID;
         },

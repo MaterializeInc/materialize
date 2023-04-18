@@ -847,7 +847,7 @@ where
                 .machine
                 .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
                 .await;
-            if !existed && !self.machine.applier.state().collections.is_tombstone() {
+            if !existed && !self.machine.applier.is_tombstone() {
                 // It's probably surprising to the caller that the shard
                 // becoming a tombstone expired this reader. Possibly the right
                 // thing to do here is pass up a bool to the caller indicating
@@ -920,7 +920,7 @@ where
                     retry
                 }
             });
-            self.machine.applier.fetch_and_update_state().await;
+            self.machine.applier.fetch_and_update_state(None).await;
         }
     }
 
@@ -1161,7 +1161,7 @@ mod tests {
             .expect("cannot serve requested as_of");
 
         // Determine sequence number at outset.
-        let original_seqno_since = subscribe.listen.handle.machine.seqno_since();
+        let original_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
 
         let mut parts = vec![];
 
@@ -1191,14 +1191,14 @@ mod tests {
 
             // SeqNo is not downgraded
             assert_eq!(
-                subscribe.listen.handle.machine.seqno_since(),
+                subscribe.listen.handle.machine.applier.seqno_since(),
                 original_seqno_since
             );
         }
 
         offset += width;
 
-        let mut seqno_since = subscribe.listen.handle.machine.seqno_since();
+        let mut seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
 
         // We're starting out with the original, non-downgraded SeqNo
         assert_eq!(seqno_since, original_seqno_since);
@@ -1260,7 +1260,7 @@ mod tests {
                 .get(&part_seqno)
                 .is_none();
 
-            let new_seqno_since = subscribe.listen.handle.machine.seqno_since();
+            let new_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
             if expect_downgrade {
                 assert!(new_seqno_since > seqno_since);
             } else {

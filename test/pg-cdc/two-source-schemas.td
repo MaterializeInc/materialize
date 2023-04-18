@@ -47,7 +47,7 @@ INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
-contains:item 't1' already exists
+contains:multiple tables with name "t1"
 
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')

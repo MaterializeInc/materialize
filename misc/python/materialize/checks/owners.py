@@ -105,10 +105,17 @@ class Owners(Check):
         return Testdrive(
             # materialize role is not allowed to drop the objects since it is
             # not the owner, verify this:
-            self._drop_objects("materialize", 1, success=False, expensive=True)
-            + self._drop_objects("materialize", 2, success=False)
-            + self._drop_objects("materialize", 3, success=False)
-            + self._drop_objects("materialize", 4, success=False)
+            (
+                # Requires enable_ld_rbac_checks
+                (
+                    self._drop_objects("materialize", 1, success=False, expensive=True)
+                    + self._drop_objects("materialize", 2, success=False)
+                    + self._drop_objects("materialize", 3, success=False)
+                    + self._drop_objects("materialize", 4, success=False)
+                )
+                if self.base_version >= MzVersion.parse("0.51.0-dev")
+                else ""
+            )
             + self._create_objects("owner_role_01", 5)
             + self._create_objects("owner_role_02", 6)
             + self._create_objects("owner_role_03", 7)

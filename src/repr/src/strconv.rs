@@ -34,7 +34,6 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, 
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use mz_lowertest::MzReflect;
-use mz_ore::result::ResultExt;
 use num_traits::Float as NumFloat;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -750,7 +749,7 @@ pub fn parse_array<'a, T, E>(
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     parse_array_inner(s, make_null, gen_elem)
         .map_err(|details| ParseError::invalid_input_syntax("array", s).with_details(details))
@@ -762,7 +761,7 @@ fn parse_array_inner<'a, T, E>(
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, String>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     let mut elems = vec![];
     let buf = &mut LexBuf::new(s);
@@ -771,7 +770,7 @@ where
         bail!("malformed array literal: missing opening left brace");
     }
 
-    let mut gen = |elem| gen_elem(elem).map_err_to_string();
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
     let is_end_of_literal = |c| matches!(c, ',' | '}');
 
@@ -814,7 +813,7 @@ pub fn parse_list<'a, T, E>(
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     parse_list_inner(s, is_element_type_list, make_null, gen_elem)
         .map_err(|details| ParseError::invalid_input_syntax("list", s).with_details(details))
@@ -829,7 +828,7 @@ fn parse_list_inner<'a, T, E>(
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, String>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     let mut elems = vec![];
     let buf = &mut LexBuf::new(s);
@@ -846,7 +845,7 @@ where
     }
 
     // Simplifies calls to `gen_elem` by handling errors
-    let mut gen = |elem| gen_elem(elem).map_err_to_string();
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '\\' | '"');
     let is_end_of_literal = |c| matches!(c, ',' | '}');
 
@@ -904,7 +903,7 @@ pub fn parse_legacy_vector<'a, T, E>(
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     parse_legacy_vector_inner(s, gen_elem)
         .map_err(|details| ParseError::invalid_input_syntax("int2vector", s).with_details(details))
@@ -915,12 +914,12 @@ pub fn parse_legacy_vector_inner<'a, T, E>(
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<T, E>,
 ) -> Result<Vec<T>, String>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     let mut elems = vec![];
     let buf = &mut LexBuf::new(s);
 
-    let mut gen = |elem| gen_elem(elem).map_err_to_string();
+    let mut gen = |elem| gen_elem(elem).map_err(|e| e.to_string());
 
     loop {
         buf.take_while(|ch| ch.is_ascii_whitespace());
@@ -1059,7 +1058,7 @@ pub fn parse_map<'a, V, E>(
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     parse_map_inner(s, is_value_type_map, gen_elem)
         .map_err(|details| ParseError::invalid_input_syntax("map", s).with_details(details))
@@ -1071,7 +1070,7 @@ fn parse_map_inner<'a, V, E>(
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, String>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     let mut map = BTreeMap::new();
     let buf = &mut LexBuf::new(s);
@@ -1095,7 +1094,7 @@ where
             None => Err("expected key".to_owned()),
         }
     };
-    let mut gen_value = |elem| gen_elem(elem).map_err_to_string();
+    let mut gen_value = |elem| gen_elem(elem).map_err(|e| e.to_string());
     let is_special_char = |c| matches!(c, '{' | '}' | ',' | '"' | '=' | '>' | '\\');
     let is_end_of_literal = |c| matches!(c, ',' | '}' | '=');
 
@@ -1188,7 +1187,7 @@ pub fn parse_range<'a, V, E>(
     gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<Range<V>, ParseError>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     Ok(Range {
         inner: parse_range_inner(s, gen_elem).map_err(|details| {
@@ -1202,7 +1201,7 @@ fn parse_range_inner<'a, V, E>(
     mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
 ) -> Result<Option<RangeInner<V>>, String>
 where
-    E: fmt::Display,
+    E: ToString,
 {
     let buf = &mut LexBuf::new(s);
 
@@ -1227,7 +1226,7 @@ where
         Some(',') => None,
         Some(_) => {
             let v = buf.take_while(|c| !matches!(c, ','));
-            let v = gen_elem(Cow::from(v)).map_err_to_string()?;
+            let v = gen_elem(Cow::from(v)).map_err(|e| e.to_string())?;
             Some(v)
         }
         None => bail!("Unexpected end of input."),
@@ -1243,7 +1242,7 @@ where
         Some(']' | ')') => None,
         Some(_) => {
             let v = buf.take_while(|c| !matches!(c, ')' | ']'));
-            let v = gen_elem(Cow::from(v)).map_err_to_string()?;
+            let v = gen_elem(Cow::from(v)).map_err(|e| e.to_string())?;
             Some(v)
         }
         None => bail!("Unexpected end of input."),

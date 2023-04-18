@@ -76,6 +76,7 @@ pub enum UnmaterializableFunc {
     CurrentSchemasWithoutSystem,
     CurrentTimestamp,
     CurrentUser,
+    IsRbacEnabled,
     MzEnvironmentId,
     MzNow,
     MzSessionId,
@@ -101,6 +102,7 @@ impl UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => ScalarType::TimestampTz.nullable(false),
             UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
+            UnmaterializableFunc::IsRbacEnabled => ScalarType::Bool.nullable(false),
             UnmaterializableFunc::MzEnvironmentId => ScalarType::String.nullable(false),
             UnmaterializableFunc::MzNow => ScalarType::MzTimestamp.nullable(false),
             UnmaterializableFunc::MzSessionId => ScalarType::Uuid.nullable(false),
@@ -129,6 +131,7 @@ impl fmt::Display for UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
             UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
+            UnmaterializableFunc::IsRbacEnabled => f.write_str("is_rbac_enabled"),
             UnmaterializableFunc::MzEnvironmentId => f.write_str("mz_environment_id"),
             UnmaterializableFunc::MzNow => f.write_str("mz_now"),
             UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
@@ -153,6 +156,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
             UnmaterializableFunc::ViewableVariables => CurrentSetting(()),
             UnmaterializableFunc::CurrentTimestamp => CurrentTimestamp(()),
             UnmaterializableFunc::CurrentUser => CurrentUser(()),
+            UnmaterializableFunc::IsRbacEnabled => IsRbacEnabled(()),
             UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
             UnmaterializableFunc::MzNow => MzNow(()),
             UnmaterializableFunc::MzSessionId => MzSessionId(()),
@@ -178,6 +182,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
                 CurrentTimestamp(()) => Ok(UnmaterializableFunc::CurrentTimestamp),
                 CurrentSetting(()) => Ok(UnmaterializableFunc::ViewableVariables),
                 CurrentUser(()) => Ok(UnmaterializableFunc::CurrentUser),
+                IsRbacEnabled(()) => Ok(UnmaterializableFunc::IsRbacEnabled),
                 MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
                 MzNow(()) => Ok(UnmaterializableFunc::MzNow),
                 MzSessionId(()) => Ok(UnmaterializableFunc::MzSessionId),
@@ -5706,6 +5711,21 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     )
 }
 
+fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    let string = datums[0].unwrap_str();
+    let from = datums[1].unwrap_str();
+    let to = datums[2].unwrap_str();
+
+    Datum::String(
+        temp_storage.push_string(
+            string
+                .chars()
+                .filter_map(|c| from.find(c).map_or(Some(c), |m| to.chars().nth(m)))
+                .collect(),
+        ),
+    )
+}
+
 fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     if datums.iter().any(|datum| datum.is_null()) {
         // the inputs should all be valid jsonb types, but a casting error might produce a Datum::Null that needs to be propagated
@@ -6604,6 +6624,7 @@ pub enum VariadicFunc {
         elem_type: ScalarType,
     },
     MakeMzAclItem,
+    Translate,
 }
 
 impl VariadicFunc {
@@ -6634,6 +6655,7 @@ impl VariadicFunc {
             VariadicFunc::PadLeading => eager!(pad_leading, temp_storage),
             VariadicFunc::Substr => eager!(substr),
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
+            VariadicFunc::Translate => Ok(eager!(translate, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
             VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
             VariadicFunc::ArrayCreate {
@@ -6685,6 +6707,7 @@ impl VariadicFunc {
             | VariadicFunc::PadLeading
             | VariadicFunc::Substr
             | VariadicFunc::Replace
+            | VariadicFunc::Translate
             | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject
             | VariadicFunc::ArrayCreate { elem_type: _ }
@@ -6719,6 +6742,7 @@ impl VariadicFunc {
             PadLeading => ScalarType::String.nullable(in_nullable),
             Substr => ScalarType::String.nullable(in_nullable),
             Replace => ScalarType::String.nullable(in_nullable),
+            Translate => ScalarType::String.nullable(in_nullable),
             JsonbBuildArray | JsonbBuildObject => ScalarType::Jsonb.nullable(true),
             ArrayCreate { elem_type } => {
                 debug_assert!(
@@ -6814,6 +6838,7 @@ impl VariadicFunc {
             | PadLeading
             | Substr
             | Replace
+            | Translate
             | JsonbBuildArray
             | JsonbBuildObject
             | ArrayCreate { .. }
@@ -6894,6 +6919,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::PadLeading => f.write_str("lpad"),
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::Replace => f.write_str("replace"),
+            VariadicFunc::Translate => f.write_str("translate"),
             VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
             VariadicFunc::ArrayCreate { .. } => f.write_str("array_create"),
@@ -6997,6 +7023,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::PadLeading => PadLeading(()),
             VariadicFunc::Substr => Substr(()),
             VariadicFunc::Replace => Replace(()),
+            VariadicFunc::Translate => Translate(()),
             VariadicFunc::JsonbBuildArray => JsonbBuildArray(()),
             VariadicFunc::JsonbBuildObject => JsonbBuildObject(()),
             VariadicFunc::ArrayCreate { elem_type } => ArrayCreate(elem_type.into_proto()),
@@ -7036,6 +7063,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 PadLeading(()) => Ok(VariadicFunc::PadLeading),
                 Substr(()) => Ok(VariadicFunc::Substr),
                 Replace(()) => Ok(VariadicFunc::Replace),
+                Translate(()) => Ok(VariadicFunc::Translate),
                 JsonbBuildArray(()) => Ok(VariadicFunc::JsonbBuildArray),
                 JsonbBuildObject(()) => Ok(VariadicFunc::JsonbBuildObject),
                 ArrayCreate(elem_type) => Ok(VariadicFunc::ArrayCreate {

@@ -85,26 +85,81 @@ impl Codec for () {
 }
 
 /// An implementation of [PartEncoder] for a single column.
-pub struct SimpleEncoder<'a, T: Data> {
-    col: &'a mut T::Mut,
-    encode: fn(&mut T::Mut, &T),
+pub struct SimpleEncoder<'a, X, T: Data>(SimpleEncoderFn<'a, X, T>);
+
+enum SimpleEncoderFn<'a, X, T: Data> {
+    Cast {
+        col: &'a mut T::Mut,
+        encode: for<'b> fn(&'b X) -> T::Ref<'b>,
+    },
+    Push {
+        col: &'a mut T::Mut,
+        encode: fn(&mut T::Mut, &X),
+    },
 }
 
-impl<'a, T: Data> PartEncoder<'a, T> for SimpleEncoder<'a, T> {
-    fn encode(&mut self, val: &T) {
-        (self.encode)(self.col, val);
+impl<'a, X, T: Data> PartEncoder<'a, X> for SimpleEncoder<'a, X, T> {
+    fn encode(&mut self, val: &X) {
+        match &mut self.0 {
+            SimpleEncoderFn::Cast { col, encode } => ColumnPush::<T>::push(*col, encode(val)),
+            SimpleEncoderFn::Push { col, encode } => encode(col, val),
+        }
     }
 }
 
 /// An implementation of [PartDecoder] for a single column.
-pub struct SimpleDecoder<'a, T: Data> {
+pub struct SimpleDecoder<'a, X, T: Data> {
     col: &'a T::Col,
-    decode: fn(&T::Col, usize, &mut T),
+    decode: fn(T::Ref<'a>, &mut X),
 }
 
-impl<'a, T: Data> PartDecoder<'a, T> for SimpleDecoder<'a, T> {
-    fn decode(&self, idx: usize, val: &mut T) {
-        (self.decode)(self.col, idx, val)
+impl<'a, X, T: Data> PartDecoder<'a, X> for SimpleDecoder<'a, X, T> {
+    fn decode(&self, idx: usize, val: &mut X) {
+        (self.decode)(ColumnGet::<T>::get(self.col, idx), val)
+    }
+}
+
+/// A helper for writing Schemas of a single column.
+pub struct SimpleSchema<X, T: Data>(PhantomData<(X, T)>);
+
+// TODO: Feels like it should be possible to write a single impl of Schema to
+// cover StringSchema, VecU8Schema, MaelstromKeySchema, etc in terms of
+// ColumnRef and ColumnMut. We might have to pull in the rust experts though,
+// the lifetimes get tricky.
+impl<X, T: Data> SimpleSchema<X, T> {
+    /// A helper for [Schema::columns] impls of a single column.
+    pub fn columns() -> Vec<(String, DataType, StatsFn)> {
+        vec![("".to_owned(), T::TYPE, StatsFn::Default)]
+    }
+
+    /// A helper for [Schema::decoder] impls of a single column.
+    pub fn decoder<'a>(
+        mut cols: ColumnsRef<'a>,
+        decode: fn(T::Ref<'a>, &mut X),
+    ) -> Result<SimpleDecoder<'a, X, T>, String> {
+        let col = cols.col::<T>("")?;
+        let () = cols.finish()?;
+        Ok(SimpleDecoder { col, decode })
+    }
+
+    /// A helper for [Schema::encoder] impls of a single column.
+    pub fn encoder<'a>(
+        mut cols: ColumnsMut<'a>,
+        encode: for<'b> fn(&'b X) -> T::Ref<'b>,
+    ) -> Result<SimpleEncoder<'a, X, T>, String> {
+        let col = cols.col::<T>("")?;
+        let () = cols.finish()?;
+        Ok(SimpleEncoder(SimpleEncoderFn::Cast { col, encode }))
+    }
+
+    /// A helper for [Schema::encoder] impls of a single column.
+    pub fn push_encoder<'a>(
+        mut cols: ColumnsMut<'a>,
+        encode: fn(&mut T::Mut, &X),
+    ) -> Result<SimpleEncoder<'a, X, T>, String> {
+        let col = cols.col::<T>("")?;
+        let () = cols.finish()?;
+        Ok(SimpleEncoder(SimpleEncoderFn::Push { col, encode }))
     }
 }
 
@@ -112,44 +167,21 @@ impl<'a, T: Data> PartDecoder<'a, T> for SimpleDecoder<'a, T> {
 #[derive(Debug, Clone, Default)]
 pub struct StringSchema;
 
-// TODO: Feels like it should be possible to write a single impl of Schema to
-// cover StringSchema, VecU8Schema, MaelstromKeySchema, etc in terms of
-// ColumnRef and ColumnMut. We might have to pull in the rust experts though,
-// the lifetimes get tricky.
 impl Schema<String> for StringSchema {
-    type Encoder<'a> = SimpleEncoder<'a, String>;
+    type Encoder<'a> = SimpleEncoder<'a, String, String>;
 
-    type Decoder<'a> = SimpleDecoder<'a, String>;
+    type Decoder<'a> = SimpleDecoder<'a, String, String>;
 
     fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
-        let data_type = DataType {
-            optional: false,
-            format: ColumnFormat::String,
-        };
-        vec![("".to_owned(), data_type, StatsFn::Default)]
+        SimpleSchema::<String, String>::columns()
     }
 
-    fn decoder<'a>(&self, mut cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
-        let col = cols.col::<String>("")?;
-        let () = cols.finish()?;
-        Ok(SimpleDecoder {
-            col,
-            decode: |col, idx, val| {
-                val.clear();
-                val.push_str(col.value(idx));
-            },
-        })
+    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        SimpleSchema::<String, String>::decoder(cols, |val, ret| val.clone_into(ret))
     }
 
-    fn encoder<'a>(&self, mut cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        let col = cols.col::<String>("")?;
-        let () = cols.finish()?;
-        Ok(SimpleEncoder {
-            col,
-            encode: |col, val| {
-                col.push(Some(val));
-            },
-        })
+    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        SimpleSchema::<String, String>::encoder(cols, |val| val.as_str())
     }
 }
 
@@ -177,39 +209,20 @@ impl Codec for String {
 pub struct VecU8Schema;
 
 impl Schema<Vec<u8>> for VecU8Schema {
-    type Encoder<'a> = SimpleEncoder<'a, Vec<u8>>;
+    type Encoder<'a> = SimpleEncoder<'a, Vec<u8>, Vec<u8>>;
 
-    type Decoder<'a> = SimpleDecoder<'a, Vec<u8>>;
+    type Decoder<'a> = SimpleDecoder<'a, Vec<u8>, Vec<u8>>;
 
     fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
-        let data_type = DataType {
-            optional: false,
-            format: ColumnFormat::Bytes,
-        };
-        vec![("".to_owned(), data_type, StatsFn::Default)]
+        SimpleSchema::<Vec<u8>, Vec<u8>>::columns()
     }
 
-    fn decoder<'a>(&self, mut cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
-        let col = cols.col::<Vec<u8>>("")?;
-        let () = cols.finish()?;
-        Ok(SimpleDecoder {
-            col,
-            decode: |col, idx, val| {
-                val.clear();
-                val.extend_from_slice(col.value(idx));
-            },
-        })
+    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        SimpleSchema::<Vec<u8>, Vec<u8>>::decoder(cols, |val, ret| val.clone_into(ret))
     }
 
-    fn encoder<'a>(&self, mut cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        let col = cols.col::<Vec<u8>>("")?;
-        let () = cols.finish()?;
-        Ok(SimpleEncoder {
-            col,
-            encode: |col, val| {
-                col.push(Some(val));
-            },
-        })
+    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        SimpleSchema::<Vec<u8>, Vec<u8>>::encoder(cols, |val| val.as_slice())
     }
 }
 

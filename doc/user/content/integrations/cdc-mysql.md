@@ -79,7 +79,7 @@ If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.con
 
     ```bash
     export CURRENT_HOST='<your-host>'
-    curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json"
+    curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" \
     http://$CURRENT_HOST:8083/connectors/ -d @register-mysql.json
     ```
 

@@ -98,7 +98,7 @@ mod test {
         G: Fn() -> C,
     {
         let result: T = build_obj(s)?;
-        let json = serde_json::to_value(result.clone()).map_err_to_string()?;
+        let json = serde_json::to_value(result.clone()).map_err_to_string_with_causes()?;
         let new_s = serialize::<T, _>(&json, type_name, &mut ctx_gen());
         let new_result = build_obj(&new_s)?;
         if new_result.eq(&result) {
@@ -127,7 +127,7 @@ mod test {
     /// blank catalog.
     fn roundtrip_with_catalog(orig_spec: &str, orig_catalog: &TestCatalog) -> Result<(), String> {
         let orig_rel = build_rel(orig_spec, orig_catalog)?;
-        let json = serde_json::to_value(orig_rel.clone()).map_err_to_string()?;
+        let json = serde_json::to_value(orig_rel.clone()).map_err_to_string_with_causes()?;
         let mut new_catalog = TestCatalog::default();
         let (new_spec, source_defs) = json_to_spec(&json.to_string(), &new_catalog);
         for source_def in source_defs {

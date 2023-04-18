@@ -48,6 +48,7 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::soft_assert;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
@@ -100,7 +101,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
-use crate::{AdapterError, DUMMY_AVAILABILITY_ZONE};
+use crate::{rbac, AdapterError, DUMMY_AVAILABILITY_ZONE};
 
 use self::builtin::{BuiltinCluster, BuiltinSource};
 
@@ -256,12 +257,11 @@ impl CatalogState {
         for object_id in object_ids {
             match object_id {
                 ObjectId::Cluster(id) => {
-                    dependents.extend_from_slice(&self.cluster_dependents(id, seen))
+                    dependents.extend_from_slice(&self.cluster_dependents(id, seen));
                 }
-                id @ ObjectId::ClusterReplica(_) => {
-                    seen.insert(id.clone());
-                    dependents.push(id);
-                }
+                ObjectId::ClusterReplica((cluster_id, replica_id)) => dependents.extend_from_slice(
+                    &self.cluster_replica_dependents(cluster_id, replica_id, seen),
+                ),
                 ObjectId::Database(id) => {
                     dependents.extend_from_slice(&self.database_dependents(id, seen))
                 }
@@ -302,9 +302,33 @@ impl CatalogState {
                 dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
             }
             for replica_id in cluster.replicas().values() {
-                seen.insert(ObjectId::ClusterReplica((cluster_id, *replica_id)));
-                dependents.push(ObjectId::ClusterReplica((cluster_id, *replica_id)));
+                dependents.extend_from_slice(&self.cluster_replica_dependents(
+                    cluster_id,
+                    *replica_id,
+                    seen,
+                ));
             }
+            dependents.push(object_id);
+        }
+        dependents
+    }
+
+    /// Returns all the IDs of all objects that depend on `replica_id`, including `replica_id`
+    /// itself.
+    ///
+    /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
+    /// earlier in the list than the roots. This is particularly userful for the order to drop
+    /// objects.
+    fn cluster_replica_dependents(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        seen: &mut BTreeSet<ObjectId>,
+    ) -> Vec<ObjectId> {
+        let mut dependents = Vec::new();
+        let object_id = ObjectId::ClusterReplica((cluster_id, replica_id));
+        if !seen.contains(&object_id) {
+            seen.insert(object_id.clone());
             dependents.push(object_id);
         }
         dependents
@@ -598,10 +622,10 @@ impl CatalogState {
                 membership.insert(cur_id.clone());
                 let role = self.get_role(cur_id);
                 soft_assert!(
-                    !role.membership().contains(id),
+                    !role.membership().keys().contains(id),
                     "circular membership exists in the catalog"
                 );
-                queue.extend(role.membership().into_iter());
+                queue.extend(role.membership().keys());
             }
         }
         membership
@@ -678,6 +702,7 @@ impl CatalogState {
         name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
     ) {
         if !id.is_system() && !item.is_placeholder() {
             info!(
@@ -705,6 +730,7 @@ impl CatalogState {
             oid,
             used_by: Vec::new(),
             owner_id,
+            privileges,
         };
         for u in entry.uses() {
             match self.entry_by_id.get_mut(u) {
@@ -797,6 +823,7 @@ impl CatalogState {
         linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
     ) {
         let mut log_indexes = BTreeMap::new();
         for (log, index_id) in introspection_source_indexes {
@@ -851,6 +878,7 @@ impl CatalogState {
                     custom_logical_compaction_window: None,
                 }),
                 MZ_SYSTEM_ROLE_ID,
+                Vec::new(),
             );
             log_indexes.insert(log.variant.clone(), index_id);
         }
@@ -866,6 +894,7 @@ impl CatalogState {
                 replica_id_by_name: BTreeMap::new(),
                 replicas_by_id: BTreeMap::new(),
                 owner_id,
+                privileges,
             },
         );
         assert!(self.clusters_by_name.insert(name, id).is_none());
@@ -890,7 +919,7 @@ impl CatalogState {
             process_status: (0..config.location.num_processes())
                 .map(|process_id| {
                     let status = ClusterReplicaProcessStatus {
-                        status: ClusterStatus::NotReady,
+                        status: ClusterStatus::NotReady(None),
                         time: to_datetime((self.config.now)()),
                     };
                     (u64::cast_from(process_id), status)
@@ -1330,7 +1359,14 @@ impl CatalogState {
     /// that the serialized state for two identical catalogs will compare
     /// identically.
     pub fn dump(&self) -> String {
-        serde_json::to_string(&self.database_by_id).expect("serialization cannot fail")
+        // Note: database_by_id is a Map whose keys are not Strings, but serializing
+        // a Map to JSON requires the keys be strings, hence the mapping here.
+        let database_by_str: BTreeMap<String, _> = self
+            .database_by_id
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.debug_json()))
+            .collect();
+        serde_json::to_string(&database_by_str).expect("serialization cannot fail")
     }
 
     pub fn availability_zones(&self) -> &[String] {
@@ -1492,6 +1528,27 @@ pub struct Database {
     pub schemas_by_id: BTreeMap<SchemaId, Schema>,
     pub schemas_by_name: BTreeMap<String, SchemaId>,
     pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
+}
+
+impl Database {
+    /// Returns a `Database` formatted as a `serde_json::Value` that is suitable for debugging. For
+    /// example `CatalogState::dump`.
+    fn debug_json(&self) -> serde_json::Value {
+        let schemas_by_str: BTreeMap<String, _> = self
+            .schemas_by_id
+            .iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+
+        serde_json::json!({
+            "name": self.name,
+            "id": self.id,
+            "schemas_by_id": schemas_by_str,
+            "schemas_by_name": self.schemas_by_name,
+            "owner_id": self.owner_id,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1503,6 +1560,7 @@ pub struct Schema {
     pub items: BTreeMap<String, GlobalId>,
     pub functions: BTreeMap<String, GlobalId>,
     pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -1528,6 +1586,10 @@ impl Role {
 #[serde(try_from = "BTreeMap<String, RoleId>")]
 pub struct RoleMembership {
     /// Key is the role that some role is a member of, value is the grantor role ID.
+    // TODO(jkosh44) This structure does not allow a role to have multiple of the same membership
+    // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
+    // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
+    // migration.
     pub map: BTreeMap<RoleId, RoleId>,
 }
 
@@ -1574,6 +1636,7 @@ pub struct Cluster {
     pub replica_id_by_name: BTreeMap<String, ReplicaId>,
     pub replicas_by_id: BTreeMap<ReplicaId, ClusterReplica>,
     pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
 }
 
 impl Cluster {
@@ -1606,7 +1669,18 @@ impl ClusterReplica {
             .values()
             .fold(ClusterStatus::Ready, |s, p| match (s, p.status) {
                 (ClusterStatus::Ready, ClusterStatus::Ready) => ClusterStatus::Ready,
-                _ => ClusterStatus::NotReady,
+                (x, y) => {
+                    let reason_x = match x {
+                        ClusterStatus::NotReady(reason) => reason,
+                        ClusterStatus::Ready => None,
+                    };
+                    let reason_y = match y {
+                        ClusterStatus::NotReady(reason) => reason,
+                        ClusterStatus::Ready => None,
+                    };
+                    // Arbitrarily pick the first known not-ready reason.
+                    ClusterStatus::NotReady(reason_x.or(reason_y))
+                }
             })
     }
 }
@@ -1625,6 +1699,7 @@ pub struct CatalogEntry {
     oid: u32,
     name: QualifiedItemName,
     owner_id: RoleId,
+    privileges: Vec<MzAclItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2133,12 +2208,41 @@ impl CatalogItem {
         }
     }
 
-    pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
-        let custom_logical_compaction_window = match self {
+    /// The custom compaction window, if any has been set.
+    // Note[btv]: As of 2023-04-10, this is only set
+    // for objects with `is_retained_metrics_object`. That
+    // may not always be true in the future, if we enable user-settable
+    // compaction windows.
+    pub fn custom_logical_compaction_window(&self) -> Option<Duration> {
+        match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
             CatalogItem::Source(source) => source.custom_logical_compaction_window,
             CatalogItem::Index(index) => index.custom_logical_compaction_window,
-            CatalogItem::MaterializedView(_) => None,
+            CatalogItem::MaterializedView(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    /// The initial compaction window, for objects that have one; that is,
+    /// tables, sources, indexes, and MVs.
+    ///
+    /// If `custom_logical_compaction_window()` returns something, use
+    /// that.  Otherwise, use a sensible default (currently 1s).
+    ///
+    /// For objects that do not have the concept of compaction window,
+    /// return nothing.
+    pub fn initial_logical_compaction_window(&self) -> Option<Duration> {
+        let custom_logical_compaction_window = match self {
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -2362,6 +2466,11 @@ impl CatalogEntry {
     pub fn owner_id(&self) -> &RoleId {
         &self.owner_id
     }
+
+    /// Returns the privileges of the entry.
+    pub fn privileges(&self) -> &Vec<MzAclItem> {
+        &self.privileges
+    }
 }
 
 struct AllocatedBuiltinSystemIds<T> {
@@ -2389,7 +2498,12 @@ pub struct SystemObjectMapping {
 #[derive(Debug)]
 pub enum CatalogItemRebuilder {
     SystemSource(CatalogItem),
-    Object(GlobalId, String),
+    Object {
+        id: GlobalId,
+        sql: String,
+        is_retained_metrics_object: bool,
+        custom_logical_compaction_window: Option<Duration>,
+    },
 }
 
 impl CatalogItemRebuilder {
@@ -2407,18 +2521,32 @@ impl CatalogItemRebuilder {
                 .expect("invalid create sql persisted to catalog")
                 .into_element();
             mz_sql::ast::transform::create_stmt_replace_ids(&mut create_stmt, ancestor_ids);
-            Self::Object(id, create_stmt.to_ast_string_stable())
+            Self::Object {
+                id,
+                sql: create_stmt.to_ast_string_stable(),
+                is_retained_metrics_object: entry.item().is_retained_metrics_object(),
+                custom_logical_compaction_window: entry.item().custom_logical_compaction_window(),
+            }
         }
     }
 
     fn build(self, catalog: &Catalog) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
-            Self::Object(id, create_sql) => catalog
-                .parse_item(id, create_sql.clone(), None)
-                .unwrap_or_else(|error| {
-                    panic!("invalid persisted create sql ({error:?}): {create_sql}")
-                }),
+            Self::Object {
+                id,
+                sql,
+                is_retained_metrics_object,
+                custom_logical_compaction_window,
+            } => catalog
+                .parse_item(
+                    id,
+                    sql.clone(),
+                    None,
+                    is_retained_metrics_object,
+                    custom_logical_compaction_window,
+                )
+                .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
     }
 }
@@ -2436,6 +2564,7 @@ pub struct BuiltinMigrationMetadata {
         u32,
         QualifiedItemName,
         RoleId,
+        Vec<MzAclItem>,
         CatalogItemRebuilder,
     )>,
     pub introspection_source_index_updates:
@@ -2521,7 +2650,13 @@ impl Catalog {
         catalog.create_temporary_schema(SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
         let databases = catalog.storage().await.load_databases().await?;
-        for (id, name, owner_id) in databases {
+        for storage::Database {
+            id,
+            name,
+            owner_id,
+            privileges,
+        } in databases
+        {
             let oid = catalog.allocate_oid()?;
             catalog.state.database_by_id.insert(
                 id.clone(),
@@ -2532,6 +2667,7 @@ impl Catalog {
                     schemas_by_id: BTreeMap::new(),
                     schemas_by_name: BTreeMap::new(),
                     owner_id,
+                    privileges,
                 },
             );
             catalog
@@ -2541,7 +2677,14 @@ impl Catalog {
         }
 
         let schemas = catalog.storage().await.load_schemas().await?;
-        for (schema_id, schema_name, database_id, owner_id) in schemas {
+        for storage::Schema {
+            id,
+            name,
+            database_id,
+            owner_id,
+            privileges,
+        } in schemas
+        {
             let oid = catalog.allocate_oid()?;
             let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
                 Some(database_id) => {
@@ -2563,38 +2706,41 @@ impl Catalog {
                 ),
             };
             schemas_by_id.insert(
-                schema_id.clone(),
+                id.clone(),
                 Schema {
                     name: QualifiedSchemaName {
                         database: database_spec,
-                        schema: schema_name.clone(),
+                        schema: name.clone(),
                     },
-                    id: SchemaSpecifier::Id(schema_id.clone()),
+                    id: SchemaSpecifier::Id(id.clone()),
                     oid,
                     items: BTreeMap::new(),
                     functions: BTreeMap::new(),
                     owner_id,
+                    privileges,
                 },
             );
-            schemas_by_name.insert(schema_name.clone(), schema_id);
+            schemas_by_name.insert(name.clone(), id);
         }
 
         let roles = catalog.storage().await.load_roles().await?;
-        for (id, role) in roles {
+        for storage::Role {
+            id,
+            name,
+            attributes,
+            membership,
+        } in roles
+        {
             let oid = catalog.allocate_oid()?;
-            catalog.state.roles_by_name.insert(role.name.clone(), id);
+            catalog.state.roles_by_name.insert(name.clone(), id);
             catalog.state.roles_by_id.insert(
                 id,
                 Role {
-                    name: role.name,
+                    name,
                     id,
                     oid,
-                    attributes: role
-                        .attributes
-                        .expect("serialized role was not properly migrated"),
-                    membership: role
-                        .membership
-                        .expect("serialized role was not properly migrated"),
+                    attributes,
+                    membership,
                 },
             );
         }
@@ -2670,6 +2816,15 @@ impl Catalog {
                                 has_storage_collection: false,
                             }),
                             MZ_SYSTEM_ROLE_ID,
+                            vec![
+                                rbac::default_catalog_privilege(
+                                    mz_sql_parser::ast::ObjectType::Source,
+                                ),
+                                rbac::owner_privilege(
+                                    mz_sql_parser::ast::ObjectType::Source,
+                                    MZ_SYSTEM_ROLE_ID,
+                                ),
+                            ],
                         );
                     }
 
@@ -2691,6 +2846,15 @@ impl Catalog {
                                 is_retained_metrics_object: table.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
+                            vec![
+                                rbac::default_catalog_privilege(
+                                    mz_sql_parser::ast::ObjectType::Table,
+                                ),
+                                rbac::owner_privilege(
+                                    mz_sql_parser::ast::ObjectType::Table,
+                                    MZ_SYSTEM_ROLE_ID,
+                                ),
+                            ],
                         );
                     }
                     Builtin::Index(_) => {
@@ -2702,6 +2866,8 @@ impl Catalog {
                             id,
                             view.sql.into(),
                             None,
+                            false,
+                            None
                         )
                         .unwrap_or_else(|e| {
                             panic!(
@@ -2714,9 +2880,22 @@ impl Catalog {
                             )
                         });
                         let oid = catalog.allocate_oid()?;
-                        catalog
-                            .state
-                            .insert_item(id, oid, name, item, MZ_SYSTEM_ROLE_ID);
+                        catalog.state.insert_item(
+                            id,
+                            oid,
+                            name,
+                            item,
+                            MZ_SYSTEM_ROLE_ID,
+                            vec![
+                                rbac::default_catalog_privilege(
+                                    mz_sql_parser::ast::ObjectType::View,
+                                ),
+                                rbac::owner_privilege(
+                                    mz_sql_parser::ast::ObjectType::View,
+                                    MZ_SYSTEM_ROLE_ID,
+                                ),
+                            ],
+                        );
                     }
 
                     Builtin::Type(_) => unreachable!("loaded separately"),
@@ -2729,6 +2908,7 @@ impl Catalog {
                             name.clone(),
                             CatalogItem::Func(Func { inner: func.inner }),
                             MZ_SYSTEM_ROLE_ID,
+                            Vec::new(),
                         );
                     }
 
@@ -2755,6 +2935,15 @@ impl Catalog {
                                 is_retained_metrics_object: coll.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
+                            vec![
+                                rbac::default_catalog_privilege(
+                                    mz_sql_parser::ast::ObjectType::Source,
+                                ),
+                                rbac::owner_privilege(
+                                    mz_sql_parser::ast::ObjectType::Source,
+                                    MZ_SYSTEM_ROLE_ID,
+                                ),
+                            ],
                         );
                     }
                 }
@@ -2762,7 +2951,14 @@ impl Catalog {
         }
 
         let clusters = catalog.storage().await.load_clusters().await?;
-        for (id, name, linked_object_id, owner_id) in clusters {
+        for storage::Cluster {
+            id,
+            name,
+            linked_object_id,
+            owner_id,
+            privileges,
+        } in clusters
+        {
             let introspection_source_index_gids = catalog
                 .storage()
                 .await
@@ -2794,13 +2990,25 @@ impl Catalog {
                 )
                 .await?;
 
-            catalog
-                .state
-                .insert_cluster(id, name, linked_object_id, all_indexes, owner_id);
+            catalog.state.insert_cluster(
+                id,
+                name,
+                linked_object_id,
+                all_indexes,
+                owner_id,
+                privileges,
+            );
         }
 
         let replicas = catalog.storage().await.load_cluster_replicas().await?;
-        for (cluster_id, replica_id, name, serialized_config, owner_id) in replicas {
+        for storage::ClusterReplica {
+            cluster_id,
+            replica_id,
+            name,
+            serialized_config,
+            owner_id,
+        } in replicas
+        {
             let logging = ReplicaLogging {
                 log_logging: serialized_config.logging.log_logging,
                 interval: serialized_config.logging.interval,
@@ -2842,6 +3050,8 @@ impl Catalog {
                             id,
                             index.sql.into(),
                             None,
+                            index.is_retained_metrics_object,
+                            if index.is_retained_metrics_object { Some(catalog.state.system_config().metrics_retention())} else { None },
                         )
                         .unwrap_or_else(|e| {
                             panic!(
@@ -2853,19 +3063,14 @@ impl Catalog {
                                 index.name, e
                             )
                         });
-                    let CatalogItem::Index(catalog_index) = &mut item else {
+                    let CatalogItem::Index(_) = &mut item else {
                         panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                     };
-                    if index.is_retained_metrics_object {
-                        catalog_index.is_retained_metrics_object = true;
-                        catalog_index.custom_logical_compaction_window =
-                            Some(catalog.state.system_config().metrics_retention());
-                    }
 
                     let oid = catalog.allocate_oid()?;
                     catalog
                         .state
-                        .insert_item(id, oid, name, item, MZ_SYSTEM_ROLE_ID);
+                        .insert_item(id, oid, name, item, MZ_SYSTEM_ROLE_ID, Vec::new());
                 }
                 Builtin::Log(_)
                 | Builtin::Table(_)
@@ -3262,6 +3467,10 @@ impl Catalog {
                     depends_on: vec![],
                 }),
                 MZ_SYSTEM_ROLE_ID,
+                vec![
+                    rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Type),
+                    rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Type, MZ_SYSTEM_ROLE_ID),
+                ],
             );
         }
 
@@ -3493,6 +3702,7 @@ impl Catalog {
                 entry.oid,
                 name,
                 entry.owner_id,
+                entry.privileges.clone(),
                 item_rebuilder,
             ));
         }
@@ -3537,10 +3747,12 @@ impl Catalog {
         for id in migration_metadata.all_drop_ops.drain(..) {
             self.state.drop_item(id);
         }
-        for (id, oid, name, owner_id, item_rebuilder) in migration_metadata.all_create_ops.drain(..)
+        for (id, oid, name, owner_id, privileges, item_rebuilder) in
+            migration_metadata.all_create_ops.drain(..)
         {
             let item = item_rebuilder.build(self);
-            self.state.insert_item(id, oid, name, item, owner_id);
+            self.state
+                .insert_item(id, oid, name, item, owner_id, privileges);
         }
         for (cluster_id, updates) in &migration_metadata.introspection_source_index_updates {
             let log_indexes = &mut self
@@ -3570,7 +3782,14 @@ impl Catalog {
             let entry = self.get_entry(&id);
             let item = entry.item();
             let serialized_item = Self::serialize_item(item);
-            tx.insert_item(id, schema_id, &name, serialized_item, entry.owner_id)?;
+            tx.insert_item(
+                id,
+                schema_id,
+                &name,
+                serialized_item,
+                entry.owner_id,
+                entry.privileges.clone(),
+            )?;
         }
         tx.update_system_object_mappings(std::mem::take(
             &mut migration_metadata.migrated_system_object_mappings,
@@ -3618,8 +3837,8 @@ impl Catalog {
         let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
-        while let Some((id, name, def, owner_id)) = items.pop_front() {
-            let d_c = def.clone();
+        while let Some(item) = items.pop_front() {
+            let d_c = item.definition.clone();
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
             // the only goal is to produce a nicer error message; we'll bail out
@@ -3627,7 +3846,7 @@ impl Catalog {
             static LOGGING_ERROR: Lazy<Regex> =
                 Lazy::new(|| Regex::new("mz_catalog.[^']*").expect("valid regex"));
 
-            let item = match c.deserialize_item(id, d_c) {
+            let catalog_item = match c.deserialize_item(item.id, d_c) {
                 Ok(item) => item,
                 Err(AdapterError::SqlCatalog(SqlCatalogError::UnknownItem(name)))
                     if LOGGING_ERROR.is_match(&name.to_string()) =>
@@ -3641,7 +3860,7 @@ impl Catalog {
                     awaiting_id_dependencies
                         .entry(missing_dep)
                         .or_default()
-                        .push((id, name, def, owner_id));
+                        .push(item);
                     continue;
                 }
                 // If we were missing a dependency, wait for it to be added.
@@ -3650,44 +3869,57 @@ impl Catalog {
                 ))) => {
                     match GlobalId::from_str(&missing_dep) {
                         Ok(id) => {
-                            awaiting_id_dependencies
-                                .entry(id)
-                                .or_default()
-                                .push((id, name, def, owner_id));
+                            awaiting_id_dependencies.entry(id).or_default().push(item);
                         }
                         Err(_) => {
                             awaiting_name_dependencies
                                 .entry(missing_dep)
                                 .or_default()
-                                .push((id, name, def, owner_id));
+                                .push(item);
                         }
                     }
                     continue;
                 }
                 Err(e) => {
                     return Err(Error::new(ErrorKind::Corruption {
-                        detail: format!("failed to deserialize item {} ({}): {}", id, name, e),
+                        detail: format!(
+                            "failed to deserialize item {} ({}): {}",
+                            item.id, item.name, e
+                        ),
                     }))
                 }
             };
             let oid = c.allocate_oid()?;
 
             // Enqueue any items waiting on this dependency.
-            if let Some(dependent_items) = awaiting_id_dependencies.remove(&id) {
+            if let Some(dependent_items) = awaiting_id_dependencies.remove(&item.id) {
                 items.extend(dependent_items);
             }
-            let full_name = c.resolve_full_name(&name, None);
+            let full_name = c.resolve_full_name(&item.name, None);
             if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name.to_string())
             {
                 items.extend(dependent_items);
             }
 
-            c.state.insert_item(id, oid, name, item, owner_id);
+            c.state.insert_item(
+                item.id,
+                oid,
+                item.name,
+                catalog_item,
+                item.owner_id,
+                item.privileges,
+            );
         }
 
         // Error on any unsatisfied dependencies.
         if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
-            let (id, name, _owner_id, _def) = dependents.remove(0);
+            let storage::Item {
+                id,
+                name,
+                definition: _,
+                owner_id: _,
+                privileges: _,
+            } = dependents.remove(0);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",
@@ -3699,7 +3931,13 @@ impl Catalog {
         }
 
         if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
-            let (id, name, _def, _owner_id) = dependents.remove(0);
+            let storage::Item {
+                id,
+                name,
+                definition: _,
+                owner_id: _,
+                privileges: _,
+            } = dependents.remove(0);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",
@@ -4155,6 +4393,10 @@ impl Catalog {
                 items: BTreeMap::new(),
                 functions: BTreeMap::new(),
                 owner_id,
+                privileges: vec![rbac::owner_privilege(
+                    mz_sql_parser::ast::ObjectType::Schema,
+                    owner_id,
+                )],
             },
         );
         Ok(())
@@ -4189,6 +4431,16 @@ impl Catalog {
     pub(crate) fn object_dependents(&self, object_ids: Vec<ObjectId>) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.object_dependents(object_ids, &mut seen)
+    }
+
+    pub(crate) fn cluster_replica_dependents(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> Vec<ObjectId> {
+        let mut seen = BTreeSet::new();
+        self.state
+            .cluster_replica_dependents(cluster_id, replica_id, &mut seen)
     }
 
     pub(crate) fn item_dependents(&self, item_id: GlobalId) -> Vec<ObjectId> {
@@ -4694,8 +4946,27 @@ impl Catalog {
                     public_schema_oid,
                     owner_id,
                 } => {
-                    let database_id = tx.insert_database(&name, owner_id)?;
-                    let schema_id = tx.insert_schema(database_id, DEFAULT_SCHEMA, owner_id)?;
+                    let database_privileges = vec![rbac::owner_privilege(
+                        mz_sql_parser::ast::ObjectType::Database,
+                        owner_id,
+                    )];
+                    let default_schema_privileges = vec![
+                        rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Schema, owner_id),
+                        // Default schemas provide USAGE privileges to PUBLIC by default.
+                        MzAclItem {
+                            grantee: RoleId::Public,
+                            grantor: owner_id,
+                            acl_mode: AclMode::USAGE,
+                        },
+                    ];
+                    let database_id =
+                        tx.insert_user_database(&name, owner_id, database_privileges.clone())?;
+                    let schema_id = tx.insert_user_schema(
+                        database_id,
+                        DEFAULT_SCHEMA,
+                        owner_id,
+                        default_schema_privileges.clone(),
+                    )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4719,6 +4990,7 @@ impl Catalog {
                             schemas_by_id: BTreeMap::new(),
                             schemas_by_name: BTreeMap::new(),
                             owner_id,
+                            privileges: database_privileges,
                         },
                     );
                     state
@@ -4749,6 +5021,7 @@ impl Catalog {
                         database_id,
                         DEFAULT_SCHEMA.to_string(),
                         owner_id,
+                        default_schema_privileges,
                     )?;
                 }
                 Op::CreateSchema {
@@ -4770,7 +5043,16 @@ impl Catalog {
                             )));
                         }
                     };
-                    let schema_id = tx.insert_schema(database_id, &schema_name, owner_id)?;
+                    let privileges = vec![rbac::owner_privilege(
+                        mz_sql::ast::ObjectType::Schema,
+                        owner_id,
+                    )];
+                    let schema_id = tx.insert_user_schema(
+                        database_id,
+                        &schema_name,
+                        owner_id,
+                        privileges.clone(),
+                    )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -4793,6 +5075,7 @@ impl Catalog {
                         database_id,
                         schema_name,
                         owner_id,
+                        privileges,
                     )?;
                 }
                 Op::CreateRole {
@@ -4853,12 +5136,17 @@ impl Catalog {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
+                    let privileges = vec![rbac::owner_privilege(
+                        mz_sql::ast::ObjectType::Cluster,
+                        owner_id,
+                    )];
                     tx.insert_user_cluster(
                         id,
                         &name,
                         linked_object_id,
                         &introspection_sources,
                         owner_id,
+                        privileges.clone(),
                     )?;
                     state.add_to_audit_log(
                         oracle_write_ts,
@@ -4882,6 +5170,7 @@ impl Catalog {
                         linked_object_id,
                         introspection_sources,
                         owner_id,
+                        privileges,
                     );
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
                     if let Some(linked_object_id) = linked_object_id {
@@ -4977,6 +5266,16 @@ impl Catalog {
                         )));
                     }
 
+                    let mut privileges = vec![rbac::owner_privilege(item.typ().into(), owner_id)];
+                    // Everyone has default USAGE privileges on types.
+                    if item.typ() == CatalogItemType::Type {
+                        privileges.push(MzAclItem {
+                            grantee: RoleId::Public,
+                            grantor: owner_id,
+                            acl_mode: AclMode::USAGE,
+                        });
+                    }
+
                     if item.is_temporary() {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                             || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
@@ -5018,7 +5317,14 @@ impl Catalog {
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = Self::serialize_item(&item);
-                        tx.insert_item(id, schema_id, &name.item, serialized_item, owner_id)?;
+                        tx.insert_item(
+                            id,
+                            schema_id,
+                            &name.item,
+                            serialized_item,
+                            owner_id,
+                            privileges.clone(),
+                        )?;
                     }
 
                     if Self::should_audit_log_item(&item) {
@@ -5060,7 +5366,7 @@ impl Catalog {
                             details,
                         )?;
                     }
-                    state.insert_item(id, oid, name, item, owner_id);
+                    state.insert_item(id, oid, name, item, owner_id, privileges);
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
                 Op::DropObject(id) => match id {
@@ -5263,7 +5569,10 @@ impl Catalog {
                             .replica_id_by_name
                             .remove(&replica.name)
                             .expect("catalog out of sync");
-                        assert!(cluster.replica_id_by_name.len() == cluster.replicas_by_id.len());
+                        assert_eq!(
+                            cluster.replica_id_by_name.len(),
+                            cluster.replicas_by_id.len()
+                        );
                     }
                     ObjectId::Item(id) => {
                         let entry = state.get_entry(&id);
@@ -5327,14 +5636,22 @@ impl Catalog {
                         audit_events,
                         EventType::Grant,
                         ObjectType::Role,
-                        EventDetails::GrantRoleV1(mz_audit_log::GrantRoleV1 {
+                        EventDetails::GrantRoleV2(mz_audit_log::GrantRoleV2 {
                             role_id: role_id.to_string(),
                             member_id: member_id.to_string(),
                             grantor_id: grantor_id.to_string(),
+                            executed_by: session
+                                .map(|session| session.role_id())
+                                .unwrap_or(&MZ_SYSTEM_ROLE_ID)
+                                .to_string(),
                         }),
                     )?;
                 }
-                Op::RevokeRole { role_id, member_id } => {
+                Op::RevokeRole {
+                    role_id,
+                    member_id,
+                    grantor_id,
+                } => {
                     state.ensure_not_reserved_role(&member_id)?;
                     state.ensure_not_reserved_role(&role_id)?;
                     builtin_table_updates
@@ -5351,9 +5668,14 @@ impl Catalog {
                         audit_events,
                         EventType::Revoke,
                         ObjectType::Role,
-                        EventDetails::RevokeRoleV1(mz_audit_log::RevokeRoleV1 {
+                        EventDetails::RevokeRoleV2(mz_audit_log::RevokeRoleV2 {
                             role_id: role_id.to_string(),
                             member_id: member_id.to_string(),
+                            grantor_id: grantor_id.to_string(),
+                            executed_by: session
+                                .map(|session| session.role_id())
+                                .unwrap_or(&MZ_SYSTEM_ROLE_ID)
+                                .to_string(),
                         }),
                     )?;
                 }
@@ -5479,6 +5801,11 @@ impl Catalog {
                         }
                         builtin_table_updates.push(state.pack_cluster_update(&cluster_name, -1));
                         let cluster = state.get_cluster_mut(id);
+                        Self::update_privilege_owners(
+                            &mut cluster.privileges,
+                            cluster.owner_id,
+                            new_owner,
+                        );
                         cluster.owner_id = new_owner;
                         tx.update_cluster(id, cluster)?;
                         builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
@@ -5523,6 +5850,11 @@ impl Catalog {
                         let database = state.get_database(&id);
                         builtin_table_updates.push(state.pack_database_update(database, -1));
                         let database = state.get_database_mut(&id);
+                        Self::update_privilege_owners(
+                            &mut database.privileges,
+                            database.owner_id,
+                            new_owner,
+                        );
                         database.owner_id = new_owner;
                         let database = state.get_database(&id);
                         tx.update_database(id, database)?;
@@ -5539,6 +5871,11 @@ impl Catalog {
                             .schemas_by_id
                             .get_mut(&schema_id)
                             .expect("catalog out of sync");
+                        Self::update_privilege_owners(
+                            &mut schema.privileges,
+                            schema.owner_id,
+                            new_owner,
+                        );
                         schema.owner_id = new_owner;
                         tx.update_schema(Some(database_id), schema_id, schema)?;
                         builtin_table_updates.push(state.pack_schema_update(
@@ -5560,6 +5897,11 @@ impl Catalog {
                         }
                         builtin_table_updates.extend(state.pack_item_update(id, -1));
                         let entry = state.get_entry_mut(&id);
+                        Self::update_privilege_owners(
+                            &mut entry.privileges,
+                            entry.owner_id,
+                            new_owner,
+                        );
                         entry.owner_id = new_owner;
                         tx.update_item(
                             id,
@@ -5712,6 +6054,7 @@ impl Catalog {
             database_id: DatabaseId,
             schema_name: String,
             owner_id: RoleId,
+            privileges: Vec<MzAclItem>,
         ) -> Result<(), AdapterError> {
             info!(
                 "create schema {}.{}",
@@ -5734,6 +6077,7 @@ impl Catalog {
                     items: BTreeMap::new(),
                     functions: BTreeMap::new(),
                     owner_id,
+                    privileges,
                 },
             );
             db.schemas_by_name.insert(schema_name, id.clone());
@@ -5745,6 +6089,63 @@ impl Catalog {
             Ok(())
         }
         Ok(())
+    }
+
+    /// Update privileges to reflect the new owner. Based off of PostgreSQL's
+    /// implementation:
+    /// <https://github.com/postgres/postgres/blob/43a33ef54e503b61f269d088f2623ba3b9484ad7/src/backend/utils/adt/acl.c#L1078-L1177>
+    fn update_privilege_owners(
+        privileges: &mut Vec<MzAclItem>,
+        old_owner: RoleId,
+        new_owner: RoleId,
+    ) {
+        let mut new_present = false;
+        for privilege in privileges.iter_mut() {
+            // Old owner's granted privilege are updated to be granted by the new
+            // owner.
+            if privilege.grantor == old_owner {
+                privilege.grantor = new_owner;
+            } else if privilege.grantor == new_owner {
+                new_present = true;
+            }
+            // Old owner's privileges is given to the new owner.
+            if privilege.grantee == old_owner {
+                privilege.grantee = new_owner;
+            } else if privilege.grantee == new_owner {
+                new_present = true;
+            }
+        }
+
+        // If the old privilege list contained references to the new owner, we may
+        // have created duplicate entries. Here we try and consolidate them. This
+        // is inspired by PostgreSQL's algorithm but not identical.
+        if new_present {
+            // Group privileges by (grantee, grantor).
+            let privilege_map: BTreeMap<_, Vec<_>> =
+                privileges
+                    .into_iter()
+                    .fold(BTreeMap::new(), |mut accum, privilege| {
+                        accum
+                            .entry((privilege.grantee, privilege.grantor))
+                            .or_default()
+                            .push(privilege);
+                        accum
+                    });
+            // Consolidate and update all privileges.
+            *privileges = privilege_map
+                .into_iter()
+                .map(|((grantee, grantor), values)|
+                    // Combine the acl_mode of all mz_aclitems with the same grantee and grantor.
+                    values.into_iter().fold(
+                        MzAclItem::empty(grantee, grantor),
+                        |mut accum, mz_aclitem| {
+                            accum.acl_mode =
+                                accum.acl_mode.union(mz_aclitem.acl_mode);
+                            accum
+                        },
+                    ))
+                .collect();
+        }
     }
 
     pub async fn consolidate(&self, collections: &[mz_stash::Id]) -> Result<(), AdapterError> {
@@ -5803,7 +6204,9 @@ impl Catalog {
         id: GlobalId,
         SerializedCatalogItem::V1 { create_sql }: SerializedCatalogItem,
     ) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()))
+        // TODO - The `None` needs to be changed if we ever allow custom
+        // logical compaction windows in user-defined objects.
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()), false, None)
     }
 
     // Parses the given SQL string into a `CatalogItem`.
@@ -5813,6 +6216,8 @@ impl Catalog {
         id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
+        is_retained_metrics_object: bool,
+        custom_logical_compaction_window: Option<Duration>,
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
         enable_features_required_for_catalog_open(&mut session_catalog);
@@ -5828,8 +6233,8 @@ impl Catalog {
                 defaults: table.defaults,
                 conn_id: None,
                 depends_on,
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
+                custom_logical_compaction_window,
+                is_retained_metrics_object,
             }),
             Plan::CreateSource(CreateSourcePlan {
                 source,
@@ -5860,8 +6265,8 @@ impl Catalog {
                 desc: source.desc,
                 timeline,
                 depends_on,
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
+                custom_logical_compaction_window,
+                is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let optimizer = Optimizer::logical_optimizer();
@@ -5896,8 +6301,8 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
                 cluster_id: index.cluster_id,
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
+                custom_logical_compaction_window,
+                is_retained_metrics_object,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,
@@ -6216,6 +6621,7 @@ pub enum Op {
     RevokeRole {
         role_id: RoleId,
         member_id: RoleId,
+        grantor_id: RoleId,
     },
     UpdateClusterReplicaStatus {
         event: ClusterEvent,
@@ -6609,6 +7015,16 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_role(id)
     }
 
+    fn get_roles(&self) -> Vec<&dyn CatalogRole> {
+        // `as` is ok to use to cast to a trait object.
+        #[allow(clippy::as_conversions)]
+        self.state
+            .roles_by_id
+            .values()
+            .map(|role| role as &dyn CatalogRole)
+            .collect()
+    }
+
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
         self.state.collect_role_membership(id)
     }
@@ -6816,12 +7232,8 @@ impl mz_sql::catalog::CatalogRole for Role {
         self.attributes.create_cluster
     }
 
-    fn membership(&self) -> BTreeSet<&RoleId> {
-        self.membership
-            .map
-            .iter()
-            .map(|(role_id, _grantor_id)| role_id)
-            .collect()
+    fn membership(&self) -> &BTreeMap<RoleId, RoleId> {
+        &self.membership.map
     }
 }
 
@@ -6967,6 +7379,8 @@ mod tests {
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
+    use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+    use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names;
@@ -7849,7 +8263,7 @@ mod tests {
                     migration_metadata
                         .all_create_ops
                         .into_iter()
-                        .map(|(_, _, name, _, _)| name.item)
+                        .map(|(_, _, name, _, _, _)| name.item)
                         .collect::<Vec<_>>(),
                     test_case.expected_all_create_ops,
                     "{} test failed with wrong all create ops",
@@ -7943,8 +8357,8 @@ mod tests {
                         item,
                         name: QualifiedItemName {
                             qualifiers: ItemQualifiers {
-                                database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::new(1)),
-                                schema_spec: SchemaSpecifier::Id(SchemaId::new(3)),
+                                database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::User(1)),
+                                schema_spec: SchemaSpecifier::Id(SchemaId::User(3)),
                             },
                             item: "v".to_string(),
                         },
@@ -7969,5 +8383,81 @@ mod tests {
                 item => panic!("expected view, got {}", item.typ()),
             }
         }
+    }
+
+    #[test]
+    fn test_update_privilege_owners() {
+        let old_owner = RoleId::User(1);
+        let new_owner = RoleId::User(2);
+        let other_role = RoleId::User(3);
+
+        // older owner exists as grantor.
+        let mut privileges = vec![
+            MzAclItem {
+                grantee: other_role,
+                grantor: old_owner,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: other_role,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT,
+            },
+        ];
+        Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
+        assert_eq!(
+            vec![MzAclItem {
+                grantee: other_role,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
+            }],
+            privileges
+        );
+
+        // older owner exists as grantee.
+        let mut privileges = vec![
+            MzAclItem {
+                grantee: old_owner,
+                grantor: other_role,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: new_owner,
+                grantor: other_role,
+                acl_mode: AclMode::SELECT,
+            },
+        ];
+        Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
+        assert_eq!(
+            vec![MzAclItem {
+                grantee: new_owner,
+                grantor: other_role,
+                acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
+            }],
+            privileges
+        );
+
+        // older owner exists as grantee and grantor.
+        let mut privileges = vec![
+            MzAclItem {
+                grantee: old_owner,
+                grantor: old_owner,
+                acl_mode: AclMode::UPDATE,
+            },
+            MzAclItem {
+                grantee: new_owner,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT,
+            },
+        ];
+        Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
+        assert_eq!(
+            vec![MzAclItem {
+                grantee: new_owner,
+                grantor: new_owner,
+                acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
+            }],
+            privileges
+        );
     }
 }

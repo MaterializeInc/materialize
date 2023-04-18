@@ -906,7 +906,8 @@ VIEW ov
           ],
           "limit": 5,
           "offset": 0,
-          "monotonic": false
+          "monotonic": false,
+          "expected_group_size": null
         }
       }
     }
@@ -1577,7 +1578,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                               "column_types": [
                                 {
                                   "scalar_type": "Int32",
-                                  "nullable": true
+                                  "nullable": false
                                 },
                                 {
                                   "scalar_type": "Int32",
@@ -1623,7 +1624,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                             "column_types": [
                                                               {
                                                                 "scalar_type": "Int32",
-                                                                "nullable": true
+                                                                "nullable": false
                                                               },
                                                               {
                                                                 "scalar_type": "Int32",
@@ -2136,7 +2137,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                           "order_key": [],
                           "limit": 1,
                           "offset": 0,
-                          "monotonic": false
+                          "monotonic": false,
+                          "expected_group_size": null
                         }
                       },
                       "body": {
@@ -2321,7 +2323,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                               "order_key": [],
                               "limit": 1,
                               "offset": 0,
-                              "monotonic": false
+                              "monotonic": false,
+                              "expected_group_size": null
                             }
                           },
                           "body": {
@@ -4004,9 +4007,9 @@ FROM
                                       "filters": {
                                         "literal_equality": false,
                                         "like": false,
-                                        "is_null": true,
+                                        "is_null": false,
                                         "literal_inequality": 0,
-                                        "any_filter": false
+                                        "any_filter": true
                                       },
                                       "input": 1
                                     }
@@ -4026,9 +4029,9 @@ FROM
                                         "filters": {
                                           "literal_equality": false,
                                           "like": false,
-                                          "is_null": true,
+                                          "is_null": false,
                                           "literal_inequality": 0,
-                                          "any_filter": false
+                                          "any_filter": true
                                         },
                                         "input": 0
                                       }
@@ -4040,55 +4043,14 @@ FROM
                           },
                           "predicates": [
                             {
-                              "CallVariadic": {
-                                "func": "Or",
-                                "exprs": [
-                                  {
-                                    "CallBinary": {
-                                      "func": "NotEq",
-                                      "expr1": {
-                                        "Column": 0
-                                      },
-                                      "expr2": {
-                                        "Column": 4
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "CallVariadic": {
-                                      "func": "And",
-                                      "exprs": [
-                                        {
-                                          "CallUnary": {
-                                            "func": {
-                                              "Not": null
-                                            },
-                                            "expr": {
-                                              "CallUnary": {
-                                                "func": {
-                                                  "IsNull": null
-                                                },
-                                                "expr": {
-                                                  "Column": 4
-                                                }
-                                              }
-                                            }
-                                          }
-                                        },
-                                        {
-                                          "CallUnary": {
-                                            "func": {
-                                              "IsNull": null
-                                            },
-                                            "expr": {
-                                              "Column": 0
-                                            }
-                                          }
-                                        }
-                                      ]
-                                    }
-                                  }
-                                ]
+                              "CallBinary": {
+                                "func": "NotEq",
+                                "expr1": {
+                                  "Column": 0
+                                },
+                                "expr2": {
+                                  "Column": 4
+                                }
                               }
                             }
                           ]

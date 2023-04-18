@@ -101,7 +101,6 @@
 //! if/when the errors are retracted.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::Hash;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
@@ -109,9 +108,8 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::{AsCollection, ExchangeData};
+use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
-use timely::container::columnation::Columnation;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -135,11 +133,12 @@ use mz_timely_util::probe::{self, ProbeNotify};
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::logging::compute::LogImportFrontiers;
-use crate::typedefs::ErrSpine;
+use crate::typedefs::{ErrSpine, RowKeySpine};
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 
 pub mod context;
+mod errors;
 mod flat_map;
 mod join;
 mod reduce;
@@ -299,13 +298,11 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                     // Build declared objects.
                     for object in dataflow.objects_to_build {
-                        // This token is wired up on every feedback edge and will stop iteration
-                        // when dropped.
                         let object_token = Rc::new(());
-                        let weak_token = Rc::downgrade(&object_token);
-
-                        let bundle = context.render_recursive_plan(weak_token, 0, object.plan);
+                        context.shutdown_token = Some(Rc::downgrade(&object_token));
                         tokens.insert(object.id, object_token);
+
+                        let bundle = context.render_recursive_plan(0, object.plan);
                         context.insert_id(Id::Global(object.id), bundle);
                     }
 
@@ -355,6 +352,10 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
+                    let object_token = Rc::new(());
+                    context.shutdown_token = Some(Rc::downgrade(&object_token));
+                    tokens.insert(object.id, object_token);
+
                     context.build_object(object);
                 }
 
@@ -617,12 +618,7 @@ where
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(
-        &mut self,
-        token: Weak<()>,
-        level: usize,
-        plan: Plan,
-    ) -> CollectionBundle<G, Row> {
+    pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionBundle<G, Row> {
         if let Plan::LetRec { ids, values, body } = plan {
             // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
@@ -646,32 +642,36 @@ where
             }
             // Now render each of the bindings.
             for (id, value) in ids.iter().zip(values.into_iter()) {
-                let bundle = self.render_recursive_plan(Weak::clone(&token), level + 1, value);
+                let bundle = self.render_recursive_plan(level + 1, value);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, err) = bundle.collection.clone().unwrap();
                 self.insert_id(Id::Local(*id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
+
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                use crate::typedefs::RowKeySpine;
-                oks_v.set(
-                    &oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation")
-                        .with_token(Weak::clone(&token)),
-                );
+                let mut oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation");
+                if let Some(token) = &self.shutdown_token {
+                    oks = oks.with_token(Weak::clone(token));
+                }
+                oks_v.set(&oks);
+
                 // Set err variable to the distinct elements of `err`.
                 // Distinctness is important, as we otherwise might add the same error each iteration,
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
-                err_v.set(
-                    &err.arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
-                        .reduce_abelian::<_, ErrSpine<_, _, _>>(
-                            "Distinct recursive err",
-                            move |_k, _s, t| t.push(((), 1)),
-                        )
-                        .as_collection(|k, _| k.clone())
-                        .with_token(Weak::clone(&token)),
-                );
+                let mut errs = err
+                    .arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
+                    .reduce_abelian::<_, ErrSpine<_, _, _>>(
+                        "Distinct recursive err",
+                        move |_k, _s, t| t.push(((), 1)),
+                    )
+                    .as_collection(|k, _| k.clone());
+                if let Some(token) = &self.shutdown_token {
+                    errs = errs.with_token(Weak::clone(token));
+                }
+                err_v.set(&errs);
             }
             // Now extract each of the bindings into the outer scope.
             for id in ids.into_iter() {
@@ -686,7 +686,7 @@ where
                 );
             }
 
-            self.render_recursive_plan(token, level, *body)
+            self.render_recursive_plan(level, *body)
         } else {
             self.render_plan(plan)
         }
@@ -935,56 +935,5 @@ impl<T: Timestamp + Lattice> RenderTimestamp for Product<mz_repr::Timestamp, T> 
     }
     fn step_back(&self) -> Self {
         Product::new(self.outer.saturating_sub(1), self.inner.clone())
-    }
-}
-
-/// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
-/// specialized for use in compute.  Validation code will only run when the error constructor is
-/// Some.
-trait MaybeValidatingRow<T, E>: ExchangeData + Columnation + Hash {
-    fn ok(t: T) -> Self;
-    fn into_error() -> Option<fn(E) -> Self>;
-}
-
-impl<E> MaybeValidatingRow<Row, E> for Row {
-    fn ok(t: Row) -> Self {
-        t
-    }
-    fn into_error() -> Option<fn(E) -> Self> {
-        None
-    }
-}
-
-impl<E> MaybeValidatingRow<(), E> for () {
-    fn ok(t: ()) -> Self {
-        t
-    }
-    fn into_error() -> Option<fn(E) -> Self> {
-        None
-    }
-}
-
-impl<E, R> MaybeValidatingRow<Vec<R>, E> for Vec<R>
-where
-    R: ExchangeData + Columnation + Hash,
-{
-    fn ok(t: Vec<R>) -> Self {
-        t
-    }
-    fn into_error() -> Option<fn(E) -> Self> {
-        None
-    }
-}
-
-impl<T, E> MaybeValidatingRow<T, E> for Result<T, E>
-where
-    T: ExchangeData + Columnation + Hash,
-    E: ExchangeData + Columnation + Hash,
-{
-    fn ok(row: T) -> Self {
-        Ok(row)
-    }
-    fn into_error() -> Option<fn(E) -> Self> {
-        Some(Err)
     }
 }

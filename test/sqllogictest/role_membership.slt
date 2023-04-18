@@ -44,7 +44,7 @@ GRANT group1 TO joe
 query TTT
 SELECT * FROM role_members
 ----
-group1  joe  materialize
+group1  joe  mz_system
 
 # Dropping a role also removes it from role_members
 simple conn=mz_system,user=mz_system
@@ -65,7 +65,7 @@ GRANT group1 TO joe
 query TTT
 SELECT * FROM role_members
 ----
-group1  joe  materialize
+group1  joe  mz_system
 
 # Dropped roles have their membership revoked
 
@@ -95,8 +95,8 @@ COMPLETE 0
 query TTT
 SELECT * FROM role_members
 ----
+group1  joe  mz_system
 group2  joe  mz_system
-group1  joe  materialize
 
 statement ok
 GRANT group2 TO group1
@@ -104,9 +104,9 @@ GRANT group2 TO group1
 query TTT
 SELECT * FROM role_members
 ----
+group1  joe     mz_system
 group2  joe     mz_system
-group1  joe     materialize
-group2  group1  materialize
+group2  group1  mz_system
 
 # Redundant grants don't error or show up multiple times in mz_role_membership or change the grantor
 simple conn=mz_system,user=mz_system
@@ -117,9 +117,9 @@ COMPLETE 0
 query TTT
 SELECT * FROM role_members
 ----
+group1  joe     mz_system
 group2  joe     mz_system
-group1  joe     materialize
-group2  group1  materialize
+group2  group1  mz_system
 
 # Test circular membership errors
 
@@ -136,7 +136,7 @@ query TTT
 SELECT * FROM role_members
 ----
 group2  joe     mz_system
-group2  group1  materialize
+group2  group1  mz_system
 
 # Redundant revokes don't error
 
@@ -147,7 +147,7 @@ query TTT
 SELECT * FROM role_members
 ----
 group2  joe     mz_system
-group2  group1  materialize
+group2  group1  mz_system
 
 # Dropped roles are revoked from all members
 
@@ -249,8 +249,8 @@ GRANT group3 TO joe, group1
 query TTT
 SELECT * FROM role_members
 ----
-group3  joe     materialize
-group3  group1  materialize
+group3  joe     mz_system
+group3  group1  mz_system
 
 statement error role "joe" is a member of role "group3"
 GRANT joe TO group1, group3
@@ -258,8 +258,8 @@ GRANT joe TO group1, group3
 query TTT
 SELECT * FROM role_members
 ----
-group3  joe     materialize
-group3  group1  materialize
+group3  joe     mz_system
+group3  group1  mz_system
 
 statement ok
 GRANT group3 TO group1, group2
@@ -267,9 +267,9 @@ GRANT group3 TO group1, group2
 query TTT
 SELECT * FROM role_members
 ----
-group3  joe     materialize
-group3  group1  materialize
-group3  group2  materialize
+group3  joe     mz_system
+group3  group1  mz_system
+group3  group2  mz_system
 
 statement error unknown role 'bob'
 REVOKE group3 FROM joe, group1, bob
@@ -277,9 +277,9 @@ REVOKE group3 FROM joe, group1, bob
 query TTT
 SELECT * FROM role_members
 ----
-group3  joe     materialize
-group3  group1  materialize
-group3  group2  materialize
+group3  joe     mz_system
+group3  group1  mz_system
+group3  group2  mz_system
 
 statement error role name "mz_system" is reserved
 REVOKE group3 FROM joe, group1, mz_system
@@ -287,9 +287,9 @@ REVOKE group3 FROM joe, group1, mz_system
 query TTT
 SELECT * FROM role_members
 ----
-group3  joe     materialize
-group3  group1  materialize
-group3  group2  materialize
+group3  joe     mz_system
+group3  group1  mz_system
+group3  group2  mz_system
 
 statement ok
 REVOKE group3 FROM joe, group1
@@ -297,7 +297,7 @@ REVOKE group3 FROM joe, group1
 query TTT
 SELECT * FROM role_members
 ----
-group3  group2  materialize
+group3  group2  mz_system
 
 statement ok
 REVOKE group3 FROM joe, group2
@@ -310,5 +310,10 @@ SELECT * FROM role_members
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO false;
 ----
 COMPLETE 0

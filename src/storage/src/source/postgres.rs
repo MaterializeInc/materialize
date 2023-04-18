@@ -38,7 +38,7 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{info, warn};
 
 use mz_expr::MirScalarExpr;
-use mz_ore::display::DisplayExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::future::TimeoutError;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -65,17 +65,17 @@ static FEEDBACK_INTERVAL: Duration = Duration::from_secs(30);
 /// The amount of time we should wait after the last received message before worrying about WAL lag
 static WAL_LAG_GRACE_PERIOD: Duration = Duration::from_secs(30);
 
-trait ErrorExt {
+trait PgErrorExt {
     fn is_definite(&self) -> bool;
 }
 
-impl ErrorExt for tokio::time::error::Elapsed {
+impl PgErrorExt for tokio::time::error::Elapsed {
     fn is_definite(&self) -> bool {
         false
     }
 }
 
-impl ErrorExt for DbError {
+impl PgErrorExt for DbError {
     fn is_definite(&self) -> bool {
         let class = match self.code().code().get(0..2) {
             None => return false,
@@ -93,7 +93,7 @@ impl ErrorExt for DbError {
     }
 }
 
-impl ErrorExt for tokio_postgres::Error {
+impl PgErrorExt for tokio_postgres::Error {
     fn is_definite(&self) -> bool {
         match self.source() {
             Some(err) => match err.downcast_ref::<DbError>() {
@@ -111,7 +111,7 @@ impl ErrorExt for tokio_postgres::Error {
     }
 }
 
-impl ErrorExt for std::io::Error {
+impl PgErrorExt for std::io::Error {
     fn is_definite(&self) -> bool {
         match self.source() {
             Some(err) => match err.downcast_ref::<tokio_postgres::Error>() {
@@ -144,7 +144,7 @@ enum ReplicationError {
     Irrecoverable(anyhow::Error),
 }
 
-impl<E: ErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
+impl<E: PgErrorExt + Into<anyhow::Error>> From<E> for ReplicationError {
     fn from(err: E) -> Self {
         if err.is_definite() {
             Self::Definite(err.into())
@@ -181,22 +181,26 @@ impl<T, E: Into<anyhow::Error>> ResultExt<T, E> for Result<T, E> {
     }
 }
 
-// Message used to communicate between `get_next_message` and the tokio task
+/// Message used to communicate between `get_next_message` and the tokio task
 enum InternalMessage {
+    /// A definite error for the source, i.e. not a subsource error.
     Err(SourceReaderError),
     Status(HealthStatusUpdate),
+    /// A value meant for a subsource.
     Value {
-        output: usize,
-        value: Row,
         lsn: PgLsn,
-        diff: Diff,
+        /// Errors sent here are meant to express a subsource error that occurred in the process of
+        /// decoding values, i.e. it is in lieu of a value. This contrasts with
+        /// `InternalEssage::Err`, which signals an error in the source itself, e.g. a programming
+        /// error.
+        value: Result<(Row, Diff), anyhow::Error>,
         end: bool,
     },
 }
 
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
-    receiver_stream: Receiver<InternalMessage>,
+    receiver_stream: Receiver<(usize, InternalMessage)>,
 
     /// The lsn we last emitted data at. Used to fabricate timestamps for errors. This should
     /// ideally go away and only emit errors that we can associate with source timestamps
@@ -234,10 +238,22 @@ struct PostgresTaskInfo {
     /// Our cursor into the WAL
     replication_lsn: PgLsn,
     metrics: PgSourceMetrics,
-    /// A map of the table oid to its information
+    /// A map of the table oid to its information.
+    ///
+    /// Note that we populate this information with state from the catalog, but only remove it if we
+    /// encounter errors during execution. This means it is possible for items to be removed during
+    /// one execution cycle, only to have them re-appear on restart. For instance, if we remove a
+    /// table because of an issue with its schema, and the operator then "fixes" the issue with the
+    /// schema, we will not remove the table during the next execution cycle. This isn't a large
+    /// concern because the fact that we never retract errors from subsources means that the source
+    /// never return readable values, though it will start sending data along its Ok stream again.
+    ///
+    /// At the time of writing, the plan is to resolve the above issue when we track each source
+    /// table's frontier independently; in that world, we can close the source table's frontier so
+    /// we have a durable signal that it should never produce any data.
     source_tables: BTreeMap<u32, SourceTable>,
     row_sender: RowSender,
-    sender: Sender<InternalMessage>,
+    sender: Sender<(usize, InternalMessage)>,
     resume_lsn: Arc<AtomicU64>,
 }
 
@@ -253,9 +269,16 @@ impl SourceRender for PostgresSourceConnection {
         connection_context: ConnectionContext,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     ) -> (
-        Collection<G, Result<SourceMessage<(), Row>, SourceReaderError>, Diff>,
+        Collection<
+            G,
+            (
+                usize,
+                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
+            ),
+            Diff,
+        >,
         Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusUpdate>,
+        Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -379,20 +402,28 @@ impl SourceRender for PostgresSourceConnection {
             loop {
                 tokio::select! {
                     message = reader.receiver_stream.recv() => match message {
-                        Some(InternalMessage::Value {
-                            output,
-                            value,
-                            diff,
+                        Some((output_index, InternalMessage::Value {
                             lsn,
+                            value,
                             end,
-                        }) => {
+                        })) => {
+                            mz_ore::soft_assert!(
+                                output_index != 0,
+                                "InternalMessage::Value is meant only for subsources"
+                            );
+
                             reader.last_lsn = lsn;
-                            let msg = SourceMessage {
-                                output,
-                                upstream_time_millis: None,
-                                key: (),
-                                value,
-                                headers: None,
+                            let (msg, diff) = match value {
+                                Ok((row, diff)) => (
+                                    Ok(SourceMessage {
+                                        upstream_time_millis: None,
+                                        key: (),
+                                        value: row,
+                                        headers: None,
+                                    }),
+                                    diff,
+                                ),
+                                Err(err) => (Err(SourceReaderError::other_definite(err)), 1),
                             };
 
                             let ts = lsn.into();
@@ -402,12 +433,17 @@ impl SourceRender for PostgresSourceConnection {
                             if end {
                                 reader.data_capability.downgrade(&next_ts);
                             }
-                            data_output.give(&cap, (Ok(msg), *cap.time(), diff)).await;
+                            data_output.give(&cap, ((output_index, msg), *cap.time(), diff)).await;
                         }
-                        Some(InternalMessage::Status(update)) => {
-                            health_output.give(&health_capability, update).await;
+                        Some((output_index, InternalMessage::Status(update))) => {
+                            health_output.give(&health_capability, (output_index, update)).await;
                         }
-                        Some(InternalMessage::Err(err)) => {
+                        Some((output_index, InternalMessage::Err(err))) => {
+                            mz_ore::soft_assert!(
+                                output_index == 0,
+                                "InternalMessage::Err is meant only for the primary source"
+                            );
+
                             // XXX(petrosagg): we are fabricating a timestamp here!!
                             let non_definite_ts = MzOffset::from(reader.last_lsn) + 1;
 
@@ -415,7 +451,7 @@ impl SourceRender for PostgresSourceConnection {
                             let next_ts = non_definite_ts + 1;
                             reader.data_capability.downgrade(&next_ts);
                             reader.upper_capability.downgrade(&next_ts);
-                            data_output.give(&cap, (Err(err), *cap.time(), 1)).await;
+                            data_output.give(&cap, ((output_index, Err(err)), *cap.time(), 1)).await;
                         }
                         None => return,
                     },
@@ -455,6 +491,18 @@ impl PgOffsetCommitter {
 #[allow(clippy::or_fun_call)]
 async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
     loop {
+        // Signal that the primary source is running.
+        let _ = task_info
+            .sender
+            .send((
+                0,
+                InternalMessage::Status(HealthStatusUpdate {
+                    update: HealthStatus::Running,
+                    should_halt: false,
+                }),
+            ))
+            .await;
+
         match postgres_replication_loop_inner(&mut task_info).await {
             Ok(()) => {}
             Err(ReplicationError::Indefinite(e)) => {
@@ -462,17 +510,25 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     "replication for source {} interrupted, retrying: {e}",
                     task_info.source_id
                 );
-                // If the channel is shutting down, so is the source.
-                let _ = task_info
-                    .sender
-                    .send(InternalMessage::Status(HealthStatusUpdate {
-                        update: HealthStatus::StalledWithError {
-                            error: e.to_string_alt(),
-                            hint: None,
-                        },
-                        should_halt: false,
-                    }))
-                    .await;
+                // Indefinite errors affect all subsources.
+                for output_index in std::iter::once(0)
+                    .chain(task_info.source_tables.values().map(|t| t.output_index))
+                {
+                    // If the channel is shutting down, so is the source.
+                    let _ = task_info
+                        .sender
+                        .send((
+                            output_index,
+                            InternalMessage::Status(HealthStatusUpdate {
+                                update: HealthStatus::StalledWithError {
+                                    error: e.to_string_with_causes(),
+                                    hint: None,
+                                },
+                                should_halt: false,
+                            }),
+                        ))
+                        .await;
+                }
             }
             Err(ReplicationError::Irrecoverable(e)) => {
                 warn!(
@@ -481,23 +537,31 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     e,
                     e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
                 );
-                // If the channel is shutting down, so is the source.
-                let _ = task_info
-                    .sender
-                    .send(InternalMessage::Status(HealthStatusUpdate {
-                        update: HealthStatus::StalledWithError {
-                            error: e.to_string_alt(),
-                            hint: None,
-                        },
-                        // TODO: In the future we probably want to handle this more gracefully,
-                        // but for now halting is the easiest way to dump the data in the pipe.
-                        // The restarted clusterd instance will restart the snapshot fresh, which will
-                        // avoid any inconsistencies. Note that if the same lsn is chosen in the
-                        // next snapshotting, the remapped timestamp chosen will be the same for
-                        // both instances of clusterd.
-                        should_halt: true,
-                    }))
-                    .await;
+                // Irrecoverable errors affect all subsources.
+                for output_index in std::iter::once(0)
+                    .chain(task_info.source_tables.values().map(|t| t.output_index))
+                {
+                    // If the channel is shutting down, so is the source.
+                    let _ = task_info
+                        .sender
+                        .send((
+                            output_index,
+                            InternalMessage::Status(HealthStatusUpdate {
+                                update: HealthStatus::StalledWithError {
+                                    error: e.to_string_with_causes(),
+                                    hint: None,
+                                },
+                                // TODO: In the future we probably want to handle this more gracefully,
+                                // but for now halting is the easiest way to dump the data in the pipe.
+                                // The restarted clusterd instance will restart the snapshot fresh, which will
+                                // avoid any inconsistencies. Note that if the same lsn is chosen in the
+                                // next snapshotting, the remapped timestamp chosen will be the same for
+                                // both instances of clusterd.
+                                should_halt: true,
+                            }),
+                        ))
+                        .await;
+                }
 
                 future::pending().await
             }
@@ -508,14 +572,37 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     e,
                     e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
                 );
+
+                // Definite errors affect all subsources in a way that they should be errored out.
+                for output_index in task_info.source_tables.values().map(|t| t.output_index) {
+                    // If the channel is shutting down, so is the source.
+                    let _ = task_info
+                        .row_sender
+                        .send_row(
+                            task_info.replication_lsn,
+                            output_index,
+                            Err(anyhow!(e.to_string())),
+                        )
+                        .await;
+                }
+
+                // Close the LSN to "commit" the messages we just sent.
+                task_info
+                    .row_sender
+                    .close_lsn(task_info.replication_lsn)
+                    .await;
+
                 // Drop the send error, as we have no way of communicating back to the
                 // source operator if the channel is gone.
                 let _ = task_info
                     .row_sender
                     .sender
-                    .send(InternalMessage::Err(SourceReaderError {
-                        inner: SourceErrorDetails::Initialization(e.to_string()),
-                    }))
+                    .send((
+                        0,
+                        InternalMessage::Err(SourceReaderError {
+                            inner: SourceErrorDetails::Initialization(e.to_string()),
+                        }),
+                    ))
                     .await;
                 return;
             }
@@ -525,184 +612,230 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
     }
 }
 
+/// The logic to snapshot the PG collections.
+///
+/// Importantly this is broken out so we can ensure nothing returns an indefinite error, which can
+/// happen inadvertently.
+async fn postgres_replication_loop_inner_snapshot(
+    task_info: &mut PostgresTaskInfo,
+) -> Result<(), ReplicationError> {
+    // Verify relevant tables for this publication; we do this on every loop to cleanup source
+    // tables and very lazily detect dropped tables.
+    let publication_tables = mz_postgres_util::publication_info(
+        &task_info.connection_config,
+        &task_info.publication,
+        None,
+    )
+    .await
+    .err_indefinite()?;
+
+    // Validate publication tables against the state snapshot
+    let incompatible_tables =
+        determine_table_compatibility(task_info.source_tables.iter(), publication_tables);
+    for (id, output, err) in incompatible_tables {
+        task_info.source_tables.remove(&id);
+        task_info
+            .row_sender
+            .send_row(task_info.replication_lsn, output, Err(err))
+            .await;
+    }
+
+    let client = task_info
+        .connection_config
+        .clone()
+        .connect_replication()
+        .await
+        .err_indefinite()?;
+
+    // Technically there is TOCTOU problem here but it makes the code easier and if we end
+    // up attempting to create a slot and it already exists we will simply retry
+    // Also, we must check if the slot exists before we start a transaction because creating a
+    // slot must be the first statement in a transaction
+    let res = client
+        .simple_query(&format!(
+            r#"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{}'"#,
+            task_info.slot
+        ))
+        .await?;
+    let slot_lsn = parse_single_row(&res, "confirmed_flush_lsn");
+    client
+        .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
+        .await?;
+
+    let (slot_lsn, snapshot_lsn, temp_slot) = match slot_lsn {
+        Ok(slot_lsn) => {
+            // The main slot already exists which means we can't use it for the snapshot. So
+            // we'll create a temporary replication slot in order to both set the transaction's
+            // snapshot to be a consistent point and also to find out the LSN that the snapshot
+            // is going to run at.
+            //
+            // When this happens we'll most likely be snapshotting at a later LSN than the slot
+            // which we will take care below by rewinding.
+            let temp_slot = uuid::Uuid::new_v4().to_string().replace('-', "");
+            let res = client
+                .simple_query(&format!(
+                    r#"CREATE_REPLICATION_SLOT {:?} TEMPORARY LOGICAL "pgoutput" USE_SNAPSHOT"#,
+                    temp_slot
+                ))
+                .await?;
+            let snapshot_lsn = parse_single_row(&res, "consistent_point")?;
+            (slot_lsn, snapshot_lsn, Some(temp_slot))
+        }
+        Err(_) => {
+            let res = client
+                .simple_query(&format!(
+                    r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
+                    task_info.slot
+                ))
+                .await?;
+            let slot_lsn = parse_single_row(&res, "consistent_point")?;
+            (slot_lsn, slot_lsn, None)
+        }
+    };
+
+    // If we sent any messages earlier, we need to close that LSN to send the next messages from
+    // the slot.
+    if task_info.replication_lsn < slot_lsn {
+        task_info
+            .row_sender
+            .close_lsn(task_info.replication_lsn)
+            .await;
+    }
+
+    let mut stream = Box::pin(
+        produce_snapshot(
+            &client,
+            &task_info.metrics,
+            &mut task_info.source_tables,
+            task_info.source_id,
+        )
+        .enumerate(),
+    );
+
+    while let Some((i, event)) = stream.as_mut().next().await {
+        if i > 0 {
+            // Failure scenario after we have produced at least one row, but before a
+            // successful `COMMIT`
+            fail::fail_point!("pg_snapshot_failure", |_| {
+                Err(ReplicationError::Indefinite(anyhow::anyhow!(
+                    "recoverable errors should crash the process"
+                )))
+            });
+        }
+        let (output_index, value) = match event {
+            Ok(event) => event,
+            Err(err @ ReplicationError::Definite(_)) => return Err(err),
+            Err(ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err)) => {
+                return Err(ReplicationError::Irrecoverable(err))
+            }
+        };
+        task_info
+            .row_sender
+            .send_row(slot_lsn, output_index, value)
+            .await
+    }
+
+    if let Some(temp_slot) = temp_slot {
+        let _ = client
+            .simple_query(&format!("DROP_REPLICATION_SLOT {temp_slot:?}"))
+            .await;
+    }
+    client.simple_query("COMMIT;").await?;
+
+    // Drop the stream and the client, to ensure that the future `produce_replication` don't
+    // conflict with the above processing.
+    //
+    // Its possible we can avoid dropping the `client` value here, but we do it out of an
+    // abundance of caution, as rust-postgres has had curious bugs around this.
+    drop(stream);
+    drop(client);
+
+    assert!(slot_lsn <= snapshot_lsn);
+
+    // We only need to rewind values from the WAL if there are any values between the `slot_lsn`
+    // and `snapshot_lsn`. If there is nothing in the WAL for us to see between those times, we
+    // would just sit there dumbly waiting for a timeout.
+    if slot_lsn < snapshot_lsn
+        && peek_wal_lsns(
+            task_info.connection_config.clone(),
+            &task_info.slot,
+            &task_info.publication,
+            Some(snapshot_lsn),
+        )
+        .await
+        .err_irrecoverable()?
+        .count()
+            > 0
+    {
+        tracing::info!(
+            "postgres snapshot was at {snapshot_lsn:?} but we need it at {slot_lsn:?}. Rewinding"
+        );
+        // Our snapshot was too far ahead so we must rewind it by reading the replication
+        // stream until the snapshot lsn and emitting any rows that we find with negated diffs
+        let replication_stream = produce_replication(
+            task_info.connection_config.clone(),
+            &task_info.slot,
+            &task_info.publication,
+            slot_lsn,
+            Arc::clone(&task_info.resume_lsn),
+            &task_info.metrics,
+            &mut task_info.source_tables,
+            task_info.source_id,
+        )
+        .await;
+        tokio::pin!(replication_stream);
+
+        while let Some(event) = replication_stream.next().await {
+            match event {
+                Ok(Event::Message(lsn, (output_index, row))) => {
+                    // Here we ignore the lsn that this row actually happened at and we
+                    // forcefully emit it at the slot_lsn with a negated diff.
+                    if lsn <= snapshot_lsn {
+                        task_info
+                            .row_sender
+                            .send_row(slot_lsn, output_index, row.map(|(row, diff)| (row, -diff)))
+                            .await;
+                    }
+                }
+                Ok(Event::Progress([lsn])) => {
+                    if lsn > snapshot_lsn {
+                        // We successfully rewinded the snapshot from snapshot_lsn to slot_lsn
+                        task_info.row_sender.close_lsn(slot_lsn).await;
+                        break;
+                    }
+                }
+                Err(err @ ReplicationError::Definite(_)) => return Err(err),
+                Err(ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err)) => {
+                    return Err(ReplicationError::Irrecoverable(err))
+                }
+            }
+        }
+    }
+    task_info.metrics.lsn.set(slot_lsn.into());
+    task_info.row_sender.close_lsn(slot_lsn).await;
+
+    info!(
+        "replication snapshot for source {} succeeded",
+        &task_info.source_id
+    );
+    task_info.replication_lsn = slot_lsn;
+
+    Ok(())
+}
+
 /// Core logic
 async fn postgres_replication_loop_inner(
     task_info: &mut PostgresTaskInfo,
 ) -> Result<(), ReplicationError> {
     if task_info.replication_lsn == PgLsn::from(0) {
-        // Get all the relevant tables for this publication
-        let publication_tables = mz_postgres_util::publication_info(
-            &task_info.connection_config,
-            &task_info.publication,
-            None,
-        )
-        .await
-        .err_indefinite()?;
-
-        // Validate publication tables against the state snapshot
-        determine_table_compatibility(&task_info.source_tables, publication_tables)
-            .err_definite()?;
-
-        let client = task_info
-            .connection_config
-            .clone()
-            .connect_replication()
-            .await
-            .err_indefinite()?;
-
-        // Technically there is TOCTOU problem here but it makes the code easier and if we end
-        // up attempting to create a slot and it already exists we will simply retry
-        // Also, we must check if the slot exists before we start a transaction because creating a
-        // slot must be the first statement in a transaction
-        let res = client
-            .simple_query(&format!(
-                r#"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = '{}'"#,
-                task_info.slot
-            ))
-            .await?;
-        let slot_lsn = parse_single_row(&res, "confirmed_flush_lsn");
-        client
-            .simple_query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ;")
-            .await?;
-
-        let (slot_lsn, snapshot_lsn, temp_slot) = match slot_lsn {
-            Ok(slot_lsn) => {
-                // The main slot already exists which means we can't use it for the snapshot. So
-                // we'll create a temporary replication slot in order to both set the transaction's
-                // snapshot to be a consistent point and also to find out the LSN that the snapshot
-                // is going to run at.
-                //
-                // When this happens we'll most likely be snapshotting at a later LSN than the slot
-                // which we will take care below by rewinding.
-                let temp_slot = uuid::Uuid::new_v4().to_string().replace('-', "");
-                let res = client
-                    .simple_query(&format!(
-                        r#"CREATE_REPLICATION_SLOT {:?} TEMPORARY LOGICAL "pgoutput" USE_SNAPSHOT"#,
-                        temp_slot
-                    ))
-                    .await?;
-                let snapshot_lsn = parse_single_row(&res, "consistent_point")?;
-                (slot_lsn, snapshot_lsn, Some(temp_slot))
+        match postgres_replication_loop_inner_snapshot(task_info).await {
+            // Snapshotting cannot, under any circmstance, return indefinite errors; everything must
+            // be restarted.
+            Err(ReplicationError::Indefinite(err)) => {
+                return Err(ReplicationError::Irrecoverable(err))
             }
-            Err(_) => {
-                let res = client
-                    .simple_query(&format!(
-                        r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
-                        task_info.slot
-                    ))
-                    .await?;
-                let slot_lsn = parse_single_row(&res, "consistent_point")?;
-                (slot_lsn, slot_lsn, None)
-            }
-        };
-
-        let mut stream = Box::pin(
-            produce_snapshot(&client, &task_info.metrics, &task_info.source_tables).enumerate(),
-        );
-
-        while let Some((i, event)) = stream.as_mut().next().await {
-            if i > 0 {
-                // Failure scenario after we have produced at least one row, but before a
-                // successful `COMMIT`
-                fail::fail_point!("pg_snapshot_failure", |_| {
-                    Err(ReplicationError::Indefinite(anyhow::anyhow!(
-                        "recoverable errors should crash the process"
-                    )))
-                });
-            }
-            let (output, row) = match event {
-                Ok(event) => event,
-                Err(err @ ReplicationError::Definite(_)) => return Err(err),
-                Err(ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err)) => {
-                    return Err(ReplicationError::Irrecoverable(err))
-                }
-            };
-            task_info
-                .row_sender
-                .send_row(output, row, slot_lsn, 1)
-                .await;
+            o => o?,
         }
-
-        if let Some(temp_slot) = temp_slot {
-            let _ = client
-                .simple_query(&format!("DROP_REPLICATION_SLOT {temp_slot:?}"))
-                .await;
-        }
-        client.simple_query("COMMIT;").await?;
-
-        // Drop the stream and the client, to ensure that the future `produce_replication` don't
-        // conflict with the above processing.
-        //
-        // Its possible we can avoid dropping the `client` value here, but we do it out of an
-        // abundance of caution, as rust-postgres has had curious bugs around this.
-        drop(stream);
-        drop(client);
-
-        assert!(slot_lsn <= snapshot_lsn);
-
-        // We only need to rewind values from the WAL if there are any values between the `slot_lsn`
-        // and `snapshot_lsn`. If there is nothing in the WAL for us to see between those times, we
-        // would just sit there dumbly waiting for a timeout.
-        if slot_lsn < snapshot_lsn
-            && peek_wal_lsns(
-                task_info.connection_config.clone(),
-                &task_info.slot,
-                &task_info.publication,
-                Some(snapshot_lsn),
-            )
-            .await?
-            .count()
-                > 0
-        {
-            tracing::info!("postgres snapshot was at {snapshot_lsn:?} but we need it at {slot_lsn:?}. Rewinding");
-            // Our snapshot was too far ahead so we must rewind it by reading the replication
-            // stream until the snapshot lsn and emitting any rows that we find with negated diffs
-            let replication_stream = produce_replication(
-                task_info.connection_config.clone(),
-                &task_info.slot,
-                &task_info.publication,
-                slot_lsn,
-                Arc::clone(&task_info.resume_lsn),
-                &task_info.metrics,
-                &task_info.source_tables,
-            )
-            .await;
-            tokio::pin!(replication_stream);
-
-            while let Some(event) = replication_stream.next().await {
-                match event {
-                    Ok(Event::Message(lsn, (output, row, diff))) => {
-                        // Here we ignore the lsn that this row actually happened at and we
-                        // forcefully emit it at the slot_lsn with a negated diff.
-                        if lsn <= snapshot_lsn {
-                            task_info
-                                .row_sender
-                                .send_row(output, row, slot_lsn, -diff)
-                                .await;
-                        }
-                    }
-                    Ok(Event::Progress([lsn])) => {
-                        if lsn > snapshot_lsn {
-                            // We successfully rewinded the snapshot from snapshot_lsn to slot_lsn
-                            task_info.row_sender.close_lsn(slot_lsn).await;
-                            break;
-                        }
-                    }
-                    Err(err @ ReplicationError::Definite(_)) => return Err(err),
-                    Err(
-                        ReplicationError::Indefinite(err) | ReplicationError::Irrecoverable(err),
-                    ) => return Err(ReplicationError::Irrecoverable(err)),
-                }
-            }
-        }
-        task_info.metrics.lsn.set(slot_lsn.into());
-        task_info.row_sender.close_lsn(slot_lsn).await;
-
-        info!(
-            "replication snapshot for source {} succeeded",
-            &task_info.source_id
-        );
-        task_info.replication_lsn = slot_lsn;
     }
 
     let replication_stream = produce_replication(
@@ -712,7 +845,8 @@ async fn postgres_replication_loop_inner(
         task_info.replication_lsn,
         Arc::clone(&task_info.resume_lsn),
         &task_info.metrics,
-        &task_info.source_tables,
+        &mut task_info.source_tables,
+        task_info.source_id,
     )
     .await;
     tokio::pin!(replication_stream);
@@ -722,8 +856,8 @@ async fn postgres_replication_loop_inner(
     // a way to encode this in the type signature
     while let Some(event) = replication_stream.next().await.transpose()? {
         match event {
-            Event::Message(lsn, (output, row, diff)) => {
-                task_info.row_sender.send_row(output, row, lsn, diff).await;
+            Event::Message(lsn, (output_index, row)) => {
+                task_info.row_sender.send_row(lsn, output_index, row).await;
             }
             Event::Progress([lsn]) => {
                 // The lsn passed to `START_REPLICATION_SLOT` produces all transactions that
@@ -740,10 +874,9 @@ async fn postgres_replication_loop_inner(
 }
 
 struct RowMessage {
-    output_index: usize,
-    row: Row,
     lsn: PgLsn,
-    diff: i64,
+    output_index: usize,
+    value: Result<(Row, Diff), anyhow::Error>,
 }
 
 /// A type that makes it easy to correctly send inserts and deletes.
@@ -753,13 +886,13 @@ struct RowMessage {
 /// before dropping the `RowSender` or moving onto a new lsn.
 /// Internally, this type uses asserts to uphold the first requirement.
 struct RowSender {
-    sender: Sender<InternalMessage>,
+    sender: Sender<(usize, InternalMessage)>,
     buffered_message: Option<RowMessage>,
 }
 
 impl RowSender {
     /// Create a new `RowSender`.
-    pub fn new(sender: Sender<InternalMessage>) -> Self {
+    pub fn new(sender: Sender<(usize, InternalMessage)>) -> Self {
         Self {
             sender,
             buffered_message: None,
@@ -767,24 +900,22 @@ impl RowSender {
     }
 
     /// Send a triplet for the specific output
-    pub async fn send_row(&mut self, output_index: usize, row: Row, lsn: PgLsn, diff: Diff) {
+    pub async fn send_row(
+        &mut self,
+        lsn: PgLsn,
+        output_index: usize,
+        value: Result<(Row, Diff), anyhow::Error>,
+    ) {
         if let Some(buffered) = self.buffered_message.take() {
             assert_eq!(buffered.lsn, lsn);
-            self.send_row_inner(
-                buffered.output_index,
-                buffered.row,
-                buffered.lsn,
-                buffered.diff,
-                false,
-            )
-            .await;
+            self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value, false)
+                .await;
         }
 
         self.buffered_message = Some(RowMessage {
-            output_index,
-            row,
             lsn,
-            diff,
+            output_index,
+            value,
         });
     }
 
@@ -795,86 +926,88 @@ impl RowSender {
         match self.buffered_message.take() {
             Some(buffered) => {
                 assert!(buffered.lsn <= lsn);
-                self.send_row_inner(
-                    buffered.output_index,
-                    buffered.row,
-                    buffered.lsn,
-                    buffered.diff,
-                    true,
-                )
-                .await;
+                self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value, true)
+                    .await;
             }
             // We should still announce that we're running even if nothing else.
             None => {
                 // If the channel is shutting down, so is the source.
                 let _ = self
                     .sender
-                    .send(InternalMessage::Status(HealthStatusUpdate {
-                        update: HealthStatus::Running,
-                        should_halt: false,
-                    }))
+                    .send((
+                        0,
+                        InternalMessage::Status(HealthStatusUpdate {
+                            update: HealthStatus::Running,
+                            should_halt: false,
+                        }),
+                    ))
                     .await;
             }
         }
     }
 
-    async fn send_row_inner(&self, output: usize, row: Row, lsn: PgLsn, diff: i64, end: bool) {
-        let message = InternalMessage::Value {
-            output,
-            value: row,
-            lsn,
-            diff,
-            end,
-        };
+    async fn send_row_inner(
+        &self,
+        lsn: PgLsn,
+        output: usize,
+        value: Result<(Row, Diff), anyhow::Error>,
+        end: bool,
+    ) {
+        let message = InternalMessage::Value { lsn, value, end };
         // a closed receiver means the source has been shutdown (dropped or the process is dying),
         // so just continue on without activation
-        let _ = self.sender.send(message).await;
+        let _ = self.sender.send((output, message)).await;
     }
 }
 
-/// Determines if a set of [`SourceTable`]s and a set of [`PostgresTableDesc`]
-/// are compatible with one another in a way that Materialize can handle.
+/// Determines if a set of [`SourceTable`]s and a set of [`PostgresTableDesc`] are compatible with
+/// one another in a way that Materialize can handle.
 ///
-/// The returned `BTreeMap` represents the order in which ingested data from
-/// tables must be projected to recover the expected ordering (i.e. their
-/// schemas have changed). Tables without an entry in the returned `BTreeMap` do
-/// not require projection (i.e. their schemas have not changed).
-///
-/// # Errors
-/// - If `source_tables` is not a strict subset of `tables`, based on the
-///   tables' OIDs.
-/// - If any object in `tables` is incompatible with its representation in
-///   `source_tables`, e.g. no longer contains all of the columns identified in
-///   `source_tables`.
-fn determine_table_compatibility(
-    source_tables: &BTreeMap<u32, SourceTable>,
+/// The returned tuples are `(a,b)`:
+/// - `a`: the ID of the incompatible table
+/// - `b`: the subsource error to propagate reflecting that the subsource is in an errored state
+fn determine_table_compatibility<'a, I>(
+    source_tables: I,
     tables: Vec<PostgresTableDesc>,
-) -> Result<(), anyhow::Error> {
+) -> Vec<(u32, usize, anyhow::Error)>
+where
+    I: Iterator<Item = (&'a u32, &'a SourceTable)>,
+{
     let pub_tables: BTreeMap<u32, PostgresTableDesc> =
         tables.into_iter().map(|t| (t.oid, t)).collect();
-
-    for (id, info) in source_tables.iter() {
+    let mut errors = vec![];
+    for (id, info) in source_tables {
         match pub_tables.get(id) {
-            Some(pub_schema) => {
-                // Keep this method in sync with the check in response to
-                // Relation messages in the replication stream.
-                info.desc.determine_compatibility(pub_schema)?;
+            Some(desc) => {
+                // Keep this method in sync with the Relation check in the replication stream.
+                if let Err(err) = info.desc.determine_compatibility(desc) {
+                    warn!(
+                        "Error validating table in publication. Expected: {:?} Actual: {:?}",
+                        &info.desc, desc
+                    );
+                    errors.push((*id, info.output_index, err));
+                }
             }
             None => {
                 warn!(
-                    "publication missing table: {} with id {}",
-                    info.desc.name, id
-                );
-                bail!(
-                    "source table {} with oid {} has been dropped",
+                    "alter table error, table removed from upstream source: name {}, oid {}, old_schema {:?}",
                     info.desc.name,
-                    info.desc.oid
-                )
+                    info.desc.oid,
+                    info.desc.columns,
+                );
+                errors.push((
+                    *id,
+                    info.output_index,
+                    anyhow!(
+                        "source table {} with oid {} has been dropped",
+                        info.desc.name,
+                        info.desc.oid
+                    ),
+                ));
             }
         }
     }
-
-    Ok(())
+    errors
 }
 
 /// Parses SQL results that are expected to be a single row into a Rust type
@@ -906,13 +1039,16 @@ fn parse_single_row<T: FromStr>(
 fn produce_snapshot<'a>(
     client: &'a Client,
     metrics: &'a PgSourceMetrics,
-    source_tables: &'a BTreeMap<u32, SourceTable>,
-) -> impl futures::Stream<Item = Result<(usize, Row), ReplicationError>> + 'a {
+    source_tables: &'a mut BTreeMap<u32, SourceTable>,
+    source_id: GlobalId,
+) -> impl futures::Stream<Item = Result<(usize, Result<(Row, Diff), anyhow::Error>), ReplicationError>>
+       + 'a {
     async_stream::try_stream! {
         // Scratch space to use while evaluating casts
         let mut datum_vec = DatumVec::new();
+        let mut subsources_to_remove = vec![];
 
-        for info in source_tables.values() {
+        'tables: for (id, info) in source_tables.iter() {
             let reader = client
                 .copy_out_simple(
                     format!(
@@ -931,30 +1067,62 @@ fn produce_snapshot<'a>(
                 .await?
                 .transpose()?
             {
-                let mut packer = text_row.packer();
-                // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
-                // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
-                let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
+                // Try catch
+                let mut pack_row = || -> Result<(Row, Diff), anyhow::Error> {
+                    let mut packer = text_row.packer();
+                    // Convert raw rows from COPY into repr:Row. Each Row is a relation_id
+                    // and list of string-encoded values, e.g. Row{ 16391 , ["1", "2"] }
+                    let parser = mz_pgcopy::CopyTextFormatParser::new(b.as_ref(), "\t", "\\N");
 
-                let mut raw_values = parser.iter_raw_truncating(info.desc.columns.len());
-                while let Some(raw_value) = raw_values.next() {
-                    match raw_value.err_definite()? {
-                        Some(value) => {
-                            packer.push(Datum::String(std::str::from_utf8(value).err_definite()?))
+                    let mut raw_values = parser.iter_raw_truncating(info.desc.columns.len());
+                    while let Some(raw_value) = raw_values.next() {
+                        match raw_value.map_err(|e| if e.to_string() == "missing data for column" {
+                            anyhow!(
+                                "source table {} with oid {} has been altered",
+                                info.desc.name,
+                                id
+                            )
+                        } else {
+                             e.into()
+                        })? {
+                            Some(value) => {
+                                packer.push(Datum::String(std::str::from_utf8(value)?))
+                            }
+                            None => packer.push(Datum::Null),
                         }
-                        None => packer.push(Datum::Null),
                     }
-                }
 
-                let mut datums = datum_vec.borrow();
-                datums.extend(text_row.iter());
+                    let mut datums = datum_vec.borrow();
+                    datums.extend(text_row.iter());
 
-                let row = cast_row(&info.casts, &datums).err_definite()?;
+                    Ok((cast_row(&info.casts, &datums)?, 1))
+                };
 
+                let row = pack_row();
+                let is_err = if let Err(e) = &row {
+                    warn!(
+                        "definite error for subsource of {} with oid {}: {}, cause: {}",
+                        source_id,
+                        id,
+                        e,
+                        e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
+                    );
+                    true
+                } else {
+                    false
+                };
                 yield (info.output_index, row);
+                if is_err {
+                    subsources_to_remove.push(*id);
+                    continue 'tables;
+                }
             }
 
             metrics.tables.inc();
+        }
+
+        for id in subsources_to_remove {
+            source_tables.remove(&id);
         }
     }
 }
@@ -1006,15 +1174,18 @@ async fn produce_replication<'a>(
     as_of: PgLsn,
     committed_lsn: Arc<AtomicU64>,
     metrics: &'a PgSourceMetrics,
-    source_tables: &'a BTreeMap<u32, SourceTable>,
-) -> impl futures::Stream<Item = Result<Event<[PgLsn; 1], (usize, Row, Diff)>, ReplicationError>> + 'a
-{
+    source_tables: &'a mut BTreeMap<u32, SourceTable>,
+    source_id: GlobalId,
+) -> impl futures::Stream<
+    Item = Result<Event<[PgLsn; 1], (usize, Result<(Row, Diff), anyhow::Error>)>, ReplicationError>,
+> + 'a {
     use ReplicationError::*;
     use ReplicationMessage::*;
     async_stream::try_stream!({
         //let mut last_data_message = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
+        let mut errors = vec![];
 
         let mut last_feedback = Instant::now();
 
@@ -1033,6 +1204,14 @@ async fn produce_replication<'a>(
         // creating two independent slots so that we can use the secondary to check without
         // interrupting the stream on the first one
         loop {
+            // If either inserts or deletes have values, we have mishandled ingesting data and risk
+            // double-counting values.
+            if !inserts.is_empty() || !deletes.is_empty() || !errors.is_empty() {
+                return Err(Definite(anyhow!(
+                    "tried to reconnect to PG replication stream with uncommitted data",
+                )))?;
+            }
+
             let client = client_config
                 .clone()
                 .connect_replication()
@@ -1041,7 +1220,7 @@ async fn produce_replication<'a>(
             tracing::trace!("starting replication slot");
             let query = format!(
                 r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
-                  ("proto_version" '1', "publication_names" '{publication}')"#,
+                      ("proto_version" '1', "publication_names" '{publication}')"#,
                 name = &slot,
                 lsn = last_commit_lsn,
                 publication = publication
@@ -1076,6 +1255,22 @@ async fn produce_replication<'a>(
                 // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
                 let mut needs_status_update = last_feedback.elapsed() > FEEDBACK_INTERVAL;
 
+                // A gentle suggestion for how to properly handle subsource errors. This is
+                // annoyingly long because we can't capture anything.
+                macro_rules! handle_subsource_err {
+                    ($errors:expr, $source_tables:expr, $output_index:expr, $err:expr, $rel_id:expr) => {{
+                        warn!(
+                            "definite error for subsource of {} with oid {}: {}, cause: {}",
+                            source_id,
+                            $rel_id,
+                            $err,
+                            $err.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
+                        );
+                        $errors.push(($output_index, $err));
+                        $source_tables.remove(&$rel_id);
+                    }};
+                }
+
                 match res {
                     Ok(Some(XLogData(xlog_data))) => match xlog_data.data() {
                         Begin(_) => {
@@ -1087,109 +1282,130 @@ async fn produce_replication<'a>(
                             }
                         }
                         Insert(insert) if source_tables.contains_key(&insert.rel_id()) => {
-                            last_data_message = Instant::now();
-                            metrics.inserts.inc();
                             let rel_id = insert.rel_id();
                             let info = source_tables.get(&rel_id).unwrap();
+                            last_data_message = Instant::now();
+                            metrics.inserts.inc();
                             let new_tuple = insert.tuple().tuple_data();
                             let mut datums = datum_vec.borrow();
 
-                            datums_from_tuple(
-                                rel_id,
-                                info.desc.columns.len(),
-                                new_tuple,
-                                &mut *datums,
-                            )
-                            .err_definite()?;
+                            let mut gen_row = || -> Result<Row, anyhow::Error> {
+                                datums_from_tuple(
+                                    rel_id,
+                                    info.desc.columns.len(),
+                                    new_tuple,
+                                    &mut *datums,
+                                )?;
+                                cast_row(&info.casts, &datums)
+                            };
 
-                            let row = cast_row(&info.casts, &datums).err_definite()?;
-                            inserts.push((info.output_index, row));
+                            match gen_row() {
+                                Ok(row) => inserts.push((info.output_index, row)),
+                                Err(err) => handle_subsource_err!(
+                                    errors,
+                                    source_tables,
+                                    info.output_index,
+                                    err,
+                                    rel_id
+                                ),
+                            }
                         }
                         Update(update) if source_tables.contains_key(&update.rel_id()) => {
                             last_data_message = Instant::now();
                             metrics.updates.inc();
                             let rel_id = update.rel_id();
                             let info = source_tables.get(&rel_id).unwrap();
-                            let err = || {
-                                anyhow!(
-                                    "Old row missing from replication stream for table with OID = {}.
-                                     Did you forget to set REPLICA IDENTITY to FULL for your table?",
-                                    rel_id
-                                )
+
+                            let mut gen_row = || -> Result<(Row, Row), anyhow::Error> {
+                                let err = || {
+                                    anyhow!(
+                                            "Old row missing from replication stream for table with OID = {}.
+                                             Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                                            rel_id
+                                        )
+                                };
+                                let old_tuple = update.old_tuple().ok_or_else(err)?.tuple_data();
+
+                                let mut old_datums = datum_vec.borrow();
+                                datums_from_tuple(
+                                    rel_id,
+                                    info.desc.columns.len(),
+                                    old_tuple,
+                                    &mut *old_datums,
+                                )?;
+                                let old_row = cast_row(&info.casts, &old_datums)?;
+
+                                drop(old_datums);
+
+                                // If the new tuple contains unchanged toast values, reuse the ones
+                                // from the old tuple
+                                let new_tuple = update
+                                    .new_tuple()
+                                    .tuple_data()
+                                    .iter()
+                                    .zip(old_tuple.iter())
+                                    .map(|(new, old)| match new {
+                                        TupleData::UnchangedToast => old,
+                                        _ => new,
+                                    });
+                                let mut new_datums = datum_vec.borrow();
+                                datums_from_tuple(
+                                    rel_id,
+                                    info.desc.columns.len(),
+                                    new_tuple,
+                                    &mut *new_datums,
+                                )?;
+                                Ok((old_row, cast_row(&info.casts, &new_datums)?))
                             };
-                            let old_tuple = update
-                                .old_tuple()
-                                .ok_or_else(err)
-                                .err_definite()?
-                                .tuple_data();
 
-                            let mut old_datums = datum_vec.borrow();
-
-                            datums_from_tuple(
-                                rel_id,
-                                info.desc.columns.len(),
-                                old_tuple,
-                                &mut *old_datums,
-                            )
-                            .err_definite()?;
-
-                            let old_row = cast_row(&info.casts, &old_datums).err_definite()?;
-                            deletes.push((info.output_index, old_row));
-                            drop(old_datums);
-
-                            // If the new tuple contains unchanged toast values, reuse the ones
-                            // from the old tuple
-                            let new_tuple = update
-                                .new_tuple()
-                                .tuple_data()
-                                .iter()
-                                .zip(old_tuple.iter())
-                                .map(|(new, old)| match new {
-                                    TupleData::UnchangedToast => old,
-                                    _ => new,
-                                });
-                            let mut new_datums = datum_vec.borrow();
-
-                            datums_from_tuple(
-                                rel_id,
-                                info.desc.columns.len(),
-                                new_tuple,
-                                &mut *new_datums,
-                            )
-                            .err_definite()?;
-
-                            let new_row = cast_row(&info.casts, &new_datums).err_definite()?;
-                            inserts.push((info.output_index, new_row));
+                            match gen_row() {
+                                Ok((old_row, new_row)) => {
+                                    deletes.push((info.output_index, old_row));
+                                    inserts.push((info.output_index, new_row));
+                                }
+                                Err(err) => handle_subsource_err!(
+                                    errors,
+                                    source_tables,
+                                    info.output_index,
+                                    err,
+                                    rel_id
+                                ),
+                            }
                         }
                         Delete(delete) if source_tables.contains_key(&delete.rel_id()) => {
                             last_data_message = Instant::now();
                             metrics.deletes.inc();
                             let rel_id = delete.rel_id();
                             let info = source_tables.get(&rel_id).unwrap();
-                            let err = || {
-                                anyhow!(
-                                    "Old row missing from replication stream for table with OID = {}.
-                                     Did you forget to set REPLICA IDENTITY to FULL for your table?",
-                                    rel_id
-                                )
+                            let mut gen_row = || -> Result<Row, anyhow::Error> {
+                                let err = || {
+                                    anyhow!(
+                                            "Old row missing from replication stream for table with OID = {}.
+                                             Did you forget to set REPLICA IDENTITY to FULL for your table?",
+                                            rel_id
+                                        )
+                                };
+                                let old_tuple = delete.old_tuple().ok_or_else(err)?.tuple_data();
+                                let mut datums = datum_vec.borrow();
+                                datums_from_tuple(
+                                    rel_id,
+                                    info.desc.columns.len(),
+                                    old_tuple,
+                                    &mut *datums,
+                                )?;
+                                cast_row(&info.casts, &datums)
                             };
-                            let old_tuple = delete
-                                .old_tuple()
-                                .ok_or_else(err)
-                                .err_definite()?
-                                .tuple_data();
-                            let mut datums = datum_vec.borrow();
 
-                            datums_from_tuple(
-                                rel_id,
-                                info.desc.columns.len(),
-                                old_tuple,
-                                &mut *datums,
-                            )
-                            .err_definite()?;
-
-                            let row = cast_row(&info.casts, &datums).err_definite()?;
-                            deletes.push((info.output_index, row));
+                            match gen_row() {
+                                Ok(row) => deletes.push((info.output_index, row)),
+                                Err(err) => handle_subsource_err!(
+                                    errors,
+                                    source_tables,
+                                    info.output_index,
+                                    err,
+                                    rel_id
+                                ),
+                            };
                         }
                         Commit(commit) => {
                             last_data_message = Instant::now();
@@ -1197,10 +1413,13 @@ async fn produce_replication<'a>(
                             last_commit_lsn = PgLsn::from(commit.end_lsn());
 
                             for (output, row) in deletes.drain(..) {
-                                yield Event::Message(last_commit_lsn, (output, row, -1));
+                                yield Event::Message(last_commit_lsn, (output, Ok((row, -1))));
                             }
                             for (output, row) in inserts.drain(..) {
-                                yield Event::Message(last_commit_lsn, (output, row, 1));
+                                yield Event::Message(last_commit_lsn, (output, Ok((row, 1))));
+                            }
+                            for (output, err) in errors.drain(..) {
+                                yield Event::Message(last_commit_lsn, (output, Err(err)));
                             }
                             yield Event::Progress([PgLsn::from(u64::from(last_commit_lsn) + 1)]);
                             metrics.lsn.set(last_commit_lsn.into());
@@ -1222,27 +1441,19 @@ async fn produce_replication<'a>(
                                 .await
                                 .err_indefinite()?;
 
-                                match current_publication_info.get(0) {
-                                    Some(desc) => {
-                                        // Keep this method in sync with the check in
-                                        // validate_tables.
-                                        info.desc
-                                            .determine_compatibility(desc)
-                                            .map_err(Definite)?;
-                                    }
-                                    None => {
-                                        warn!(
-                                            "alter table error, table removed from upstream source: name {}, oid {}, old_schema {:?}",
-                                            info.desc.name,
-                                            info.desc.oid,
-                                            info.desc.columns,
-                                        );
-                                        return Err(Definite(anyhow!(
-                                            "source table {} with oid {} has been dropped",
-                                            info.desc.name,
-                                            info.desc.oid
-                                        )))?;
-                                    }
+                                // Validate publication tables against the state snapshot
+                                let incompatible_tables = determine_table_compatibility(
+                                    std::iter::once((&rel_id, info)),
+                                    current_publication_info,
+                                );
+                                for (rel_id, output_index, err) in incompatible_tables {
+                                    handle_subsource_err!(
+                                        errors,
+                                        source_tables,
+                                        output_index,
+                                        err,
+                                        rel_id
+                                    );
                                 }
                             }
                         }
@@ -1251,19 +1462,33 @@ async fn produce_replication<'a>(
                             metrics.ignored.inc();
                         }
                         Truncate(truncate) => {
-                            let tables = truncate
+                            let truncated_tables = truncate
                                 .rel_ids()
                                 .iter()
                                 // Filter here makes option handling in map "safe"
-                                .filter_map(|id| source_tables.get(id))
-                                .map(|info| {
-                                    format!("name: {} id: {}", info.desc.name, info.desc.oid)
+                                .filter_map(|id| source_tables.get(id).map(|info| (id, info)))
+                                .map(|(id, info)| {
+                                    (
+                                        id,
+                                        info.output_index,
+                                        anyhow!(
+                                            "source table truncated: name: {} id: {}",
+                                            info.desc.name,
+                                            info.desc.oid
+                                        ),
+                                    )
                                 })
-                                .collect::<Vec<String>>();
-                            return Err(Definite(anyhow!(
-                                "source table(s) {} got truncated",
-                                tables.join(", ")
-                            )))?;
+                                .collect::<Vec<_>>();
+
+                            for (rel_id, output_index, err) in truncated_tables {
+                                handle_subsource_err!(
+                                    errors,
+                                    source_tables,
+                                    output_index,
+                                    err,
+                                    rel_id
+                                );
+                            }
                         }
                         // The enum is marked as non_exhaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
@@ -1275,10 +1500,15 @@ async fn produce_replication<'a>(
                     },
                     Ok(Some(PrimaryKeepAlive(keepalive))) => {
                         needs_status_update = needs_status_update || keepalive.reply() == 1;
-                        observed_wal_end = PgLsn::from(keepalive.wal_end());
+                        // Irrespective of the WAL lag, we do not want to reconnect if we have
+                        // pending writes, nor do we want to consider fast-forwarding the WAL. If
+                        // the WAL lag is intense enough, we'll receive a TCP error.
+                        if inserts.is_empty() && deletes.is_empty() && errors.is_empty() {
+                            observed_wal_end = PgLsn::from(keepalive.wal_end());
 
-                        if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD {
-                            break;
+                            if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD {
+                                break;
+                            }
                         }
                     }
                     // The enum is marked non_exhaustive, better be conservative
@@ -1332,7 +1562,8 @@ async fn produce_replication<'a>(
             let peek_binary_start_time = Instant::now();
 
             let changes = peek_wal_lsns(client_config.clone(), slot, publication, None)
-                .await?
+                .await
+                .err_indefinite()?
                 .filter(|change_lsn| change_lsn > &last_commit_lsn)
                 .count();
 
@@ -1366,8 +1597,8 @@ async fn peek_wal_lsns(
     slot: &str,
     publication: &str,
     up_to: Option<PgLsn>,
-) -> Result<impl Iterator<Item = PgLsn>, ReplicationError> {
-    let client = config.connect_replication().await.err_indefinite()?;
+) -> Result<impl Iterator<Item = PgLsn>, mz_postgres_util::PostgresError> {
+    let client = config.connect_replication().await?;
     let query = format!(
         "SELECT lsn FROM pg_logical_slot_peek_binary_changes(
             '{}', {}, NULL,
@@ -1382,7 +1613,7 @@ async fn peek_wal_lsns(
         publication,
     );
 
-    let rows = client.simple_query(&query).await.err_indefinite()?;
+    let rows = client.simple_query(&query).await?;
 
     Ok(rows.into_iter().filter_map(|row| match row {
         SimpleQueryMessage::Row(row) => {

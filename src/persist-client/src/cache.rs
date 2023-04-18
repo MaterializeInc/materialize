@@ -14,7 +14,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, RwLock, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
@@ -33,7 +33,7 @@ use tracing::instrument;
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{Metrics, MetricsBlob, MetricsConsensus};
+use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus};
 use crate::internal::state::TypedState;
 use crate::{PersistClient, PersistConfig, PersistLocation, ShardId};
 
@@ -267,7 +267,7 @@ trait DynState: Debug + Send + Sync {
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
-impl<K, V, T, D> DynState for Mutex<TypedState<K, V, T, D>>
+impl<K, V, T, D> DynState for RwLock<TypedState<K, V, T, D>>
 where
     K: Codec,
     V: Codec,
@@ -317,7 +317,7 @@ impl StateCache {
         &self,
         shard_id: ShardId,
         mut init_fn: InitFn,
-    ) -> Result<Arc<Mutex<TypedState<K, V, T, D>>>, Box<CodecMismatch>>
+    ) -> Result<LockingTypedState<K, V, T, D>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -348,11 +348,11 @@ impl StateCache {
             let state = match init {
                 StateCacheInit::Init(x) => x,
                 StateCacheInit::NeedInit(init_once) => {
-                    let mut did_init: Option<Arc<Mutex<TypedState<K, V, T, D>>>> = None;
+                    let mut did_init: Option<Arc<RwLock<TypedState<K, V, T, D>>>> = None;
                     let state = init_once
                         .get_or_try_init::<Box<CodecMismatch>, _, _>(|| async {
                             let init_res = init_fn().await;
-                            let state = Arc::new(Mutex::new(init_res?));
+                            let state = Arc::new(RwLock::new(init_res?));
                             let ret = Arc::downgrade(&state);
                             did_init = Some(state);
                             let ret: Weak<dyn DynState> = ret;
@@ -362,7 +362,7 @@ impl StateCache {
                     if let Some(x) = did_init {
                         // We actually did the init work, don't bother casting back
                         // the type erased and weak version.
-                        return Ok(x);
+                        return Ok(LockingTypedState(x));
                     }
                     let Some(state) = state.upgrade() else {
                         // Race condition. Between when we first checked the
@@ -379,9 +379,9 @@ impl StateCache {
 
             match Arc::clone(&state)
                 .as_any()
-                .downcast::<Mutex<TypedState<K, V, T, D>>>()
+                .downcast::<RwLock<TypedState<K, V, T, D>>>()
             {
-                Ok(x) => return Ok(x),
+                Ok(x) => return Ok(LockingTypedState(x)),
                 Err(_) => {
                     return Err(Box::new(CodecMismatch {
                         requested: (
@@ -428,6 +428,64 @@ impl StateCache {
             .values()
             .filter(|x| x.get().map_or(false, |x| x.upgrade().is_some()))
             .count()
+    }
+}
+
+/// A locked decorator for TypedState that abstracts out the specific lock implementation used.
+/// Guards the private lock with public accessor fns to make locking scopes more explicit and
+/// simpler to reason about.
+#[derive(Debug)]
+pub(crate) struct LockingTypedState<K, V, T, D>(Arc<RwLock<TypedState<K, V, T, D>>>);
+
+impl<K, V, T, D> Clone for LockingTypedState<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<K, V, T, D> LockingTypedState<K, V, T, D> {
+    pub(crate) fn read_lock<R, F: FnMut(&TypedState<K, V, T, D>) -> R>(
+        &self,
+        metrics: &LockMetrics,
+        mut f: F,
+    ) -> R {
+        metrics.acquire_count.inc();
+        let state = match self.0.try_read() {
+            Ok(x) => x,
+            Err(TryLockError::WouldBlock) => {
+                metrics.blocking_acquire_count.inc();
+                let start = Instant::now();
+                let state = self.0.read().expect("lock poisoned");
+                metrics
+                    .blocking_seconds
+                    .inc_by(start.elapsed().as_secs_f64());
+                state
+            }
+            Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
+        };
+        f(&state)
+    }
+
+    pub(crate) fn write_lock<R, F: FnOnce(&mut TypedState<K, V, T, D>) -> R>(
+        &self,
+        metrics: &LockMetrics,
+        f: F,
+    ) -> R {
+        metrics.acquire_count.inc();
+        let mut state = match self.0.try_write() {
+            Ok(x) => x,
+            Err(TryLockError::WouldBlock) => {
+                metrics.blocking_acquire_count.inc();
+                let start = Instant::now();
+                let state = self.0.write().expect("lock poisoned");
+                metrics
+                    .blocking_seconds
+                    .inc_by(start.elapsed().as_secs_f64());
+                state
+            }
+            Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
+        };
+        f(&mut state)
     }
 }
 
@@ -527,12 +585,12 @@ mod tests {
                 0,
             )
         }
-        async fn assert_same<K, V, T, D>(
-            state1: &Mutex<TypedState<K, V, T, D>>,
-            state2: &Mutex<TypedState<K, V, T, D>>,
+        fn assert_same<K, V, T, D>(
+            state1: &LockingTypedState<K, V, T, D>,
+            state2: &LockingTypedState<K, V, T, D>,
         ) {
-            let pointer1 = format!("{:p}", state1.lock().await.deref());
-            let pointer2 = format!("{:p}", state2.lock().await.deref());
+            let pointer1 = format!("{:p}", state1.0.read().expect("lock").deref());
+            let pointer2 = format!("{:p}", state2.0.read().expect("lock").deref());
             assert_eq!(pointer1, pointer2);
         }
 
@@ -596,7 +654,7 @@ mod tests {
         assert_eq!(did_work.load(Ordering::SeqCst), false);
         assert_eq!(states.initialized_count().await, 1);
         assert_eq!(states.strong_count().await, 1);
-        assert_same(&s1_state1, &s1_state2).await;
+        assert_same(&s1_state1, &s1_state2);
 
         // Trying to initialize with different types doesn't work.
         let did_work = Arc::new(AtomicBool::new(false));
@@ -629,7 +687,7 @@ mod tests {
             .get::<String, (), u64, i64, _, _>(s2, || async { Ok(new_state(s2)) })
             .await
             .expect("should successfully initialize");
-        assert_same(&s2_state1, &s2_state2).await;
+        assert_same(&s2_state1, &s2_state2);
 
         // The cache holds weak references to State so we reclaim memory if the
         // shards stops being used.

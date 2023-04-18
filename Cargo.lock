@@ -1375,9 +1375,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.6"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2dd04ddaf88237dc3b8d8f9a3c1004b506b54b3313403944054d23c0870c521"
+checksum = "a33c2bf77f2df06183c3aa30d1e96c0695a313d4f9c453cc3762a6db39f99200"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
@@ -3626,7 +3626,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.51.0-dev"
+version = "0.52.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3774,7 +3774,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.51.0-dev"
+version = "0.52.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4279,7 +4279,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.51.0-dev"
+version = "0.52.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4331,6 +4331,7 @@ dependencies = [
  "bytes",
  "mz-proto",
  "parquet2",
+ "proptest",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -4757,6 +4758,7 @@ dependencies = [
  "anyhow",
  "mz-ore",
  "openssh",
+ "openssh-mux-client",
  "openssl",
  "rand",
  "scopeguard",

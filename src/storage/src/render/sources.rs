@@ -18,7 +18,8 @@ use std::sync::Arc;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{self, Exchange, OkErr};
-use timely::dataflow::Scope;
+use timely::dataflow::scopes::{Child, Scope};
+use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
 
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
@@ -32,7 +33,7 @@ use mz_timely_util::operator::CollectionExt;
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::render::upsert::UpsertKey;
-use crate::source::types::{DecodeResult, SourceOutput};
+use crate::source::types::{DecodeResult, HealthStatusUpdate, SourceOutput};
 use crate::source::{self, RawSourceCreationConfig, SourceCreationParams};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
@@ -47,6 +48,13 @@ pub enum SourceType<G: Scope> {
     Row(Collection<G, SourceOutput<(), Row>, Diff>),
 }
 
+/// The worker index for health streams, used to differentiate itself from [`OutputIndex`].
+pub(crate) type WorkerId = usize;
+
+/// The output index for health streams, used to handle multiplexed streams and differentiate itself
+/// from [`WorkerId`].
+pub(crate) type OutputIndex = usize;
+
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the final source and its errors
 /// as requested by the original `CREATE SOURCE` statement,
@@ -58,23 +66,22 @@ pub enum SourceType<G: Scope> {
 ///
 /// This function is intended to implement the recipe described here:
 /// <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-storage.md#source-ingestion>
-pub fn render_source<RootG, G>(
-    root_scope: &mut RootG,
-    scope: &mut G,
+pub fn render_source<'g, G: Scope<Timestamp = ()>>(
+    scope: &mut Child<'g, G, mz_repr::Timestamp>,
     dataflow_debug_name: &String,
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
-    resume_upper: Antichain<G::Timestamp>,
+    resume_upper: Antichain<mz_repr::Timestamp>,
     source_resume_upper: Vec<Row>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
-    Vec<(Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)>,
+    Vec<(
+        Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
+        Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
+    )>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
     Rc<dyn Any>,
-)
-where
-    RootG: Scope<Timestamp = ()>,
-    G: Scope<Timestamp = Timestamp>,
-{
+) {
     // Tokens that we should return from the method.
     let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
 
@@ -97,7 +104,7 @@ where
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         id,
-        num_outputs: description.desc.connection.num_outputs(),
+        source_exports: description.source_exports.clone(),
         timestamp_interval: description.desc.timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
@@ -124,62 +131,64 @@ where
     // a million fields
     let resumption_calculator = description.clone();
 
-    let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
-
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let ((ok_sources, err_source), capability) = match connection {
+    let (streams, health, capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
-                root_scope,
+            let (streams, health, cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
-                internal_cmd_tx,
             );
-            let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
+            let streams: Vec<_> = streams
+                .into_iter()
+                .map(|(ok, err)| (SourceType::Delimited(ok), err))
+                .collect();
+            (streams, health, cap)
         }
         GenericSourceConnection::Postgres(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
-                root_scope,
+            let (streams, health, cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
-                internal_cmd_tx,
             );
-            let oks = oks.into_iter().map(SourceType::Row).collect();
-            ((oks, err), cap)
+            let streams: Vec<_> = streams
+                .into_iter()
+                .map(|(ok, err)| (SourceType::Row(ok), err))
+                .collect();
+            (streams, health, cap)
         }
         GenericSourceConnection::LoadGenerator(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
-                root_scope,
+            let (streams, health, cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
-                internal_cmd_tx,
             );
-            let oks = oks.into_iter().map(SourceType::Row).collect();
-            ((oks, err), cap)
+            let streams: Vec<_> = streams
+                .into_iter()
+                .map(|(ok, err)| (SourceType::Row(ok), err))
+                .collect();
+            (streams, health, cap)
         }
         GenericSourceConnection::TestScript(connection) => {
-            let ((oks, err), cap) = source::create_raw_source(
-                root_scope,
+            let (streams, health, cap) = source::create_raw_source(
                 scope,
                 base_source_config,
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
-                internal_cmd_tx,
             );
-            let oks: Vec<_> = oks.into_iter().map(SourceType::Delimited).collect();
-            ((oks, err), cap)
+            let streams: Vec<_> = streams
+                .into_iter()
+                .map(|(ok, err)| (SourceType::Delimited(ok), err))
+                .collect();
+            (streams, health, cap)
         }
     };
 
@@ -188,7 +197,7 @@ where
     needed_tokens.push(source_token);
 
     let mut outputs = vec![];
-    for ok_source in ok_sources {
+    for (ok_source, err_source) in streams {
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
@@ -207,7 +216,7 @@ where
         needed_tokens.extend(extra_tokens);
         outputs.push((ok, err));
     }
-    (outputs, Rc::new(needed_tokens))
+    (outputs, health, Rc::new(needed_tokens))
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope

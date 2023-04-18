@@ -47,7 +47,7 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
-use crate::AdapterError;
+use crate::{rbac, AdapterError};
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a, T> {
@@ -755,6 +755,9 @@ fn eval_unmaterializable_func(
             pack(t)
         }
         UnmaterializableFunc::CurrentUser => pack(Datum::from(&*session.user().name)),
+        UnmaterializableFunc::IsRbacEnabled => pack(Datum::from(
+            rbac::is_rbac_enabled_for_session(state.system_config(), session),
+        )),
         UnmaterializableFunc::MzEnvironmentId => {
             pack(Datum::from(&*state.config().environment_id.to_string()))
         }

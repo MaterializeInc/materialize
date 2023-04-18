@@ -8,8 +8,6 @@ aliases:
     - /sql/show-column
 ---
 
-{{< show-command-note >}}
-
 `SHOW COLUMNS` lists the columns available from an item&mdash;either sources, materialized views, or non-materialized views.
 
 ## Syntax

@@ -1177,7 +1177,8 @@ VIEW ov
             ],
             "limit": 5,
             "offset": 0,
-            "monotonic": false
+            "monotonic": false,
+            "expected_group_size": null
           }
         },
         "outputs": [
@@ -2976,7 +2977,8 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                         "order_key": [],
                                                         "limit": 1,
                                                         "offset": 0,
-                                                        "monotonic": false
+                                                        "monotonic": false,
+                                                        "expected_group_size": null
                                                       }
                                                     },
                                                     "outputs": [
@@ -3529,7 +3531,8 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                                                         "order_key": [],
                                                         "limit": 1,
                                                         "offset": 0,
-                                                        "monotonic": false
+                                                        "monotonic": false,
+                                                        "expected_group_size": null
                                                       }
                                                     },
                                                     "outputs": [
@@ -6982,7 +6985,7 @@ FROM
                           "column_types": [
                             {
                               "scalar_type": "Int32",
-                              "nullable": true
+                              "nullable": false
                             },
                             {
                               "scalar_type": "Int32",
@@ -7021,7 +7024,7 @@ FROM
                                 "column_types": [
                                   {
                                     "scalar_type": "Int32",
-                                    "nullable": true
+                                    "nullable": false
                                   },
                                   {
                                     "scalar_type": "Int32",
@@ -7056,7 +7059,7 @@ FROM
                                                   "column_types": [
                                                     {
                                                       "scalar_type": "Int32",
-                                                      "nullable": true
+                                                      "nullable": false
                                                     }
                                                   ],
                                                   "keys": [
@@ -7131,7 +7134,7 @@ FROM
                                             "column_types": [
                                               {
                                                 "scalar_type": "Int32",
-                                                "nullable": true
+                                                "nullable": false
                                               },
                                               {
                                                 "scalar_type": "Int32",
@@ -7170,7 +7173,7 @@ FROM
                                                                           "column_types": [
                                                                             {
                                                                               "scalar_type": "Int32",
-                                                                              "nullable": true
+                                                                              "nullable": false
                                                                             },
                                                                             {
                                                                               "scalar_type": "Int32",
@@ -7209,7 +7212,7 @@ FROM
                                                                         "column_types": [
                                                                           {
                                                                             "scalar_type": "Int32",
-                                                                            "nullable": true
+                                                                            "nullable": false
                                                                           }
                                                                         ],
                                                                         "keys": [
@@ -7242,7 +7245,7 @@ FROM
                                                               "column_types": [
                                                                 {
                                                                   "scalar_type": "Int32",
-                                                                  "nullable": true
+                                                                  "nullable": false
                                                                 }
                                                               ],
                                                               "keys": [
@@ -7318,7 +7321,7 @@ FROM
                                         "column_types": [
                                           {
                                             "scalar_type": "Int32",
-                                            "nullable": true
+                                            "nullable": false
                                           },
                                           {
                                             "scalar_type": "Int32",

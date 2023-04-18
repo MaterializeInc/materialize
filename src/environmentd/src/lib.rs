@@ -92,6 +92,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rand::seq::SliceRandom;
 use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 
@@ -219,20 +220,10 @@ pub struct Config {
 /// Configures TLS encryption for connections.
 #[derive(Debug, Clone)]
 pub struct TlsConfig {
-    /// The TLS mode to use.
-    pub mode: TlsMode,
     /// The path to the TLS certificate.
     pub cert: PathBuf,
     /// The path to the TLS key.
     pub key: PathBuf,
-}
-
-/// Configures how strictly to enforce TLS encryption and authentication.
-#[derive(Debug, Clone)]
-pub enum TlsMode {
-    /// Require that all clients connect with TLS, but do not require that they
-    /// present a client certificate.
-    Require,
 }
 
 /// Start an `environmentd` server.
@@ -265,15 +256,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             };
             let pgwire_tls = mz_pgwire::TlsConfig {
                 context: context.clone(),
-                mode: match tls_config.mode {
-                    TlsMode::Require => mz_pgwire::TlsMode::Enable,
-                },
+                mode: mz_pgwire::TlsMode::Require,
             };
             let http_tls = http::TlsConfig {
                 context,
-                mode: match tls_config.mode {
-                    TlsMode::Require => http::TlsMode::Enable,
-                },
+                mode: http::TlsMode::Require,
             };
             (Some(pgwire_tls), Some(http_tls))
         }
@@ -328,7 +315,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             // availability zone installed.
             default_availability_zone: config
                 .availability_zones
-                .first()
+                .choose(&mut rand::thread_rng())
                 .cloned()
                 .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
         },
@@ -411,7 +398,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Launch SQL server.
     task::spawn(|| "sql_server", {
         let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
-            tls: pgwire_tls,
+            tls: pgwire_tls.clone(),
             adapter_client: adapter_client.clone(),
             frontegg: config.frontegg.clone(),
             metrics: metrics.clone(),
@@ -423,7 +410,16 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Launch internal SQL server.
     task::spawn(|| "internal_sql_server", {
         let internal_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
-            tls: None,
+            tls: pgwire_tls.map(|mut pgwire_tls| {
+                // Allow, but do not require, TLS connections on the internal
+                // port. Some users of the internal SQL server do not support
+                // TLS, while others require it, so we allow both.
+                //
+                // TODO(benesch): migrate all internal applications to TLS and
+                // remove `TlsMode::Allow`.
+                pgwire_tls.mode = mz_pgwire::TlsMode::Allow;
+                pgwire_tls
+            }),
             adapter_client: adapter_client.clone(),
             frontegg: None,
             metrics,

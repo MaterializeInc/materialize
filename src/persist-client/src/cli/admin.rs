@@ -191,7 +191,7 @@ pub async fn force_compaction(
 
     let mut attempt = 0;
     'outer: loop {
-        machine.applier.fetch_and_update_state().await;
+        machine.applier.fetch_and_update_state(None).await;
         let reqs = machine.applier.all_fueled_merge_reqs();
         info!("attempt {}: got {} compaction reqs", attempt, reqs.len());
         for (idx, req) in reqs.clone().into_iter().enumerate() {
@@ -455,7 +455,7 @@ async fn force_gc(
     let mut machine = make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;
     let gc_req = GcReq {
         shard_id,
-        new_seqno_since: machine.applier.state().seqno_since(),
+        new_seqno_since: machine.applier.seqno_since(),
     };
     let maintenance = GarbageCollector::gc_and_truncate(&mut machine, gc_req).await;
     if !maintenance.is_empty() {

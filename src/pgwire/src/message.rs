@@ -384,7 +384,7 @@ impl ErrorResponse {
                 SqlState::INTERNAL_ERROR
             }
             AdapterError::ConcurrentRoleDrop(_) => SqlState::UNDEFINED_OBJECT,
-            AdapterError::DependentObjectOwnership(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+            AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::VarError(e) => match e {
                 VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
                 VarError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
@@ -426,7 +426,8 @@ impl ErrorResponse {
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
             AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
             AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
-            AdapterNotice::RbacDisabled => SqlState::WARNING,
+            AdapterNotice::RbacSystemDisabled => SqlState::WARNING,
+            AdapterNotice::RbacUserDisabled => SqlState::WARNING,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::WARNING,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
             AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::WARNING,
@@ -587,7 +588,8 @@ impl Severity {
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
             AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
             AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
-            AdapterNotice::RbacDisabled => Severity::Notice,
+            AdapterNotice::RbacSystemDisabled => Severity::Notice,
+            AdapterNotice::RbacUserDisabled => Severity::Notice,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
             AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
