@@ -22,7 +22,8 @@ INSERT INTO t_base VALUES (1, 9223372036854775807);
 statement ok
 INSERT INTO t_base VALUES (1, 9223372036854775807);
 
-# statement ok
+# see also: https://github.com/MaterializeInc/materialize/issues/17758
+# statement error
 # CREATE VIEW v_using_constant_folding AS
 #  SELECT data FROM (
 #     SELECT * FROM (
@@ -31,6 +32,9 @@ INSERT INTO t_base VALUES (1, 9223372036854775807);
 #         ) AS t_base(data, diff),
 #         repeat_row(diff)
 # );
+# resulting in:
+# thread 'coordinator' panicked at 'attempt to multiply with overflow', src/transform/src/fold_constants.rs:629:49
+# note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 # query I
 # SELECT SUM(data)

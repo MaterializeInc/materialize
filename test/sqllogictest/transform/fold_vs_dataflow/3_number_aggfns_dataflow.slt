@@ -21,6 +21,8 @@ INSERT INTO t_using_dataflow_rendering VALUES
  (1e38::real, 1e38::double, 1e38::numeric, (-32767)::INT2, (-1)::INT2),
  (2, 2, 2, 32767::INT2, 1::INT2);
 
+# DIFF TO CONSTANT FOLDING!
+# to be addressed with https://github.com/MaterializeInc/materialize/issues/15186
 query IIIIIIIIIIIIIIIIIIIIIIII
 SELECT
  SUM(real1), SUM(double1), SUM(numeric1),

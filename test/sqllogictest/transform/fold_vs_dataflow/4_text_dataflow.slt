@@ -25,6 +25,8 @@ CREATE TABLE t_operator (op_val TEXT);
 statement ok
 INSERT INTO t_operator VALUES ('%bCd%');
 
+# DIFF TO CONSTANT FOLDING!
+# to be addressed with https://github.com/MaterializeInc/materialize/issues/18494
 query T
 SELECT * FROM t_data
 WHERE f1 ILIKE (SELECT op_val FROM t_operator)

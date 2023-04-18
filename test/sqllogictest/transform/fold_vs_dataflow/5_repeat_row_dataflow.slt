@@ -22,17 +22,37 @@ INSERT INTO t_base VALUES (1, 9223372036854775807);
 statement ok
 INSERT INTO t_base VALUES (1, 9223372036854775807);
 
-# statement ok
-# CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
-#  SELECT data FROM t_base, repeat_row(diff);
+statement ok
+CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
+  SELECT data FROM t_base, repeat_row(diff);
 
-# query I
+# see also: https://github.com/MaterializeInc/materialize/issues/17758
+# query error
 # SELECT SUM(data)
 # FROM mv_using_dataflow_rendering;
-# ----
+# resulting in:
+# thread 'tokio-runtime-worker' panicked at 'cluster-u1-replica-1-0 crashed; aborting because propagate_crashes is enabled', src/orchestrator-process/src/lib.rs:560:29
+# note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+# 2023-04-18T09:50:00.705649Z  WARN mz_storage_client::controller::rehydration: storage cluster produced error, reconnecting: status: Unknown, message: "error reading a body from connection: broken pipe", details: [], metadata: MetadataMap { headers: {} }
 
-# query T multiline
-# EXPLAIN SELECT SUM(data)
-# FROM mv_using_dataflow_rendering;
-# ----
-# EOF
+query T multiline
+EXPLAIN SELECT SUM(data)
+FROM mv_using_dataflow_rendering;
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0)]
+        Get materialize.public.mv_using_dataflow_rendering
+
+EOF
