@@ -4,15 +4,15 @@
 # Summary
 
 - Support user specified order by in Kafka upsert sources in a limited capacity. If users want to specify custom ordering which is semantically meaningful to them, there's currently no easy way to do that. They could potentially use `ENVELOPE NONE` along with a `DISTINCT ON` view to get similar results, but it's cumbersome and lacks the automatic compaction on keys with normal `ENVELOPE UPSERT`.
-- Currently, will limit the scope to allow only `ORDER BY` the `TIMESTAMP` metadata field. Depending upon user feedback this can later be expanded to support expressions and extractions from other columns like `HEADERS`.
+- Currently, will limit the scope to allow only `ORDER BY` the `TIMESTAMP` and the `OFFSET` metadata fields. Depending upon user feedback this can later be expanded to support expressions and extractions from other columns like `HEADERS`.
 
 # Scope
 
-The scope will be limited to only allow `ORDER BY TIMESTAMP` (ascending order).
+The scope will be limited to only allow `ORDER BY ( TIMESTAMP, OFFSET )` (ascending order).
 
 - In a key-compacted Kafka topic, value = NULL is taken to mean that it’s a delete tombstone and that the corresponding key should be removed. If we want to borrow that tombstone semantic for our more flexible upsert source, it would make sense to limit the `ORDER BY` columns to only the metadata columns.
-- Limiting it to only `TIMESTAMP` because
-    - `OFFSET` is already default. We can make it explicit though if we want.
+- Limiting it to only `TIMESTAMP` and `OFFSET` because
+    - `OFFSET` is already default. We are making it explicit here and it's going to be required that the user always mention `OFFSET` as one of the columns in ORDER BY.
     - `PARTITION`, `KEY`, `TOPIC`, would not make for meaningful orderings:
         - The `PARTITION` of a record is typically derived from its key, and so is the same for every record with a given key.
         - `KEY` is, by definition, the same for every record with a given key.
@@ -24,7 +24,7 @@ The scope will be limited to only allow `ORDER BY TIMESTAMP` (ascending order).
 
 ## Proposal
 
-Make it possible with unsafe-mode to provide custom ORDER BY clause which will override the default ordering by offset. The given ORDER BY identifier should refer to the included TIMESTAMP metadata column.
+Make it possible with unsafe-mode to provide custom ORDER BY clause which will override the default ordering by offset. The given ORDER BY identifiers should refer to only the included TIMESTAMP and OFFSET metadata columns. It will be required that the user always mention OFFSET as one of the columns for the ORDER BY clause.
 
 The option will be part of the `ENVELOPE UPSERT` clause with the following grammar:
 
@@ -33,43 +33,45 @@ The option will be part of the `ENVELOPE UPSERT` clause with the following gramm
 The `ASC` modifier is optional noise for specifying ascending ordering, for symmetry with the `ORDER BY` clause in `SELECT` statements.
 
 Examples of valid syntax and semantics:
-- `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP ) ASC )`
-- `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts ENVELOPE UPSERT ( ORDER BY ( ts ) )`
+- `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP, OFFSET ) ASC )`
+- `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts, OFFSET AS o ENVELOPE UPSERT ( ORDER BY ( ts, o ) )`
+- `CREATE SOURCE ... INCLUDE OFFSET AS o ENVELOPE UPSERT ( ORDER BY ( o ) )` (equivalent to default ordering by offset behavior)
 
 Examples that are syntactically invalid:
-- `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY TIMESTAMP )` (missing parentheses around TIMESTAMP)
-- `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts ENVELOPE UPSERT ( ORDER BY ( ts ) DESC )` (DESC ordering is not allowed, will be rejected at parsing)
+- `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY TIMESTAMP, OFFSET )` (missing parentheses around order by columns)
+- `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts, OFFSET AS o ENVELOPE UPSERT ( ORDER BY ( ts, o ) DESC )` (DESC ordering is not allowed, will be rejected at parsing)
 
 Examples that are syntactically valid but semantically invalid:
-- `CREATE SOURCE ... INCLUDE OFFSET ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP ) )` (TIMESTAMP column is not included)
-- `CREATE SOURCE ... INCLUDE PARTITION AS p ENVELOPE UPSERT ( ORDER BY ( p ) )` (ORDER BY identifier does not refer to the TIMESTAMP metadata column)
+- `CREATE SOURCE ... INCLUDE OFFSET ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP ) )` (OFFSET is not specified as one of the order by columns)
+- `CREATE SOURCE ... INCLUDE OFFSET ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP, OFFSET ) )` (TIMESTAMP column is not included)
+- `CREATE SOURCE ... INCLUDE PARTITION AS p ENVELOPE UPSERT ( ORDER BY ( p ) )` (ORDER BY identifier does not refer to the TIMESTAMP or OFFSET metadata column)
 
 # Reference Explanation
-For envelope upsert, the included metadata columns are appended to the value and eventually persisted. For this feature, we will keep track of the index of the order by field and read the corresponding value to compare when upsert-ing.
+For envelope upsert, the included metadata columns are appended to the value and eventually persisted. For this feature, we will keep track of the indices of the order by fields and read the corresponding values to compare when upsert-ing.
 
-Here's an example of the upsert behavior where the source consists of a key, value and the timestamp from metadata and is ordered by the timestamp.
+Here's an example of the upsert behavior where the source consists of a key, value, timestamp and offset from metadata and is ordered by (timestamp, offset).
 
 ```
  Previously persisted data        Incoming kafka stream decoded
-+------------------------+         +-------------------------+
-| Ok (key1, old1, 100)   |         |  Ok (key1, new1, 200)   |
-| Ok (key2, old2, 201)   |         |  Ok (key2, new2, 200)   |
-| Err(key3, some_error1) |         |  Err(key3, some_error2) |
-| Ok (key4, old4, 300)   |         |  Ok (key4, new4, 300)   |
-+------------------+-----+         +-----+-------------------+
++-------------------------+         +--------------------------+
+| Ok (key1, old1, 100, 1) |         |  Ok (key1, new1, 200, 5) |
+| Ok (key2, old2, 201, 2) |         |  Ok (key2, new2, 200, 6) |
+| Err(key3, some_error1)  |         |  Err(key3, some_error2)  |
+| Ok (key4, old4, 300, 4) |         |  Ok (key4, new4, 300, 7) |
++------------------+------+         +-----+--------------------+
                    |                     |
                    |                     |
                    |                     |
                    |                     |
                    v    Upsert Output    v
-                  +------------------------+
-                  | Ok (key1, new1, 200)   | // value updated, 200 > 100
-                  | Ok (key2, old2, 201)   | // old value kept, 200 < 201
-                  | Err(key3, some_error2) | // new error always overrides old
-                  | Ok (key4, new4, 300)   | // updated value with higher offset
-                  +------------------------+
+                  +-------------------------+
+                  | Ok (key1, new1, 200, 5) | // value updated, (200, 5) > (100, 1)
+                  | Ok (key2, old2, 201, 2) | // old value kept, (200, 6) < (201, 2)
+                  | Err(key3, some_error2)  | // new error always overrides old
+                  | Ok (key4, new4, 300, 7) | // value updated, (300, 7) > (300, 4)
+                  +-------------------------+
 ```
-In case the order by value of two entries are same, the offset will be used as a tie-breaker.
+Since offset is always going to be part of the order by value, it will function as an explicit tie-breaker when timestamps are same.
 
 Note: As shown in the example above, the errors are still implicitly ordered by offset as we do not persist any extra metadata for them separately. A later error with the same key will always overwrite a previous one. This would still allow us to retract errors in the same way as before.
 
