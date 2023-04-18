@@ -87,52 +87,51 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 2  create  schema  {"database_name":"materialize","id":"3","name":"public"}  NULL
 3  create  cluster  {"id":"u1","name":"default"}  NULL
 4  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","logical_size":"1","replica_id":"1","replica_name":"r1"}  NULL
-5  create  role  {"id":"u1","name":"default_owner"}  NULL
-6  create  role  {"id":"u2","name":"materialize"}  materialize
-7  create  database  {"id":"u2","name":"test"}  materialize
-8  create  schema  {"database_name":"test","id":"u6","name":"public"}  materialize
-9  create  schema  {"database_name":"test","id":"u7","name":"sc1"}  materialize
-10  create  schema  {"database_name":"test","id":"u8","name":"sc2"}  materialize
-11  drop  schema  {"database_name":"test","id":"u7","name":"sc1"}  materialize
-12  drop  schema  {"database_name":"test","id":"u6","name":"public"}  materialize
-13  drop  schema  {"database_name":"test","id":"u8","name":"sc2"}  materialize
-14  drop  database  {"id":"u2","name":"test"}  materialize
-15  create  role  {"id":"u3","name":"foo"}  materialize
-16  drop  role  {"id":"u3","name":"foo"}  materialize
-17  create  cluster  {"id":"u2","name":"foo"}  materialize
-18  create  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","logical_size":"1","replica_id":"4","replica_name":"r"}  materialize
-19  create  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
-20  create  view  {"database":"materialize","id":"u2","item":"unmat","schema":"public"}  materialize
-21  create  table  {"database":"materialize","id":"u3","item":"t","schema":"public"}  materialize
-22  create  index  {"database":"materialize","id":"u4","item":"t_primary_idx","schema":"public"}  materialize
-23  alter  view  {"id":"u2","new_name":{"database":"materialize","item":"renamed","schema":"public"},"old_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
-24  drop  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
-25  create  materialized-view  {"database":"materialize","id":"u5","item":"v2","schema":"public"}  materialize
-26  create  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
-27  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
-28  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
-29  create  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public","size":null,"type":"subsource"}  materialize
-30  create  cluster  {"id":"u3","name":"materialize_public_s"}  materialize
-31  create  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","logical_size":"1","replica_id":"5","replica_name":"linked"}  materialize
-32  create  source  {"database":"materialize","id":"u8","item":"s","schema":"public","size":"1","type":"load-generator"}  materialize
-33  drop  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","replica_id":"5","replica_name":"linked"}  materialize
-34  create  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","logical_size":"2","replica_id":"6","replica_name":"linked"}  materialize
-35  alter  source  {"database":"materialize","id":"u8","item":"s","new_size":"2","old_size":"1","schema":"public"}  materialize
-36  drop  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public"}  materialize
-37  drop  source  {"database":"materialize","id":"u8","item":"s","schema":"public"}  materialize
-38  drop  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","replica_id":"6","replica_name":"linked"}  materialize
-39  drop  cluster  {"id":"u3","name":"materialize_public_s"}  materialize
-40  create  source  {"database":"materialize","id":"u9","item":"accounts","schema":"public","size":null,"type":"subsource"}  materialize
-41  create  source  {"database":"materialize","id":"u10","item":"auctions","schema":"public","size":null,"type":"subsource"}  materialize
-42  create  source  {"database":"materialize","id":"u11","item":"bids","schema":"public","size":null,"type":"subsource"}  materialize
-43  create  source  {"database":"materialize","id":"u12","item":"organizations","schema":"public","size":null,"type":"subsource"}  materialize
-44  create  source  {"database":"materialize","id":"u13","item":"users","schema":"public","size":null,"type":"subsource"}  materialize
-45  create  source  {"database":"materialize","id":"u14","item":"multiplex_progress","schema":"public","size":null,"type":"subsource"}  materialize
-46  create  cluster  {"id":"u4","name":"materialize_public_multiplex"}  materialize
-47  create  cluster-replica  {"cluster_id":"u4","cluster_name":"materialize_public_multiplex","logical_size":"1","replica_id":"7","replica_name":"linked"}  materialize
-48  create  source  {"database":"materialize","id":"u15","item":"multiplex","schema":"public","size":"1","type":"load-generator"}  materialize
-49  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_id":"4","replica_name":"r"}  materialize
-50  drop  cluster  {"id":"u2","name":"foo"}  materialize
+5  create  role  {"id":"u1","name":"materialize"}  materialize
+6  create  database  {"id":"u2","name":"test"}  materialize
+7  create  schema  {"database_name":"test","id":"u6","name":"public"}  materialize
+8  create  schema  {"database_name":"test","id":"u7","name":"sc1"}  materialize
+9  create  schema  {"database_name":"test","id":"u8","name":"sc2"}  materialize
+10  drop  schema  {"database_name":"test","id":"u7","name":"sc1"}  materialize
+11  drop  schema  {"database_name":"test","id":"u6","name":"public"}  materialize
+12  drop  schema  {"database_name":"test","id":"u8","name":"sc2"}  materialize
+13  drop  database  {"id":"u2","name":"test"}  materialize
+14  create  role  {"id":"u2","name":"foo"}  materialize
+15  drop  role  {"id":"u2","name":"foo"}  materialize
+16  create  cluster  {"id":"u2","name":"foo"}  materialize
+17  create  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","logical_size":"1","replica_id":"4","replica_name":"r"}  materialize
+18  create  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
+19  create  view  {"database":"materialize","id":"u2","item":"unmat","schema":"public"}  materialize
+20  create  table  {"database":"materialize","id":"u3","item":"t","schema":"public"}  materialize
+21  create  index  {"database":"materialize","id":"u4","item":"t_primary_idx","schema":"public"}  materialize
+22  alter  view  {"id":"u2","new_name":{"database":"materialize","item":"renamed","schema":"public"},"old_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
+23  drop  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
+24  create  materialized-view  {"database":"materialize","id":"u5","item":"v2","schema":"public"}  materialize
+25  create  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
+26  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
+27  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
+28  create  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public","size":null,"type":"subsource"}  materialize
+29  create  cluster  {"id":"u3","name":"materialize_public_s"}  materialize
+30  create  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","logical_size":"1","replica_id":"5","replica_name":"linked"}  materialize
+31  create  source  {"database":"materialize","id":"u8","item":"s","schema":"public","size":"1","type":"load-generator"}  materialize
+32  drop  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","replica_id":"5","replica_name":"linked"}  materialize
+33  create  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","logical_size":"2","replica_id":"6","replica_name":"linked"}  materialize
+34  alter  source  {"database":"materialize","id":"u8","item":"s","new_size":"2","old_size":"1","schema":"public"}  materialize
+35  drop  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public"}  materialize
+36  drop  source  {"database":"materialize","id":"u8","item":"s","schema":"public"}  materialize
+37  drop  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","replica_id":"6","replica_name":"linked"}  materialize
+38  drop  cluster  {"id":"u3","name":"materialize_public_s"}  materialize
+39  create  source  {"database":"materialize","id":"u9","item":"accounts","schema":"public","size":null,"type":"subsource"}  materialize
+40  create  source  {"database":"materialize","id":"u10","item":"auctions","schema":"public","size":null,"type":"subsource"}  materialize
+41  create  source  {"database":"materialize","id":"u11","item":"bids","schema":"public","size":null,"type":"subsource"}  materialize
+42  create  source  {"database":"materialize","id":"u12","item":"organizations","schema":"public","size":null,"type":"subsource"}  materialize
+43  create  source  {"database":"materialize","id":"u13","item":"users","schema":"public","size":null,"type":"subsource"}  materialize
+44  create  source  {"database":"materialize","id":"u14","item":"multiplex_progress","schema":"public","size":null,"type":"subsource"}  materialize
+45  create  cluster  {"id":"u4","name":"materialize_public_multiplex"}  materialize
+46  create  cluster-replica  {"cluster_id":"u4","cluster_name":"materialize_public_multiplex","logical_size":"1","replica_id":"7","replica_name":"linked"}  materialize
+47  create  source  {"database":"materialize","id":"u15","item":"multiplex","schema":"public","size":"1","type":"load-generator"}  materialize
+48  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"foo","replica_id":"4","replica_name":"r"}  materialize
+49  drop  cluster  {"id":"u2","name":"foo"}  materialize
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET mock_audit_event_timestamp = 666
@@ -145,7 +144,7 @@ CREATE TABLE tt ()
 query ITTTTT
 SELECT id, event_type, object_type, details, user, occurred_at FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-51  create  table  {"database":"materialize","id":"u16","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
+50  create  table  {"database":"materialize","id":"u16","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET mock_audit_event_timestamp
