@@ -2842,6 +2842,7 @@ pub struct RevokeRoleStatement<T: AstInfo> {
     pub member_names: Vec<T::RoleName>,
 }
 
+//
 impl<T: AstInfo> AstDisplay for RevokeRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("REVOKE ");
