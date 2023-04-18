@@ -122,7 +122,9 @@ class UpgradeEntireMzFourVersions(Scenario):
         return released_versions[3]
 
     def actions(self) -> List[Action]:
-        print(f"Upgrading going through {released_versions[:3]}")
+        print(
+            f"Upgrading going through {released_versions[3]} -> {released_versions[2]} -> {released_versions[1]} -> {released_versions[0]}"
+        )
         return [
             StartMz(tag=released_versions[3]),
             Initialize(self),
