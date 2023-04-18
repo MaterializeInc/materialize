@@ -86,7 +86,7 @@ def clean_up_sqs() -> None:
 
 
 def clean_up_ec2() -> None:
-    print(f"Terminating scratch ec2 instances whose age exceeds the deletion time")
+    print("Terminating scratch ec2 instances whose age exceeds the deletion time")
     olds = [i["InstanceId"] for i in scratch.get_old_instances()]
     if olds:
         print(f"Instances to delete: {olds}")

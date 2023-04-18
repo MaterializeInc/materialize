@@ -45,9 +45,9 @@ class MaterializeIndexConfig(dbtClassMixin):
             dbt.exceptions.CompilationError(f"Could not parse index config: {msg}")
         except TypeError:
             dbt.exceptions.CompilationError(
-                f"Invalid index config:\n"
+                "Invalid index config:\n"
                 f"  Got: {raw_index}\n"
-                f'  Expected a dictionary with at minimum a "columns" key'
+                '  Expected a dictionary with at minimum a "columns" key'
             )
 
 

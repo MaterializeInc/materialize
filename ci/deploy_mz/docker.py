@@ -22,7 +22,7 @@ def main() -> None:
         mzbuild.Repository(Path("."), Arch.AARCH64, coverage=False),
     ]
 
-    print(f"--- Tagging Docker images")
+    print("--- Tagging Docker images")
     deps = [[repo.resolve_dependencies([repo.images["mz"]])["mz"]] for repo in repos]
 
     mzbuild.publish_multiarch_images(f"v{VERSION}", deps)

@@ -75,7 +75,7 @@ class Materialized(Service):
             # TODO(benesch): remove the following environment variables
             # after v0.38 ships, since these environment variables will be
             # baked into the Docker image.
-            f"MZ_ORCHESTRATOR=process",
+            "MZ_ORCHESTRATOR=process",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
@@ -133,7 +133,7 @@ class Materialized(Service):
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
-            f"--orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus",
+            "--orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus",
         ]
 
         command += options

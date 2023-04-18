@@ -29,7 +29,7 @@ def main() -> None:
         # tags.
         return image.publish and (not buildkite_tag or image.mainline)
 
-    print(f"--- Tagging Docker images")
+    print("--- Tagging Docker images")
     deps = [
         repo.resolve_dependencies(image for image in repo if include_image(image))
         for repo in repos

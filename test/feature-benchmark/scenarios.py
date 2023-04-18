@@ -86,7 +86,7 @@ true
 
     def benchmark(self) -> MeasurementSource:
         hundred_selects = "\n".join(
-            f"> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
+            "> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
         )
 
         return Td(
