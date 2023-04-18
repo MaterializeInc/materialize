@@ -26,7 +26,7 @@ CREATE TABLE t_operator (op_val TEXT);
 statement ok
 INSERT INTO t_operator VALUES ('%bCd%');
 
-# DIFF TO CONSTANT FOLDING!
+# DIFF TO CONSTANT FOLDING (ILIKE on TEXT)!
 # to be addressed with https://github.com/MaterializeInc/materialize/issues/18494
 query T
 SELECT * FROM t_data

@@ -21,7 +21,7 @@ CREATE TABLE t_using_dataflow_rendering (real1 REAL, double1 DOUBLE PRECISION, n
 statement ok
 INSERT INTO t_using_dataflow_rendering VALUES (1e-39::real, 1e-39::double, 1e-39::numeric);
 
-# DIFF TO CONSTANT FOLDING!
+# DIFF TO CONSTANT FOLDING (SELECT on types [REAL, DOUBLE])!
 # to be addressed with https://github.com/MaterializeInc/materialize/issues/15186
 query RRR
 SELECT * FROM t_using_dataflow_rendering
@@ -50,7 +50,7 @@ DELETE FROM t_using_dataflow_rendering;
 statement ok
 INSERT INTO t_using_dataflow_rendering VALUES (1e38::real, 1e38::double, 1e38::numeric);
 
-# DIFF TO CONSTANT FOLDING!
+# DIFF TO CONSTANT FOLDING (SELECT on types [REAL, DOUBLE])!
 # to be addressed with https://github.com/MaterializeInc/materialize/issues/15186
 query RRR
 SELECT * FROM t_using_dataflow_rendering
