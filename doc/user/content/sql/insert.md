@@ -31,6 +31,11 @@ _query_ | A [`SELECT`](../select) statements whose returned rows you want to wri
 
 The optional `RETURNING` clause causes `INSERT` to return values based on each inserted row.
 
+### Known limitations
+
+* **Low performance.** While processing an `INSERT ... SELECT` statement,
+  Materialize cannot process other `INSERT`, `UPDATE`, or `DELETE` statements.
+
 ## Examples
 
 To insert data into a table, execute an `INSERT` statement where the `VALUES` clause
