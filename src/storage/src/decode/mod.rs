@@ -23,6 +23,7 @@ use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
+use mz_ore::error::ErrorExt;
 use regex::Regex;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::Scope;
@@ -158,8 +159,17 @@ impl PreDelimitedFormat {
         match self {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
             PreDelimitedFormat::Json => {
-                let j = mz_repr::adt::jsonb::Jsonb::from_slice(bytes)
-                    .map_err(|_| DecodeErrorKind::Text("Failed to decode JSON".to_string()))?;
+                let j = mz_repr::adt::jsonb::Jsonb::from_slice(bytes).map_err(|e| {
+                    DecodeErrorKind::Bytes(format!(
+                        "Failed to decode JSON: {}",
+                        // See if we can output the string that failed to be converted to JSON.
+                        match std::str::from_utf8(bytes) {
+                            Ok(str) => str.to_string(),
+                            // Otherwise produce the nominally helpful error.
+                            Err(_) => e.display_with_causes().to_string(),
+                        }
+                    ))
+                })?;
                 Ok(Some(j.into_row()))
             }
             PreDelimitedFormat::Text => {

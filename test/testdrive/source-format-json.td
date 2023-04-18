@@ -42,3 +42,9 @@ $ kafka-ingest format=bytes topic=data
 1.23
 "\"hello\""
 "{\"a\":\"b\",\"c\":\"d\"}"
+
+$ kafka-ingest format=bytes topic=data
+hello
+
+!SELECT * FROM data
+exact:Decode error: Bytes: Failed to decode JSON: hello (original bytes: [68, 65, 6c, 6c, 6f])
