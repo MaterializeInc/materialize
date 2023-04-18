@@ -324,6 +324,10 @@ impl AdapterError {
             ),
             AdapterError::PlanError(e) => e.hint(),
             AdapterError::VarError(e) => e.hint(),
+            AdapterError::UnallowedOnCluster { .. } => Some(
+                "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -456,8 +460,7 @@ impl fmt::Display for AdapterError {
                 let items = depends_on.into_iter().map(|item| item.quoted()).join(", ");
                 write!(
                     f,
-                    "querying the following items {items} is not allowed from the {} cluster. \
-                    Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.",
+                    "querying the following items {items} is not allowed from the {} cluster",
                     cluster.quoted()
                 )
             }

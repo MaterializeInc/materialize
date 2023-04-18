@@ -33,7 +33,7 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 # Not allowed to query user objects from mz_introspection.
 > SET CLUSTER TO mz_introspection
 ! SHOW INDEXES ON data
-contains: querying the following items "materialize.public.data" is not allowed from the "mz_introspection" cluster. Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query
+contains: querying the following items "materialize.public.data" is not allowed from the "mz_introspection" cluster
 
 > CREATE CLUSTER my_cluster REPLICAS (r1 (size '1'))
 > SET CLUSTER TO my_cluster
