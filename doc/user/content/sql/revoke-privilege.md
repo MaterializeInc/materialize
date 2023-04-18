@@ -55,7 +55,8 @@ The following tables describes which privileges are applicable on which objects:
 | `SECRET`             | U              |
 | `CLUSTER`            | UC             |
 
-
+The keyword `PUBLIC` can be used as the _role_name_. This pseudo-role indicates that these
+privileges are being revoked from all roles, even those that don't exist yet.
 
 ## Examples
 

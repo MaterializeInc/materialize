@@ -417,3 +417,15 @@ query TT
 SELECT * FROM schema_privileges WHERE name ='sch'
 ----
 sch  joe=UC/joe
+
+statement error GRANT PRIVILEGE not yet supported
+GRANT SELECT ON TABLE t TO joe
+
+statement error GRANT PRIVILEGE not yet supported
+GRANT SELECT ON TABLE t TO PUBLIC
+
+statement error REVOKE PRIVILEGE not yet supported
+REVOKE SELECT ON TABLE t FROM joe
+
+statement error REVOKE PRIVILEGE not yet supported
+REVOKE SELECT ON TABLE t FROM PUBLIC
