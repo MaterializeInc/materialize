@@ -37,6 +37,7 @@
 //! against a relation containing the assignments of values to those holes.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter::repeat;
 
 use itertools::Itertools;
 
@@ -296,13 +297,19 @@ impl HirRelationExpr {
                         body
                     })?
                 }
-                LetRec { bindings, body } => {
+                LetRec {
+                    max_iter,
+                    bindings,
+                    body,
+                } => {
+                    let num_bindings = bindings.len();
+
                     // We use the outer type with the HIR types to form MIR CTE types.
                     let outer_column_types = get_outer.typ().column_types;
 
                     // Rename and introduce all bindings.
-                    let mut shadowed_bindings = Vec::with_capacity(bindings.len());
-                    let mut mir_ids = Vec::with_capacity(bindings.len());
+                    let mut shadowed_bindings = Vec::with_capacity(num_bindings);
+                    let mut mir_ids = Vec::with_capacity(num_bindings);
                     for (_name, id, _value, typ) in bindings.iter() {
                         let mir_id = mz_expr::LocalId::new(id_gen.allocate_id());
                         mir_ids.push(mir_id);
@@ -323,7 +330,7 @@ impl HirRelationExpr {
                         shadowed_bindings.push((*id, shadowed));
                     }
 
-                    let mut mir_values = Vec::with_capacity(bindings.len());
+                    let mut mir_values = Vec::with_capacity(num_bindings);
                     for (_name, _id, value, _typ) in bindings.into_iter() {
                         mir_values.push(value.applied_to(
                             id_gen,
@@ -347,6 +354,7 @@ impl HirRelationExpr {
                     mz_expr::MirRelationExpr::LetRec {
                         ids: mir_ids,
                         values: mir_values,
+                        max_iters: repeat(max_iter).take(num_bindings).collect(),
                         body: Box::new(mir_body),
                     }
                 }

@@ -77,6 +77,7 @@
 
 use proptest::prelude::Strategy;
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU64;
 use std::{char::CharTryFromError, num::TryFromIntError};
 use uuid::Uuid;
 
@@ -311,6 +312,19 @@ macro_rules! rust_type_id(
 );
 
 rust_type_id![bool, f32, f64, i32, i64, String, u32, u64, Vec<u8>];
+
+impl RustType<u64> for Option<NonZeroU64> {
+    fn into_proto(&self) -> u64 {
+        match self {
+            Some(d) => d.get(),
+            None => 0,
+        }
+    }
+
+    fn from_proto(proto: u64) -> Result<Self, TryFromProtoError> {
+        Ok(NonZeroU64::new(proto)) // 0 is correctly mapped to None
+    }
+}
 
 /// Blanket implementation for `BTreeMap<K, V>` where there exists `T` such
 /// that `T` implements `ProtoMapEntry<K, V>`.

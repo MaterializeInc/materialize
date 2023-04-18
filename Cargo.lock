@@ -3699,6 +3699,7 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "futures",
+ "itertools",
  "mz-build-info",
  "mz-cluster",
  "mz-cluster-client",
