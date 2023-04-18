@@ -1,0 +1,29 @@
+# use mode standard to avoid formatting issues
+mode standard
+
+statement ok
+CREATE VIEW v_using_constant_folding (f1) AS
+SELECT
+ 'ABCDef';
+
+query TT
+SELECT
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM v_using_constant_folding;
+----
+ABCDef
+[238, 226, 119, 230, 210, 45, 158, 105, 232, 127, 11, 125, 76, 10, 244, 149, 96, 158, 231, 207, 230, 136, 216, 56, 30, 157, 228, 74, 89, 49, 203, 21, 238, 196, 151, 235, 205, 247, 59, 41, 81, 87, 67, 152, 170, 149, 41, 38, 39, 103, 214, 97, 156, 131, 169, 93, 142, 69, 43, 29, 72, 113, 255, 236]
+
+query T multiline
+EXPLAIN
+SELECT
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM v_using_constant_folding;
+----
+Explained Query (fast path):
+  Constant
+    - (0x414243446566, 0xeee277e6d22d9e69e87f0b7d4c0af495609ee7cfe688d8381e9de44a5931cb15eec497ebcdf73b2951574398aa9529262767d6619c83a95d8e452b1d4871ffec)
+
+EOF

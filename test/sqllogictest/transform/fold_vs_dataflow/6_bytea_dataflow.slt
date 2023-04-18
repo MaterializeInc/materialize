@@ -1,0 +1,31 @@
+# use mode standard to avoid formatting issues
+mode standard
+
+statement ok
+CREATE TABLE t_using_dataflow_rendering (f1 TEXT);
+
+statement ok
+INSERT INTO t_using_dataflow_rendering VALUES ('ABCDef');
+
+query TT
+SELECT
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM t_using_dataflow_rendering;
+----
+ABCDef
+[238, 226, 119, 230, 210, 45, 158, 105, 232, 127, 11, 125, 76, 10, 244, 149, 96, 158, 231, 207, 230, 136, 216, 56, 30, 157, 228, 74, 89, 49, 203, 21, 238, 196, 151, 235, 205, 247, 59, 41, 81, 87, 67, 152, 170, 149, 41, 38, 39, 103, 214, 97, 156, 131, 169, 93, 142, 69, 43, 29, 72, 113, 255, 236]
+
+query T multiline
+EXPLAIN
+SELECT
+ CAST(f1 AS BYTEA),
+ SHA512(CAST(f1 AS BYTEA))
+FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Project (#1, #2)
+    Map (text_to_bytea(#0), digest(#1, "sha512"))
+      Get materialize.public.t_using_dataflow_rendering
+
+EOF
