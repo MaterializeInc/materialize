@@ -225,6 +225,7 @@ pub enum EventDetails {
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
     SchemaV1(SchemaV1),
+    SchemaV2(SchemaV2),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -338,6 +339,13 @@ pub struct SchemaV1 {
     pub database_name: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct SchemaV2 {
+    pub id: String,
+    pub name: String,
+    pub database_name: Option<String>,
+}
+
 impl EventDetails {
     pub fn as_json(&self) -> serde_json::Value {
         match self {
@@ -351,6 +359,7 @@ impl EventDetails {
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::IdNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::SchemaV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::SchemaV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
