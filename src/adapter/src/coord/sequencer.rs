@@ -72,6 +72,11 @@ impl Coordinator {
         {
             return tx.send(Err(e), session);
         }
+        if let Err(e) =
+            introspection::check_cluster_restrictions(&session_catalog, &plan, &depends_on)
+        {
+            return tx.send(Err(e), session);
+        }
 
         match plan {
             Plan::CreateSource(plan) => {

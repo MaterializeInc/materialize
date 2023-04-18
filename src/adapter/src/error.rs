@@ -15,6 +15,7 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_repr::adt::timestamp::TimestampError;
+use smallvec::SmallVec;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::error as compute_error;
@@ -145,6 +146,11 @@ pub enum AdapterError {
     SubscribeOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
+    /// A query depends on items which are not allowed to be referenced from the current cluster.
+    UnallowedOnCluster {
+        depends_on: SmallVec<[String; 2]>,
+        cluster: String,
+    },
     /// A user tried to perform an action that they were unauthorized to do.
     Unauthorized(rbac::UnauthorizedError),
     /// The specified function cannot be called
@@ -318,6 +324,10 @@ impl AdapterError {
             ),
             AdapterError::PlanError(e) => e.hint(),
             AdapterError::VarError(e) => e.hint(),
+            AdapterError::UnallowedOnCluster { .. } => Some(
+                "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -442,6 +452,17 @@ impl fmt::Display for AdapterError {
             AdapterError::Transform(e) => e.fmt(f),
             AdapterError::UncallableFunction { func, context } => {
                 write!(f, "cannot call {} in {}", func, context)
+            }
+            AdapterError::UnallowedOnCluster {
+                depends_on,
+                cluster,
+            } => {
+                let items = depends_on.into_iter().map(|item| item.quoted()).join(", ");
+                write!(
+                    f,
+                    "querying the following items {items} is not allowed from the {} cluster",
+                    cluster.quoted()
+                )
             }
             AdapterError::Unauthorized(unauthorized) => {
                 write!(f, "{unauthorized}")

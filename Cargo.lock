@@ -3422,6 +3422,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "smallvec",
  "thiserror",
  "timely",
  "tokio",

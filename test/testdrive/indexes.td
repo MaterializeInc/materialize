@@ -30,7 +30,14 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${writer-schema}'
 
+# Not allowed to query user objects from mz_introspection.
 > SET CLUSTER TO mz_introspection
+! SHOW INDEXES ON data
+contains: querying the following items "materialize.public.data" is not allowed from the "mz_introspection" cluster
+
+> CREATE CLUSTER my_cluster REPLICAS (r1 (size '1'))
+> SET CLUSTER TO my_cluster
+
 > SHOW INDEXES ON data
 name    on  cluster key
 --------------------------------------------------------------------------
@@ -39,7 +46,7 @@ name    on  cluster key
 # Sources can have default indexes added
 > CREATE DEFAULT INDEX ON data
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON data
 name                on      cluster             key
 -------------------------------------------------------------------------------------------
@@ -63,7 +70,7 @@ position         name
 # Views do not have indexes automatically created
 > CREATE VIEW data_view as SELECT * from data
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON data_view
 name    on  cluster key
 --------------------------------------------------------------------------
@@ -72,7 +79,7 @@ name    on  cluster key
 # Views can have default indexes added
 > CREATE DEFAULT INDEX ON data_view
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON data_view
 name                    on          cluster             key
 ---------------------------------------------------------------------------------------------------
@@ -83,7 +90,7 @@ data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
 > CREATE MATERIALIZED VIEW matv AS
   SELECT b, sum(a) FROM data GROUP BY b
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON matv
 name    on  cluster key
 --------------------------------------------------------------------------
@@ -92,7 +99,7 @@ name    on  cluster key
 # Materialized views can have default indexes added
 > CREATE DEFAULT INDEX ON matv
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON matv
 name                on      cluster             key
 --------------------------------------------------------------------------------------------
@@ -102,7 +109,7 @@ matv_primary_idx    matv    <VARIABLE_OUTPUT>   {b}
 # IF NOT EXISTS prevents adding multiple default indexes
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON data_view
 name                    on          cluster             key
 -------------------------------------------------------------------------------------------------
@@ -112,7 +119,7 @@ data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
 # Additional default indexes have the same structure as the first
 > CREATE DEFAULT INDEX ON matv
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON matv
 name                on      cluster             key
 ------------------------------------------------------------------------------------------------
@@ -123,7 +130,7 @@ matv_primary_idx1   matv    <VARIABLE_OUTPUT>   {b}
 # Default indexes can be named
 > CREATE DEFAULT INDEX named_idx ON data_view
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON data_view
 name                    on          cluster             key
 -----------------------------------------------------------------------------------------------
@@ -137,7 +144,7 @@ named_idx               data_view   <VARIABLE_OUTPUT>   {a,b}
 # Indexes with specified columns can be automatically named
 > CREATE INDEX ON data_view(a)
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON data_view
 name            on          cluster             key
 -------------------------------------------------------------------------------------------
@@ -150,7 +157,7 @@ data_view_a_idx data_view   <VARIABLE_OUTPUT>   {a}
 > CREATE INDEX ON data_view(b, a)
 > CREATE INDEX ON data_view(b - a, a)
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON data_view
 name                    on          cluster             key
 -----------------------------------------------------------------------------------------------
@@ -164,7 +171,7 @@ data_view_expr_a_idx    data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 # Indexes can be both explicitly named and explicitly structured
 > CREATE INDEX named_idx ON data_view (b - a, a)
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON data_view
 name        on          cluster             key
 ---------------------------------------------------------------------------------------------
@@ -177,7 +184,7 @@ named_idx   data_view   <VARIABLE_OUTPUT>   "{b - a,a}"
 > CREATE INDEX data_view_primary_idx ON data_view (b - a, a)
 > CREATE DEFAULT INDEX IF NOT EXISTS ON data_view
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON data_view
 name                    on          cluster             key
 ------------------------------------------------------------------------------------------------------
@@ -197,7 +204,7 @@ materialize.public.data_view_primary_idx "CREATE INDEX \"data_view_primary_idx\"
 > CREATE DEFAULT INDEX ON foo
 > CREATE INDEX ON foo (a + b)
 > CREATE INDEX ON foo (substr(z, 3))
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON foo
 foo_primary_idx foo <VARIABLE_OUTPUT>   {a,b,z}
 foo_expr_idx    foo <VARIABLE_OUTPUT>   "{a + b}"
@@ -219,7 +226,7 @@ contains:cannot show indexes on materialize.public.foo_primary_idx because it is
 
 > CREATE CLUSTER clstr REPLICAS (r1 (SIZE '1'))
 > CREATE DEFAULT INDEX IN CLUSTER clstr ON foo;
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES IN CLUSTER clstr WHERE on = 'foo'
 foo_primary_idx1    foo clstr   {a,b,z}
 
@@ -230,7 +237,7 @@ foo_primary_idx1    foo clstr   {a,b,z}
 > DROP TABLE foo CASCADE
 > DROP SOURCE data CASCADE
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 
 ! SHOW INDEXES FROM public ON foo
 contains:Cannot specify both FROM and ON
@@ -243,7 +250,7 @@ contains:unknown schema 'nonexistent'
 > CREATE TABLE bar ();
 > CREATE INDEX bar_ind ON bar ();
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES
 bar_ind bar <VARIABLE_OUTPUT> {}
 > SET CLUSTER TO default
@@ -253,7 +260,7 @@ bar_ind bar <VARIABLE_OUTPUT> {}
 > CREATE TABLE foo.bar (a INT)
 > CREATE INDEX bar_ind ON foo.bar (a)
 
-> SET CLUSTER TO mz_introspection
+> SET CLUSTER TO my_cluster
 > SHOW INDEXES ON foo.bar
 bar_ind bar <VARIABLE_OUTPUT> {a}
 > SET CLUSTER TO default

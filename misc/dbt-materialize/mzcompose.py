@@ -53,6 +53,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter", nargs="?", default="", help="limit to test cases matching filter"
     )
+    parser.add_argument(
+        "-k", nargs="?", default=None, help="limit tests by keyword expressions"
+    )
     args = parser.parse_args()
 
     for test_case in test_cases:
@@ -63,6 +66,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 image=test_case.materialized_image,
                 volumes_extra=["secrets:/secrets"],
             )
+            test_args = ["dbt-materialize/tests"]
+            if args.k:
+                test_args.append(f"-k {args.k}")
 
             with c.test_case(test_case.name):
                 with c.override(materialized):
@@ -72,7 +78,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.run(
                         "dbt-test",
                         "pytest",
-                        "dbt-materialize/tests",
+                        *test_args,
                         env_extra={
                             "DBT_HOST": "materialized",
                             "KAFKA_ADDR": "redpanda:9092",
