@@ -45,6 +45,7 @@ members = [
     "src/proto",
     "src/repr",
     "src/repr-test-util",
+    "src/rocksdb",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
