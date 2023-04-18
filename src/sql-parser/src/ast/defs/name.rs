@@ -181,8 +181,8 @@ impl<T: AstInfo> AstDisplay for DeferredItemName<T> {
 }
 impl_display_t!(DeferredItemName);
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum UnresolvedName {
+#[derive(Debug, PartialEq, Eq, Hash, Clone, PartialOrd, Ord)]
+pub enum UnresolvedObjectName {
     Cluster(Ident),
     ClusterReplica(QualifiedReplica),
     Database(UnresolvedDatabaseName),
@@ -191,16 +191,16 @@ pub enum UnresolvedName {
     Item(UnresolvedItemName),
 }
 
-impl AstDisplay for UnresolvedName {
+impl AstDisplay for UnresolvedObjectName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            UnresolvedName::Cluster(n) => f.write_node(n),
-            UnresolvedName::ClusterReplica(n) => f.write_node(n),
-            UnresolvedName::Database(n) => f.write_node(n),
-            UnresolvedName::Schema(n) => f.write_node(n),
-            UnresolvedName::Role(n) => f.write_node(n),
-            UnresolvedName::Item(n) => f.write_node(n),
+            UnresolvedObjectName::Cluster(n) => f.write_node(n),
+            UnresolvedObjectName::ClusterReplica(n) => f.write_node(n),
+            UnresolvedObjectName::Database(n) => f.write_node(n),
+            UnresolvedObjectName::Schema(n) => f.write_node(n),
+            UnresolvedObjectName::Role(n) => f.write_node(n),
+            UnresolvedObjectName::Item(n) => f.write_node(n),
         }
     }
 }
-impl_display!(UnresolvedName);
+impl_display!(UnresolvedObjectName);

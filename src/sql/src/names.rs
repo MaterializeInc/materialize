@@ -23,6 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::UnresolvedObjectName;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
@@ -431,6 +432,16 @@ pub enum ResolvedSchemaName {
 
 impl ResolvedSchemaName {
     /// Panics if this is `Self::Error`.
+    pub fn database_spec(&self) -> &ResolvedDatabaseSpecifier {
+        match self {
+            ResolvedSchemaName::Schema { database_spec, .. } => database_spec,
+            ResolvedSchemaName::Error => {
+                unreachable!("should have been handled by name resolution")
+            }
+        }
+    }
+
+    /// Panics if this is `Self::Error`.
     pub fn schema_spec(&self) -> &SchemaSpecifier {
         match self {
             ResolvedSchemaName::Schema { schema_spec, .. } => schema_spec,
@@ -462,6 +473,18 @@ pub enum ResolvedDatabaseName {
     Error,
 }
 
+impl ResolvedDatabaseName {
+    /// Panics if this is `Self::Error`.
+    pub fn database_id(&self) -> &DatabaseId {
+        match self {
+            ResolvedDatabaseName::Database { id, .. } => id,
+            ResolvedDatabaseName::Error => {
+                unreachable!("should have been handled by name resolution")
+            }
+        }
+    }
+}
+
 impl AstDisplay for ResolvedDatabaseName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -490,6 +513,18 @@ impl AstDisplay for ResolvedClusterName {
         } else {
             f.write_str(format!("[{}]", self.id))
         }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResolvedClusterReplicaName {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+}
+
+impl AstDisplay for ResolvedClusterReplicaName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("[{}.{}]", self.cluster_id, self.replica_id))
     }
 }
 
@@ -608,6 +643,29 @@ impl AstDisplay for ResolvedRoleName {
     }
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ResolvedObjectName {
+    Cluster(ResolvedClusterName),
+    ClusterReplica(ResolvedClusterReplicaName),
+    Database(ResolvedDatabaseName),
+    Schema(ResolvedSchemaName),
+    Role(ResolvedRoleName),
+    Item(ResolvedItemName),
+}
+
+impl AstDisplay for ResolvedObjectName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ResolvedObjectName::Cluster(n) => f.write_node(n),
+            ResolvedObjectName::ClusterReplica(n) => f.write_node(n),
+            ResolvedObjectName::Database(n) => f.write_node(n),
+            ResolvedObjectName::Schema(n) => f.write_node(n),
+            ResolvedObjectName::Role(n) => f.write_node(n),
+            ResolvedObjectName::Item(n) => f.write_node(n),
+        }
+    }
+}
+
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
     type ItemName = ResolvedItemName;
@@ -617,6 +675,7 @@ impl AstInfo for Aug {
     type DataType = ResolvedDataType;
     type CteId = LocalId;
     type RoleName = ResolvedRoleName;
+    type ObjectName = ResolvedObjectName;
 }
 
 /// The identifier for a schema.
@@ -1227,6 +1286,45 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             }
         }
     }
+    fn fold_object_name(
+        &mut self,
+        name: <Raw as AstInfo>::ObjectName,
+    ) -> <Aug as AstInfo>::ObjectName {
+        match name {
+            UnresolvedObjectName::Cluster(name) => ResolvedObjectName::Cluster(
+                self.fold_cluster_name(RawClusterName::Unresolved(name)),
+            ),
+            UnresolvedObjectName::ClusterReplica(name) => {
+                match self.catalog.resolve_cluster_replica(&name) {
+                    Ok(cluster_replica) => {
+                        ResolvedObjectName::ClusterReplica(ResolvedClusterReplicaName {
+                            cluster_id: cluster_replica.cluster_id(),
+                            replica_id: cluster_replica.replica_id(),
+                        })
+                    }
+                    Err(e) => {
+                        self.status = Err(e.into());
+                        ResolvedObjectName::ClusterReplica(ResolvedClusterReplicaName {
+                            // The ID is arbitrary here; we just need some dummy
+                            // value to return.
+                            cluster_id: ClusterId::System(0),
+                            replica_id: 0,
+                        })
+                    }
+                }
+            }
+            UnresolvedObjectName::Database(name) => {
+                ResolvedObjectName::Database(self.fold_database_name(name))
+            }
+            UnresolvedObjectName::Schema(name) => {
+                ResolvedObjectName::Schema(self.fold_schema_name(name))
+            }
+            UnresolvedObjectName::Role(name) => ResolvedObjectName::Role(self.fold_role_name(name)),
+            UnresolvedObjectName::Item(name) => {
+                ResolvedObjectName::Item(self.fold_item_name(RawItemName::Name(name)))
+            }
+        }
+    }
 }
 
 /// Resolves names in an AST node using the provided catalog.
@@ -1340,6 +1438,12 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
         node
     }
     fn fold_role_name(&mut self, node: <Aug as AstInfo>::RoleName) -> <Aug as AstInfo>::RoleName {
+        node
+    }
+    fn fold_object_name(
+        &mut self,
+        node: <Aug as AstInfo>::ObjectName,
+    ) -> <Aug as AstInfo>::ObjectName {
         node
     }
 }

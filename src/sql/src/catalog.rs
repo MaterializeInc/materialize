@@ -33,8 +33,8 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{Expr, ObjectType};
+use mz_sql_parser::ast::{QualifiedReplica, UnresolvedItemName};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
 
@@ -168,6 +168,14 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
         &'a self,
         cluster_name: Option<&'b str>,
     ) -> Result<&dyn CatalogCluster<'a>, CatalogError>;
+
+    /// Resolves the named cluster replica.
+    ///
+    /// If the provided name is `None`, resolves the currently active cluster.
+    fn resolve_cluster_replica<'a, 'b>(
+        &'a self,
+        cluster_replica_name: &'b QualifiedReplica,
+    ) -> Result<&dyn CatalogClusterReplica<'a>, CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -498,6 +506,12 @@ pub trait CatalogCluster<'a> {
 pub trait CatalogClusterReplica<'a> {
     /// Returns the name of the cluster replica.
     fn name(&self) -> &str;
+
+    /// Returns a stable ID for the cluster that the replica belongs to.
+    fn cluster_id(&self) -> ClusterId;
+
+    /// Returns a stable ID for the replica.
+    fn replica_id(&self) -> ReplicaId;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;

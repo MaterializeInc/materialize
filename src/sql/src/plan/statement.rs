@@ -26,9 +26,9 @@ use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, SessionCatalog,
 };
 use crate::names::{
-    self, Aug, DatabaseId, FullItemName, ItemQualifiers, PartialItemName, QualifiedItemName,
-    RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
-    ResolvedSchemaName, SchemaSpecifier,
+    self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
+    QualifiedItemName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -43,6 +43,7 @@ pub(crate) mod show;
 mod tcl;
 
 pub(crate) use ddl::PgConfigOptionExtracted;
+use mz_repr::role_id::RoleId;
 
 /// Describes the output of a SQL statement.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -141,6 +142,8 @@ pub fn describe(
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::GrantRole(stmt) => ddl::describe_grant_role(&scx, stmt)?,
         Statement::RevokeRole(stmt) => ddl::describe_revoke_role(&scx, stmt)?,
+        Statement::GrantPrivilege(stmt) => ddl::describe_grant_privilege(&scx, stmt)?,
+        Statement::RevokePrivilege(stmt) => ddl::describe_revoke_privilege(&scx, stmt)?,
 
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => {
@@ -274,6 +277,8 @@ pub fn plan(
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::GrantRole(stmt) => ddl::plan_grant_role(scx, stmt),
         Statement::RevokeRole(stmt) => ddl::plan_revoke_role(scx, stmt),
+        Statement::GrantPrivilege(stmt) => ddl::plan_grant_privilege(scx, stmt),
+        Statement::RevokePrivilege(stmt) => ddl::plan_revoke_privilege(scx, stmt),
 
         // DML statements.
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
@@ -816,5 +821,9 @@ impl<'a> StatementContext<'a> {
         }
 
         Ok((columns, table_constraints))
+    }
+
+    pub fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {
+        self.catalog.get_owner_id(id)
     }
 }

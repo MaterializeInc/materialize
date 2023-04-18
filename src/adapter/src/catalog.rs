@@ -76,7 +76,9 @@ use mz_sql::session::vars::{
     OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
-use mz_sql_parser::ast::{CreateSinkOption, CreateSourceOption, Statement, WithOptionValue};
+use mz_sql_parser::ast::{
+    CreateSinkOption, CreateSourceOption, QualifiedReplica, Statement, WithOptionValue,
+};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller::IntrospectionType;
@@ -916,6 +918,8 @@ impl CatalogState {
     ) {
         let replica = ClusterReplica {
             name: replica_name.clone(),
+            cluster_id,
+            replica_id,
             process_status: (0..config.location.num_processes())
                 .map(|process_id| {
                     let status = ClusterReplicaProcessStatus {
@@ -1250,6 +1254,19 @@ impl CatalogState {
         self.clusters_by_id
             .get(id)
             .expect("failed to lookup BuiltinCluster by ID")
+    }
+
+    pub fn resolve_cluster_replica(
+        &self,
+        cluster_replica_name: &QualifiedReplica,
+    ) -> Result<&ClusterReplica, SqlCatalogError> {
+        let cluster = self.resolve_cluster(cluster_replica_name.cluster.as_str())?;
+        let replica_name = cluster_replica_name.replica.as_str();
+        let replica_id = cluster
+            .replica_id_by_name
+            .get(replica_name)
+            .ok_or_else(|| SqlCatalogError::UnknownClusterReplica(replica_name.to_string()))?;
+        Ok(&cluster.replicas_by_id[replica_id])
     }
 
     /// Resolves [`PartialItemName`] into a [`CatalogEntry`].
@@ -1657,6 +1674,8 @@ impl Cluster {
 #[derive(Debug, Serialize, Clone)]
 pub struct ClusterReplica {
     pub name: String,
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
     pub config: ReplicaConfig,
     pub process_status: BTreeMap<ProcessId, ClusterReplicaProcessStatus>,
     pub owner_id: RoleId,
@@ -7038,6 +7057,13 @@ impl SessionCatalog for ConnCatalog<'_> {
             .resolve_cluster(cluster_name.unwrap_or_else(|| self.active_cluster()))?)
     }
 
+    fn resolve_cluster_replica(
+        &self,
+        cluster_replica_name: &QualifiedReplica,
+    ) -> Result<&dyn CatalogClusterReplica, SqlCatalogError> {
+        Ok(self.state.resolve_cluster_replica(cluster_replica_name)?)
+    }
+
     fn resolve_item(
         &self,
         name: &PartialItemName,
@@ -7270,6 +7296,14 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
 impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn cluster_id(&self) -> ClusterId {
+        self.cluster_id
+    }
+
+    fn replica_id(&self) -> ReplicaId {
+        self.replica_id
     }
 
     fn owner_id(&self) -> RoleId {

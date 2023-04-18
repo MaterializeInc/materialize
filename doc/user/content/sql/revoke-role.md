@@ -47,3 +47,5 @@ REVOKE data_scientist FROM joe, mike;
 - [DROP USER](../drop-user)
 - [GRANT ROLE](../grant-role)
 - [ALTER OWNER](../alter-owner)
+- [GRANT PRIVILEGE](../grant-privilege)
+- [REVOKE PRIVILEGE](../revoke-privilege)

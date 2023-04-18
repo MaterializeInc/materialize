@@ -213,6 +213,8 @@ format_spec ::=
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
+grant_privilege ::=
+  'GRANT' privilege (',' privilege)* ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'TO' 'GROUP'? role_name
 grant_role ::=
   'GRANT' role_name 'TO' 'GROUP'? member_name ( ',' member_name )*
 key_strat ::=
@@ -282,8 +284,12 @@ op_cast ::=
   val '::' type
 prepare ::=
   'PREPARE' name 'AS' statement
+privilege ::=
+  ('SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'CREATE' | 'USAGE')
 reset_session_variable ::=
   'RESET' variable_name
+revoke_privilege ::=
+  'REVOKE' privilege (',' privilege)* ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'FROM' 'GROUP'? role_name
 revoke_role ::=
   'REVOKE' role_name 'FROM' 'GROUP'? member_name ( ',' member_name )*
 rollback ::=
