@@ -17,7 +17,9 @@ statement ok
 INSERT INTO t_operator VALUES ('%bCd%');
 
 query T
-SELECT * FROM t_data WHERE f1 ILIKE (SELECT op_val FROM t_operator) ORDER BY f1;
+SELECT * FROM t_data
+WHERE f1 ILIKE (SELECT op_val FROM t_operator)
+ORDER BY f1;
 ----
 ABCDEF
 AbCdEf
@@ -25,7 +27,8 @@ aBcDeF
 abcdef
 
 query T multiline
-EXPLAIN SELECT * FROM t_data WHERE f1 ILIKE (SELECT op_val FROM t_operator);
+EXPLAIN SELECT * FROM t_data
+WHERE f1 ILIKE (SELECT op_val FROM t_operator);
 ----
 Explained Query:
   Project (#0)

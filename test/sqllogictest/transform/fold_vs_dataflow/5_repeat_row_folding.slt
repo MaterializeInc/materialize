@@ -15,8 +15,8 @@ INSERT INTO t_base VALUES (1, 9223372036854775807);
 
 # statement ok
 # CREATE VIEW v_using_constant_folding AS
- #  SELECT data FROM (
-                      #     SELECT * FROM (
+#  SELECT data FROM (
+#     SELECT * FROM (
 #         VALUES (1, 9223372036854775807),
 #                (1, 9223372036854775807)
 #         ) AS t_base(data, diff),
@@ -24,10 +24,12 @@ INSERT INTO t_base VALUES (1, 9223372036854775807);
 # );
 
 # query I
-# SELECT SUM(data) FROM v_using_constant_folding;
+# SELECT SUM(data)
+# FROM v_using_constant_folding;
 # ----
 
 # query T multiline
-# EXPLAIN SELECT * FROM v_using_constant_folding;
+# EXPLAIN SELECT SUM(data)
+# FROM v_using_constant_folding;
 # ----
 # EOF

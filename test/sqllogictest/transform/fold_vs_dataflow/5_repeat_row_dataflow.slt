@@ -18,10 +18,12 @@ INSERT INTO t_base VALUES (1, 9223372036854775807);
 #  SELECT data FROM t_base, repeat_row(diff);
 
 # query I
-# SELECT SUM(data) FROM mv_using_dataflow_rendering;
+# SELECT SUM(data)
+# FROM mv_using_dataflow_rendering;
 # ----
 
 # query T multiline
-# EXPLAIN SELECT SUM(data) FROM mv_using_dataflow_rendering;
+# EXPLAIN SELECT SUM(data)
+# FROM mv_using_dataflow_rendering;
 # ----
 # EOF

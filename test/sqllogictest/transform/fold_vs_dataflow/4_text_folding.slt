@@ -11,12 +11,15 @@ statement ok
 INSERT INTO t_data VALUES ('ABCDEF'), ('abcdef'), ('aBcDeF'), ('AbCdEf');
 
 query T
-SELECT * FROM t_data WHERE f1 ILIKE '%bCd%'  ORDER BY f1;
+SELECT * FROM t_data
+WHERE f1 ILIKE '%bCd%'
+ORDER BY f1;
 ----
 AbCdEf
 
 query T multiline
-EXPLAIN SELECT * FROM t_data WHERE f1 ILIKE '%bCd%';
+EXPLAIN SELECT * FROM t_data
+WHERE f1 ILIKE '%bCd%';
 ----
 Explained Query:
   Filter "%bCd%" ~~(#0)
