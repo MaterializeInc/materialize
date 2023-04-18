@@ -1890,3 +1890,101 @@ ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
 ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
 =>
 AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
+
+parse-statement
+GRANT USAGE, CREATE ON CLUSTER foo TO joe
+----
+GRANT USAGE, CREATE ON CLUSTER foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE, CREATE], object_type: Cluster, name: Cluster(Ident("foo")), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE, CREATE ON CLUSTER REPLICA foo.r TO joe
+----
+error: Unsupported GRANT on CLUSTER REPLICA
+GRANT USAGE, CREATE ON CLUSTER REPLICA foo.r TO joe
+                               ^
+
+parse-statement
+GRANT CREATE ON DATABASE foo TO joe
+----
+GRANT CREATE ON DATABASE foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [CREATE], object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE ON SCHEMA foo TO joe
+----
+GRANT USAGE ON SCHEMA foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
+----
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [SELECT, INSERT, UPDATE, DELETE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE ON foo TO joe
+----
+GRANT USAGE ON TABLE foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE ON SINK foo TO joe
+----
+error: Unsupported GRANT on SINK
+GRANT USAGE ON SINK foo TO joe
+               ^
+
+parse-statement
+GRANT USAGE ON SOURCE foo TO joe
+----
+error: For object type SOURCE, you must specify 'TABLE' or omit the object type
+GRANT USAGE ON SOURCE foo TO joe
+               ^
+
+parse-statement
+GRANT USAGE ON INDEX foo TO joe
+----
+error: Unsupported GRANT on INDEX
+GRANT USAGE ON INDEX foo TO joe
+               ^
+
+parse-statement
+GRANT USAGE ON SECRET foo TO joe
+----
+GRANT USAGE ON SECRET foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE ON CONNECTION foo TO joe
+----
+GRANT USAGE ON CONNECTION foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT SELECT ON VIEW foo TO joe
+----
+error: For object type VIEW, you must specify 'TABLE' or omit the object type
+GRANT SELECT ON VIEW foo TO joe
+                ^
+
+parse-statement
+GRANT SELECT ON MATERIALIZED VIEW foo TO joe
+----
+error: For object type MATERIALIZED VIEW, you must specify 'TABLE' or omit the object type
+GRANT SELECT ON MATERIALIZED VIEW foo TO joe
+                             ^
+
+parse-statement
+GRANT FAKE ON TABLE t TO joe
+----
+error: Expected TO, found ON
+GRANT FAKE ON TABLE t TO joe
+           ^

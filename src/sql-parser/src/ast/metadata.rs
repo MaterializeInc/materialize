@@ -19,7 +19,8 @@ use std::hash::Hash;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::{
-    Ident, Statement, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedSchemaName,
+    Ident, Statement, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName,
 };
 
 /// This represents the metadata that lives next to an AST, as we take it through
@@ -54,6 +55,8 @@ pub trait AstInfo: Clone {
     type CteId: Clone + Hash + Debug + Eq + Ord;
     /// The type used for role references.
     type RoleName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
+    /// They type used for any object names.
+    type ObjectName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
@@ -68,6 +71,7 @@ impl AstInfo for Raw {
     type DataType = RawDataType;
     type CteId = ();
     type RoleName = Ident;
+    type ObjectName = UnresolvedObjectName;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]

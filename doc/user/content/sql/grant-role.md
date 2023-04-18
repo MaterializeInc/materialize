@@ -42,3 +42,5 @@ GRANT data_scientist TO joe, mike;
 - [DROP USER](../drop-user)
 - [REVOKE ROLE](../revoke-role)
 - [ALTER OWNER](../alter-owner)
+- [GRANT PRIVILEGE](../grant-privilege)
+- [REVOKE PRIVILEGE](../revoke-privilege)

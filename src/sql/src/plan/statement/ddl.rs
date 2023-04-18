@@ -37,8 +37,8 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedItemName,
-    UnresolvedName, UnresolvedSchemaName, Value,
+    GrantPrivilegeStatement, GrantRoleStatement, RevokePrivilegeStatement, RevokeRoleStatement,
+    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -3376,20 +3376,22 @@ pub fn plan_drop_objects(
     let mut ids = Vec::new();
     for name in names {
         let id = match name {
-            UnresolvedName::Cluster(name) => {
+            UnresolvedObjectName::Cluster(name) => {
                 plan_drop_cluster(scx, if_exists, name, cascade)?.map(ObjectId::Cluster)
             }
-            UnresolvedName::ClusterReplica(name) => {
+            UnresolvedObjectName::ClusterReplica(name) => {
                 plan_drop_cluster_replica(scx, if_exists, name)?.map(ObjectId::ClusterReplica)
             }
-            UnresolvedName::Database(name) => {
+            UnresolvedObjectName::Database(name) => {
                 plan_drop_database(scx, if_exists, name, cascade)?.map(ObjectId::Database)
             }
-            UnresolvedName::Schema(name) => {
+            UnresolvedObjectName::Schema(name) => {
                 plan_drop_schema(scx, if_exists, name, cascade)?.map(ObjectId::Schema)
             }
-            UnresolvedName::Role(name) => plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role),
-            UnresolvedName::Item(name) => {
+            UnresolvedObjectName::Role(name) => {
+                plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role)
+            }
+            UnresolvedObjectName::Item(name) => {
                 plan_drop_item(scx, object_type, if_exists, name, cascade)?.map(ObjectId::Item)
             }
         };
@@ -3725,19 +3727,19 @@ pub fn plan_alter_owner(
     }: AlterOwnerStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     match (object_type, name) {
-        (ObjectType::Cluster, UnresolvedName::Cluster(name)) => {
+        (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
             plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::ClusterReplica, UnresolvedName::ClusterReplica(name)) => {
+        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
             plan_alter_cluster_replica_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::Database, UnresolvedName::Database(name)) => {
+        (ObjectType::Database, UnresolvedObjectName::Database(name)) => {
             plan_alter_database_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::Schema, UnresolvedName::Schema(name)) => {
+        (ObjectType::Schema, UnresolvedObjectName::Schema(name)) => {
             plan_alter_schema_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::Role, UnresolvedName::Role(_)) => unreachable!("rejected by the parser"),
+        (ObjectType::Role, UnresolvedObjectName::Role(_)) => unreachable!("rejected by the parser"),
         (
             object_type @ ObjectType::Cluster
             | object_type @ ObjectType::ClusterReplica
@@ -3748,15 +3750,15 @@ pub fn plan_alter_owner(
         )
         | (
             object_type,
-            name @ UnresolvedName::Cluster(_)
-            | name @ UnresolvedName::ClusterReplica(_)
-            | name @ UnresolvedName::Database(_)
-            | name @ UnresolvedName::Schema(_)
-            | name @ UnresolvedName::Role(_),
+            name @ UnresolvedObjectName::Cluster(_)
+            | name @ UnresolvedObjectName::ClusterReplica(_)
+            | name @ UnresolvedObjectName::Database(_)
+            | name @ UnresolvedObjectName::Schema(_)
+            | name @ UnresolvedObjectName::Role(_),
         ) => {
             unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
         }
-        (object_type, UnresolvedName::Item(name)) => {
+        (object_type, UnresolvedObjectName::Item(name)) => {
             plan_alter_item_owner(scx, object_type, if_exists, name, new_owner.id)
         }
     }
@@ -4303,6 +4305,34 @@ pub fn plan_revoke_role(
             .collect(),
         grantor_id,
     }))
+}
+
+pub fn describe_grant_privilege(
+    _: &StatementContext,
+    _: GrantPrivilegeStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_grant_privilege(
+    _: &StatementContext,
+    _: GrantPrivilegeStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    bail_unsupported!("GRANT PRIVILEGE");
+}
+
+pub fn describe_revoke_privilege(
+    _: &StatementContext,
+    _: RevokePrivilegeStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_revoke_privilege(
+    _: &StatementContext,
+    _: RevokePrivilegeStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    bail_unsupported!("REVOKE PRIVILEGE");
 }
 
 fn resolve_cluster<'a>(
