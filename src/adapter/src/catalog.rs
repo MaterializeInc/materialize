@@ -5394,13 +5394,13 @@ impl Catalog {
                         state.database_by_id.remove(&id);
                     }
                     ObjectId::Schema((database_spec, schema_id)) => {
-                        let schemas = match database_spec {
-                            ResolvedDatabaseSpecifier::Ambient => &state.ambient_schemas_by_id,
-                            ResolvedDatabaseSpecifier::Id(database_id) => {
-                                &state.database_by_id[&database_id].schemas_by_id
-                            }
-                        };
-                        let schema = &schemas[&schema_id];
+                        let schema = state.get_schema(
+                            &database_spec,
+                            &SchemaSpecifier::Id(schema_id),
+                            session
+                                .map(|session| session.conn_id())
+                                .unwrap_or(SYSTEM_CONN_ID),
+                        );
                         let database_id = match database_spec {
                             ResolvedDatabaseSpecifier::Ambient => None,
                             ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
@@ -5427,7 +5427,7 @@ impl Catalog {
                                 }),
                             }),
                         )?;
-                        if let Some(database_id) = database_id {
+                        if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
                             let db = state
                                 .database_by_id
                                 .get_mut(&database_id)
@@ -5879,13 +5879,13 @@ impl Catalog {
                             &schema_id,
                             -1,
                         ));
-                        let schemas = match database_spec {
-                            ResolvedDatabaseSpecifier::Ambient => &mut state.ambient_schemas_by_id,
-                            ResolvedDatabaseSpecifier::Id(id) => {
-                                &mut state.get_database_mut(&id).schemas_by_id
-                            }
-                        };
-                        let schema = schemas.get_mut(&schema_id).expect("catalog out of sync");
+                        let schema = state.get_schema_mut(
+                            &database_spec,
+                            &SchemaSpecifier::Id(schema_id),
+                            session
+                                .map(|session| session.conn_id())
+                                .unwrap_or(SYSTEM_CONN_ID),
+                        );
                         Self::update_privilege_owners(
                             &mut schema.privileges,
                             schema.owner_id,
