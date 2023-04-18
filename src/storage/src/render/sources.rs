@@ -385,7 +385,7 @@ where
                     let upsert = crate::render::upsert::upsert(
                         &upsert_input,
                         upsert_envelope.key_indices.clone(),
-                        upsert_envelope.order_by_index,
+                        upsert_envelope.order_by_indices.clone(),
                         resume_upper,
                         previous,
                         previous_token,
@@ -472,18 +472,21 @@ fn upsert_commands<G: Scope>(
     input.map(move |result| {
         let metadata = result.metadata;
 
-        // Converting absolute row position to get the index in metadata row
-        let metadata_index = upsert_envelope.order_by_index.map(|row_pos| {
-            let key_value_arity = upsert_envelope.source_arity - metadata.iter().count();
-            row_pos - key_value_arity
-        });
+        let order = if upsert_envelope.order_by_indices.is_empty() {
+            result.position.into()
+        } else {
+            let metadata_arity = metadata.iter().count();
+            let key_value_arity = upsert_envelope.source_arity - metadata_arity;
+            // Converting absolute row position to get the index in metadata row
+            let metadata_indices = upsert_envelope
+                .order_by_indices
+                .iter()
+                .map(|row_pos| row_pos - key_value_arity)
+                .collect();
 
-        // Getting the ordering information from metadata
-        let order = crate::render::upsert::get_order(
-            &Ok(metadata.clone()),
-            metadata_index,
-            Some(result.position),
-        );
+            // Getting the ordering information from metadata
+            crate::render::upsert::get_order(&Ok(metadata.clone()), &metadata_indices)
+        };
 
         let key = match result.key {
             Some(Ok(key)) => Ok(key),

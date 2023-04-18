@@ -76,7 +76,7 @@ message ProtoUpsertEnvelope {
     ProtoUpsertStyle style = 1;
     repeated uint64 key_indices = 2;
     uint64 source_arity = 3;
-    optional uint64 order_by_index = 4;
+    repeated uint64 order_by_indices = 4;
 }
 
 message ProtoUpsertStyle {

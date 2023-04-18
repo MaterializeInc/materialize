@@ -882,8 +882,8 @@ pub enum UnplannedSourceEnvelope {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct UpsertOrderBy {
-    // index of the order by field in the metadata row
-    pub metadata_index: usize,
+    // indices of the order by fields in the metadata row
+    pub metadata_indices: Vec<usize>,
     // total number of columns in the metadata
     // will be used to convert position in metadata to absolute source col position
     pub metadata_arity: usize,
@@ -922,9 +922,9 @@ pub struct UpsertEnvelope {
     /// The indices of the keys in the full value row, used
     /// to deduplicate data in `upsert_core`
     pub key_indices: Vec<usize>,
-    /// Optional index of the column in the full value row
-    /// to be used for custom order by
-    pub order_by_index: Option<usize>,
+    /// Optional indices of the columns in the full value row
+    /// to be used for order by
+    pub order_by_indices: Vec<usize>,
 }
 
 impl Arbitrary for UpsertEnvelope {
@@ -936,14 +936,16 @@ impl Arbitrary for UpsertEnvelope {
             any::<usize>(),
             any::<UpsertStyle>(),
             proptest::collection::vec(any::<usize>(), 1..4),
-            proptest::option::of(any::<usize>()),
+            proptest::collection::vec(any::<usize>(), 1..2),
         )
-            .prop_map(|(source_arity, style, key_indices, order_by_index)| Self {
-                source_arity,
-                style,
-                key_indices,
-                order_by_index,
-            })
+            .prop_map(
+                |(source_arity, style, key_indices, order_by_indices)| Self {
+                    source_arity,
+                    style,
+                    key_indices,
+                    order_by_indices,
+                },
+            )
             .boxed()
     }
 }
@@ -954,7 +956,7 @@ impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
             source_arity: self.source_arity.into_proto(),
             style: Some(self.style.into_proto()),
             key_indices: self.key_indices.into_proto(),
-            order_by_index: self.order_by_index.into_proto(),
+            order_by_indices: self.order_by_indices.into_proto(),
         }
     }
 
@@ -965,7 +967,7 @@ impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
                 .style
                 .into_rust_if_some("ProtoUpsertEnvelope::style")?,
             key_indices: proto.key_indices.into_rust()?,
-            order_by_index: proto.order_by_index.into_rust()?,
+            order_by_indices: proto.order_by_indices.into_rust()?,
         })
     }
 }
@@ -1250,14 +1252,19 @@ impl UnplannedSourceEnvelope {
                 let source_arity = source_arity.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert");
 
                 // getting absolute position of order by in source columns
-                let order_by_index = upsert_order_by.map(|order_by| {
-                    order_by.metadata_index + (source_arity - order_by.metadata_arity)
-                });
+                let order_by_indices = match upsert_order_by {
+                    Some(order_by) => order_by
+                        .metadata_indices
+                        .iter()
+                        .map(|idx| idx + (source_arity - order_by.metadata_arity))
+                        .collect(),
+                    None => vec![],
+                };
                 SourceEnvelope::Upsert(UpsertEnvelope {
                     style: upsert_style,
                     key_indices: key.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert"),
                     source_arity,
-                    order_by_index,
+                    order_by_indices,
                 })
             }
             UnplannedSourceEnvelope::Debezium(inner) => SourceEnvelope::Debezium(inner),

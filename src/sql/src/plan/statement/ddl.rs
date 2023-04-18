@@ -917,33 +917,49 @@ pub fn plan_create_source(
                 key_envelope = get_unnamed_key_envelope(key_encoding)?;
             }
 
-            let order_by = match order_by {
-                Some(order_col) => {
-                    scx.require_unsafe_mode("ENVELOPE UPSERT ORDER BY")?;
+            let order_by = if !order_by.is_empty() {
+                scx.require_unsafe_mode("ENVELOPE UPSERT ORDER BY")?;
 
-                    let metadata_col = metadata_columns
-                        .iter()
-                        .find_position(|(col_name, _)| *col_name == order_col.as_str());
+                let mut offset_included = false;
 
-                    if let Some((pos, _)) = metadata_col {
-                        let included_col = metadata_column_types
-                            .get(pos)
-                            .expect("metadata index calculation error");
+                let metadata_indices = order_by
+                    .iter()
+                    .map(|order_col| {
+                        let metadata_type = metadata_columns
+                            .iter()
+                            .position(|(col_name, _)| *col_name == order_col.as_str())
+                            .map(|pos| {
+                                let included_col = metadata_column_types
+                                    .get(pos)
+                                    .expect("metadata index calculation error");
+                                (pos, included_col)
+                            });
 
-                        if included_col != &IncludedColumnSource::Timestamp {
-                            sql_bail!("Only TIMESTAMP is supported as an order by column")
+                        match metadata_type {
+                            Some((pos, &IncludedColumnSource::Timestamp)) => Ok(pos),
+                            Some((pos, &IncludedColumnSource::Offset)) => {
+                                offset_included = true;
+                                Ok(pos)
+                            }
+                            Some(_) => sql_bail!(
+                                "Only TIMESTAMP and OFFSET are supported as order by columns"
+                            ),
+                            None => sql_bail!("Could not find {} in included metadata", order_col),
                         }
+                    })
+                    .collect::<Result<Vec<_>, PlanError>>()?;
 
-                        Ok::<std::option::Option<UpsertOrderBy>, PlanError>(Some(UpsertOrderBy {
-                            metadata_index: pos,
-                            metadata_arity: metadata_columns.len(),
-                        }))
-                    } else {
-                        sql_bail!("Could not find {} in included metadata", order_col)
-                    }
+                if !offset_included {
+                    sql_bail!("OFFSET must be explicitly specified as an order by column");
                 }
-                None => Ok(None),
-            }?;
+
+                Some(UpsertOrderBy {
+                    metadata_indices,
+                    metadata_arity: metadata_columns.len(),
+                })
+            } else {
+                None
+            };
 
             UnplannedSourceEnvelope::Upsert {
                 style: UpsertStyle::Default(key_envelope),

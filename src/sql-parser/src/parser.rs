@@ -1964,16 +1964,16 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[ORDER, BY])?;
 
                 self.expect_token(&Token::LParen)?;
-                let order_by_col = Some(self.parse_identifier()?);
+                let order_by_cols = self.parse_comma_separated(Parser::parse_identifier)?;
                 self.expect_token(&Token::RParen)?;
 
                 // only optional ASC allowed
                 let _order = self.parse_keyword(ASC);
 
                 self.expect_token(&Token::RParen)?;
-                order_by_col
+                order_by_cols
             } else {
-                None
+                vec![]
             };
 
             Envelope::Upsert { order_by }

@@ -18,12 +18,12 @@ $ kafka-create-topic topic=textbytes
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
-  INCLUDE OFFSET, TIMESTAMP as ts
-  ENVELOPE UPSERT ( ORDER BY ( ts ) ASC )
+  INCLUDE OFFSET as o, TIMESTAMP as ts
+  ENVELOPE UPSERT ( ORDER BY ( ts, o ) ASC )
   WITH (SIZE = '1')
 
 > SHOW CREATE SOURCE texttext
-"materialize.public.texttext" "CREATE SOURCE \"materialize\".\"public\".\"texttext\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-textbytes-${testdrive.seed}') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE OFFSET, TIMESTAMP AS \"ts\" ENVELOPE UPSERT( ORDER BY (\"ts\")) EXPOSE PROGRESS AS \"materialize\".\"public\".\"texttext_progress\" WITH (SIZE = '1')"
+materialize.public.texttext "CREATE SOURCE \"materialize\".\"public\".\"texttext\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-textbytes-${testdrive.seed}') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE OFFSET AS \"o\", TIMESTAMP AS \"ts\" ENVELOPE UPSERT( ORDER BY (\"ts\", \"o\")) EXPOSE PROGRESS AS \"materialize\".\"public\".\"texttext_progress\" WITH (SIZE = '1')"
 
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=185
 fish:fish_185
@@ -81,7 +81,12 @@ contains:Could not find key in included metadata
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, PARTITION as p
   ENVELOPE UPSERT (ORDER BY (p)) WITH (SIZE = '1')
-contains:Only TIMESTAMP is supported as an order by column
+contains:Only TIMESTAMP and OFFSET are supported as order by columns
+
+! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
+  KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP as ts, OFFSET
+  ENVELOPE UPSERT (ORDER BY (ts)) WITH (SIZE = '1')
+contains:OFFSET must be explicitly specified as an order by column
 
 # no parentheses around ORDER BY
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')

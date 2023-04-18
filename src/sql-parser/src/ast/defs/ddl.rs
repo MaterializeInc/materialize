@@ -414,7 +414,7 @@ impl_display!(SourceIncludeMetadata);
 pub enum Envelope {
     None,
     Debezium(DbzMode),
-    Upsert { order_by: Option<Ident> },
+    Upsert { order_by: Vec<Ident> },
     CdcV2,
 }
 
@@ -446,12 +446,13 @@ impl AstDisplay for Envelope {
             }
             Envelope::Upsert { order_by } => {
                 f.write_str("UPSERT");
-                if let Some(order) = order_by {
+
+                if !order_by.is_empty() {
                     f.write_str("(");
                     f.write_str(" ORDER BY ");
 
                     f.write_str("(");
-                    f.write_node(order);
+                    f.write_node(&display::comma_separated(order_by));
                     f.write_str(")");
 
                     f.write_str(")");

@@ -109,54 +109,64 @@ impl<H: Digest> Hasher for DigestHasher<H> {
 #[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 struct State(Result<Row, UpsertError>, UpsertOrder);
 
-/// Struct containing the custom order by value and
-/// the default fallback kafka offset.
+/// Struct containing a list of values to order by
 ///
-/// The following table shows the possible OrderBy values
+/// The following table shows the possible UpsertOrder values
 /// for a particular key with different value types where,
 /// - p = the UpsertOrder from previously persisted state
 /// - k = the UpsertOrder from incoming kafka ingestion
 ///
-/// | value   | order by |p.order,  p.default|k.order,  k.default| k.cmp(p)                                 |
-/// |---------|----------|-------------------|-------------------|------------------------------------------|
-/// | Ok(row) | Y        |Some(),   None     |Some(),   Some()   | k.order.cmp(p.order), if equal then k > p|
-/// | Err()   | Y        |None,     None     |Some(),   Some()   | k > p always since Some > None           |
-/// | Ok(row) | N        |None,     None     |None,     Some()   | k > p always since Some > None           |
-/// | Err()   | N        |None,     None     |None,     Some()   | k > p always since Some > None           |
+/// | value   | order by |p      |k      | k.cmp(p)                      |
+/// |---------|----------|-------|-------|-------------------------------|
+/// | Ok(row) | Y        |Some(a)|Some(b)| b.cmp(a)                      |
+/// | Err()   | Y        |None   |Some() | k > p always since Some > None|
+/// | Ok(row) | N        |None   |Some() | k > p always since Some > None|
+/// | Err()   | N        |None   |Some() | k > p always since Some > None|
 ///
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) struct UpsertOrder {
-    // Value if using upsert order by
-    // Currently can only hold i64 timestamp
-    pub order: Option<i64>,
-    // Fallback default offset for order by
-    pub default: Option<MzOffset>,
+pub(crate) struct UpsertOrder(Option<Vec<i128>>);
+
+impl From<MzOffset> for UpsertOrder {
+    fn from(val: MzOffset) -> Self {
+        UpsertOrder(Some(vec![val
+            .offset
+            .try_into()
+            .expect("Unexpected u64 overflow to i128")]))
+    }
 }
 
 /// Gets the ordering information extracting out the value from the row
 /// based on the given index, and the default fallback value.
 pub(crate) fn get_order(
     row_or_error: &Result<Row, UpsertError>,
-    order_by_index: Option<usize>,
-    default: Option<MzOffset>,
+    order_by_index: &Vec<usize>,
 ) -> UpsertOrder {
-    let order = match (row_or_error, order_by_index) {
-        (Ok(row), Some(index)) => {
-            let datum = row
+    let order = match row_or_error {
+        Ok(row) if !order_by_index.is_empty() => {
+            let order_col = order_by_index
                 .iter()
-                .nth(index)
-                .expect("Expected a valid order by index");
+                .map(|idx| {
+                    let datum = row
+                        .iter()
+                        .nth(*idx)
+                        .expect("Expected a valid order by index");
 
-            match datum {
-                // Currently only timestamp type is supported
-                Datum::Timestamp(ts) => Some(ts.timestamp_nanos()),
-                _ => panic!("Only timestamp is supported for order by"),
-            }
+                    match datum {
+                        // Currently only timestamp and u64 types are supported
+                        Datum::Timestamp(ts) => ts.timestamp_nanos().try_into().expect("Unexpected i64 overflow to i128"),
+                        Datum::UInt64(num) => num.try_into().expect("Unexpected u64 overflow to i128"),
+                        datum => panic!(
+                            "Only timestamp or offset is supported for order by, instead found {:?} at index {:?}",
+                            datum, idx
+                        ),
+                    }
+                })
+                .collect::<Vec<i128>>();
+            Some(order_col)
         }
-        (_, None) => None,
-        (Err(_), _) => None,
+        _ => None,
     };
-    UpsertOrder { order, default }
+    UpsertOrder(order)
 }
 
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
@@ -164,7 +174,7 @@ pub(crate) fn get_order(
 pub(crate) fn upsert<G: Scope>(
     input: &Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, UpsertOrder), Diff>,
     mut key_indices: Vec<usize>,
-    order_by_index: Option<usize>,
+    order_by_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,
@@ -240,7 +250,7 @@ where
 
         for ((key, value), diff) in snapshot {
             assert_eq!(diff, 1, "invalid upsert state");
-            let order = get_order(&value, order_by_index, None);
+            let order = get_order(&value, &order_by_indices);
             state.insert(key, State(value, order));
         }
 
