@@ -48,8 +48,6 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 
 # Test that an OOMing cluster replica generates expected entries in
 # `mz_cluster_replica_statuses`
-
-
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
     def verify_cluster_oomed() -> None:
         with mz.environmentd.sql_cursor(autocommit=False) as cur:
