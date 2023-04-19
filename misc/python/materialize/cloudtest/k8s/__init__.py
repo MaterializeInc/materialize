@@ -145,7 +145,7 @@ class K8sService(K8sResource):
         self,
         port: Optional[str] = None,
         user: str = "materialize",
-        autocommit: bool = True
+        autocommit: bool = True,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the service"""
         conn = self.sql_conn(port=port, user=user)

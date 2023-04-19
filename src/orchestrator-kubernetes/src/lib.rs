@@ -873,6 +873,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 .and_then(|status| status.container_statuses.as_ref())
                 .map(|container_statuses| {
                     container_statuses.iter().any(|cs| {
+                        // We check whether the current _or_ the last state
+                        // is an OOM kill. The reason for this is that after a kill,
+                        // the state toggles from "Terminated" to "Waiting" very quickly,
+                        // at which point the OOM error appears int he last state,
+                        // not the current one.
+                        //
+                        // This "oomed" value is ignored later on if the pod is ready,
+                        // so there is no risk that we will go directly from "Terminated"
+                        // to "Running" and incorrectly report that we are currently
+                        // oom-killed.
                         cs.last_state.as_ref().map(is_state_oom).unwrap_or(false)
                             || cs.state.as_ref().map(is_state_oom).unwrap_or(false)
                     })
