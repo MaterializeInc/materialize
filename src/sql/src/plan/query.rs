@@ -2976,7 +2976,7 @@ fn plan_join(
             (joined, product_scope)
         }
         JoinConstraint::Using { columns, alias } => {
-            let column_names = &columns
+            let column_names = columns
                 .iter()
                 .map(|ident| normalize::column_name(ident.clone()))
                 .collect::<Vec<_>>();
