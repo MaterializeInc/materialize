@@ -81,7 +81,7 @@ pub struct ReplicaAllocation {
     /// The number of worker threads in the replica.
     pub workers: usize,
     /// The number of compute credits per hour.
-    pub compute_credits_per_hour: Numeric,
+    pub credits_per_hour: Numeric,
 }
 
 /// Configures the location of a cluster replica.
