@@ -3050,6 +3050,20 @@ fn plan_using_constraint(
         }
     }
 
+    if let Some(alias_name) = alias {
+        let new_item = PartialItemName {
+            database: None,
+            schema: None,
+            item: alias_name.clone().to_string(),
+        };
+
+        for partial_item_name in both_scope.table_names() {
+            if partial_item_name.matches(&new_item) {
+                sql_bail!("table name \"{}\" specified more than once", new_item)
+            }
+        }
+    }
+
     let ecx = &ExprContext {
         qcx: right_qcx,
         name: "USING clause",
@@ -3128,17 +3142,11 @@ fn plan_using_constraint(
                 item: alias_name.clone().to_string(),
             };
 
-            for partial_item_name in both_scope.table_names() {
-                if partial_item_name.matches(&new_item) {
-                    sql_bail!("table name \"{}\" specified more than once", new_item)
-                }
-            }
-
             new_items.push(ScopeItem::from_name(Some(new_item), column_name.clone().to_string()));
 
             // Should be able to use either `lhs` or `rhs` here since the column
             // is available in both scopes
-            map_exprs.push(HirScalarExpr::Column(lhs))
+            map_exprs.push(HirScalarExpr::Column(lhs));
         }
 
         join_exprs.push(HirScalarExpr::CallBinary {
