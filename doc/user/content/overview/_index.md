@@ -18,15 +18,15 @@ stream in from your data sources.
 ## Why should you use Materialize?
 
 Teams responsible for processing data understand the challenges
-associated with traditional databases. The need for immediate answers to business-essential questions requires a significant investment in data resources and can be time/cost
+associated with traditional databases. Getting immediate answers to business-essential questions requires a significant investment in data resources and can be time/cost
 prohibitive at scale.
 
-Materialize can solve data challenges in your organization in several ways.
+Materialize can solve your data challenges in several ways.
 
 ### Efficient dataflow management
 
-If your team performs OLAP queries over relational data,
-Materialize can reduce the time it takes to receive your query results.
+If your organization needs business-intelligence queries or reports from relational data,
+Materialize can reduce the time it takes to receive the information you need.
 
 Traditionally, teams use a batch processing system to query large data
 sets every night. These computations are resource expensive and time consuming
@@ -34,7 +34,7 @@ meaning you cannot run queries on demand. The once-a-day cycle caches the
 query result until the next run.
 
 Materialize continually updates the results of your queries as it receives new
-data. You no longer need to rely on day-old data and have a real time answer to
+data. You no longer need to rely on day-old data because you have real time answers to
 your queries.
 
 ### SQL API management
@@ -57,8 +57,7 @@ these terms and explains what Materialize does.
 ### What is a SQL view?
 
 In SQL, a **view** is a pre-defined query and its results. Every time you query
-a view, SQL executes your query and returns your results. Views contain your
-results and compute your data as you define.
+a view, SQL executes your query and returns your results.
 
 Because executing queries is resource expensive, a **materialized view** stores
 the results in a table. Materialized views are typically executed on a schedule
@@ -68,20 +67,19 @@ the next scheduled run.
 **Incrementally updated materialized views** can detect changes to your data,
 pass that data to an engine, parse the operation, and update your materialized
 views. Incremental updates do not take the same resource expenses as a full
-query operation and allow you to quickly receive materialized views based on the
+query operation and allow you to quickly receive based on the
 most up-to-date information.
 
 ### What is a streaming engine?
 
 Incrementally updated materialized views require a stream of data in the
-underlying database. The **stream** is a destination or source of data, like
-Apache Kafka. Those changes flow from a published feed and other services can
-consume that data. 
+underlying database. The **stream** is a source of data, like
+Apache Kafka, with a pipeline to a service that consumes that data. 
 
 To maintain materialized views from a stream of data, you need an engine to
 subscribe to the stream, compute, and maintain the materialized view. The
-**dataflow engine** in Materialize is a set of computations that keep your data
-up to date automatically.
+**dataflow engine** in Materialize keeps your data current with Timely and
+Differential Dataflow technology.
 
 ## What is the Materialized workflow?
 
@@ -107,8 +105,7 @@ you need. You can connect Materialize to external data sources like
 Kafka, Redpanda, and Confluent.
 
 The first step in the Materialize workflow is to create a secure connection to
-a source. 
-SQL syntax is the primary user interface for Materialize so you
+a source. SQL syntax is the primary user interface for Materialize so you
 need to use a `CREATE CONNECTION` statement to your specified data sources. To
 perform SQL queries in Materialize, log in to your Materialize cloud account
 with a `psql` client.
@@ -135,9 +132,8 @@ CREATE SOURCE kafka_source
   WITH (SIZE = '3xsmall');
 ```
 
-With a connection and a data source, Materialize will process your incoming data
-and transform queries you define. The next step in the workflow is creating a
-query.
+After you subscribe Materialize to a data source, it needs a query to compute
+your data into a view.
 
 ### Creating queries and views
 
@@ -147,10 +143,9 @@ subqueries, and data aggregation.
 To determine what queries to create in Materialize, consider how you use your
 query results and what operational questions you want to answer with that data.
 
-After you determine what data you need from your sources, you can create a
+After you determine what information you need from your sources, you can create a
 materialized view from your query. The example below creates a materialized view
-of a `winning_bids` view and selects columns based on high bids and
-sorts sequentially:
+of `winning_bids` and selects columns based on high bids in an auction and sorts them sequentially:
 
 ```sql
 CREATE MATERIALIZED VIEW winning_bids AS
@@ -167,10 +162,9 @@ WHERE end_time < mz_now();
 Materialize continually checks your sources for new data and updates the
 materialized views you create.
 
-Materialize creates dataflows of your query output. As the Materialize engine
-receives new data from sources, Materialize compares the changed data and
+As the Materialize engine receives new data from sources, Materialize compares the changed data and
 operation type to determine what and how to update your data. Materialized
-views persist in durable storage and reduces the operational burden on your
+views persist in durable storage which reduces the operational burden on your
 resources when accessing query results.
 
 Timely Dataflow and Differential Dataflow are the foundation of this
@@ -179,7 +173,7 @@ Dataflows, review the documentation and other references.
 
 ### Emitting data
 
-After the Materialize engine computes and processes data and changes from a
+After the Materialize engine computes and processes changes from a
 data source, you need a way to access those results that will also process
 incremental updates as your data changes.
 
