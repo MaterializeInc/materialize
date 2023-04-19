@@ -25,6 +25,7 @@ use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLocation};
 use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
@@ -826,7 +827,7 @@ impl Coordinator {
         let mut new_materialized_views = 0;
         let mut new_clusters = 0;
         let mut new_replicas_per_cluster = BTreeMap::new();
-        let mut new_compute_credits_per_hour = 0.0;
+        let mut new_compute_credits_per_hour = Numeric::zero();
         let mut new_databases = 0;
         let mut new_schemas_per_database = BTreeMap::new();
         let mut new_objects_per_schema = BTreeMap::new();
@@ -1102,7 +1103,7 @@ impl Coordinator {
                     .compute_credits_per_hour
             })
             .sum();
-        self.validate_resource_limit_float(
+        self.validate_resource_limit_numeric(
             current_compute_credits,
             new_compute_credits_per_hour,
             SystemVars::max_compute_credits_per_hour,
@@ -1158,7 +1159,7 @@ impl Coordinator {
     fn validate_resource_limit<F>(
         &self,
         current_amount: usize,
-        new_instances: i32,
+        new_amount: i32,
         resource_limit: F,
         resource_type: &str,
         limit_name: &str,
@@ -1166,12 +1167,12 @@ impl Coordinator {
     where
         F: Fn(&SystemVars) -> u32,
     {
-        if new_instances <= 0 {
+        if new_amount <= 0 {
             return Ok(());
         }
 
         let limit: i64 = resource_limit(self.catalog().system_config()).into();
-        let new_instances: i64 = new_instances.into();
+        let new_instances: i64 = new_amount.into();
         let current_amount: Option<i64> = current_amount.try_into().ok();
         let desired =
             current_amount.and_then(|current_amount| current_amount.checked_add(new_instances));
@@ -1203,19 +1204,19 @@ impl Coordinator {
 
     /// Validate a specific type of float resource limit and return an error if that limit is exceeded.
     ///
-    /// This is very similar to [`Self::validate_resource_limit`] but for floats.
-    fn validate_resource_limit_float<F>(
+    /// This is very similar to [`Self::validate_resource_limit`] but for numerics.
+    fn validate_resource_limit_numeric<F>(
         &self,
-        current_amount: f64,
-        new_instances: f64,
+        current_amount: Numeric,
+        new_amount: Numeric,
         resource_limit: F,
         resource_type: &str,
         limit_name: &str,
     ) -> Result<(), AdapterError>
     where
-        F: Fn(&SystemVars) -> f64,
+        F: Fn(&SystemVars) -> Numeric,
     {
-        if new_instances <= 0.0 {
+        if new_amount <= Numeric::zero() {
             return Ok(());
         }
 
@@ -1223,7 +1224,7 @@ impl Coordinator {
         // Floats will overflow to infinity instead of panicking, which has the correct comparison
         // semantics.
         // NaN should be impossible here since both values are positive.
-        let desired = current_amount + new_instances;
+        let desired = current_amount + new_amount;
         if desired > limit {
             Err(AdapterError::ResourceExhaustion {
                 resource_type: resource_type.to_string(),

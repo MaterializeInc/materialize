@@ -24,6 +24,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
+use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
 use crate::ast::Ident;
@@ -374,13 +375,14 @@ pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-pub const MAX_COMPUTE_CREDITS_PER_HOUR: ServerVar<f64> = ServerVar {
+static DEFAULT_MAX_COMPUTE_CREDITS_PER_HOUR: Lazy<Numeric> = Lazy::new(|| 64.into());
+pub static MAX_COMPUTE_CREDITS_PER_HOUR: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("max_compute_credits_per_hour"),
-    value: &64.0,
+    value: &DEFAULT_MAX_COMPUTE_CREDITS_PER_HOUR,
     description: "The maximum number of compute credits per hour in the region (Materialize).",
     internal: false,
     safe: true,
-};
+});
 
 pub const MAX_DATABASES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_databases"),
@@ -1643,7 +1645,7 @@ impl SystemVars {
     }
 
     /// Returns the value of the `max_compute_credits_per_hour` configuration parameter.
-    pub fn max_compute_credits_per_hour(&self) -> f64 {
+    pub fn max_compute_credits_per_hour(&self) -> Numeric {
         *self.expect_value(&MAX_COMPUTE_CREDITS_PER_HOUR)
     }
 
@@ -2291,23 +2293,23 @@ impl Value for usize {
     }
 }
 
-impl Value for f64 {
+impl Value for Numeric {
     const TYPE_NAME: &'static str = "floating point";
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
-        let f: f64 = s.parse().map_err(|_| ())?;
-        // TODO(jkosh44) This is a hacky way of of imposing validations on f64. Ideally this type
-        //  of validation should be specific to the variable that requires it, not all f64s.
+        let n: Numeric = s.parse().map_err(|_| ())?;
+        // TODO(jkosh44) This is a hacky way of of imposing validations on Numerics. Ideally this type
+        //  of validation should be specific to the variable that requires it, not all Numerics.
         //  Additionally, it should return an InvalidParameterValue error, but this eventually gets
         //  turned into an InvalidParameterType error. Unfortunately, SystemVars has no way of doing
         //  this kind of validation.
         // NaN and negatives are not valid values. Positive infinity is allowed because it's useful
         // to signify that there is no limit.
-        if f.is_nan() || f.is_sign_negative() {
+        if n.is_nan() || n.is_negative() {
             Err(())
         } else {
-            Ok(f)
+            Ok(n)
         }
     }
 

@@ -1743,7 +1743,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
         .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
         .with_column(
             "compute_credits_per_hour",
-            ScalarType::Float64.nullable(false),
+            ScalarType::Numeric { max_scale: None }.nullable(false),
         ),
     is_retained_metrics_object: true,
 });
