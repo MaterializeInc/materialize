@@ -199,7 +199,7 @@ def get_known_issues_from_github() -> list[KnownIssue]:
         headers["Authorization"] = f"Bearer {token}"
 
     response = requests.get(
-        f'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"',
+        'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"',
         headers=headers,
     )
 

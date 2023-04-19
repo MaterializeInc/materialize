@@ -47,14 +47,14 @@ class Query:
 
         if dialect == Dialect.PG:
             if timing:
-                return "\n".join([f"EXPLAIN (ANALYZE, TIMING TRUE)", self.query])
+                return "\n".join(["EXPLAIN (ANALYZE, TIMING TRUE)", self.query])
             else:
-                return "\n".join([f"EXPLAIN", self.query])
+                return "\n".join(["EXPLAIN", self.query])
         else:
             if timing:
-                return "\n".join([f"EXPLAIN WITH(timing)", self.query])
+                return "\n".join(["EXPLAIN WITH(timing)", self.query])
             else:
-                return "\n".join([f"EXPLAIN", self.query])
+                return "\n".join(["EXPLAIN", self.query])
 
 
 class ExplainOutput:

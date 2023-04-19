@@ -171,11 +171,11 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     # Restart the storage computed and confirm that the source errors out properly
 
     cluster_id, replica_id = mz.environmentd.sql_query(
-        f"SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'to_be_killed'"
+        "SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'to_be_killed'"
     )[0]
     pod_name = cluster_pod_name(cluster_id, replica_id, 0)
 
-    mz.kubectl("exec", pod_name, "--", "bash", "-c", f"kill -9 `pidof clusterd`")
+    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
     wait(condition="condition=Ready", resource=f"{pod_name}")
 
     mz.testdrive.run(
@@ -209,9 +209,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
         "--",
         "bash",
         "-c",
-        f"kill -9 `pidof environmentd`",
+        "kill -9 `pidof environmentd`",
     )
-    wait(condition="condition=Ready", resource=f"pod/environmentd-0")
+    wait(condition="condition=Ready", resource="pod/environmentd-0")
 
     mz.testdrive.run(
         input=dedent(

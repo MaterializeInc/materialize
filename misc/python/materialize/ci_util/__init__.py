@@ -80,7 +80,7 @@ def get_artifacts() -> Any:
     if "CI" not in os.environ:
         return []
 
-    ui.header(f"Getting artifact informations from Buildkite")
+    ui.header("Getting artifact informations from Buildkite")
     build = os.environ["BUILDKITE_BUILD_NUMBER"]
     build_id = os.environ["BUILDKITE_BUILD_ID"]
     job = os.environ["BUILDKITE_JOB_ID"]

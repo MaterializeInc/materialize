@@ -75,7 +75,7 @@ class Materialized(Service):
             # TODO(benesch): remove the following environment variables
             # after v0.38 ships, since these environment variables will be
             # baked into the Docker image.
-            f"MZ_ORCHESTRATOR=process",
+            "MZ_ORCHESTRATOR=process",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
@@ -133,7 +133,7 @@ class Materialized(Service):
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
-            f"--orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus",
+            "--orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus",
         ]
 
         command += options
@@ -668,7 +668,7 @@ class Localstack(Service):
     def __init__(
         self,
         name: str = "localstack",
-        image: str = f"localstack/localstack:0.13.1",
+        image: str = "localstack/localstack:0.13.1",
         port: int = 4566,
         environment: List[str] = ["HOSTNAME_EXTERNAL=localstack"],
         volumes: List[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
@@ -694,7 +694,7 @@ class Minio(Service):
     def __init__(
         self,
         name: str = "minio",
-        image: str = f"minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
+        image: str = "minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
         setup_materialize: bool = False,
     ) -> None:
         # We can pre-create buckets in minio by creating subdirectories in

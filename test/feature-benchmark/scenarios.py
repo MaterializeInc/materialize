@@ -86,7 +86,7 @@ true
 
     def benchmark(self) -> MeasurementSource:
         hundred_selects = "\n".join(
-            f"> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
+            "> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
         )
 
         return Td(
@@ -900,7 +900,7 @@ class KafkaEnvelopeNoneBytesScalability(ScenarioBig):
     def shared(self) -> List[Action]:
         return [
             TdAction(
-                f"""
+                """
 $ kafka-create-topic topic=kafka-scalability partitions=8
 """
             ),
@@ -1039,7 +1039,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
     def before(self) -> Action:
         return TdAction(
-            f"""
+            """
 > DROP SOURCE IF EXISTS mz_source_pgcdc;
             """
         )
@@ -1075,7 +1075,7 @@ class PgCdcStreaming(PgCdc):
 
     def shared(self) -> Action:
         return TdAction(
-            f"""
+            """
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -1088,7 +1088,7 @@ CREATE PUBLICATION p1 FOR ALL TABLES;
 
     def before(self) -> Action:
         return TdAction(
-            f"""
+            """
 > DROP SOURCE IF EXISTS s1;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -1144,7 +1144,7 @@ class QueryLatency(Coordinator):
     """Measure the time it takes to run SELECT 1 queries"""
 
     def benchmark(self) -> MeasurementSource:
-        selects = "\n".join(f"> SELECT 1\n1\n" for i in range(0, self.n()))
+        selects = "\n".join("> SELECT 1\n1\n" for i in range(0, self.n()))
 
         return Td(
             f"""
@@ -1170,7 +1170,7 @@ class ConnectionLatency(Coordinator):
 
     def benchmark(self) -> MeasurementSource:
         connections = "\n".join(
-            f"""
+            """
 $ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
 SELECT 1;
 """
@@ -1205,7 +1205,7 @@ class StartupEmpty(Startup):
         return [
             Lambda(lambda e: e.RestartMz()),
             Td(
-                f"""
+                """
 > SELECT 1;
   /* B */
 1
@@ -1222,7 +1222,7 @@ class StartupLoaded(Scenario):
     def shared(self) -> Action:
         return TdAction(
             self.schema()
-            + f"""
+            + """
 $ kafka-create-topic topic=startup-time
 
 $ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1

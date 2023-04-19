@@ -20,7 +20,7 @@ def main() -> None:
         mzbuild.Repository(Path("."), Arch.X86_64, coverage=False),
         mzbuild.Repository(Path("."), Arch.AARCH64, coverage=False),
     ]
-    print(f"--- Tagging development Docker images")
+    print("--- Tagging development Docker images")
     deps = [
         repo.resolve_dependencies(image for image in repo if image.publish)
         for repo in repos

@@ -166,14 +166,14 @@ class KafkaTopics(Generator):
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
                 FOR CONFLUENT SCHEMA REGISTRY
                 URL '${{testdrive.schema-registry-url}}';
                 """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
@@ -220,14 +220,14 @@ class KafkaSourcesSameTopic(Generator):
         print('"123" {"f1": "123"}')
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
@@ -272,14 +272,14 @@ class KafkaPartitions(Generator):
             print(f'"{i}" {{"f1": "{i}"}}')
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
@@ -328,20 +328,20 @@ class KafkaRecordsEnvelopeNone(Generator):
         print('{"f1": "123"}')
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
 
         print(
-            f"""> CREATE SOURCE kafka_records_envelope_none
+            """> CREATE SOURCE kafka_records_envelope_none
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-none-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
@@ -377,20 +377,20 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         print('{"key": "fish"} {"f1": "fish"}')
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
 
         print(
-            f"""> CREATE SOURCE kafka_records_envelope_upsert_same
+            """> CREATE SOURCE kafka_records_envelope_upsert_same
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-same-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
@@ -429,20 +429,20 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
             """
         )
 
         print(
-            f"""> CREATE SOURCE kafka_records_envelope_upsert_distinct
+            """> CREATE SOURCE kafka_records_envelope_upsert_distinct
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
@@ -459,7 +459,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         print('{"key": "${kafka-ingest.iteration}"}')
 
         print(
-            f"> SELECT COUNT(*), COUNT(DISTINCT f1) FROM kafka_records_envelope_upsert_distinct;\n0 0"
+            "> SELECT COUNT(*), COUNT(DISTINCT f1) FROM kafka_records_envelope_upsert_distinct;\n0 0"
         )
 
 
@@ -479,7 +479,7 @@ class KafkaSinks(Generator):
             print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${{testdrive.schema-registry-url}}';
             """
@@ -524,10 +524,10 @@ class KafkaSinksSameSource(Generator):
         )
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');"""
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');"""
         )
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');"""
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');"""
         )
 
         for i in cls.all():
@@ -734,8 +734,8 @@ class SubqueriesNested(Generator):
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
-        print(f"> SELECT 1 WHERE 1 = ")
-        print("\n".join(f"  (SELECT * FROM t1 WHERE f1 = " for i in cls.all()))
+        print("> SELECT 1 WHERE 1 = ")
+        print("\n".join("  (SELECT * FROM t1 WHERE f1 = " for i in cls.all()))
         print("  1" + "".join("  )" for i in cls.all()) + ";")
         print("1")
 
@@ -936,9 +936,9 @@ class WhereConditionAnd(Generator):
 class WhereConditionAndSameColumn(Generator):
     @classmethod
     def body(cls) -> None:
-        print(f"> CREATE TABLE t1 (f1 INTEGER);")
+        print("> CREATE TABLE t1 (f1 INTEGER);")
 
-        print(f"> INSERT INTO t1 VALUES (1);")
+        print("> INSERT INTO t1 VALUES (1);")
 
         where_condition = " AND ".join(f"f1 <= {i}" for i in cls.all())
         print(f"> SELECT f1 FROM t1 WHERE {where_condition};")
@@ -962,9 +962,9 @@ class WhereConditionOr(Generator):
 class WhereConditionOrSameColumn(Generator):
     @classmethod
     def body(cls) -> None:
-        print(f"> CREATE TABLE t1 (f1 INTEGER);")
+        print("> CREATE TABLE t1 (f1 INTEGER);")
 
-        print(f"> INSERT INTO t1 VALUES (1);")
+        print("> INSERT INTO t1 VALUES (1);")
 
         where_condition = " OR ".join(f"f1 = {i}" for i in cls.all())
         print(f"> SELECT f1 FROM t1 WHERE {where_condition};")
@@ -1087,7 +1087,7 @@ class UnionsNested(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1)")
 
-        print(f"> SELECT f1 + 0 FROM t1 UNION DISTINCT ")
+        print("> SELECT f1 + 0 FROM t1 UNION DISTINCT ")
         print(
             "\n".join(
                 f"  (SELECT f1 + {i} - {i} FROM t1 UNION DISTINCT " for i in cls.all()
@@ -1166,7 +1166,7 @@ class RowsJoinOneToOne(Generator):
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
         print(
-            f"> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.generate_series = a2.generate_series;"
+            "> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.generate_series = a2.generate_series;"
         )
         print(f"{cls.COUNT}")
 
@@ -1179,7 +1179,7 @@ class RowsJoinOneToMany(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
-        print(f"> SELECT COUNT(*) FROM v1 AS a1, (SELECT 1) AS a2;")
+        print("> SELECT COUNT(*) FROM v1 AS a1, (SELECT 1) AS a2;")
         print(f"{cls.COUNT}")
 
 
@@ -1191,7 +1191,7 @@ class RowsJoinCross(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
-        print(f"> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2;")
+        print("> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2;")
         print(f"{cls.COUNT**2}")
 
 
@@ -1225,7 +1225,7 @@ class RowsJoinDifferential(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
-        print(f"> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.f1 = a2.f1;")
+        print("> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.f1 = a2.f1;")
         print(f"{cls.COUNT}")
 
 
@@ -1237,7 +1237,7 @@ class RowsJoinOuter(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
-        print(f"> SELECT COUNT(*) FROM v1 AS a1 LEFT JOIN v1 AS a2 USING (f1);")
+        print("> SELECT COUNT(*) FROM v1 AS a1 LEFT JOIN v1 AS a2 USING (f1);")
         print(f"{cls.COUNT}")
 
 
