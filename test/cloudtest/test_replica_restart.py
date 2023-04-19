@@ -10,7 +10,6 @@
 import threading
 import time
 from io import StringIO
-from typing import Optional
 
 from pg8000 import Connection
 
