@@ -613,6 +613,6 @@ where
     (
         fetched_stream,
         completed_fetches_stream,
-        Rc::new(shutdown_button),
+        Rc::new(shutdown_button.press_on_drop()),
     )
 }
