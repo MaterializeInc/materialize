@@ -74,6 +74,7 @@
 // END LINT CONFIG
 
 use std::collections::BTreeMap;
+use std::env;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
@@ -85,8 +86,9 @@ use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource, ObjectFieldSelector,
-    Pod, PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
-    Service as K8sService, ServicePort, ServiceSpec,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, Pod, PodAffinityTerm, PodAntiAffinity,
+    PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort,
+    ServiceSpec, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -680,6 +682,51 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }]
         });
 
+        let coverage = env::var_os("CI_COVERAGE_ENABLED").is_some();
+
+        let env = if coverage {
+            Some(vec![EnvVar {
+                name: "LLVM_PROFILE_FILE".to_string(),
+                value: Some("/coverage/clusterd-%p-%9m%c.profraw".to_string()),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
+        let volume_mounts = if coverage {
+            Some(vec![VolumeMount {
+                name: "coverage".to_string(),
+                mount_path: "/coverage".to_string(),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
+        let volume_claim_templates = if coverage {
+            Some(vec![PersistentVolumeClaim {
+                metadata: ObjectMeta {
+                    name: Some("coverage".to_string()),
+                    ..Default::default()
+                },
+                spec: Some(PersistentVolumeClaimSpec {
+                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                    resources: Some(ResourceRequirements {
+                        requests: Some(BTreeMap::from([(
+                            "storage".to_string(),
+                            Quantity("10Gi".to_string()),
+                        )])),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -707,6 +754,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         limits: Some(limits),
                         ..Default::default()
                     }),
+                    volume_mounts: volume_mounts,
+                    env: env,
                     ..Default::default()
                 }],
                 node_selector: Some(node_selector),
@@ -750,10 +799,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 replicas: Some(scale.into()),
                 template: pod_template_spec,
                 pod_management_policy: Some("Parallel".to_string()),
+                volume_claim_templates: volume_claim_templates,
                 ..Default::default()
             }),
             status: None,
         };
+
         self.service_api
             .patch(
                 &name,

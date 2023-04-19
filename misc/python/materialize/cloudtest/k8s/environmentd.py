@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import urllib.parse
 from typing import Dict, Optional
 
@@ -87,6 +88,8 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             field_ref=V1ObjectFieldSelector(field_path="metadata.name")
         )
 
+        coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+
         env = [
             V1EnvVar(name="MZ_POD_NAME", value_from=value_from),
             V1EnvVar(name="AWS_REGION", value="minio"),
@@ -103,14 +106,29 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ),
         ]
 
+        if coverage:
+            env.extend(
+                [
+                    V1EnvVar(
+                        name="LLVM_PROFILE_FILE",
+                        value="/coverage/environmentd-%p-%9m%c.profraw",
+                    ),
+                    V1EnvVar(
+                        name="CI_COVERAGE_ENABLED",
+                        value="1",
+                    ),
+                ]
+            )
+
         for (k, v) in self.env.items():
             env.append(V1EnvVar(name=k, value=v))
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
 
-        volume_mounts = [
-            V1VolumeMount(name="data", mount_path="/data"),
-        ]
+        volume_mounts = [V1VolumeMount(name="data", mount_path="/data")]
+
+        if coverage:
+            volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
 
         s3_endpoint = urllib.parse.quote("http://minio-service.default:9000")
 
@@ -170,8 +188,19 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                     access_modes=["ReadWriteOnce"],
                     resources=V1ResourceRequirements(requests={"storage": "1Gi"}),
                 ),
-            )
+            ),
         ]
+
+        if coverage:
+            claim_templates.append(
+                V1PersistentVolumeClaim(
+                    metadata=V1ObjectMeta(name="coverage"),
+                    spec=V1PersistentVolumeClaimSpec(
+                        access_modes=["ReadWriteOnce"],
+                        resources=V1ResourceRequirements(requests={"storage": "10Gi"}),
+                    ),
+                )
+            )
 
         return V1StatefulSet(
             api_version="apps/v1",
