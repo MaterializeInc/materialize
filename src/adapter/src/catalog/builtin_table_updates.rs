@@ -1190,7 +1190,7 @@ impl CatalogState {
                         cpu_limit,
                         scale,
                         workers,
-                        compute_credits_per_hour,
+                        credits_per_hour,
                     },
                 )| {
                     // Just invent something when the limits are `None`,
