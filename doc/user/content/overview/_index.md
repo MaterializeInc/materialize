@@ -12,7 +12,7 @@ menu:
 
 Materialize is a **streaming database** that incrementally updates query results as it
 receives new data. Unlike a traditional database, Materialize continually
-performs complex operations and computes dataflow operations as they
+performs complex operations and computes dataflow changes as they
 stream in from your data sources.
 
 ## Why should you use Materialize?
@@ -89,8 +89,9 @@ The streaming materialized view engine described above allows you to:
 
 - Describe queries as **materialized views**, which is a concept implemented in
 **SQL**.
-- Use change data capture **streams** to feed a dataflow **engine** to create
-and maintain the answers to those queries.
+- Use change data capture **streams** to feed a dataflow **engine** and
+continually update the data. 
+- Stream data to other systems on demand.
 
 The basic stages of the Materialize workflow are:
 

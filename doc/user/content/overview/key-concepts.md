@@ -10,8 +10,7 @@ aliases:
   - /overview/api-components/
 ---
 
-This document captures the unique components in Materialize to help you
-understand how Materialize functions differently from traditional databases.
+This document captures the unique components in Materialize to hel functions differently from traditional databases.
 
 Materialize uses the components below to compute and build your data queries.
 
@@ -127,63 +126,6 @@ store query output in memory and allow Materialize to perform complex operations
 more efficiently.
 
 For more information on indexes, review [Arrangements](/overview/arrangements/).
-
-## Clusters
-
-Tenants are logical components that describe how Materialize allocates compute
-resources for your dataflow objects. When you create a dataflow object like a
-source or an index, you must specify a cluster or your resource will use the
-`default` cluster.
-
-Clusters rely on cluster replicas to run dataflows. Without a replica, clusters
-cannot perform data operations. For example, if you create an index on a cluster
-without a replica, you cannot select from that index because there is
-no index architecture to read.
-
-Clusters represent the logic of your dataflow objects and how they work together
-which impact their performance once you provision replicas. Materialize
-creates an instance of every object on each replica which means objects
-in your tenant share the same compute resources. You may need to configure
-multiple clusters to optimize performance in more resource intense operations.
-
-### Cluster deployment options
-
-When building your Materialize deployment, you can change its performance
-characteristics by...
-
-Action | Outcome
--------|---------
-Adding clusters + decreasing dataflow density | Reduced resource contention among dataflows, decoupled dataflow availability
-Adding replicas to clusters | See [Cluster replica scaling](#cluster-replica-deployment-options)
-
-## Cluster replicas
-
-Cluster replicas are the physical architecture within clusters that create and
-maintain dataflows.
-
-
-Each cluster replica within a cluster is a clone and construct the same
-dataflows. Each replica within a cluster receives a copy of all data from
-sources the dataflow uses and then performs identical computations on that data.
-As long as one replica is available, the cluster continues operations and gives
-you active replication in Materialize. 
-
-All dataflows of a cluster share the same resources on each replica. Depending
-on your dataflow needs, you may consider distributing replicas across multiple
-clusters or provisioning more compute resources within your clusters.
-
-### Cluster replica deployment options
-
-
-Materialize is an active-replication-based system. An active-replication-based
-system assumes each cluster replica has the same working set.
-
-When planning your Materialize deployment, consider these options for your
-cluster and replica architecture:
-
-Action | Outcome ---------|--------- Increase replicas' size | Ability to
-maintain more dataflows or more complex dataflows Add replicas to a cluster |
-Greater tolerance to replica failure
 
 ## Related pages
 
