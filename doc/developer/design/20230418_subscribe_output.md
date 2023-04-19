@@ -228,34 +228,34 @@ Calls handleUpdated with that map every time we've gotten on update
 `query` needs to ask for PROGRESS and SNAPSHOT
 """
 def subscribe(query, num_primary_keys, handleSnapshot, handleUpdated):
-	table = {}
-	conn = psycopg.connect("user=...")
-	with conn.cursor() as cur:
-		first_message = True
-		saw_complete_snapshot = False
-		cur_batch_timestamp = None
-		saw_data_updates_in_cur_batch = False
-		for (progress, timestamp, diff, *data) in cur.stream(query):
-			if timestamp != cur_batch_timestamp:
-				# process the batch we just worked on unless it's the first message
-				if first_message:
-					first_message = False
-				elif saw_complete_snapshot:
-					if saw_data_updates_in_cur_batch:
-						handleUpdated(table)
-				else:
-					saw_complete_snapshot = True
-					handleSnapshot(table)
-				saw_data_updates_in_cur_batch = False
-				cur_batch_timestamp = timestamp
+    table = {}
+    conn = psycopg.connect("user=...")
+    with conn.cursor() as cur:
+        first_message = True
+        saw_complete_snapshot = False
+        cur_batch_timestamp = None
+        saw_data_updates_in_cur_batch = False
+        for (progress, timestamp, diff, *data) in cur.stream(query):
+            if timestamp != cur_batch_timestamp:
+                # process the batch we just worked on unless it's the first message
+                if first_message:
+                    first_message = False
+                elif saw_complete_snapshot:
+                    if saw_data_updates_in_cur_batch:
+                        handleUpdated(table)
+                else:
+                    saw_complete_snapshot = True
+                    handleSnapshot(table)
+                saw_data_updates_in_cur_batch = False
+                cur_batch_timestamp = timestamp
 
-	        if not progress:
-				saw_data_updates_in_cur_batch = True
-				for _ in range(diff):
-					table[data[:num_primary_keys]] = data[num_primary_keys:]
-				for _ in range(-diff):
-					if data[:num_primary_keys] in table and table[data[:num_primary_keys]] == data[num_primary_keys:]:
-						del table[data[:num_primary_keys]]
+            if not progress:
+                saw_data_updates_in_cur_batch = True
+                for _ in range(diff):
+                    table[data[:num_primary_keys]] = data[num_primary_keys:]
+                for _ in range(-diff):
+                    if data[:num_primary_keys] in table and table[data[:num_primary_keys]] == data[num_primary_keys:]:
+                        del table[data[:num_primary_keys]]
 ```
 
 This design will only help with the bottom paragraph, when updating `table`.
