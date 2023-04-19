@@ -9,6 +9,8 @@
 
 # This testdrive file is exactly the same as upsert-kafka.td, but using the new syntax.
 
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+
 $ set keyschema={
     "type": "record",
     "name": "Key",
