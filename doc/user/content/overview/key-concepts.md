@@ -10,23 +10,23 @@ aliases:
   - /overview/api-components/
 ---
 
-This document captures the unique components in Materialize to hel functions differently from traditional databases.
+This document captures the unique components in Materialize and how they function differently from traditional databases.
 
 Materialize uses the components below to compute and build your data queries.
 
 Component                | Use
 -------------------------|-----
+**[Clusters]**           | Isolated logical workspaces that can be used by sources, sinks, indexes, and materialized views.
+**[Cluster replicas]**   | Physical compute resources within a cluster.
 **[Sources]**            | An external system you want Materialize to read data from (e.g. Kafka).
 **[Views]**              | Queries of sources and other views that you want to save for repeated execution.
 **[Indexes]**            | Query results stored in memory.
 **[Materialized views]** | Query results stored durably.
 **[Sinks]**              | Output streams or files that Materialize sends data to.
-**[Clusters]**           | Logical compute resources that can be used by sources, sinks, indexes, and materialized views.
-**[Cluster replicas]**   | Allocate physical compute resources for a cluster.
 
 ## Clusters
 
-Clusters are logical components that describe how Materialize allocates compute
+Clusters are logical workspaces that describe how Materialize allocates compute
 resources for your dataflow objects. When you create a dataflow object like a
 source or an index, you must specify a cluster or your resource will use the
 `default` cluster.
@@ -69,15 +69,66 @@ clusters or provisioning more replicas within your clusters.
 
 ### Cluster replica deployment options
 
-
-Materialize is an active-replication-based system and assumes each cluster replica has the same working set.
-
-When planning your Materialize deployment one option to consider is the size of
-your replicas within your clusters. Clusters with larger sized replicas have greater
-dataflow throughput and can maintain more complex dataflows. 
+For greater data throughput or for managing more complex dataflows consider
+deploying larger sized replicas in your cluster.
 
 You can also add more replicas to your clusters to increase fault tolerance if a
 replica becomes unavailable.
+
+## Sources
+
+Sources are external systems with data you want Materialize to compute.
+Materialize uses these sources as data streams and schemas to interpret your data. 
+
+Sources share some similarities with SQL tables and clients:
+
+* Like tables, sources are structures of data components that you can query.
+* Like clients, sources provide and read the underlying data.
+
+## Source components
+
+Sources consist of the following components:
+
+Component      | Use                                                                                               | Example
+---------------|---------------------------------------------------------------------------------------------------|---------
+**Connector**  | Provides actual bytes of data to Materialize                                                      | Kafka
+**Format**     | Structures of the external source's bytes, i.e. its schema                                        | Avro
+**Envelope**   | Expresses how Materialize should handle the incoming data + any additional formatting information | Upsert
+
+### Connectors
+
+Materialize includes embedded connectors for the following external systems:
+
+- [Kafka](/sql/create-source/kafka)
+- [Redpanda](/sql/create-source/kafka)
+- [PostgreSQL](/sql/create-source/postgres)
+
+For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
+
+### Formats
+
+Materialize decodes incoming bytes of data from several formats:
+
+- Avro
+- Protobuf
+- Regex
+- CSV
+- Plain text
+- Raw bytes
+- JSON
+
+### Envelopes
+
+An envelope is an attribute in a source statement that determines how
+Materialize interacts with your data.
+
+
+Envelope | Action
+---------|-------
+**Append-only** | Inserts all received data; does not support updates or deletes.
+**Debezium** | Treats data as wrapped in a "diff envelope" that indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Kafka&mdash;Using Debezium](/sql/create-source/kafka/#using-debezium).
+**Upsert** | Treats data as having a key and a value. New records with non-null value that have the same key as a preexisting record in the dataflow will replace the preexisting record. New records with null value that have the same key as preexisting record will cause the preexisting record to be deleted. <br/><br/>For more information, see [`CREATE SOURCE`: &mdash;Handling upserts](/sql/create-source/kafka/#handling-upserts)
+
 
 ## Views
 
