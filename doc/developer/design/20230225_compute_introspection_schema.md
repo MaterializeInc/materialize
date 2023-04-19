@@ -188,11 +188,6 @@ clear what the distinction is.
   provides given that we can approximate it.
 * All histogram views or sources should be suffixed with `_histogram`,
   to make their role more obvious. 
-* All per-replica sources and views should have their names prepended
-  with some string (perhaps `clusterd_`, though I'm open to
-  suggestions) that makes it obvious which ones they are. Furthermore,
-  the limitations of per-replica relations should be clearly
-  documented.
 
 ### Possibly useful missing views
 
