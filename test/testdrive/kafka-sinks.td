@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+
 $ kafka-create-topic topic=test partitions=1
 $ kafka-ingest topic=test format=bytes
 jack,jill
