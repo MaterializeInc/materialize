@@ -80,7 +80,7 @@ pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 impl Default for ClusterReplicaSizeMap {
     // Used for testing and local purposes. This default value should not be used in production.
     //
-    // Compute credits per hour are calculated as (scale * worker). This is not necessarily how the
+    // Credits per hour are calculated as (scale * worker). This is not necessarily how the
     // value is computed in production.
     fn default() -> Self {
         // {

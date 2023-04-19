@@ -38,11 +38,6 @@ SERVICES = [
 def workflow_postgres(c: Composition) -> None:
     c.up(*prerequisites, "postgres")
 
-    c.sql(
-        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
-        port=6877,
-        user="mz_system",
-    )
     c.run("testdrive", "postgres/debezium-postgres.td.initialize")
     c.run("testdrive", "postgres/*.td")
 
@@ -50,11 +45,6 @@ def workflow_postgres(c: Composition) -> None:
 def workflow_sql_server(c: Composition) -> None:
     c.up(*prerequisites, "sql-server")
 
-    c.sql(
-        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
-        port=6877,
-        user="mz_system",
-    )
     c.run(
         "testdrive",
         f"--var=sa-password={SqlServer.DEFAULT_SA_PASSWORD}",
@@ -65,11 +55,6 @@ def workflow_sql_server(c: Composition) -> None:
 def workflow_mysql(c: Composition) -> None:
     c.up(*prerequisites, "mysql")
 
-    c.sql(
-        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
-        port=6877,
-        user="mz_system",
-    )
     c.run(
         "testdrive",
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",

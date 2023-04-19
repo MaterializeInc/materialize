@@ -868,7 +868,7 @@ impl Coordinator {
                             .0
                             .get(&location.size)
                             .expect("location size is validated against the cluster replica sizes");
-                        new_credits_per_hour += replica_allocation.compute_credits_per_hour
+                        new_credits_per_hour += replica_allocation.credits_per_hour
                     }
                 }
                 Op::CreateItem { name, item, .. } => {
@@ -927,7 +927,7 @@ impl Coordinator {
                                     .0
                                     .get(&location.size)
                                     .expect("location size is validated against the cluster replica sizes");
-                                new_credits_per_hour -= replica_allocation.compute_credits_per_hour
+                                new_credits_per_hour -= replica_allocation.credits_per_hour
                             }
                         }
                         ObjectId::Database(_) => {
@@ -1098,7 +1098,7 @@ impl Coordinator {
                     .0
                     .get(size)
                     .expect("location size is validated against the cluster replica sizes")
-                    .compute_credits_per_hour
+                    .credits_per_hour
             })
             .sum();
         self.validate_resource_limit_numeric(

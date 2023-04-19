@@ -14,13 +14,7 @@
 # Errors
 #
 
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
 $ kafka-create-topic topic=t0
-
-# Increase compute credit limit
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_credits_per_hour TO 1000
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');

@@ -8,8 +8,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
 $ set cdcv2-schema=[
   {
     "type": "array",
@@ -155,10 +153,6 @@ $ kafka-create-topic topic=input_cdcv2
 
 $ kafka-ingest format=avro topic=input_dbz key-format=avro key-schema=${dbz-key-schema} schema=${dbz-schema} timestamp=1
 {"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
-
-# Increase compute credit limit
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_credits_per_hour TO 1000
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');

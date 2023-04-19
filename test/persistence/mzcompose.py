@@ -64,11 +64,6 @@ def workflow_kafka_sources(
     seed = round(time.time())
 
     c.up("materialized")
-    c.sql(
-        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
-        port=6877,
-        user="mz_system",
-    )
 
     c.run("testdrive", f"--seed={seed}", f"kafka-sources/*{td_test}*-before.td")
 
@@ -98,11 +93,6 @@ def workflow_user_tables(
     seed = round(time.time())
 
     c.up("materialized")
-    c.sql(
-        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
-        port=6877,
-        user="mz_system",
-    )
 
     c.run(
         "testdrive",
@@ -147,11 +137,6 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
     seed = round(time.time())
 
     c.up("materialized")
-    c.sql(
-        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
-        port=6877,
-        user="mz_system",
-    )
 
     c.run(
         "testdrive",
@@ -178,11 +163,6 @@ def workflow_compaction(c: Composition) -> None:
         Materialized(options=["--metrics-scraping-interval=1s"]),
     ):
         c.up("materialized")
-        c.sql(
-            "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
-            port=6877,
-            user="mz_system",
-        )
 
         c.run("testdrive", "compaction/compaction.td")
 

@@ -367,7 +367,7 @@ ALTER SYSTEM SET max_credits_per_hour = 3
 > SHOW max_credits_per_hour
 3
 
-# Size 1 has 1 compute credit and size 2 has 2 compute credits
+# Size 1 has 1 credit and size 2 has 2 credits
 
 > CREATE CLUSTER c1 REPLICAS (r1 (size '1'), r2 (size '2'))
 
