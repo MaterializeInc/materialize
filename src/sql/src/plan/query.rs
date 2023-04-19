@@ -2954,7 +2954,7 @@ fn plan_join(
 
     let (expr, scope) = match constraint {
         JoinConstraint::On(expr) => {
-            let product_scope: Scope = left_scope.product(right_scope)?;
+            let product_scope = left_scope.product(right_scope)?;
             let ecx = &ExprContext {
                 qcx: left_qcx,
                 name: "ON clause",
