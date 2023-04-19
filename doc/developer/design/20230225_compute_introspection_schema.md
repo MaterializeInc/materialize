@@ -9,7 +9,7 @@ IDs to the operators they connect), and there are various existing ones that
 have inconsistently named fields or inconsistent
 semantics. Furthermore, the documentation of the various relations is
 incomplete (e.g., it doesn't make clear whether each relation is
-per-replica or global). 
+per-replica or global).
 
 ## Goals
 
@@ -32,7 +32,7 @@ provided in the web UI by the "external introspection" project.
 
 ## Description
 
-### Schema inconsistencies and inelegancies 
+### Schema inconsistencies and inelegancies
 
 In this section, we describe the various issues that make the schema
 confusing.
@@ -114,7 +114,7 @@ GROUP BY operator_id, worker_id"
 
 This dimension is applied inconsistently: not all relations that
 report a count or sum in the data are derived from a corresponding
-`_internal` source. 
+`_internal` source.
 
 `raw` variants, on the other hand, measure some time value in
 nanoseconds, whereas their corresponding non-`raw` views convert the
@@ -151,7 +151,7 @@ Furthermore, sometimes the same logical value is reported by two
 relations, one reporting `clusterd`'s view of the world, and the other
 reporting `environmentd`'s. For example, `mz_compute_frontiers`
 vs. `mz_cluster_replica_frontiers`. However, the names do not make it
-clear what the distinction is. 
+clear what the distinction is.
 
 ### Suggested fixes for schema inconsistencies
 
@@ -187,7 +187,7 @@ clear what the distinction is.
   On the other hand, it is not clear how much value the `sum` field
   provides given that we can approximate it.
 * All histogram views or sources should be suffixed with `_histogram`,
-  to make their role more obvious. 
+  to make their role more obvious.
 
 ### Possibly useful missing views
 
@@ -224,6 +224,6 @@ None known to me
 
 * Are there further views that could be useful but that we don't have
 access to? We should fill this out as more become known to us (e.g.,
-while debugging customer issues) 
+while debugging customer issues)
 
 * Is there a better name than `_internal` for the non-aggregated sources?
