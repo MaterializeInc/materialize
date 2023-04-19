@@ -1547,7 +1547,7 @@ pub struct Database {
     pub schemas_by_id: BTreeMap<SchemaId, Schema>,
     pub schemas_by_name: BTreeMap<String, SchemaId>,
     pub owner_id: RoleId,
-    // Key is the role granted the privilege, value is the privilege itself.
+    // Key is the role that granted the privilege, value is the privilege itself.
     pub privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
 }
 
@@ -1586,7 +1586,7 @@ pub struct Schema {
     pub items: BTreeMap<String, GlobalId>,
     pub functions: BTreeMap<String, GlobalId>,
     pub owner_id: RoleId,
-    // Key is the role granted the privilege, value is the privilege itself.
+    // Key is the role that granted the privilege, value is the privilege itself.
     pub privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
 }
 
@@ -1684,7 +1684,7 @@ pub struct Cluster {
     pub replica_id_by_name: BTreeMap<String, ReplicaId>,
     pub replicas_by_id: BTreeMap<ReplicaId, ClusterReplica>,
     pub owner_id: RoleId,
-    // Key is the role granted the privilege, value is the privilege itself.
+    // Key is the role that granted the privilege, value is the privilege itself.
     pub privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
 }
 
@@ -1750,7 +1750,7 @@ pub struct CatalogEntry {
     oid: u32,
     name: QualifiedItemName,
     owner_id: RoleId,
-    // Key is the role granted the privilege, value is the privilege itself.
+    // Key is the role that granted the privilege, value is the privilege itself.
     privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
 }
 
@@ -4652,7 +4652,7 @@ impl Catalog {
     }
 
     /// Returns the privileges of an object by its ID.
-    /// Key is the role granted the privilege, value is the privilege itself.
+    /// Key is the role that granted the privilege, value is the privilege itself.
     pub fn get_privileges(
         &self,
         id: &ObjectId,

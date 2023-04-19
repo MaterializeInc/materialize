@@ -330,7 +330,7 @@ pub trait CatalogDatabase {
     fn owner_id(&self) -> RoleId;
 
     /// Returns the privileges associated with the database.
-    /// Key is the role granted the privilege, value is the privilege itself.
+    /// Key is the role that granted the privilege, value is the privilege itself.
     fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>>;
 }
 
@@ -356,7 +356,7 @@ pub trait CatalogSchema {
     fn owner_id(&self) -> RoleId;
 
     /// Returns the privileges associated with the schema.
-    /// Key is the role granted the privilege, value is the privilege itself.
+    /// Key is the role that granted the privilege, value is the privilege itself.
     fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>>;
 }
 
@@ -512,7 +512,7 @@ pub trait CatalogCluster<'a> {
     fn owner_id(&self) -> RoleId;
 
     /// Returns the privileges associated with the cluster.
-    /// Key is the role granted the privilege, value is the privilege itself.
+    /// Key is the role that granted the privilege, value is the privilege itself.
     fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>>;
 }
 
@@ -601,7 +601,7 @@ pub trait CatalogItem {
     fn owner_id(&self) -> RoleId;
 
     /// Returns the privileges associated with the item.
-    /// Key is the role granted the privilege, value is the privilege itself.
+    /// Key is the role that granted the privilege, value is the privilege itself.
     fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>>;
 }
 
