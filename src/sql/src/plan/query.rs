@@ -3142,10 +3142,14 @@ fn plan_using_constraint(
                 item: alias_name.clone().to_string(),
             };
 
+            let new_item_col = both_scope.items.len() + new_items.len();
+            join_cols.push(new_item_col);
+            hidden_cols.push(new_item_col);
+
             new_items.push(ScopeItem::from_name(Some(new_item), column_name.clone().to_string()));
 
-            // Should be able to use either `lhs` or `rhs` here since the column
-            // is available in both scopes
+            // Should be safe to use either `lhs` or `rhs` here since the column
+            // is available in both scopes and must have the same type of the new item.
             map_exprs.push(HirScalarExpr::Column(lhs));
         }
 
