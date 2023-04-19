@@ -592,6 +592,7 @@ pub struct PeekPlan {
 
 #[derive(Debug)]
 pub enum SubscribeOutput {
+    Diffs,
     WithinTimestampOrderBy {
         order_by: Vec<ColumnOrder>,
         project: Vec<usize>,
@@ -609,7 +610,7 @@ pub struct SubscribePlan {
     pub up_to: Option<MirScalarExpr>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
-    pub output: Option<SubscribeOutput>,
+    pub output: SubscribeOutput,
 }
 
 #[derive(Debug)]

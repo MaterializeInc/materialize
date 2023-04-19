@@ -457,6 +457,7 @@ impl_display!(Envelope);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SubscribeOutput<T: AstInfo> {
+    Diffs,
     WithinTimestampOrderBy { order_by: Vec<OrderByExpr<T>> },
     EnvelopeUpsert { key_columns: Vec<Ident> },
 }
@@ -464,12 +465,13 @@ pub enum SubscribeOutput<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for SubscribeOutput<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            Self::Diffs => {}
             Self::WithinTimestampOrderBy { order_by } => {
-                f.write_str("WITHIN TIMESTAMP ORDER BY ");
+                f.write_str(" WITHIN TIMESTAMP ORDER BY ");
                 f.write_node(&display::comma_separated(order_by));
             }
             Self::EnvelopeUpsert { key_columns } => {
-                f.write_str("ENVELOPE UPSERT (KEY (");
+                f.write_str(" ENVELOPE UPSERT (KEY (");
                 f.write_node(&display::comma_separated(key_columns));
                 f.write_str("))");
             }

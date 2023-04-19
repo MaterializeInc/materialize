@@ -2327,9 +2327,7 @@ impl Coordinator {
                 let expr = self.view_optimizer.optimize(expr)?;
                 let all_types = expr.typ().column_types;
                 let projected_types = match &output {
-                    Some(SubscribeOutput::WithinTimestampOrderBy { project, .. }) => {
-                        project.clone()
-                    }
+                    SubscribeOutput::WithinTimestampOrderBy { project, .. } => project.clone(),
                     _ => (0..desc.arity()).collect_vec(),
                 }
                 .into_iter()

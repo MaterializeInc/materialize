@@ -54,7 +54,7 @@ pub struct ActiveSubscribe {
     /// Whether we are already in the process of dropping the resources related to this subscribe.
     pub dropping: bool,
     /// How to modify output
-    pub output: Option<SubscribeOutput>,
+    pub output: SubscribeOutput,
 }
 
 impl ActiveSubscribe {
@@ -74,7 +74,7 @@ impl ActiveSubscribe {
             packer.push(Datum::True);
 
             // Fill in the diff column
-            if !matches!(self.output, Some(SubscribeOutput::EnvelopeUpsert { .. })) {
+            if !matches!(self.output, SubscribeOutput::EnvelopeUpsert { .. }) {
                 packer.push(Datum::Null);
             }
             // Fill all table columns with NULL.
@@ -107,7 +107,7 @@ impl ActiveSubscribe {
                         // results since the cursor will always produce rows in the same order.
                         // TODO: Is sorting by time necessary?
                         match &self.output {
-                            Some(SubscribeOutput::WithinTimestampOrderBy { order_by, project }) => {
+                            SubscribeOutput::WithinTimestampOrderBy { order_by, project } => {
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
                                 let mut right_datum_vec = mz_repr::DatumVec::new();
                                 rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
@@ -130,7 +130,7 @@ impl ActiveSubscribe {
                                     }
                                 }
                             }
-                            Some(SubscribeOutput::EnvelopeUpsert { key_indices }) => {
+                            SubscribeOutput::EnvelopeUpsert { key_indices } => {
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
                                 let mut right_datum_vec = mz_repr::DatumVec::new();
                                 let order_by = &key_indices
@@ -208,7 +208,7 @@ impl ActiveSubscribe {
                                 }
                                 rows = new_rows;
                             }
-                            None => rows.sort_by_key(|(time, _, _)| *time),
+                            SubscribeOutput::Diffs => rows.sort_by_key(|(time, _, _)| *time),
                         }
 
                         let rows = rows
@@ -227,10 +227,7 @@ impl ActiveSubscribe {
                                     packer.push(Datum::False);
                                 }
 
-                                if !matches!(
-                                    self.output,
-                                    Some(SubscribeOutput::EnvelopeUpsert { .. })
-                                ) {
+                                if !matches!(self.output, SubscribeOutput::EnvelopeUpsert { .. }) {
                                     packer.push(Datum::Int64(diff));
                                 }
 

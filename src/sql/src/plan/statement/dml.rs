@@ -391,7 +391,7 @@ pub fn describe_subscribe(
         }
         SubscribeRelation::Query(query) => {
             let mut query = Query::query(query);
-            if let Some(SubscribeOutput::WithinTimestampOrderBy { order_by }) = &stmt.output {
+            if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &stmt.output {
                 query.order_by = order_by.clone();
             }
             let query::PlannedQuery { desc, .. } = plan_query(
@@ -417,7 +417,7 @@ pub fn describe_subscribe(
         desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
     }
 
-    if let Some(SubscribeOutput::EnvelopeUpsert { key_columns }) = stmt.output {
+    if let SubscribeOutput::EnvelopeUpsert { key_columns } = stmt.output {
         let key_columns = key_columns
             .into_iter()
             .map(normalize::column_name)
@@ -477,7 +477,7 @@ pub fn plan_subscribe(
 
             // In constrast to a query, the order by cannot be very fancy, it's just column names
             let mut order_by_col = Vec::new();
-            if let Some(SubscribeOutput::WithinTimestampOrderBy { order_by }) = &output {
+            if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &output {
                 for mut obe in order_by.clone() {
                     let idx = match obe.expr.take() {
                         mz_sql_parser::ast::Expr::Identifier(mut id) => {
@@ -515,7 +515,7 @@ pub fn plan_subscribe(
             // user-supplied query is planned as a subquery whose `ORDER
             // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
             let mut query = Query::query(query);
-            if let Some(SubscribeOutput::WithinTimestampOrderBy { order_by }) = &output {
+            if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &output {
                 query.order_by = order_by.clone();
             }
             let query = plan_query(
@@ -540,42 +540,41 @@ pub fn plan_subscribe(
     let when = query::plan_as_of(scx, as_of)?;
     let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
 
-    let output = output
-        .map(|env| match env {
-            SubscribeOutput::EnvelopeUpsert { key_columns } => {
-                scx.require_envelope_upsert_in_subscribe()?;
-                let key_columns = key_columns
-                    .into_iter()
-                    .map(normalize::column_name)
-                    .collect::<Vec<_>>();
-                let duplicates = key_columns.iter().duplicates().collect_vec();
-                if !duplicates.is_empty() {
-                    sql_bail!(
-                        "Repeated column names in subscribe envelope key: {}",
-                        duplicates.iter().join(", ")
-                    );
-                }
-                let key_indices = key_columns
-                    .iter()
-                    .map(|col| -> anyhow::Result<usize> {
-                        let name_idx = desc
-                            .get_by_name(col)
-                            .map(|(idx, _type)| idx)
-                            .ok_or_else(|| sql_err!("No such column: {}", col))?;
-                        if desc.get_unambiguous_name(name_idx).is_none() {
-                            sql_err!("Ambiguous column: {}", col);
-                        }
-                        Ok(name_idx)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(plan::SubscribeOutput::EnvelopeUpsert { key_indices })
+    let output = match output {
+        SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
+        SubscribeOutput::EnvelopeUpsert { key_columns } => {
+            scx.require_envelope_upsert_in_subscribe()?;
+            let key_columns = key_columns
+                .into_iter()
+                .map(normalize::column_name)
+                .collect::<Vec<_>>();
+            let duplicates = key_columns.iter().duplicates().collect_vec();
+            if !duplicates.is_empty() {
+                sql_bail!(
+                    "Repeated column names in subscribe envelope key: {}",
+                    duplicates.iter().join(", ")
+                );
             }
-            SubscribeOutput::WithinTimestampOrderBy { order_by: _ } => {
-                scx.require_within_timestamp_order_by_in_subscribe()?;
-                Ok(plan::SubscribeOutput::WithinTimestampOrderBy { order_by, project })
-            }
-        })
-        .transpose()?;
+            let key_indices = key_columns
+                .iter()
+                .map(|col| -> anyhow::Result<usize> {
+                    let name_idx = desc
+                        .get_by_name(col)
+                        .map(|(idx, _type)| idx)
+                        .ok_or_else(|| sql_err!("No such column: {}", col))?;
+                    if desc.get_unambiguous_name(name_idx).is_none() {
+                        sql_err!("Ambiguous column: {}", col);
+                    }
+                    Ok(name_idx)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            plan::SubscribeOutput::EnvelopeUpsert { key_indices }
+        }
+        SubscribeOutput::WithinTimestampOrderBy { order_by: _ } => {
+            scx.require_within_timestamp_order_by_in_subscribe()?;
+            plan::SubscribeOutput::WithinTimestampOrderBy { order_by, project }
+        }
+    };
 
     let SubscribeOptionExtracted {
         progress, snapshot, ..
