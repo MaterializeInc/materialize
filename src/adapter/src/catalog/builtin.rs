@@ -1740,7 +1740,11 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
         .with_column("workers", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
         .with_column("memory_bytes", ScalarType::UInt64.nullable(false))
-        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "compute_credits_per_hour",
+            ScalarType::Float64.nullable(false),
+        ),
     is_retained_metrics_object: true,
 });
 

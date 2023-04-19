@@ -79,6 +79,8 @@ pub struct ReplicaAllocation {
     pub scale: u16,
     /// The number of worker threads in the replica.
     pub workers: usize,
+    /// The number of compute credits per hour.
+    pub compute_credits_per_hour: f64,
 }
 
 /// Configures the location of a cluster replica.

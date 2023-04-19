@@ -317,7 +317,7 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     safe: true,
 };
 
-const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
+pub const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_aws_privatelink_connections"),
     value: &0,
     description: "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
@@ -325,7 +325,7 @@ const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_TABLES: ServerVar<u32> = ServerVar {
+pub const MAX_TABLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_tables"),
     value: &25,
     description: "The maximum number of tables in the region, across all schemas (Materialize).",
@@ -333,7 +333,7 @@ const MAX_TABLES: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_SOURCES: ServerVar<u32> = ServerVar {
+pub const MAX_SOURCES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sources"),
     value: &25,
     description: "The maximum number of sources in the region, across all schemas (Materialize).",
@@ -341,7 +341,7 @@ const MAX_SOURCES: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_SINKS: ServerVar<u32> = ServerVar {
+pub const MAX_SINKS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sinks"),
     value: &25,
     description: "The maximum number of sinks in the region, across all schemas (Materialize).",
@@ -349,7 +349,7 @@ const MAX_SINKS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
+pub const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_materialized_views"),
     value: &100,
     description:
@@ -358,7 +358,7 @@ const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
+pub const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_clusters"),
     value: &10,
     description: "The maximum number of clusters in the region (Materialize).",
@@ -366,7 +366,7 @@ const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
+pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_replicas_per_cluster"),
     value: &5,
     description: "The maximum number of replicas of a single cluster (Materialize).",
@@ -374,7 +374,15 @@ const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_DATABASES: ServerVar<u32> = ServerVar {
+pub const MAX_COMPUTE_CREDITS_PER_HOUR: ServerVar<f64> = ServerVar {
+    name: UncasedStr::new("max_compute_credits_per_hour"),
+    value: &64.0,
+    description: "The maximum number of compute credits per hour in the region (Materialize).",
+    internal: false,
+    safe: true,
+};
+
+pub const MAX_DATABASES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_databases"),
     value: &1000,
     description: "The maximum number of databases in the region (Materialize).",
@@ -382,7 +390,7 @@ const MAX_DATABASES: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
+pub const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_schemas_per_database"),
     value: &1000,
     description: "The maximum number of schemas in a database (Materialize).",
@@ -390,7 +398,7 @@ const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
+pub const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_objects_per_schema"),
     value: &1000,
     description: "The maximum number of objects in a schema (Materialize).",
@@ -398,7 +406,7 @@ const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_SECRETS: ServerVar<u32> = ServerVar {
+pub const MAX_SECRETS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_secrets"),
     value: &100,
     description: "The maximum number of secrets in the region, across all schemas (Materialize).",
@@ -406,7 +414,7 @@ const MAX_SECRETS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_ROLES: ServerVar<u32> = ServerVar {
+pub const MAX_ROLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_roles"),
     value: &1000,
     description: "The maximum number of roles in the region (Materialize).",
@@ -1432,6 +1440,7 @@ impl Default for SystemVars {
             .with_var(&MAX_MATERIALIZED_VIEWS)
             .with_var(&MAX_CLUSTERS)
             .with_var(&MAX_REPLICAS_PER_CLUSTER)
+            .with_var(&MAX_COMPUTE_CREDITS_PER_HOUR)
             .with_var(&MAX_DATABASES)
             .with_var(&MAX_SCHEMAS_PER_DATABASE)
             .with_var(&MAX_OBJECTS_PER_SCHEMA)
@@ -1474,8 +1483,8 @@ impl SystemVars {
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
     where
-        V: Value + Debug + Eq + Clone + 'static,
-        V::Owned: Debug + Eq + Send + Clone + Sync,
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
     {
         self.vars.insert(var.name, Box::new(SystemVar::new(var)));
         self
@@ -1483,8 +1492,8 @@ impl SystemVars {
 
     fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
     where
-        V: Value + Debug + Eq + Clone + 'static,
-        V::Owned: Debug + Eq + Send + Clone + Sync,
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
     {
         let var = self
             .vars
@@ -1631,6 +1640,11 @@ impl SystemVars {
     /// Returns the value of the `max_replicas_per_cluster` configuration parameter.
     pub fn max_replicas_per_cluster(&self) -> u32 {
         *self.expect_value(&MAX_REPLICAS_PER_CLUSTER)
+    }
+
+    /// Returns the value of the `max_compute_credits_per_hour` configuration parameter.
+    pub fn max_compute_credits_per_hour(&self) -> f64 {
+        *self.expect_value(&MAX_COMPUTE_CREDITS_PER_HOUR)
     }
 
     /// Returns the value of the `max_databases` configuration parameter.
@@ -1928,7 +1942,7 @@ where
 
 impl<V> SystemVar<V>
 where
-    V: Value + fmt::Debug + Eq + ?Sized + 'static,
+    V: Value + fmt::Debug + PartialEq + ?Sized + 'static,
     V::Owned: fmt::Debug,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
@@ -1952,7 +1966,7 @@ where
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + fmt::Debug + Eq + ?Sized + 'static,
+    V: Value + fmt::Debug + PartialEq + ?Sized + 'static,
     V::Owned: fmt::Debug,
 {
     fn name(&self) -> &'static str {
@@ -1982,7 +1996,7 @@ where
 
 impl<V> VarMut for SystemVar<V>
 where
-    V: Value + fmt::Debug + Eq + 'static,
+    V: Value + fmt::Debug + PartialEq + 'static,
     V::Owned: fmt::Debug + Clone + Send + Sync,
 {
     fn as_var(&self) -> &dyn Var {
@@ -2270,6 +2284,31 @@ impl Value for usize {
     fn parse(input: VarInput) -> Result<usize, ()> {
         let s = extract_single_value(input)?;
         s.parse().map_err(|_| ())
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl Value for f64 {
+    const TYPE_NAME: &'static str = "floating point";
+
+    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+        let s = extract_single_value(input)?;
+        let f: f64 = s.parse().map_err(|_| ())?;
+        // TODO(jkosh44) This is a hacky way of of imposing validations on f64. Ideally this type
+        //  of validation should be specific to the variable that requires it, not all f64s.
+        //  Additionally, it should return an InvalidParameterValue error, but this eventually gets
+        //  turned into an InvalidParameterType error. Unfortunately, SystemVars has no way of doing
+        //  this kind of validation.
+        // NaN and negatives are not valid values. Positive infinity is allowed because it's useful
+        // to signify that there is no limit.
+        if f.is_nan() || f.is_sign_negative() {
+            Err(())
+        } else {
+            Ok(f)
+        }
     }
 
     fn format(&self) -> String {

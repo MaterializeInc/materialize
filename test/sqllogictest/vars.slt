@@ -289,3 +289,17 @@ COMPLETE 1
 
 statement error parameter "database" requires a "string" value
 set database = one, two
+
+# Test invalid values for float vars
+# TODO(jkosh44) the error messages here are bad, but the best we can do right now. A user will
+# never see this anyway since it's only exposed to admins.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_compute_credits_per_hour = '-100.5'
+----
+db error: ERROR: parameter "max_compute_credits_per_hour" requires a "floating point" value
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_compute_credits_per_hour = NaN
+----
+db error: ERROR: parameter "max_compute_credits_per_hour" requires a "floating point" value
