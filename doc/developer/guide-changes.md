@@ -430,7 +430,7 @@ their part. When work resumes on the PR, convert it back to an active PR.
 In a similar vein, if code review reveals that a PR needs to be scrapped
 entirely, close the PR rather than leaving it open. Even if the PR should serve
 useful example of an approach that didn't pan out, it can serve in that role
-while closed. Consider linking it an the associated issue for posterity, if
+while closed. Consider linking it and the associated issue for posterity, if
 applicable.
 
 #### Merge skew
@@ -736,7 +736,7 @@ in the long term they harm the maintainability of the codebase. Put another way:
 adding the first special case is easy, but adding the tenth special case is
 nearly impossible.
 
-Usually, special casing a sign that the interface is wrong. Can you redesign the
+Usually, special casing is a sign that the interface is wrong. Can you redesign the
 interface to instead consist of several composable, non-interdependent pieces?
 This sort of refactor can be _really_ tricky to design, but if you can get it
 right, it pays dividends.
