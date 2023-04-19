@@ -136,7 +136,7 @@ impl Default for ClusterReplicaSizeMap {
                     cpu_limit: None,
                     scale,
                     workers: scale.into(),
-                    compute_credits_per_hour: (scale * scale).into(),
+                    credits_per_hour: (scale * scale).into(),
                 },
             );
         }
