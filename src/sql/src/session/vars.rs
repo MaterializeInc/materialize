@@ -676,6 +676,15 @@ static ENABLE_MONOTONIC_ONESHOT_SELECTS: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Feature flag indicating whether `FORMAT JSON` sources are enabled.
+static ENABLE_FORMAT_JSON: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_format_json"),
+    value: &false,
+    description: "Feature flag indicating whether `FORMAT JSON` sources are enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Feature flag indicating whether real time recency is enabled.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
@@ -1479,6 +1488,7 @@ impl Default for SystemVars {
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
+            .with_var(&ENABLE_FORMAT_JSON)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
@@ -1813,6 +1823,20 @@ impl SystemVars {
     /// Returns the `enable_monotonic_oneshot_selects` configuration parameter.
     pub fn enable_monotonic_oneshot_selects(&self) -> bool {
         *self.expect_value(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
+    }
+
+    /// Returns the `enable_format_json` configuration parameter.
+    pub fn enable_format_json(&self) -> bool {
+        *self.expect_value(&ENABLE_FORMAT_JSON)
+    }
+
+    /// Sets the `enable_format_json` configuration parameter.
+    pub fn set_enable_format_json(&mut self, value: bool) -> bool {
+        self.vars
+            .get_mut(ENABLE_FORMAT_JSON.name)
+            .expect("var known to exist")
+            .set(VarInput::Flat(value.format().as_str()))
+            .expect("valid parameter value")
     }
 
     /// Returns the `enable_ld_rbac_checks` configuration parameter.

@@ -726,6 +726,13 @@ impl<'a> StatementContext<'a> {
         Ok(())
     }
 
+    pub fn require_format_json(&self) -> Result<(), PlanError> {
+        if !self.unsafe_mode() && !self.catalog.system_vars().enable_format_json() {
+            sql_bail!("`FORMAT JSON` is not enabled")
+        }
+        Ok(())
+    }
+
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {
         let param_types = self.param_types.into_inner();
         let mut out = vec![];
