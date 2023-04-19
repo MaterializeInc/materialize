@@ -2314,7 +2314,7 @@ impl Value for Numeric {
     }
 
     fn format(&self) -> String {
-        self.to_string()
+        self.to_standard_notation_string()
     }
 }
 

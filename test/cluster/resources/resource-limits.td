@@ -378,12 +378,12 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_compute_credits_per_hour = 4.0
 
 > SHOW max_compute_credits_per_hour
-4
+4.0
 
 > CREATE CLUSTER REPLICA c1.r3 SIZE '1'
 
 ! CREATE CLUSTER REPLICA c1.r4 SIZE '2'
-contains:creating cluster replica would violate max_compute_credits_per_hour limit (desired: 6, limit: 4, current: 4)
+contains:creating cluster replica would violate max_compute_credits_per_hour limit (desired: 6, limit: 4.0, current: 4)
 
 > DROP CLUSTER REPLICA c1.r2
 
