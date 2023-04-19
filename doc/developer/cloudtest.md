@@ -237,3 +237,20 @@ module.
 [kubectl]: https://kubernetes.io/docs/reference/kubectl/
 [MinIO]: https://min.io
 [pytest]: https://pytest.org
+
+# Troubleshooting
+
+## DNS issues
+
+If pods are failing with what seems like DNS issues (can't resolve redpanda, or
+cannot connect to postgres) you can try and have a look at the [relevant
+Kubernetes
+documentation](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/).
+At least the list of [known
+issues](https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/#known-issues)
+can be very relevant for your linux distribution, if it is running
+`systemd-resolved`.
+
+In at least one case, a VPN (mullvad) was interfering with DNS resolution. Try
+de-activating your VPN and then tear down and restart your testing cluster to
+see if that helps.
