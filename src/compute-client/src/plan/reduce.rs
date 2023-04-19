@@ -321,6 +321,24 @@ pub enum HierarchicalPlan {
     Bucketed(BucketedPlan),
 }
 
+impl HierarchicalPlan {
+    /// Upgrades from a bucketed plan to a monotonic plan, if necessary,
+    /// and sets consolidation requirements.
+    pub fn as_monotonic(&mut self, must_consolidate: bool) {
+        match self {
+            HierarchicalPlan::Bucketed(bucketed) => {
+                // TODO: ideally we would not have the `clone()` but ownership
+                // seems fraught here as we are behind a `&mut self` reference.
+                *self =
+                    HierarchicalPlan::Monotonic(bucketed.clone().into_monotonic(must_consolidate));
+            }
+            HierarchicalPlan::Monotonic(monotonic) => {
+                monotonic.must_consolidate = must_consolidate;
+            }
+        }
+    }
+}
+
 impl RustType<ProtoHierarchicalPlan> for HierarchicalPlan {
     fn into_proto(&self) -> ProtoHierarchicalPlan {
         use proto_hierarchical_plan::Kind;
@@ -359,6 +377,10 @@ pub struct MonotonicPlan {
     /// Set of "skips" or calls to `nth()` an iterator needs to do over
     /// the input to extract the relevant datums.
     pub skips: Vec<usize>,
+    /// True if the input is logically but not physically monotonic,
+    /// and the operator must first consolidate the inputs to remove
+    /// potential negations.
+    pub must_consolidate: bool,
 }
 
 impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
@@ -366,6 +388,7 @@ impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
         ProtoMonotonicPlan {
             aggr_funcs: self.aggr_funcs.into_proto(),
             skips: self.skips.into_proto(),
+            must_consolidate: self.must_consolidate.into_proto(),
         }
     }
 
@@ -373,6 +396,7 @@ impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
         Ok(Self {
             aggr_funcs: proto.aggr_funcs.into_rust()?,
             skips: proto.skips.into_rust()?,
+            must_consolidate: proto.must_consolidate.into_rust()?,
         })
     }
 }
@@ -398,6 +422,18 @@ pub struct BucketedPlan {
     /// be decreasing, and ideally, a power of two so that we can easily
     /// distribute values to buckets with `value.hashed() % buckets[layer]`.
     pub buckets: Vec<u64>,
+}
+
+impl BucketedPlan {
+    /// Convert to a monotonic plan, indicate whether the operator must apply
+    /// consolidation to its input.
+    fn into_monotonic(self, must_consolidate: bool) -> MonotonicPlan {
+        MonotonicPlan {
+            aggr_funcs: self.aggr_funcs,
+            skips: self.skips,
+            must_consolidate,
+        }
+    }
 }
 
 impl RustType<ProtoBucketedPlan> for BucketedPlan {
@@ -516,6 +552,16 @@ pub struct CollationPlan {
     /// We keep a map from output position -> reduction type
     /// to easily merge results back into the requested order.
     pub aggregate_types: Vec<ReductionType>,
+}
+
+impl CollationPlan {
+    /// Upgrades the hierarchical component of the collation plan to monotonic, if necessary,
+    /// and sets consolidation requirements.
+    pub fn as_monotonic(&mut self, must_consolidate: bool) {
+        self.hierarchical
+            .as_mut()
+            .map(|plan| plan.as_monotonic(must_consolidate));
+    }
 }
 
 impl RustType<ProtoCollationPlan> for CollationPlan {
@@ -677,7 +723,11 @@ impl ReducePlan {
                 // to do to get the desired indexes.
                 let skips = convert_indexes_to_skips(indexes);
                 if monotonic {
-                    let monotonic = MonotonicPlan { aggr_funcs, skips };
+                    let monotonic = MonotonicPlan {
+                        aggr_funcs,
+                        skips,
+                        must_consolidate: false,
+                    };
                     ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
                 } else {
                     let buckets = bucketing_of_expected_group_size(expected_group_size);

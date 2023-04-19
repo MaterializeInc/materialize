@@ -60,8 +60,14 @@ where
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                     group_key,
                     order_key,
+                    must_consolidate,
                 }) => {
-                    let (oks, errs) = self.render_top1_monotonic(ok_input, group_key, order_key);
+                    let (oks, errs) = self.render_top1_monotonic(
+                        ok_input,
+                        group_key,
+                        order_key,
+                        must_consolidate,
+                    );
                     err_collection = err_collection.concat(&errs);
                     oks
                 }
@@ -70,19 +76,38 @@ where
                     group_key,
                     arity,
                     limit,
+                    must_consolidate,
                 }) => {
+                    // Map the group key along with the row and consolidate if required to do so.
                     let mut datum_vec = mz_repr::DatumVec::new();
-                    let collection = ok_input.map(move |row| {
-                        let group_row = {
-                            let datums = datum_vec.borrow_with(&row);
-                            let iterator = group_key.iter().map(|i| datums[*i]);
-                            let total_size = mz_repr::datums_size(iterator.clone());
-                            let mut group_row = Row::with_capacity(total_size);
-                            group_row.packer().extend(iterator);
-                            group_row
-                        };
-                        (group_row, row)
+                    let collection = ok_input
+                        .map(move |row| {
+                            let group_row = {
+                                let datums = datum_vec.borrow_with(&row);
+                                let iterator = group_key.iter().map(|i| datums[*i]);
+                                let total_size = mz_repr::datums_size(iterator.clone());
+                                let mut group_row = Row::with_capacity(total_size);
+                                group_row.packer().extend(iterator);
+                                group_row
+                            };
+                            (group_row, row)
+                        })
+                        .consolidate_named_if::<RowKeySpine<_, _, _>>(
+                            must_consolidate,
+                            "Consolidated MonotonicTopK input",
+                        );
+
+                    // It should be now possible to ensure that we have a monotonic collection.
+                    let error_logger = self.error_logger();
+                    let (collection, errs) = collection.ensure_monotonic(move |data, diff| {
+                        error_logger.log(
+                            "Non-monotonic input to MonotonicTopK",
+                            &format!("data={data:?}, diff={diff}"),
+                        );
+                        let m = "tried to build monotonic top-k on non-monotonic input".to_string();
+                        (DataflowError::from(EvalError::Internal(m)), 1)
                     });
+                    err_collection = err_collection.concat(&errs);
 
                     // For monotonic inputs, we are able to thin the input relation in two stages:
                     // 1. First, we can do an intra-timestamp thinning which has the advantage of
@@ -287,34 +312,38 @@ where
         collection: Collection<S, Row, Diff>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
+        must_consolidate: bool,
     ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
         // We can place our rows directly into the diff field, and only keep the relevant one
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical
-        // reduction.
-        let collection = collection.map({
-            let mut datum_vec = mz_repr::DatumVec::new();
-            move |row| {
-                let group_key = {
-                    let datums = datum_vec.borrow_with(&row);
-                    let iterator = group_key.iter().map(|i| datums[*i]);
-                    let total_size = mz_repr::datums_size(iterator.clone());
-                    let mut group_key = Row::with_capacity(total_size);
-                    group_key.packer().extend(iterator);
-                    group_key
-                };
-                (group_key, row)
-            }
-        });
+        // reduction. We start by mapping the group key along with the row and consolidating
+        // if required to do so.
+        let collection = collection
+            .map({
+                let mut datum_vec = mz_repr::DatumVec::new();
+                move |row| {
+                    let group_key = {
+                        let datums = datum_vec.borrow_with(&row);
+                        let iterator = group_key.iter().map(|i| datums[*i]);
+                        let total_size = mz_repr::datums_size(iterator.clone());
+                        let mut group_key = Row::with_capacity(total_size);
+                        group_key.packer().extend(iterator);
+                        group_key
+                    };
+                    (group_key, row)
+                }
+            })
+            .consolidate_named_if::<RowKeySpine<_, _, _>>(
+                must_consolidate,
+                "Consolidated MonotonicTop1 input",
+            );
 
-        // We arrange the inputs ourself to force it into a leaner structure because we know we
-        // won't care about values.
-        let consolidated = collection
-            .consolidate_named::<RowKeySpine<_, _, _>>("Consolidated MonotonicTop1 input");
+        // It should be now possible to ensure that we have a monotonic collection and process it.
         let error_logger = self.error_logger();
-        let (partial, errs) = consolidated.ensure_monotonic(move |data, diff| {
+        let (partial, errs) = collection.ensure_monotonic(move |data, diff| {
             error_logger.log(
                 "Non-monotonic input to MonotonicTop1",
                 &format!("data={data:?}, diff={diff}"),

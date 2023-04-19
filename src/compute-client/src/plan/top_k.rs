@@ -62,6 +62,7 @@ impl TopKPlan {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                 group_key,
                 order_key,
+                must_consolidate: false,
             })
         } else if monotonic && offset == 0 {
             // For monotonic inputs, we are able to retract inputs that can no longer be produced
@@ -77,6 +78,7 @@ impl TopKPlan {
                 order_key,
                 limit,
                 arity,
+                must_consolidate: false,
             })
         } else {
             // A plan for all other inputs
@@ -88,6 +90,38 @@ impl TopKPlan {
                 arity,
                 buckets: bucketing_of_expected_group_size(expected_group_size),
             })
+        }
+    }
+
+    /// Upgrades from a basic topk plan to a monotonic plan, if necessary, and
+    /// sets consolidation requirements.
+    pub fn as_monotonic(&mut self, must_consolidate: bool) {
+        match self {
+            TopKPlan::Basic(plan) => {
+                if plan.offset == 0 {
+                    *self = if plan.limit == Some(1) {
+                        TopKPlan::MonotonicTop1(MonotonicTop1Plan {
+                            group_key: plan.group_key.clone(),
+                            order_key: plan.order_key.clone(),
+                            must_consolidate,
+                        })
+                    } else {
+                        TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                            group_key: plan.group_key.clone(),
+                            order_key: plan.order_key.clone(),
+                            limit: plan.limit,
+                            arity: plan.arity,
+                            must_consolidate,
+                        })
+                    }
+                }
+            }
+            TopKPlan::MonotonicTop1(plan) => {
+                plan.must_consolidate = must_consolidate;
+            }
+            TopKPlan::MonotonicTopK(plan) => {
+                plan.must_consolidate = must_consolidate;
+            }
         }
     }
 }
@@ -138,6 +172,10 @@ pub struct MonotonicTop1Plan {
     pub group_key: Vec<usize>,
     /// Ordering that is used within each group.
     pub order_key: Vec<mz_expr::ColumnOrder>,
+    /// True if the input is logically but not physically monotonic,
+    /// and the operator must first consolidate the inputs to remove
+    /// potential negations.
+    pub must_consolidate: bool,
 }
 
 impl RustType<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
@@ -145,6 +183,7 @@ impl RustType<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
         ProtoMonotonicTop1Plan {
             group_key: self.group_key.into_proto(),
             order_key: self.order_key.into_proto(),
+            must_consolidate: self.must_consolidate.into_proto(),
         }
     }
 
@@ -152,6 +191,7 @@ impl RustType<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
         Ok(MonotonicTop1Plan {
             group_key: proto.group_key.into_rust()?,
             order_key: proto.order_key.into_rust()?,
+            must_consolidate: proto.must_consolidate.into_rust()?,
         })
     }
 }
@@ -168,6 +208,10 @@ pub struct MonotonicTopKPlan {
     pub limit: Option<usize>,
     /// The number of columns in the input and output.
     pub arity: usize,
+    /// True if the input is logically but not physically monotonic,
+    /// and the operator must first consolidate the inputs to remove
+    /// potential negations.
+    pub must_consolidate: bool,
 }
 
 impl RustType<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
@@ -177,6 +221,7 @@ impl RustType<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
             order_key: self.order_key.into_proto(),
             limit: self.limit.into_proto(),
             arity: self.arity.into_proto(),
+            must_consolidate: self.must_consolidate.into_proto(),
         }
     }
 
@@ -186,6 +231,7 @@ impl RustType<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
             order_key: proto.order_key.into_rust()?,
             limit: proto.limit.into_rust()?,
             arity: proto.arity.into_rust()?,
+            must_consolidate: proto.must_consolidate.into_rust()?,
         })
     }
 }

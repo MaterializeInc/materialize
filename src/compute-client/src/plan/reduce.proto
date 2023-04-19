@@ -50,6 +50,7 @@ message ProtoHierarchicalPlan {
 message ProtoMonotonicPlan {
     repeated mz_expr.relation.ProtoAggregateFunc aggr_funcs = 1;
     repeated uint64 skips = 2;
+    bool must_consolidate = 3;
 }
 
 

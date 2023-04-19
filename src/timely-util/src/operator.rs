@@ -14,7 +14,9 @@ use std::rc::Weak;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::trace::{Batch, Trace, TraceReader};
+use differential_dataflow::{AsCollection, Collection, Hashable};
+
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -218,6 +220,16 @@ where
     /// the provided token can be upgraded. Once the token cannot be upgraded anymore, all data
     /// flowing into the operator is dropped.
     fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
+
+    /// Consolidates the collection if `must_consolidate` is `true` and leaves it
+    /// untouched otherwise.
+    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hashable,
+        R: Semigroup + differential_dataflow::ExchangeData,
+        G::Timestamp: Lattice,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr::Batch: Batch;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -507,6 +519,21 @@ where
 
     fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R> {
         self.inner.with_token(token).as_collection()
+    }
+
+    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hashable,
+        R: Semigroup + differential_dataflow::ExchangeData,
+        G::Timestamp: Lattice,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr::Batch: Batch,
+    {
+        if must_consolidate {
+            self.consolidate_named::<Tr>(name)
+        } else {
+            self
+        }
     }
 }
 

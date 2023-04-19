@@ -2457,7 +2457,7 @@ impl ExplainStage {
             ExplainStage::RawPlan => "optimize/raw",
             ExplainStage::DecorrelatedPlan => "optimize/hir_to_mir",
             ExplainStage::OptimizedPlan => "optimize/global",
-            ExplainStage::PhysicalPlan => "optimize/mir_to_lir",
+            ExplainStage::PhysicalPlan => "optimize/finalize_dataflow",
             ExplainStage::Trace => unreachable!(),
             ExplainStage::Timestamp => unreachable!(),
         }
