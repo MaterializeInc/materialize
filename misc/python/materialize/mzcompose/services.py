@@ -668,7 +668,7 @@ class Localstack(Service):
     def __init__(
         self,
         name: str = "localstack",
-        image: str = f"localstack/localstack:0.13.1",
+        image: str = "localstack/localstack:0.13.1",
         port: int = 4566,
         environment: List[str] = ["HOSTNAME_EXTERNAL=localstack"],
         volumes: List[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
@@ -694,7 +694,7 @@ class Minio(Service):
     def __init__(
         self,
         name: str = "minio",
-        image: str = f"minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
+        image: str = "minio/minio:RELEASE.2022-09-25T15-44-53Z.fips",
         setup_materialize: bool = False,
     ) -> None:
         # We can pre-create buckets in minio by creating subdirectories in

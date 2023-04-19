@@ -120,7 +120,7 @@ class Owners(Check):
             + self._create_objects("owner_role_02", 6)
             + self._create_objects("owner_role_03", 7)
             + dedent(
-                f"""
+                """
                 $ psql-execute command="\\l owner_db*"
                 \\                             List of databases
                    Name    |     Owner     | Encoding | Collate | Ctype | Access privileges

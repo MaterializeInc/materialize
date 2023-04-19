@@ -570,7 +570,7 @@ def workflow_test_github_15496(c: Composition) -> None:
         )
         c.testdrive(
             dedent(
-                f"""
+                """
             > SET cluster = cluster1;
 
             # Run a query that would generate a panic before the fix.
@@ -618,7 +618,7 @@ def workflow_test_github_17177(c: Composition) -> None:
         )
         c.testdrive(
             dedent(
-                f"""
+                """
             # Set data for test up
             > SET cluster = cluster1;
 
@@ -719,7 +719,7 @@ def workflow_test_github_17510(c: Composition) -> None:
         )
         c.testdrive(
             dedent(
-                f"""
+                """
             > SET cluster = cluster1;
 
             # Run a queries that would generate panics before the fix.
@@ -860,7 +860,7 @@ def workflow_test_github_17509(c: Composition) -> None:
         )
         c.testdrive(
             dedent(
-                f"""
+                """
             > SET cluster = cluster1;
 
             # The query below would return a null previously, but now fails cleanly.
@@ -1320,7 +1320,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         future.
         """
         output = c.sql_query(
-            f"""
+            """
             SELECT s.user, c.name, t.name
             FROM mz_internal.mz_subscriptions s
               JOIN mz_clusters c ON (c.id = s.cluster_id)

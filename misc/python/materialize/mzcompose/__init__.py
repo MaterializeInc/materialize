@@ -179,7 +179,7 @@ class Composition:
                     # `allow_host_ports` is `True`
                     raise UIError(
                         "programming error: disallowed host port in service {name!r}",
-                        hint=f'Add `"allow_host_ports": True` to the service config to disable this check.',
+                        hint='Add `"allow_host_ports": True` to the service config to disable this check.',
                     )
 
             if "allow_host_ports" in config:
