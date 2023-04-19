@@ -14,6 +14,12 @@ $ kafka-ingest topic=test format=bytes
 jack,jill
 goofus,gallant
 
+# Increase compute credit limit
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;
+----
+COMPLETE 0
+
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
 

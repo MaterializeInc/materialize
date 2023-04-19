@@ -33,6 +33,7 @@ class MzStart(Action):
             "max_objects_per_schema",
             "max_materialized_views",
             "max_sinks",
+            "max_compute_credits_per_hour",
         ]:
             c.sql(
                 f"ALTER SYSTEM SET {config_param} TO 1000",
