@@ -12,7 +12,7 @@ aliases:
 Materialize can connect to data sources like Kafka, Confluent, and PostgreSQL with a
 secure SSH bastion server. In this guide, you will create an `SSH TUNNEL`
 connection, configure your Materialize authentication settings, and create a
-source connection. 
+source connection.
 
 ## Prerequisites
 
@@ -51,7 +51,7 @@ created in the previous step.
     | u75   | ssh-ed25519 AAAA...76RH materialize   | ssh-ed25519 AAAA...hLYV materialize   |
     ```
 
-    
+
     > Materialize provides two public keys to allow you to rotate keys without
     connection downtime. Review the [`ALTER CONNECTION`](/sql/alter-connection) documentation for 
     more information on how to rotate your keys.
@@ -95,13 +95,13 @@ created in the previous step.
     ```
 
     If you are unable to connect using the `telnet` command, enable `AllowTcpForwarding` and `PermitTunnel` on your bastion host SSH configuration file.
-    
+
     On your SSH bastion host, open the SSH config file (usually located at `/etc/ssh/sshd_config`) using a text editor:
-    
+
     ```bash
     sudo nano /etc/ssh/sshd_config
     ```
-    
+
     Add or uncomment the following lines:
 
     ```bash
