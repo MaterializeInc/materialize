@@ -106,7 +106,7 @@ you need. You can connect Materialize to external data sources like
 Kafka, Redpanda, and Confluent.
 
 The first step in the Materialize workflow is to create a secure connection to
-a {{< glossary_tooltip text="source" term_id="source" >}}.
+a source. 
 SQL syntax is the primary user interface for Materialize so you
 need to use a `CREATE CONNECTION` statement to your specified data sources. To
 perform SQL queries in Materialize, log in to your Materialize cloud account

@@ -19,10 +19,7 @@ subset of SQL syntax.
 
 Most databases are not designed to maintain long-running incremental queries.
 Database architecture is optimized for one-time query execution and run
-materialized view updates as completely new query opearations.
-
-Materialize supports more complex views and incremental updates for up to the
-minute results>>>>> 
+materialized view updates as completely new query operations.
 
 ## Dataflows
 
@@ -39,7 +36,7 @@ updates the query results when new data arrives.
 ### Collections
 
 Materialize dataflows process **multisets**. Multisets are collections of data that
-that store each event in an update stream as a triple of `(data, time, diff)`. 
+store each event in an update stream as a triple of `(data, time, diff)`. 
 
 Term | Definition -----|----------- **data**  |  The record update.  **time**  |
 The logical timestamp of the update.  **diff**  |  The change in the number of
@@ -63,7 +60,7 @@ Materialize](https://materialize.com/joins-in-materialize).
 
 ### Arrangement size
 
-The amount of memory an arrangement requires is essentialy proportional to the
+The amount of memory an arrangement requires is essentially proportional to the
 number of distinct (data, time) pairs. Even in large datasets, the amount of
 pairs within can be small.
 
@@ -95,7 +92,7 @@ If Materialize cannot detect a primary key, the default key is the full set of
 columns to ensure good data distribution. Creating an unmaterialized
 view and then specifying a custom index makes the key smaller.
 
-For more infromation on when and how to create indexes, see
+For more information on when and how to create indexes, see
 [Optimization](../../ops/optimization/).  For more in-depth details on joins,
 see [Joins in Materialize](https://materialize.com/joins-in-materialize/).
 

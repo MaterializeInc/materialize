@@ -21,7 +21,7 @@ Materialize allows requests from any isolation level and treats each request at
 the Serializable level. Materialize also defines a [Strict Serializable](#strict-serializable) isolation level.
 
 
-The default isolation level in Materialize is Scrit Serializable, but you can
+The default isolation level in Materialize is Strict Serializable, but you can
 configure isolation levels per session as a variable. 
 
 ## Syntax
@@ -83,7 +83,7 @@ may capture T2 first.
 
 Non-linearizable orders occur more often when querying from indexes and
 materialized views with long propagation delays. In the example above, if T1
-happens before T2 in real time, T1 queries table `t`, and T2 an exensive
+happens before T2 in real time, T1 queries table `t`, and T2 an expensive
 materialized view that includes `t`, T2 may not have access to all rows
 available to T1 if executed shortly after each other in real time.
 
@@ -97,12 +97,12 @@ would be considered single object and will always be executed immediately.
 
 ## Strict serializable
 
-The Scrit Serializable isolation level provides the same guarantees as
+The Strict Serializable isolation level provides the same guarantees as
 Serializable and guarantees linearizable transactions.
 
 For example, if SQL transaction T1 happens before T2 in real time, the
 transactions execute sequentially with T1 before T2. SQL transaction T1 queries
-table `t` and T2 queries an expensive materialiezd view including `t`, T2 is
+table `t` and T2 queries an expensive materialized view including `t`, T2 is
 still guaranteed access to all rows available to T1.
 
 !> The linearizable guarantee only applies to transactions (including single statement SQL
@@ -112,9 +112,9 @@ THEN all subsequent read transactions are guaranteed to see the data.
 
 ## Choosing the right isolation level
 
-Materialzie recommends you start with the default Strict Serializable isolation
-leve. If you notice performance issues on reads or your application does not
-require linearizable transactions, consider downgrading to the Seiarlizable
+Materialize recommends you start with the default Strict Serializable isolation
+level. If you notice performance issues on reads or your application does not
+require linearizable transactions, consider downgrading to the Serializable
 isolation level.
 
 Strict Serializable provides stronger consistency guarantees but may have slower reads than Serializable because Strict Serializable may need to wait for writes to propagate through materialized views and indexes, while Serializable does not.

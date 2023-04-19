@@ -39,7 +39,7 @@ no index architecture to read.
 
 Clusters are similar to a VPC while cluster replicas are similar to compute
 instances within a VPC. The cluster is the architectural foundation that
-provides the operational resources to objects within and the
+provides operational resources to objects within and the
 cluster replicas process data available to them in the cluster.
 
 ### Cluster deployment options
@@ -130,7 +130,7 @@ For more information on indexes, review [Arrangements](/overview/arrangements/).
 
 ## Clusters
 
-Tenants are logical components that describe how Materialize alloctates compute
+Tenants are logical components that describe how Materialize allocates compute
 resources for your dataflow objects. When you create a dataflow object like a
 source or an index, you must specify a cluster or your resource will use the
 `default` cluster.
