@@ -2294,7 +2294,7 @@ impl Value for usize {
 }
 
 impl Value for Numeric {
-    const TYPE_NAME: &'static str = "floating point";
+    const TYPE_NAME: &'static str = "numeric";
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
