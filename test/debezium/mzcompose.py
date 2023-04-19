@@ -41,7 +41,7 @@ def workflow_postgres(c: Composition) -> None:
     c.sql(
         "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
         port=6877,
-        user="mz_system"
+        user="mz_system",
     )
     c.run("testdrive", "postgres/debezium-postgres.td.initialize")
     c.run("testdrive", "postgres/*.td")
@@ -53,7 +53,7 @@ def workflow_sql_server(c: Composition) -> None:
     c.sql(
         "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
         port=6877,
-        user="mz_system"
+        user="mz_system",
     )
     c.run(
         "testdrive",
@@ -68,7 +68,7 @@ def workflow_mysql(c: Composition) -> None:
     c.sql(
         "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
         port=6877,
-        user="mz_system"
+        user="mz_system",
     )
     c.run(
         "testdrive",
