@@ -35,7 +35,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     # This should fail until max_aws_privatelink_connections is increased.
     with pytest.raises(
         ProgrammingError,
-        match="AWS PrivateLink Connection resource limit of 0 cannot be exceeded",
+        match="creating AWS PrivateLink Connection would violate max_aws_privatelink_connections limit",
     ):
         mz.environmentd.sql(create_connection_statement)
 

@@ -17,10 +17,8 @@
 $ kafka-create-topic topic=t0
 
 # Increase compute credit limit
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;
-----
-COMPLETE 0
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_compute_credits_per_hour TO 1000
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
