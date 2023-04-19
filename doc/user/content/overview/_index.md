@@ -10,185 +10,204 @@ menu:
     weight: 5
 ---
 
-Materialize is a **streaming database** powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and
-[Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow),
-purpose-built for low-latency applications. It lets you ask complex questions
-about your data using **SQL**, and incrementally maintains the results of these SQL queries as the underlying data changes.
+Materialize is a **streaming database** that incrementally updates query results as it
+receives new data. Unlike a traditional database, Materialize continually
+performs complex operations and computes dataflow operations as they
+stream in from your data sources.
 
-## What does Materialize do?
+## Why should you use Materialize?
 
-You might be wondering: why not just use your database's built-in functionality
-to perform these same computations? Your database often acts as if it's never
-been asked that question before, which means it can take a _long_ time to come
-up with an answer, each and every time you pose the query.
+Teams responsible for processing data understand the challenges
+associated with traditional databases. The need for immediate answers to business-essential questions requires a significant investment in data resources and can be time/cost
+prohibitive at scale.
 
-Materialize instead keeps the results of the queries and incrementally updates
-them as new data comes in. So, rather than recalculating the answer each time
-it's asked, Materialize continually updates the answer and gives you the
-answer's current state.
+Materialize can solve data challenges in your organization in several ways.
 
-Importantly, Materialize supports incrementally updating a much broader set of
-views than is common in traditional databases (e.g. views over multi-way joins
-with complex aggregations), and can do incremental updates in the presence of
-arbitrary inserts, updates, and deletes in the input streams.
+### Efficient dataflow management
 
-## Why should I use Materialize?
+If your team performs OLAP queries over relational data,
+Materialize can reduce the time it takes to receive your query results.
 
-If you perform any OLAP queries over relational data and want to reduce the time
-it takes to refresh answers to common queries, Materialize can make that happen.
+Traditionally, teams use a batch processing system to query large data
+sets every night. These computations are resource expensive and time consuming
+meaning you cannot run queries on demand. The once-a-day cycle caches the
+query result until the next run.
 
-For a sense of scale, it can take queries that most teams would run once-per-day
-and instead provide sub-second or single-digit second answers.
+Materialize continually updates the results of your queries as it receives new
+data. You no longer need to rely on day-old data and have a real time answer to
+your queries.
 
-## Materialize's design objective
+### SQL API management
 
-Materialize lets teams very quickly get answers to questions they routinely
-ask.
+Materialize allows you to interact with your data through the built-in SQL API.
+You can manage your data and perform administrative tasks in Materialize with 
+the SQL queries your team already uses.
 
-It's useful to think of these questions as the kind of queries you might use to
-power business intelligence dashboards. You might have a ton of data that comes
-in all day, and each team in your org wants to answer some questions using that
-data.
+### PostgreSQL wire compatibility 
 
-Traditionally, to get answers, some batch processing system performs a query
-over all of the data every night. This approach makes intuitive sense: the
-working set is often larger than any machine's memory and you need to process
-all of it. These kind of computations are therefore relatively expensive, so
-it's not feasible to execute them on the fly. Instead, you want to compute the
-answer once and then cache it until you derive a new answer.
-
-This once-a-day update cycle works, but it's inopportune to continually
-recompute an answer that you once knew. It's also slow and doesn't allow teams
-to nimbly make decisions.
-
-In contrast to the traditional approach, Materialize lets teams continually
-update the answers to their queries as new data comes in. This means that you
-no longer need to rely on day-old data to inform your decisions. You can now
-simply look at a real-time answer.
-
-## Understanding the jargon
-
-"A streaming SQL materialized view engine" is difficult to wade through, so
- let's take the terms piece-by-piece.
-
-### SQL & views
-
-One way to consider the answer to one of the aforementioned analytical queries
-is as a "view" of your data. There is some defined query that you want to
-execute, that results in giving you an answer that contains some subsets and
-computations of your data.
-
-In the language of **SQL**, a **view** is a pre-defined query and its results;
-every time you query a view, the underlying query is executed and you get the
-results back.
-
-However, continually re-executing queries is expensive, so another
-implementation of views instead stores the view's results as a physical table,
-i.e. it caches them. Because this involves storing the results, they're
-referred to as **materialized views**.
-
-Materialized views are often maintained with some periodicity and don't reflect
-the underlying data with total fidelity. This essentially makes them snapshots
-of the results, meaning any updates that have happened since the snapshot was
-generated will not be reflected in the materialized view. It's easy to liken
-this to the batch processing strategy discussed above; you occasionally perform
-some expensive computation and cache the results.
-
-However, it's also possible that if you were to describe the changes that
-happened in the underlying database that you would be able to reflect those
-changes in materialized views without needing to periodically recompute the
-answer to the query in total. Instead, each successful operation could be
-passed to an engine that could then parse the operation and, if necessary,
-update the materialized view. This is known as an **incrementally updated
-materialized view**.
-
-### Streaming
-
-If we understand the implementation of incrementally updated materialized views
-as "the need to see a stream of updates that are occurring to the underlying
-database", it could be modeled simply as "change data capture" (CDC). Using
-CDC, whenever a change occurs to the underlying database, a structure
-describing the change is propagated to some destination.
-
-One such destination you can use for CDC is a **stream** like Apache Kafka. As
-your database changes, you can describe those changes in a published feed, and
-services that care about those changes can subscribe to it.
-
-### Engine
-
-To maintain materialized views using a stream of data, you need an engine to
-subscribe to the CDC streams, and then perform the computations for and
-maintenance of the materialized view.
-
-One approach to this is using a dataflow **engine**, which is a set of
-computations that work over streams of data; they take a stream as their input,
-transform it, and output their own stream. If you think of dataflows in similar
-terms as functional programming, you can see that they can complete arbitrarily
-complex tasks.
-
-By modeling a SQL query as a dataflow, you can take in a CDC stream, apply a set
-of transformations to it, and then observe the results as final operator's
-output set.
-
-### Putting it all together
-
-To put all of this together, Materialize lets you:
-
-- Describe queries you want to know the answer to as **materialized views**,
-  which is a concept implemented in **SQL**.
-- Use CDC **streams** to feed our dataflow **engine** to create and maintain the
-  answers to those queries.
-
-Ultimately, this lets you refresh answers to your queries very quickly because
-Materialize continually updates their answers as new data streams in.
+Materialize supports PostgreSQL wire-compatibility by default. PostgreSQL
+wire-compatibility allows Materialize to communicate with PostgreSQL databases
+and tools without third-party integrations.
 
 ## How does Materialize work?
 
-While we've covered the high-level details above, this section gives some of the
-more specific details about Materialize itself.
+Materialize is a SQL streaming engine that manages materialized views. This section defines
+these terms and explains what Materialize does.
 
-Materialize ingests streams of data from external systems like Kafka and
-PostgreSQL that you declare as "sources". These sources monitor changes in the
-upstream data and automatically pull new records into Materialize. You can
-interact with this data in Materialize as if it were in a SQL table.
+### What is a SQL view?
 
-Using these sources, you can define "views". Views represent those queries to
-which you continually want an up-to-date answer. Your view definitions are
-transformed by our query engine to create [Differential dataflows](https://github.com/frankmcsherry/differential-dataflow).
+In SQL, a **view** is a pre-defined query and its results. Every time you query
+a view, SQL executes your query and returns your results. Views contain your
+results and compute your data as you define.
 
-A dataflow is a set of connected operators that each both consume and produce
-streams of data, creating a network of computation that can respond to streams
-of input data from sources. Differential dataflows are special, though, in that
-they can easily perform incremental updates at each step of the dataflow.
+Because executing queries is resource expensive, a **materialized view** stores
+the results in a table. Materialized views are typically executed on a schedule
+and create a snapshot of the data at runtime, which cannot detect changes until
+the next scheduled run.
 
-As data streams in from your sources, your dataflows determine which data is
-relevant and update their result sets only if they need to, for example, when
-there are new rows or the values used in dataflow computations have changed.
+**Incrementally updated materialized views** can detect changes to your data,
+pass that data to an engine, parse the operation, and update your materialized
+views. Incremental updates do not take the same resource expenses as a full
+query operation and allow you to quickly receive materialized views based on the
+most up-to-date information.
 
-When you query one of your views, Materialize can simply return the dataflow's
-result set, which should always be faster than computing the answer from
-scratch.
+### What is a streaming engine?
 
-## Materialize vs. other methodologies
+Incrementally updated materialized views require a stream of data in the
+underlying database. The **stream** is a destination or source of data, like
+Apache Kafka. Those changes flow from a published feed and other services can
+consume that data. 
 
-### Batch processing
+To maintain materialized views from a stream of data, you need an engine to
+subscribe to the stream, compute, and maintain the materialized view. The
+**dataflow engine** in Materialize is a set of computations that keep your data
+up to date automatically.
 
-Batch processing relies on performing large, expensive computations
-infrequently. This means that you can never achieve real-time results, and it
-often does not build upon its prior computations.
+## What is the Materialized workflow?
 
-In contrast, Materialize continually updates queries as data comes in, which
-means it performs small, efficient computations constantly. This enables
-real-time results and builds upon all of your prior computations.
+The streaming materialized view engine described above allows you to:
 
-### Materialized views in relational databases
+- Describe queries as **materialized views**, which is a concept implemented in
+**SQL**.
+- Use change data capture **streams** to feed a dataflow **engine** to create
+and maintain the answers to those queries.
 
-To maintain materialized views, most RDBMSes occasionally re-run the view's
-underlying query. This results in a potential impact to the database's
-performance while updating the view, as well as data that is only infrequently
-up-to-date.
+The basic stages of the Materialize workflow are:
+
+* Ingesting data
+* Querying data and creating views
+* Incremental updates
+* Data output
+
+### Ingesting data
+
+Materialize relies on data from outside sources to perform the complex queries
+you need. You can connect Materialize to external data sources like
+Kafka, Redpanda, and Confluent.
+
+The first step in the Materialize workflow is to create a secure connection to
+a {{< glossary_tooltip text="source" term_id="source" >}}.
+SQL syntax is the primary user interface for Materialize so you
+need to use a `CREATE CONNECTION` statement to your specified data sources. To
+perform SQL queries in Materialize, log in to your Materialize cloud account
+with a `psql` client.
+
+Below is an example of the `CREATE` statement using Kafka:
+
+```sql
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKER '{yourKafkaBrokerIP:Port}',
+    SSL KEY = SECRET kafka_ssl_key,
+    SSL CERTIFICATE = SECRET kafka_ssl_crt
+);
+```
+
+After you create the connection, the `CREATE SOURCE` statement provisions the
+dedicated resources to process data from your Kafka connection. Your source is
+captured in **clusters** which are resource isolated tenants within Materialize
+where all data operations take place. The example below uses the `default`
+cluster available in every environment
+
+```sql
+CREATE SOURCE kafka_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
+  WITH (SIZE = '3xsmall');
+```
+
+With a connection and a data source, Materialize will process your incoming data
+and transform queries you define. The next step in the workflow is creating a
+query.
+
+### Creating queries and views
+
+Materialize can perform complex queries on your data including joins,
+subqueries, and data aggregation.
+
+To determine what queries to create in Materialize, consider how you use your
+query results and what operational questions you want to answer with that data.
+
+After you determine what data you need from your sources, you can create a
+materialized view from your query. The example below creates a materialized view
+of a `winning_bids` view and selects columns based on high bids and
+sorts sequentially:
+
+```sql
+CREATE MATERIALIZED VIEW winning_bids AS
+SELECT auction_id,
+       bid_id,
+       item,
+       amount
+FROM highest_bid_per_auction
+WHERE end_time < mz_now();
+```
+
+### Incremental updates
+
+Materialize continually checks your sources for new data and updates the
+materialized views you create.
+
+Materialize creates dataflows of your query output. As the Materialize engine
+receives new data from sources, Materialize compares the changed data and
+operation type to determine what and how to update your data. Materialized
+views persist in durable storage and reduces the operational burden on your
+resources when accessing query results.
+
+Timely Dataflow and Differential Dataflow are the foundation of this
+internal process. For more information on Timely and Differential
+Dataflows, review the documentation and other references.
+
+### Emitting data
+
+After the Materialize engine computes and processes data and changes from a
+data source, you need a way to access those results that will also process
+incremental updates as your data changes.
+
+A **sink** allows Materialize to stream results to an outside system. Like a
+source, you need to create a connection to your data recipient with the a new
+`CREATE CONNECTION` statement.
+
+A sink requires the same properties as an source, with one important
+consideration. Although Materialize processes data from outside sources
+continually with little resource impact, systems receiving the data may not
+have the same resource freedom. The `SIZE` parameter determines the amount
+of CPU and memory available to the sink process in Materialize and can reduce
+bottleneck in your receiving systems.
+
+```sql
+CREATE SINK json_sink
+  FROM <source, table or mview>
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_json_topic')
+  FORMAT JSON
+  WITH (SIZE = '3xsmall');
+```
+
+~> Some statements are truncated for clarity and formatting. Review the documentation for
+Envelopes and Formats for more information.
 
 ## Learn more
+
+Now that you understand what Materialize is and how it can help your
+organization, review the following resources to learn more:
 
 - [Key concepts](/overview/key-concepts)
 - [Get started](/get-started)

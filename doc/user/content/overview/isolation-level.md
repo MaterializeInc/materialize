@@ -10,19 +10,19 @@ menu:
     weight: 6
 ---
 
-The SQL standard defines four levels of transaction isolation. In order of least strict to most strict they are:
+SQL defines four levels of transaction isolation from least to most permissive:
 
   * Read Uncommitted
   * Read Committed
   * Repeatable Read
   * Serializable
 
-In Materialize, you can request any of these isolation
-levels, but they all behave the same as the Serializable isolation level. In addition to the four levels defined in the
-SQL Standard, Materialize also defines a [Strict Serializable](#strict-serializable) isolation level.
+Materialize allows requests from any isolation level and treats each request at
+the Serializable level. Materialize also defines a [Strict Serializable](#strict-serializable) isolation level.
 
-Isolation level is a per session configurable variable that can be set by the user. The default isolation level is
-[Strict Serializable](#strict-serializable).
+
+The default isolation level in Materialize is Scrit Serializable, but you can
+configure isolation levels per session as a variable. 
 
 ## Syntax
 
@@ -47,7 +47,7 @@ SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 
 ## Serializable
 
-The SQL standard defines the Serializable isolation level as preventing the following three phenomenons:
+The Serializable isolation level prevents the following phenomena:
 
 - **P1 (”Dirty Read”):**
   > "SQL-transaction T1 modifies a row. SQL-transaction T2 then reads that row before T1 performs a
@@ -70,55 +70,57 @@ The SQL standard defines the Serializable isolation level as preventing the foll
   different collection of rows."
   (ISO/IEC 9075-2:1999 (E) 4.32 SQL-transactions)
 
-Furthermore, Serializable also guarantees that the result of executing a group of concurrent SQL-transactions produces
-the same effect as some serial execution of those same transactions. A serial execution is one where each
-SQL-transaction executes to completion before the next one begins. There is no guarantee that this serial ordering is
-consistent with the real time ordering of the transactions, in other words transactions are not
-[linearizable](https://jepsen.io/consistency/models/linearizable) under the Serializable isolation level. For example
-if SQL-transaction T1 happens before SQL-transaction T2 in real time, then the result may be equivalent to a serial
-order where T2 was executed first.
+Serializable also guarantees the result of executing a group of concurrent
+SQL-transactions produces the same effect as some serial execution of the same
+transactions. A serial execution is when each SQL-transaction executes to
+completion before the next operation beings. These transactions are not
+linearizable under the Serializable isolation level because there is no
+guarantee that the serial ordering corresponds to the real-time order of the
+transactions.
 
-Non-linearizable orderings are more likely to surface when querying from indexes and materialized views with
-large propagation delays. For example, if SQL-transaction T1 happens before SQL-transaction T2 in real time, T1 queries
-table t, and T2 queries materialized view mv where mv is an expensive materialized view including t, then T2 may not see
-all the rows that were seen by T1 if they are executed close enough together in real time.
+For example, if SQL-transaction T1 happens before T2 in real time, the result
+may capture T2 first.
 
-If a consistent snapshot is not available across all objects in a query, the query will be blocked until one becomes available. On the other hand, if a consistent snapshot is available, the query will be executed immediately. A consistent snapshot is guaranteed to be available for queries that involve a single object (which includes queries against a single materialized view that was created using multiple objects). Such queries will therefore never block, and always be executed immediately.
+Non-linearizable orders occur more often when querying from indexes and
+materialized views with long propagation delays. In the example above, if T1
+happens before T2 in real time, T1 queries table `t`, and T2 an exensive
+materialized view that includes `t`, T2 may not have access to all rows
+available to T1 if executed shortly after each other in real time.
+
+If all objects in a query cannot access a consistent snapshot, the engine will
+block the query until a snapshot becaomes available. 
+
+If a snapshot is available, the engine will execute the query immediately.
+Consistent snapshots are guaranteed for queries that involve a single object.
+For example, queries of a single materialized view created with multiple objects
+would be considered single object and will always be executed immediately.
 
 ## Strict serializable
 
-The Strict Serializable isolation level provides all the same guarantees as Serializable, with the addition that
-transactions are linearizable. That means that if SQL-transaction T1 happens before SQL-transaction T2 in real time,
-then the execution is equivalent to a serial execution where T1 comes before T2.
+The Scrit Serializable isolation level provides the same guarantees as
+Serializable and guarantees linearizable transactions.
 
-For example, if SQL-transaction T1 happens before SQL-transaction T2 in real time, T1 queries table t, and
-T2 queries materialized view mv where mv is an expensive materialized view including t, then T2 is guaranteed to see all
-of the rows that were seen by T1.
+For example, if SQL transaction T1 happens before T2 in real time, the
+transactions execute sequentially with T1 before T2. SQL transaction T1 queries
+table `t` and T2 queries an expensive materialiezd view including `t`, T2 is
+still guaranteed access to all rows available to T1.
 
-It’s important to note that the linearizable guarantee only applies to transactions (including single statement SQL
-queries which are implicitly single statement transactions), not to data written while ingesting from upstream sources.
-So if some piece of data has been fully ingested from an upstream source, then it is not guaranteed to appear in the
-next read transaction. See [real-time recency](https://github.com/MaterializeInc/materialize/issues/11531)
-and [strengthening correctness](https://github.com/MaterializeInc/materialize/issues/13107) for more details. If some
-piece of data has been fully ingested from an upstream source AND is included in the results of some read transaction
-THEN all subsequent read transactions are guaranteed to see that piece of data.
+!> The linearizable guarantee only applies to transactions (including single statement SQL
+queries), not to data written while ingesting from upstream sources. If an
+upstream source ingests data, it is not guaranteed to appear in the next read transaction. For more information, review [real-time recency](https://github.com/MaterializeInc/materialize/issues/11531) and [strengthening correctness](https://github.com/MaterializeInc/materialize/issues/13107) for more details. If an upstream source ingests data AND that data included in the results of some read transaction
+THEN all subsequent read transactions are guaranteed to see the data.
 
 ## Choosing the right isolation level
 
-It may not be immediately clear which isolation level is right for you. Materialize recommends to start with the default
-Strict Serializable isolation level. If you are noticing performance issues on reads, and your application does not need
-linearizable transactions, then you should downgrade to the Serializable isolation level.
+Materialzie recommends you start with the default Strict Serializable isolation
+leve. If you notice performance issues on reads or your application does not
+require linearizable transactions, consider downgrading to the Seiarlizable
+isolation level.
 
-Strict Serializable provides stronger consistency guarantees but may have slower reads than Serializable. This is
-because Strict Serializable may need to wait for writes to propagate through materialized views and indexes, while
-Serializable does not.
+Strict Serializable provides stronger consistency guarantees but may have slower reads than Serializable because Strict Serializable may need to wait for writes to propagate through materialized views and indexes, while Serializable does not.
 
-In Serializable mode, If a consistent snapshot is not available across all objects in a query, the query will be
-blocked until one becomes available. On the other hand, if a consistent snapshot is available, the query will be
-executed immediately. A consistent snapshot is guaranteed to be available for queries that involve a single object
-(which includes queries against a single materialized view that was created using multiple objects). Such queries will
-therefore never block, and always be executed immediately.
-
+For more information on isolation levels and how to change them, review [the]()
+documentation.
 
 ## Learn more
 
