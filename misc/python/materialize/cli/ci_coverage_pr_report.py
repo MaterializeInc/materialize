@@ -113,7 +113,9 @@ def get_report(coverage: Coverage) -> str:
                         f.write(line)
                 f.truncate()
 
-        result = subprocess.run(["git", "diff"], check=True, capture_output=True)
+        result = subprocess.run(
+            ["git", "diff", "--output-indicator-old=!"], check=True, capture_output=True
+        )
         return result.stdout.decode("utf-8").strip()
     finally:
         # Restore the code into its original state
