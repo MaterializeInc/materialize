@@ -849,7 +849,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
             let process_id = pod.name_any().split('-').last().unwrap().parse()?;
             let service_id_label = "environmentd.materialize.cloud/service-id";
-            println!("[btv] pod: {pod:#?}");
             let service_id = pod
                 .labels()
                 .get(service_id_label)
