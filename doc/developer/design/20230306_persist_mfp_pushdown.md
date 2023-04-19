@@ -14,12 +14,9 @@ especially those that filter down to a narrow window of time.
 # Motivation
 [motivation]: #motivation
 
-Blobs written by Persist today are a black box: we have no way to characterize their contents without pulling down every part from Blob storage and decoding every row they contain.
-This requires us to fetch every part no matter what question is being asked of the data.
+Unlock append-only sources for customers via temporal filters. Right now, using an append-only `SOURCE` in Materialize is painful because `MATERIALIZED VIEW` restart times increase without bound as data accumulates. However, if there is a [temporal filter](https://materialize.com/docs/sql/patterns/temporal-filters/) to bound the size of the dataflow's input data (e.g. the last 30 days of data), we may be able to use the described optimization to similarly bound the restart times.
 
-By introducing types and capturing statistic metadata on parts, Persist can
-determine which parts are relevant to a query before even reading them from Blob storage.
-When reading data with the appropriate locality, MFP pushdown will enable faster dataflow rehydration and faster ad-hoc / exploratory queries in ways that are not currently achievable.
+This technique is not limited to temporal filters or sources. In fact, the optimization will be picked up anywhere we can apply it. However, we're hoping to focus on polishing the subset relevant to append-only sources in the first version of this shipped to customers.
 
 # Explanation
 [explanation]: #explanation
@@ -29,23 +26,25 @@ When reading data with the appropriate locality, MFP pushdown will enable faster
 A `Schema` trait will be introduced to map data back and forth between Persist columns. Any Rust type
 that is to roundtrip through Persist must have a corresponding `Schema`.
 
-TODO: description of Row's Schema implementation.
+Each column in a `RelationDesc` is mapped to a column that persist understands: a name, a type, and override-able logic for computing aggregate statistics of columns of that data. The set of supported types is a subset of Apache [Arrow's data types], which is then internally mapped to [Parquet].
 
+[Arrow's data types]: https://docs.rs/arrow2/0.17.0/arrow2/datatypes/enum.DataType.html
+[parquet]: https://parquet.apache.org/docs/
 ## Part Statistics
 
 When Persist writes a batch to Blob storage, it will compute basic statistics over its columns, when possible,
 and write this data alongside existing metadata in Consensus. To start, we will collect a column's
-non-null min and max values and null count, as well as the min/max Row within the part.
+non-null min and max values and null count. We may also track the min/max Row within the part.
 
-Statistics are optional: Persist may not be able to compute min/max values for all types, and we may need to drop statistics to keep metadata from getting too big.
+Statistics are optional: Persist may not be able to compute min/max values for all types, and we may need to trim statistics to keep metadata from getting too big.
 
 ## Filtering
 
-Our compute layer pushes an `MapFilterProject` operator into the Persist source, which can filter and transform data before emitting it downstream.
+Our compute layer pushes a `MapFilterProject` operator into the Persist source, which can filter and transform data before emitting it downstream.
 Before each batch part is fetched from Blob storage in `persist_source`, the source will use our new part statistics to analyze whether that MFP will filter out _all_ the rows in that part.
 If so, we get to skip fetching the part from Blob storage entirely.
 
-This requires that we have some way to figure out what an MFP's `MirScalarExpr`s might return given only basic information like the nullability and range of values. For more on how that can be done, see the section on [filter pushdown].
+This requires that we have some way to figure out what an MFP's `MirScalarExpr`s might return given only basic information like the nullability and range of values. For more on how that can be done, see the section on [filtering parts].
 
 Not all parts may have statistics, and those statistics may not be complete.
 When stats are not present, this analysis needs to be conservative: if we don't have statistics for a column, we'll assume it might contain any legal value.
@@ -70,7 +69,45 @@ we'll often have accumulated considerable numbers of older, larger parts that ar
 
 ## Calculating statistics
 
-TODO
+All statistics are stored in persist `State`, along with the other metadata about a batch and its parts. We might keep statistics at a part level, or a batch level, or (because it is possible to union the statistics as we have defined them below) both. In the future, we might explore keeping select statistics in `Blob` and storing only a pointer to them in State. This would allow us to keep much larger statistics, but may not end up being necessary.
+
+For all nullable `ColumnType`s, we track the number of null values. For fixed length `ScalarType`s, we compute the min and max of the column. For variable length types, such as `String` and `Bytes`, we compute (possibly truncated) lower and upper bounds to keep the size of the stats bounded.
+
+For compound types, such as `Record`, `List`, or `Jsonb`, we need to keep stats for individual elements. Using `Jsonb` as an example:
+- `ScalarType::Jsonb` means the Datum can be any of `JsonNull`, `False`, `True`, `Numeric`, `String`, `List`, or `Map`.
+- `List` and `Map` recursively contain `Datum`s that can be any of the above.
+- Any of part of this can mix the above types. Concretely: the top level `Datum` might be a Numeric in one `Row` of a part and a `Map` in another. Similarly, the top level `Datum` in two `Row`s might be a `Map` in both, but have a different set of keys, or both have the same key `a` but it maps to different types in each.
+- Even in the initial version of this feature, we have customers that would like to push down filters that use the `->` operator on `jsonb` objects/maps.
+
+As a result, we end up with the full stats being recursive and looking something like this (simplified here for clarity):
+
+```rust
+struct LowerAndUpperBounds<T>{lower: T, upper: T};
+struct JsonbStats{
+    json_null_count: usize,
+    bools: Option<LowerAndUpperBounds<bool>>,
+    numerics: Option<LowerAndUpperBounds<Numeric>>,
+    strings: Option<LowerAndUpperBounds<String>>,
+    lists: Option<Vec<JsonbStats>>,
+    maps: Option<BTreeMap<String, JsonbStats>>,
+};
+```
+
+This, of course, can explode to unbounded size given a sufficiently adversarial user. See the next section.
+
+## Statistics trimming
+
+Because statistics are stored in metadata, it is desireable to keep a bound on the size of them. Even if we guarantee that each individual column's statistics are of bounded size, we could have any number of columns. If we had perfect knowledge at statistics calculation time of which columns would be queried, this is much easier, but one of the benefits of this feature is that it works without configuration and also enables exploratory queries. So, ideally we don't require the user to declare this up front.
+
+There are a number of options here, including machine learning models, but simple heuristics are understandable and can get us surprisingly far. It is difficult to predict exactly what the heuristics will be, but an initial thought is something like the following:
+
+- First, a budget (in bytes) is calculated, possibly as a function of how many updates are in the part. We guarantee that the resulting statistics fit into this budget.
+- Second, anything obviously unnecessary is trimmed. For example, any real query filtering on a json column is likely to have a cast in the expression tree. This means that many (all?) json stats computed on a column containing more than one Datum type (e.g. both `Numeric` and `String`) would output an error from MFP evaluation for something in the part. As a result, the stats would never allow us to filter this part and thus can be trimmed.
+- Third, we can adjust truncation of stats over varlen columns. For example, a bound of `a<huge string>..=y<huge string>` can likely be shortened to `a..=z`. This does make the bounds less tight, which increases false positives.
+- Finally, we can trim stats for `Record`, `List`, or `Jsonb` elements or even for entire columns. Note that if we do this, we almost certainly want some way for the customer to be able to hint that a certain column is critical and should never have trimmed stats (possibly even something as simple as a LaunchDarkly flag).
+
+
+Note that it is expected that the common case will be that stats do not need trimming. This is more a safety measure.
 
 ## Filtering Parts
 [filtering parts]: #filtering-parts
@@ -141,7 +178,8 @@ It should be safe to roll back any breakage just by disabling the flag.
 [drawbacks]: #drawbacks
 
 Collecting statistics and interpreting MFP expressions both require a significant amount of code, and errors could result in incorrect output.
-We should validate that the real-world latency improvements our users will see are large enough to justify the time investment and the added risk.
+
+Opting in all shards to stats collection uses CPU and storage that is wasted if they are not queried in a way that allows us to push down an MFP.
 
 # Conclusion and alternatives
 [conclusion-and-alternatives]: #conclusion-and-alternatives
@@ -152,17 +190,12 @@ While some use-cases can be addressed with either feature, filter pushdown has t
 We've explored various approaches to extracting part filters from the MFP data, including matching on the top-level structure of the filter.
 However, real-world temporal filters are often complex: even the basic examples in our temporal filters documentation fairly deep nesting.
 
-TODO: anything else?
-
 # Unresolved questions
 [unresolved-questions]: #unresolved-questions
 
-We've reserved the right to drop statistics when they grow to large...
-but we haven't yet defined what counts as too large, or exactly which statistics will be dropped.
-We plan to tweak our approach here as we go, based on observed production behaviour.
-(And may add a dynamic configuration to be able to adjust it more easily.)
+It is an assumption that temporal filters will be sufficient to unlock append-only sources. Users might have append-only workloads that are not ideally expressed as a temporal filter.
 
-TODO
+Do we need some mechanism to ensure that a "critical" usage of this feature (an append-only source that is infeasible without it) is not accidentally broken?
 
 # Future work
 [future-work]: #future-work
