@@ -1206,7 +1206,7 @@ impl CatalogState {
                         memory_bytes.into(),
                         // TODO(guswynn): disk size will be filled in later.
                         Datum::Null,
-                        (*compute_credits_per_hour).into(),
+                        (*credits_per_hour).into(),
                     ]);
                     BuiltinTableUpdate { id, row, diff: 1 }
                 },
