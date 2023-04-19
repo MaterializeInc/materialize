@@ -6347,6 +6347,7 @@ impl Catalog {
         old_owner: RoleId,
         new_owner: RoleId,
     ) {
+        // TODO(jkosh44) Would be nice not to clone every privilege.
         let mut flat_privileges = MzAclItem::flatten(privileges);
 
         let mut new_present = false;
@@ -6373,7 +6374,7 @@ impl Catalog {
             // Group privileges by (grantee, grantor).
             let privilege_map: BTreeMap<_, Vec<_>> =
                 flat_privileges
-                    .drain(..)
+                    .into_iter()
                     .fold(BTreeMap::new(), |mut accum, privilege| {
                         accum
                             .entry((privilege.grantee, privilege.grantor))
