@@ -1,5 +1,5 @@
 - Feature name: Subscribe outputs
-- Associated: #10593
+- Associated: [#10593](https://github.com/MaterializeInc/materialize/issues/10593)
 
 # Summary
 [summary]: #summary
@@ -10,8 +10,8 @@ deletes of tuples, with their application-level data. To
 bridge that gap we introduce three ways to change how subscribe
 produces its output: `WITHIN TIMESTAMP ORDER BY`, `ENVELOPE UPSERT`,
 and `ENVELOPE DEBEZIUM`. These output types are simple to implement
-because they operate on the diffs present in a single timestamp and
-hopefully match the user's mental model.
+because they operate on the diffs present in a single timestamp. We 
+hope they'll match the user's mental model of updates on their results.
 
 # Motivation
 [motivation]: #motivation
@@ -220,7 +220,7 @@ machine in order to tell when it has the complete snapshot data and
 when it has a consistent view on the result set. A example
 implementation:
 
-```lang: python
+```python
 """
 Maintains a map from the first `num_primary_keys` columns to the rest of the row
 Calls handleSnapshot with that map when there's a complete snapshot
