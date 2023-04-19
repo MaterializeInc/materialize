@@ -4084,6 +4084,81 @@ select '(,)'::numrange <= 'empty'::numrange;
 ----
 false
 
+query B
+select '(1,2)'::numrange < '(3,4)'::numrange;
+----
+true
+
+query B
+select '(1,2)'::numrange <= '(3,4)'::numrange;
+----
+true
+
+query B
+select '(1,2)'::numrange = '(3,4)'::numrange;
+----
+false
+
+query B
+select '(1,2)'::numrange >= '(3,4)'::numrange;
+----
+false
+
+query B
+select '(1,2)'::numrange > '(3,4)'::numrange;
+----
+false
+
+query B
+select '(3,4)'::numrange >= '(3,4)'::numrange;
+----
+true
+
+query B
+select '(3,4)'::numrange = '(3,4)'::numrange;
+----
+true
+
+query B
+select '(3,4)'::numrange <= '(3,4)'::numrange;
+----
+true
+
+query B
+select '(3,4)'::numrange < '(3,4)'::numrange;
+----
+false
+
+query B
+select '(3,4)'::numrange > '(3,4)'::numrange;
+----
+false
+
+query B
+select '(5,6)'::numrange < '(3,4)'::numrange;
+----
+false
+
+query B
+select '(5,6)'::numrange <= '(3,4)'::numrange;
+----
+false
+
+query B
+select '(5,6)'::numrange = '(3,4)'::numrange;
+----
+false
+
+query B
+select '(5,6)'::numrange >= '(3,4)'::numrange;
+----
+true
+
+query B
+select '(5,6)'::numrange > '(3,4)'::numrange;
+----
+true
+
 statement ok
 CREATE TABLE numrange_test_values (v numrange);
 
