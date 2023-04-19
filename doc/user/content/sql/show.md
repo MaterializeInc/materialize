@@ -27,6 +27,7 @@ Materialize reserves system variables for region-wide configuration. Although it
 Name                                        | Default value                                                         | Description   |
 --------------------------------------------|-----------------------------------------------------------------------|---------------|
 allowed_cluster_replica_sizes               | `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`  | The allowed sizes when creating a new cluster replica.
+enable_rbac_checks                          | `false`                                                               | Boolean flag indicating whether to apply RBAC checks before executing statements. Setting this variable requires _superuser_ privileges.
 max_aws_privatelink_connections             | `0`                                                                   | The maximum number of AWS PrivateLink connections in the region, across all schemas.
 max_clusters                                | `10`                                                                  | The maximum number of clusters in the region.
 max_databases                               | `1000`                                                                | The maximum number of databases in the region.
