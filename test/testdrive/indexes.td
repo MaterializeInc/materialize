@@ -266,6 +266,7 @@ bar_ind bar <VARIABLE_OUTPUT> {a}
 > SET CLUSTER TO default
 
 > DROP CLUSTER clstr CASCADE;
+> DROP CLUSTER my_cluster CASCADE;
 
 # Test creating indexes on system objects
 > CREATE INDEX sys_ind ON mz_array_types (id)
