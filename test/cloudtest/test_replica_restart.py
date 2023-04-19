@@ -45,6 +45,44 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
         time.sleep(0.2)
 
 
+# Test that an OOMing cluster replica generates expected entries in
+# `mz_cluster_replica_statuses`
+def test_oom_clusterd(mz: MaterializeApplication) -> None:
+    def verify_cluster_oomed() -> None:
+        with mz.environmentd.sql_cursor(autocommit=False) as cur:
+            cur.execute("SET CLUSTER=mz_introspection")
+            cur.execute(
+                """DECLARE c CURSOR FOR SUBSCRIBE TO (SELECT status, reason FROM mz_internal.mz_cluster_replica_statuses mcrs
+JOIN mz_cluster_replicas mcr ON mcrs.replica_id = mcr.id
+JOIN mz_clusters mc ON mcr.cluster_id = mc.id
+WHERE mc.name = 'default')"""
+            )
+            while True:
+                cur.execute("FETCH ALL c")
+                for (_, diff, status, reason) in cur.fetchall():
+                    if diff < 1:
+                        continue
+                    if status == "not-ready" and reason == "oom-killed":
+                        return
+
+    mz.environmentd.sql("DROP VIEW IF EXISTS v CASCADE")
+    # Once we create an index on this view, it is practically guaranteed to OOM
+    mz.environmentd.sql(
+        """
+CREATE VIEW v AS
+SELECT repeat('abc' || x || y, 1000000) FROM
+(SELECT * FROM generate_series(1, 1000000)) a(x),
+(SELECT * FROM generate_series(1, 1000000)) b(y)
+    """
+    )
+    mz.environmentd.sql("CREATE DEFAULT INDEX i ON v")
+
+    # Wait for the cluster pod to OOM
+    verify_cluster_oomed()
+
+    mz.environmentd.sql("DROP VIEW v CASCADE")
+
+
 # Test that a crashed (and restarted) cluster replica generates expected notice
 # events.
 def test_crash_clusterd(mz: MaterializeApplication) -> None:

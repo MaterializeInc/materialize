@@ -182,6 +182,7 @@ impl<T, E: Into<anyhow::Error>> ResultExt<T, E> for Result<T, E> {
 }
 
 /// Message used to communicate between `get_next_message` and the tokio task
+#[derive(Debug)]
 enum InternalMessage {
     /// A definite error for the source, i.e. not a subsource error.
     Err(SourceReaderError),
@@ -574,13 +575,17 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                                     error: e.to_string_with_causes(),
                                     hint: None,
                                 },
-                                // TODO: In the future we probably want to handle this more gracefully,
-                                // but for now halting is the easiest way to dump the data in the pipe.
-                                // The restarted clusterd instance will restart the snapshot fresh, which will
-                                // avoid any inconsistencies. Note that if the same lsn is chosen in the
-                                // next snapshotting, the remapped timestamp chosen will be the same for
-                                // both instances of clusterd.
-                                should_halt: true,
+                                // TODO: In the future we probably want to handle this more
+                                // gracefully, but for now halting is the easiest way to dump the
+                                // data in the pipe. The restarted clusterd instance will restart
+                                // the snapshot fresh, which will avoid any inconsistencies. Note
+                                // that if the same lsn is chosen in the next snapshotting, the
+                                // remapped timestamp chosen will be the same for both instances of
+                                // clusterd.
+                                //
+                                // Note that only the primary source halts, though all of them
+                                // error.
+                                should_halt: output_index == 0,
                             }),
                         ))
                         .await;
@@ -725,26 +730,14 @@ async fn postgres_replication_loop_inner_snapshot(
             .await;
     }
 
-    let mut stream = Box::pin(
-        produce_snapshot(
-            &client,
-            &task_info.metrics,
-            &mut task_info.source_tables,
-            task_info.source_id,
-        )
-        .enumerate(),
-    );
+    let mut stream = Box::pin(produce_snapshot(
+        &client,
+        &task_info.metrics,
+        &mut task_info.source_tables,
+        task_info.source_id,
+    ));
 
-    while let Some((i, event)) = stream.as_mut().next().await {
-        if i > 0 {
-            // Failure scenario after we have produced at least one row, but before a
-            // successful `COMMIT`
-            fail::fail_point!("pg_snapshot_failure", |_| {
-                Err(ReplicationError::Indefinite(anyhow::anyhow!(
-                    "recoverable errors should crash the process"
-                )))
-            });
-        }
+    while let Some(event) = stream.as_mut().next().await {
         let (output_index, value) = match event {
             Ok(event) => event,
             Err(err @ ReplicationError::Definite(_)) => return Err(err),
@@ -757,6 +750,14 @@ async fn postgres_replication_loop_inner_snapshot(
             .send_row(slot_lsn, output_index, value)
             .await
     }
+
+    // Failure scenario after we have produced at least one row, but before a
+    // successful `COMMIT`
+    fail::fail_point!("pg_snapshot_failure", |_| {
+        Err(ReplicationError::Indefinite(anyhow::anyhow!(
+            "recoverable errors should crash the process during snapshots"
+        )))
+    });
 
     if let Some(temp_slot) = temp_slot {
         let _ = client
