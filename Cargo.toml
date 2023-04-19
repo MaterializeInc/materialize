@@ -19,6 +19,7 @@ members = [
     "src/expr",
     "src/expr-test-util",
     "src/frontegg-auth",
+    "src/frontegg-client",
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
