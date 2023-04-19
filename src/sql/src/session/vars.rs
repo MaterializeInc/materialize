@@ -377,7 +377,7 @@ pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
 
 static DEFAULT_MAX_COMPUTE_CREDITS_PER_HOUR: Lazy<Numeric> = Lazy::new(|| 64.into());
 pub static MAX_COMPUTE_CREDITS_PER_HOUR: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
-    name: UncasedStr::new("max_compute_credits_per_hour"),
+    name: UncasedStr::new("max_credits_per_hour"),
     value: &DEFAULT_MAX_COMPUTE_CREDITS_PER_HOUR,
     description: "The maximum number of compute credits per hour in the region (Materialize).",
     internal: false,
