@@ -2992,7 +2992,7 @@ fn plan_join(
                 kind,
                 alias.as_ref(),
             )?
-        },
+        }
         JoinConstraint::Natural => {
             // We shouldn't need to set ambiguous_columns on both the right and left qcx since they
             // have the same scx. However, it doesn't hurt to be safe.
@@ -3146,7 +3146,10 @@ fn plan_using_constraint(
             join_cols.push(new_item_col);
             hidden_cols.push(new_item_col);
 
-            new_items.push(ScopeItem::from_name(Some(new_item), column_name.clone().to_string()));
+            new_items.push(ScopeItem::from_name(
+                Some(new_item),
+                column_name.clone().to_string(),
+            ));
 
             // Should be safe to use either `lhs` or `rhs` here since the column
             // is available in both scopes and must have the same type of the new item.
