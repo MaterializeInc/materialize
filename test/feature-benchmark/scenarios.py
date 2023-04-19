@@ -1273,7 +1273,7 @@ ALTER SYSTEM SET max_materialized_views = {self.n() * 2};
 ALTER SYSTEM SET max_sources = {self.n() * 2};
 ALTER SYSTEM SET max_sinks = {self.n() * 2};
 ALTER SYSTEM SET max_tables = {self.n() * 2};
-ALTER SYSTEM SET max_compute_credits_per_hour = {self.n() * 2};
+ALTER SYSTEM SET max_credits_per_hour = {self.n() * 2};
 
 > CREATE CONNECTION IF NOT EXISTS s1_kafka_conn
   TO KAFKA (BROKER '${{testdrive.kafka-addr}}')

@@ -78,7 +78,7 @@ class ConfigureMz(MzcomposeAction):
             ALTER SYSTEM SET max_materialized_views = 1000;
             ALTER SYSTEM SET max_objects_per_schema = 1000;
             ALTER SYSTEM SET max_secrets = 1000;
-            ALTER SYSTEM SET max_compute_credits_per_hour = 1000;
+            ALTER SYSTEM SET max_credits_per_hour = 1000;
             # Since we already test with RBAC enabled, we have to give materialize
             # user the relevant permissions so the existing tests keep working.
             ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;

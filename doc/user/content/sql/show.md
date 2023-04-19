@@ -30,7 +30,7 @@ allowed_cluster_replica_sizes               | `3xsmall`, `2xsmall`, `xsmall`, `s
 enable_rbac_checks                          | `false`                                                               | Boolean flag indicating whether to apply RBAC checks before executing statements. Setting this variable requires _superuser_ privileges.
 max_aws_privatelink_connections             | `0`                                                                   | The maximum number of AWS PrivateLink connections in the region, across all schemas.
 max_clusters                                | `10`                                                                  | The maximum number of clusters in the region.
-max_compute_credits_per_hour                | `64`                                                                  | The maximum number of compute credits per hour in the region.
+max_credits_per_hour                        | `64`                                                                  | The maximum number of compute credits per hour in the region.
 max_databases                               | `1000`                                                                | The maximum number of databases in the region.
 max_objects_per_schema                      | `1000`                                                                | The maximum number of objects in a schema.
 max_replicas_per_cluster                    | `5`                                                                   | The maximum number of replicas of a single cluster.

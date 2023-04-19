@@ -65,7 +65,7 @@ def workflow_kafka_sources(
 
     c.up("materialized")
     c.sql(
-        "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
+        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
         port=6877,
         user="mz_system",
     )
@@ -99,7 +99,7 @@ def workflow_user_tables(
 
     c.up("materialized")
     c.sql(
-        "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
+        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
         port=6877,
         user="mz_system",
     )
@@ -148,7 +148,7 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
 
     c.up("materialized")
     c.sql(
-        "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
+        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
         port=6877,
         user="mz_system",
     )
@@ -179,7 +179,7 @@ def workflow_compaction(c: Composition) -> None:
     ):
         c.up("materialized")
         c.sql(
-            "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
+            "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
             port=6877,
             user="mz_system",
         )

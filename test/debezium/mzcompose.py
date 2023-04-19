@@ -39,7 +39,7 @@ def workflow_postgres(c: Composition) -> None:
     c.up(*prerequisites, "postgres")
 
     c.sql(
-        "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
+        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
         port=6877,
         user="mz_system",
     )
@@ -51,7 +51,7 @@ def workflow_sql_server(c: Composition) -> None:
     c.up(*prerequisites, "sql-server")
 
     c.sql(
-        "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
+        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
         port=6877,
         user="mz_system",
     )
@@ -66,7 +66,7 @@ def workflow_mysql(c: Composition) -> None:
     c.up(*prerequisites, "mysql")
 
     c.sql(
-        "ALTER SYSTEM SET max_compute_credits_per_hour TO 1000;",
+        "ALTER SYSTEM SET max_credits_per_hour TO 1000;",
         port=6877,
         user="mz_system",
     )
