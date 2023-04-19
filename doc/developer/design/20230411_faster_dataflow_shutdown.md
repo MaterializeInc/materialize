@@ -127,11 +127,12 @@ The fuse operator is instantiated with a token reference that it uses to observe
 As long as there are still other holders of the token, it simply forwards all updates received on its inputs to its outputs.
 Once the token has been dropped by everyone else, it discards all input updates.
 
-In addition to discarding updates when the token is dropped, the fuse operator can also immediately advance its output to the empty frontier.
+A possible optimization would be for the fuse operator to immediately downgrade its output to the empty frontier upon observing dataflow shutdown.
 This is not a requirement for solving divergent WMR cancellation, as dropping data updates is sufficient for reaching a fixpoint.
-Rather, immediately advancing to the empty frontier is a measure to speed up shutdown of the operators downstream of the fuse operator.
-It allows them to observe the empty import frontier as soon as the token is dropped, potentially long before the input to the fuse operator has produced all of its remaining outputs and advanced to the empty frontier.
-We propose implementing this performance optimization in the fuse operator, even though it is not strictly required, because it has low implementation complexity and little associated risk.
+Rather, this optimization could help to speed up shutdown of the operators downstream of the fuse operator, it allows them to observe the empty import frontier as soon as the token is dropped, potentially long before the input to the fuse operator has produced all of its remaining outputs and advanced to the empty frontier.
+We do *not* propose implementing this performance optimization as part of this design.
+In addition to it not being required to solve divergent WMR shutdown, it complicates implementation of the fuse operator and there is some uncertainty about its correctness in the face of mutually recursive structures.
+We therefore leave aggressive frontier downgrading as potential future work.
 
 [#18718] provides the described fuse operator implementation, and applies it to the cancellation of WMR dataflows.
 
@@ -166,7 +167,6 @@ At least for `SELECT` queries computing simple cross joins adding a token check 
 It is likely that the compiler is able to lift the token check out of the loop that calls the join closure in DD, so the check is only performed once per batch rather than once per update.
 
 There might be other places in the join implementations where adding a token check improves shutdown performance.
-For example, adding a fuse operator after the join output would allow downstream operators to observe an empty input frontier and begin shutting down before the join operator has finished iterating over all matches.
 In the interest of keeping code complexity in check, we suggest to not speculatively add more token checks to the join implementations, unless we have evidence (e.g., example queries) that they significantly improve dataflow shutdown performance. The same applies to adding token checks to other operators than join.
 
 [#7577]: https://github.com/MaterializeInc/materialize/issues/7577
@@ -244,21 +244,15 @@ Doing so would potentially provide greater control of the update stream, which w
 We reject this alternative because making changes to DD is relatively more complicated and time-intensive.
 Furthermore, DD is a public library, so it is not clear whether the maintainers would accept changes that are tailored to the Materialize use-case.
 
-<!--
-# Unresolved questions
-[unresolved-questions]: #unresolved-questions
-
-- What questions need to be resolved to finalize the design?
-- What questions will need to be resolved during the implementation of the design?
-- What questions does this design raise that we should address separately?
--->
-
 
 # Future work
 [future-work]: #future-work
 
 We expect to find more instances of dataflow operators that are slow to shut down under certain conditions, even after this design is implemented.
 Insofar as these instances can be resolved by adding more token checks, we should do so.
+
+As mentioned in [#fuse-operators], a possible optimization would be to make the fuse operator advance to the empty froniter immediately once it observes the dataflow shutdown.
+We can consider implementing this optimization if we receive prove that it is worthwhile, provided we can convice ourselves that it is a safe thing to do.
 
 This design does not consider issues caused by dataflow operators refusing to yield back to the Timely runtime.
 Examples of this are `FlatMap`s executing `generate_series` functions with high numbers ([#8853]), or high-cardinality joins over a small number of keys.
