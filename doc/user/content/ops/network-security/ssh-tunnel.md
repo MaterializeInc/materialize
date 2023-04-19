@@ -53,7 +53,7 @@ created in the previous step.
 
 
     > Materialize provides two public keys to allow you to rotate keys without
-    connection downtime. Review the [`ALTER CONNECTION`](/sql/alter-connection) documentation for 
+    connection downtime. Review the [`ALTER CONNECTION`](/sql/alter-connection) documentation for
     more information on how to rotate your keys.
 
 1. Log in to your SSH bastion server and add each key to the bastion `authorized_keys` file:
