@@ -688,38 +688,6 @@ SELECT f1, t1.f2 AS f1 FROM t1 JOIN t2 USING (f1) ORDER BY f1;
 query error  common column name "f2" appears more than once in left table
 SELECT * FROM t1 LEFT JOIN t2 USING (f1) RIGHT JOIN t3 USING (f2);
 
-# Test join using aliases
-# Adapted from: https://github.com/postgres/postgres/blob/master/src/test/regress/sql/join.sql
-
-query T
-SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f2 = 1;
-----
-
-query error column "t1.f1" does not exist
-SELECT * FROM (t1 JOIN t2 USING (f1)) AS x WHERE t1.f1 = 1;
-
-query T
-SELECT * FROM t1 JOIN t2 USING (f2) AS x WHERE x.f2 = 1;
-----
-
-query error column "x.f5" does not exist
-SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE x.f5 = 'one';
-
-query error column "x.f4" does not exist
-SELECT * FROM (t3 JOIN t4 USING (f3) AS x) AS xx WHERE x.f4 = 1;
-
-query error table name "a1" specified more than once
-SELECT * FROM t1 a1 JOIN t2 a2 USING (f1) AS a1
-
-query T
-SELECT x.* FROM t3 JOIN t4 USING (f3) AS x WHERE t3.f1 = 1;
-----
-
-query T
-SELECT ROW(x.*) FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f1 = 1;
-----
-
-
 statement ok
 INSERT INTO t1 VALUES
     (1, 2),
@@ -756,6 +724,61 @@ statement ok
 INSERT INTO t4 VALUES
     (4, 3),
     (9, 10);
+
+# Test join using aliases
+# Adapted from: https://github.com/postgres/postgres/blob/master/src/test/regress/sql/join.sql
+
+query T
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f2 = 1;
+----
+
+query III colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f1 = 3;
+----
+f1  f2  f2
+3   4   4
+
+query III colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x;
+----
+f1  f2  f2
+3   4   4
+
+query II colnames
+SELECT * FROM t1 JOIN t2 USING (f1, f2) AS x;
+----
+f1  f2
+3   4
+
+query error column "t1.f1" does not exist
+SELECT * FROM (t1 JOIN t2 USING (f1)) AS x WHERE t1.f1 = 1;
+
+query error column "x.f5" does not exist
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE x.f5 = 'one';
+
+query error column "x.f4" does not exist
+SELECT * FROM (t3 JOIN t4 USING (f3) AS x) AS xx WHERE x.f4 = 1;
+
+query error table name "a1" specified more than once
+SELECT * FROM t1 a1 JOIN t2 a2 USING (f1) AS a1
+
+query I colnames
+SELECT x.* FROM t3 JOIN t4 USING (f3) AS x WHERE t3.f3 = 4;
+----
+f3
+4
+
+query II colnames
+SELECT x.* FROM t1 JOIN t2 USING (f1, f2) AS x;
+----
+f1  f2
+3   4
+
+query T colnames
+SELECT ROW(x.*) FROM t1 JOIN t2 USING (f1) AS x;
+----
+row
+("(3)")
 
 # Left
 
