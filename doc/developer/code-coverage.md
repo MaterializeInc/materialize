@@ -12,7 +12,7 @@ As an example let's take the *[adapter: Update privileges when an owner is updat
 
 ![Commit: 69de84971e8c16ab459c88be73870bb676dbc478, Branch: jkosh44:update-privilege-owners](assets/coverage-new-build.png)
 
-After some time your [Coverage run](https://buildkite.com/materialize/coverage/builds/26) will be finished and contain a summary of any uncovered lines in the form of a `git diff` where each removed line is not covered:
+After some time your [Coverage run](https://buildkite.com/materialize/coverage/builds/26) will be finished and contain a summary of any uncovered lines in the form of a `git diff` where each line highlighted with a `!` is not covered:
 
 ![Uncovered Lines in Pull Request](assets/coverage-uncovered-lines.png)
 
