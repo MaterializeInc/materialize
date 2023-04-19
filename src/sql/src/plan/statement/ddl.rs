@@ -1580,7 +1580,10 @@ fn get_encoding_inner(
                     .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
-        Format::Json => DataEncodingInner::Json,
+        Format::Json => {
+            scx.require_format_json()?;
+            DataEncodingInner::Json
+        }
         Format::Text => DataEncodingInner::Text,
     }))
 }

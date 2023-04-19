@@ -190,6 +190,38 @@ class WithMutuallyRecursive(FeatureTestScenario):
         return f"SELECT * FROM wmr_{ordinal:02d}"
 
 
+class FormatJson(FeatureTestScenario):
+    @classmethod
+    def feature_name(cls) -> str:
+        return "enable_format_json"
+
+    @classmethod
+    def feature_error(cls) -> str:
+        return "`FORMAT JSON` is not enabled"
+
+    @classmethod
+    def create_item(cls, ordinal: int) -> str:
+        return dedent(
+            f"""
+            CREATE CONNECTION kafka_conn_{ordinal:02d}
+                TO KAFKA (BROKER 'foo');
+            CREATE SOURCE data
+                FROM KAFKA CONNECTION kafka_conn (TOPIC 'bar')
+                FORMAT JSON;
+            """
+        )
+
+    @classmethod
+    def drop_item(cls, ordinal: int) -> str:
+        return f"DROP CONNECTION kafka_conn_{ordinal:02d} CASCADE;"
+
+    @classmethod
+    def query_item(cls, ordinal: int) -> str:
+        # Test cannot spin up infra for this feature to be tested, but we just want to verify it
+        # plans successfully.
+        return "SELECT true;"
+
+
 def run_test(c: Composition, args: argparse.Namespace) -> None:
     c.up("materialized")
     c.up("testdrive", persistent=True)

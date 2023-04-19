@@ -35,12 +35,14 @@ $ kafka-ingest format=bytes topic=data
 1
 1.23
 "hello"
+""
 
 > SELECT * FROM data
 [1,2,3]
 1
 1.23
 "\"hello\""
+"\"\""
 "{\"a\":\"b\",\"c\":\"d\"}"
 
 $ kafka-ingest format=bytes topic=data
