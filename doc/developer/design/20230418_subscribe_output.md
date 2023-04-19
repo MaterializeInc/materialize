@@ -179,6 +179,10 @@ New testdrive tests that exercise these new output types.
 There isn't a performance concern because these output types only need
 to sort the data for a given timestamp.
 
+We'll add metrics to see how often these options are used in order to
+find clients that are using subscribe and get more detail on their
+usecases.
+
 ## Lifecycle
 [lifecycle]: #lifecycle
 
