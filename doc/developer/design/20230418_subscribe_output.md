@@ -10,7 +10,7 @@ deletes of tuples, with their application-level data. To
 bridge that gap we introduce three ways to change how subscribe
 produces its output: `WITHIN TIMESTAMP ORDER BY`, `ENVELOPE UPSERT`,
 and `ENVELOPE DEBEZIUM`. These output types are simple to implement
-because they operate on the diffs present in a single timestamp. We 
+because they operate on the diffs present in a single timestamp. We
 hope they'll match the client's mental model of updates on their results.
 
 # Motivation
@@ -170,11 +170,11 @@ We'll put these options into production behind a launchdarkly flag
 that we can enable for clients if they're okay working without a
 backwards compatibility guarantee. That'll also let us gather feedback
 from clients using these features.
-	
+
 ## Testing and observability
 [testing-and-observability]: #testing-and-observability
 
-New testdrive tests that exercise these new output types. 
+New testdrive tests that exercise these new output types.
 
 There isn't a performance concern because these output types only need
 to sort the data for a given timestamp.
@@ -182,7 +182,7 @@ to sort the data for a given timestamp.
 ## Lifecycle
 [lifecycle]: #lifecycle
 
-The options will start life behind individual feature flags: 
+The options will start life behind individual feature flags:
  - `enable_within_timestamp_order_by_in_subscribe`
  - `enable_envelope_upsert_in_subscribe`
  - `enable_envelope_debezium_in_subscribe`
