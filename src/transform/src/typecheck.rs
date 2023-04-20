@@ -57,14 +57,15 @@ impl Typecheck {
     }
 }
 
-// Either return an error (when soft assertions are enabled)
-// ... or just log an error (when soft assertions are disabled)
+// Detailed type error logging as a warning, with failures in CI (SOFT_ASSERTIONS) and a logged error in production
 macro_rules! type_error {
     ($($arg:tt)+) => {{
+        ::tracing::warn!($($arg)+);
+
         if mz_ore::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
-            return Err(TransformError::Internal(format!($($arg)+)));
+            return Err(TransformError::Internal("type error in MIR optimization (details in warning)".to_string()));
         } else {
-            ::tracing::error!($($arg)+);
+            ::tracing::error!("type error in MIR optimization (details in warning)");
         }
     }}
 }
