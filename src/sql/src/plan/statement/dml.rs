@@ -22,7 +22,7 @@ use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::{SubscribeOutput, OrderByExpr, Expr};
+use mz_sql_parser::ast::{Expr, OrderByExpr, SubscribeOutput};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -519,9 +519,19 @@ pub fn plan_subscribe(
         SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
         SubscribeOutput::EnvelopeUpsert { key_columns } => {
             scx.require_envelope_upsert_in_subscribe()?;
-            let order_by = key_columns.iter().map(|ident| OrderByExpr{ expr: Expr::Identifier(vec![ident.clone()]), asc: None, nulls_last: None } ).collect_vec();
+            let order_by = key_columns
+                .iter()
+                .map(|ident| OrderByExpr {
+                    expr: Expr::Identifier(vec![ident.clone()]),
+                    asc: None,
+                    nulls_last: None,
+                })
+                .collect_vec();
             let (order_by, map_exprs) = query::plan_order_by_exprs(
-                &ExprContext{name: "ENVELOPE UPSERT KEY clause", ..ecx},
+                &ExprContext {
+                    name: "ENVELOPE UPSERT KEY clause",
+                    ..ecx
+                },
                 &order_by[..],
                 &[],
             )?;
@@ -537,7 +547,10 @@ pub fn plan_subscribe(
             scx.require_within_timestamp_order_by_in_subscribe()?;
             let mz_diff_fake_column = usize::MAX;
             let (mut order_by, map_exprs) = query::plan_order_by_exprs(
-                &ExprContext{name: "WITHIN TIMESTAMP ORDER BY clause", ..ecx},
+                &ExprContext {
+                    name: "WITHIN TIMESTAMP ORDER BY clause",
+                    ..ecx
+                },
                 &order_by[..],
                 &[(mz_diff_fake_column, &"mz_diff".into())],
             )?;
