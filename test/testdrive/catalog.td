@@ -510,8 +510,7 @@ mz_active_peeks_per_worker                   log   <null>
 mz_arrangement_batches_raw                   log   <null>
 mz_arrangement_records_raw                   log   <null>
 mz_arrangement_sharing_raw                   log   <null>
-mz_
-compute_delays_histogram_raw              log   <null>
+mz_compute_delays_histogram_raw              log   <null>
 mz_compute_dependencies_per_worker           log   <null>
 mz_compute_exports_per_worker                log   <null>
 mz_compute_frontiers_per_worker              log   <null>
