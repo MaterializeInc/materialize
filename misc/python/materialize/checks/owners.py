@@ -113,14 +113,14 @@ class Owners(Check):
                     + self._drop_objects("materialize", 3, success=False)
                     + self._drop_objects("materialize", 4, success=False)
                 )
-                if self.base_version >= MzVersion.parse("0.50.0-dev")
+                if self.base_version >= MzVersion.parse("0.51.0-dev")
                 else ""
             )
             + self._create_objects("owner_role_01", 5)
             + self._create_objects("owner_role_02", 6)
             + self._create_objects("owner_role_03", 7)
             + dedent(
-                f"""
+                """
                 $ psql-execute command="\\l owner_db*"
                 \\                             List of databases
                    Name    |     Owner     | Encoding | Collate | Ctype | Access privileges
@@ -222,6 +222,117 @@ class Owners(Check):
 
                 > SELECT mz_cluster_replicas.name, mz_roles.name FROM mz_cluster_replicas JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id WHERE mz_cluster_replicas.name LIKE 'owner_cluster_r%'
                 owner_cluster_r1 owner_role_01
+
+                > SELECT mz_connections.name, mz_roles.name FROM mz_connections JOIN mz_roles ON mz_connections.owner_id = mz_roles.id WHERE mz_connections.name LIKE 'owner_%'
+                owner_csr_conn1 owner_role_01
+                owner_csr_conn2 owner_role_01
+                owner_csr_conn3 owner_role_01
+                owner_csr_conn4 owner_role_02
+                owner_csr_conn5 owner_role_01
+                owner_csr_conn6 owner_role_02
+                owner_csr_conn7 owner_role_03
+                owner_kafka_conn1 owner_role_01
+                owner_kafka_conn2 owner_role_01
+                owner_kafka_conn3 owner_role_01
+                owner_kafka_conn4 owner_role_02
+                owner_kafka_conn5 owner_role_01
+                owner_kafka_conn6 owner_role_02
+                owner_kafka_conn7 owner_role_03
+
+                > SELECT name, unnest(privileges)::text FROM mz_databases WHERE name LIKE 'owner_db%'
+                owner_db1 owner_role_01=UC/owner_role_01
+                owner_db2 owner_role_01=UC/owner_role_01
+                owner_db3 owner_role_01=UC/owner_role_01
+                owner_db4 owner_role_02=UC/owner_role_02
+                owner_db5 owner_role_01=UC/owner_role_01
+                owner_db6 owner_role_02=UC/owner_role_02
+                owner_db7 owner_role_03=UC/owner_role_03
+
+                > SELECT name, unnest(privileges)::text FROM mz_schemas WHERE name LIKE 'owner_schema%'
+                owner_schema1 owner_role_01=UC/owner_role_01
+                owner_schema2 owner_role_01=UC/owner_role_01
+                owner_schema3 owner_role_01=UC/owner_role_01
+                owner_schema4 owner_role_02=UC/owner_role_02
+                owner_schema5 owner_role_01=UC/owner_role_01
+                owner_schema6 owner_role_02=UC/owner_role_02
+                owner_schema7 owner_role_03=UC/owner_role_03
+
+                > SELECT name, unnest(privileges)::text FROM mz_tables WHERE name LIKE 'owner_t%'
+                owner_t1 owner_role_01=arwd/owner_role_01
+                owner_t2 owner_role_01=arwd/owner_role_01
+                owner_t3 owner_role_01=arwd/owner_role_01
+                owner_t4 owner_role_02=arwd/owner_role_02
+                owner_t5 owner_role_01=arwd/owner_role_01
+                owner_t6 owner_role_02=arwd/owner_role_02
+                owner_t7 owner_role_03=arwd/owner_role_03
+
+                > SELECT name, unnest(privileges)::text FROM mz_views WHERE name LIKE 'owner_v%'
+                owner_v1 owner_role_01=r/owner_role_01
+                owner_v2 owner_role_01=r/owner_role_01
+                owner_v3 owner_role_01=r/owner_role_01
+                owner_v4 owner_role_02=r/owner_role_02
+                owner_v5 owner_role_01=r/owner_role_01
+                owner_v6 owner_role_02=r/owner_role_02
+                owner_v7 owner_role_03=r/owner_role_03
+
+                > SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name LIKE 'owner_mv%'
+                owner_mv1 owner_role_01=r/owner_role_01
+                owner_mv2 owner_role_01=r/owner_role_01
+                owner_mv3 owner_role_01=r/owner_role_01
+                owner_mv4 owner_role_02=r/owner_role_02
+                owner_mv5 owner_role_01=r/owner_role_01
+                owner_mv6 owner_role_02=r/owner_role_02
+                owner_mv7 owner_role_03=r/owner_role_03
+
+                > SELECT name, unnest(privileges)::text FROM mz_types WHERE name LIKE 'owner_type%'
+                owner_type1 =U/owner_role_01
+                owner_type1 owner_role_01=U/owner_role_01
+                owner_type2 =U/owner_role_01
+                owner_type2 owner_role_01=U/owner_role_01
+                owner_type3 =U/owner_role_01
+                owner_type3 owner_role_01=U/owner_role_01
+                owner_type4 =U/owner_role_02
+                owner_type4 owner_role_02=U/owner_role_02
+                owner_type5 =U/owner_role_01
+                owner_type5 owner_role_01=U/owner_role_01
+                owner_type6 =U/owner_role_02
+                owner_type6 owner_role_02=U/owner_role_02
+                owner_type7 =U/owner_role_03
+                owner_type7 owner_role_03=U/owner_role_03
+
+                > SELECT name, unnest(privileges)::text FROM mz_secrets WHERE name LIKE 'owner_secret%'
+                owner_secret1 owner_role_01=U/owner_role_01
+                owner_secret2 owner_role_01=U/owner_role_01
+                owner_secret3 owner_role_01=U/owner_role_01
+                owner_secret4 owner_role_02=U/owner_role_02
+                owner_secret5 owner_role_01=U/owner_role_01
+                owner_secret6 owner_role_02=U/owner_role_02
+                owner_secret7 owner_role_03=U/owner_role_03
+
+                > SELECT name, unnest(privileges)::text FROM mz_sources WHERE name LIKE 'owner_source%' AND type = 'load-generator'
+                owner_source1 owner_role_01=r/owner_role_01
+
+                ! SELECT name, unnest(privileges)::text FROM mz_sinks WHERE name LIKE 'owner_sink%'
+                contains: column "privileges" does not exist
+
+                > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'owner_cluster%'
+                owner_cluster1 owner_role_01=UC/owner_role_01
+
+                > SELECT name, unnest(privileges)::text FROM mz_connections WHERE name LIKE 'owner_%'
+                owner_csr_conn1 owner_role_01=U/owner_role_01
+                owner_csr_conn2 owner_role_01=U/owner_role_01
+                owner_csr_conn3 owner_role_01=U/owner_role_01
+                owner_csr_conn4 owner_role_02=U/owner_role_02
+                owner_csr_conn5 owner_role_01=U/owner_role_01
+                owner_csr_conn6 owner_role_02=U/owner_role_02
+                owner_csr_conn7 owner_role_03=U/owner_role_03
+                owner_kafka_conn1 owner_role_01=U/owner_role_01
+                owner_kafka_conn2 owner_role_01=U/owner_role_01
+                owner_kafka_conn3 owner_role_01=U/owner_role_01
+                owner_kafka_conn4 owner_role_02=U/owner_role_02
+                owner_kafka_conn5 owner_role_01=U/owner_role_01
+                owner_kafka_conn6 owner_role_02=U/owner_role_02
+                owner_kafka_conn7 owner_role_03=U/owner_role_03
                 """
             )
             + self._drop_objects("owner_role_01", 5)

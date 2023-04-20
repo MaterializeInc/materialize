@@ -146,18 +146,18 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let mut output_ids = Vec::new();
         let mut dataflow_plans = Vec::with_capacity(dataflows.len());
-        for dataflow in dataflows.into_iter() {
+        for mut dataflow in dataflows.into_iter() {
             output_ids.extend(dataflow.export_ids());
-            let mut plan = self.finalize_dataflow(dataflow, instance)?;
             // If the only outputs of the dataflow are sinks, we might
             // be able to turn off the computation early, if they all
             // have non-trivial `up_to`s.
-            if plan.index_exports.is_empty() {
-                plan.until = Antichain::from_elem(Timestamp::MIN);
-                for (_, sink) in &plan.sink_exports {
-                    plan.until.join_assign(&sink.up_to);
+            if dataflow.index_exports.is_empty() {
+                dataflow.until = Antichain::from_elem(Timestamp::MIN);
+                for (_, sink) in &dataflow.sink_exports {
+                    dataflow.until.join_assign(&sink.up_to);
                 }
             }
+            let plan = self.finalize_dataflow(dataflow, instance)?;
             dataflow_plans.push(plan);
         }
         self.controller
@@ -208,9 +208,13 @@ impl Coordinator {
     /// invariants such as ensuring that the `as_of` frontier is in advance of
     /// the various `since` frontiers of participating data inputs.
     ///
-    /// In particular, there are requirement on the `as_of` field for the dataflow
+    /// In particular, there are requirements on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
+    ///
+    /// Additionally, this method requires that the `until` field of the dataflow
+    /// has been set, so that any plan improvements based on its difference to `as_of`
+    /// can be carried out.
     ///
     /// This method will return an error if the finalization fails. DO NOT call this
     /// method for DDL. Instead, use the non-fallible version [`Self::must_finalize_dataflow`].
@@ -262,7 +266,13 @@ impl Coordinator {
                 .unwrap_or_terminate("Normalize failed; unrecoverable error");
         }
 
-        mz_compute_client::plan::Plan::finalize_dataflow(dataflow).map_err(AdapterError::Internal)
+        mz_compute_client::plan::Plan::finalize_dataflow(
+            dataflow,
+            self.catalog()
+                .system_config()
+                .enable_monotonic_oneshot_selects(),
+        )
+        .map_err(AdapterError::Internal)
     }
 }
 

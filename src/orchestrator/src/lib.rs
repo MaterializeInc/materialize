@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -152,13 +150,21 @@ pub struct ServiceEvent {
     pub time: DateTime<Utc>,
 }
 
+/// Why the service is not ready, if known
+#[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
+pub enum NotReadyReason {
+    OomKilled,
+}
+
 /// Describes the status of an orchestrated service.
 #[derive(Debug, Clone, Copy, Serialize, Eq, PartialEq)]
 pub enum ServiceStatus {
     /// Service is ready to accept requests.
     Ready,
     /// Service is not ready to accept requests.
-    NotReady,
+    /// The inner element is `None` if the reason
+    /// is unknown
+    NotReady(Option<NotReadyReason>),
 }
 
 impl ServiceStatus {
@@ -166,7 +172,7 @@ impl ServiceStatus {
     pub fn as_kebab_case_str(&self) -> &'static str {
         match self {
             ServiceStatus::Ready => "ready",
-            ServiceStatus::NotReady => "not-ready",
+            ServiceStatus::NotReady(_) => "not-ready",
         }
     }
 }

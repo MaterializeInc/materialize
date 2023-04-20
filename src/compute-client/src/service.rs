@@ -356,7 +356,10 @@ where
                         if old_frontier != new_frontier && !entry.dropped {
                             let updates = match &mut entry.stashed_updates {
                                 Ok(stashed_updates) => {
+                                    // The compute protocol requires us to only send out
+                                    // consolidated batches.
                                     consolidate_updates(stashed_updates);
+
                                     let mut ship = Vec::new();
                                     let mut keep = Vec::new();
                                     for (time, data, diff) in stashed_updates.drain(..) {

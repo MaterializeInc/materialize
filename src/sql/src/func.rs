@@ -2374,6 +2374,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "to_timestamp" => Scalar {
             params!(Float64) => UnaryFunc::ToTimestamp(func::ToTimestamp) => TimestampTz, 1158;
         },
+        "translate" => Scalar {
+            params!(String, String, String) => VariadicFunc::Translate => String, 878;
+        },
         "trunc" => Scalar {
             params!(Float32) => UnaryFunc::TruncFloat32(func::TruncFloat32) => Float32, oid::FUNC_TRUNC_F32_OID;
             params!(Float64) => UnaryFunc::TruncFloat64(func::TruncFloat64) => Float64, 1343;
@@ -3565,7 +3568,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
             params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lt =>Bool, oid::FUNC_MZ_TIMESTAMP_LT_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3884;
+            params!(RangeAny, RangeAny) => BinaryFunc::Lt => Bool, 3884;
         },
         "<=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Lte => Bool, 1755;
@@ -3593,7 +3596,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
             params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lte =>Bool, oid::FUNC_MZ_TIMESTAMP_LTE_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3885;
+            params!(RangeAny, RangeAny) => BinaryFunc::Lte => Bool, 3885;
         },
         ">" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gt => Bool, 1756;
@@ -3621,7 +3624,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
             params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gt =>Bool, oid::FUNC_MZ_TIMESTAMP_GT_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3887;
+            params!(RangeAny, RangeAny) => BinaryFunc::Gt => Bool, 3887;
         },
         ">=" => Scalar {
             params!(Numeric, Numeric) => BinaryFunc::Gte => Bool, 1757;
@@ -3649,7 +3652,7 @@ pub static OP_IMPLS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
             params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
             params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
             params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gte =>Bool, oid::FUNC_MZ_TIMESTAMP_GTE_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3886;
+            params!(RangeAny, RangeAny) => BinaryFunc::Gte => Bool, 3886;
         },
         // Warning!
         // - If you are writing functions here that do not simply use

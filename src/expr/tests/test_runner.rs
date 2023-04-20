@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -152,7 +150,7 @@ mod test {
             .unwrap()
             .to_string()
             .parse::<usize>()
-            .map_err_to_string()?;
+            .map_err_to_string_with_causes()?;
         let mut mfp = MapFilterProject::new(input_arity);
         while let Some(command) = deserialize_optional::<MFPTestCommand, _, _>(
             &mut input_stream,

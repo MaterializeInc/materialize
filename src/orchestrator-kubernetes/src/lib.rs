@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -86,8 +84,8 @@ use clap::ArgEnum;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Affinity, Container, ContainerPort, EnvVar, EnvVarSource, ObjectFieldSelector, Pod,
-    PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
+    Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource, ObjectFieldSelector,
+    Pod, PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
     Service as K8sService, ServicePort, ServiceSpec,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -105,8 +103,8 @@ use tracing::warn;
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
-    LabelSelectionLogic, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
-    ServiceEvent, ServiceStatus,
+    LabelSelectionLogic, NamespacedOrchestrator, NotReadyReason, Orchestrator, Service,
+    ServiceConfig, ServiceEvent, ServiceStatus,
 };
 use mz_orchestrator::{LabelSelector as MzLabelSelector, ServiceProcessMetrics};
 
@@ -857,6 +855,39 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
                 .clone();
 
+            fn is_state_oom(state: &ContainerState) -> bool {
+                state
+                    .terminated
+                    .as_ref()
+                    // 137 is the exit code corresponding to OOM in Kubernetes.
+                    // It'd be a bit clearer to compare the reason to "OOMKilled",
+                    // but this doesn't work in Kind for some reason, preventing us from
+                    // writing automated tests.
+                    .map(|terminated| terminated.exit_code == 137)
+                    .unwrap_or(false)
+            }
+            let oomed = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_ref())
+                .map(|container_statuses| {
+                    container_statuses.iter().any(|cs| {
+                        // We check whether the current _or_ the last state
+                        // is an OOM kill. The reason for this is that after a kill,
+                        // the state toggles from "Terminated" to "Waiting" very quickly,
+                        // at which point the OOM error appears int he last state,
+                        // not the current one.
+                        //
+                        // This "oomed" value is ignored later on if the pod is ready,
+                        // so there is no risk that we will go directly from "Terminated"
+                        // to "Running" and incorrectly report that we are currently
+                        // oom-killed.
+                        cs.last_state.as_ref().map(is_state_oom).unwrap_or(false)
+                            || cs.state.as_ref().map(is_state_oom).unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+
             let (pod_ready, last_probe_time) = pod
                 .status
                 .and_then(|status| status.conditions)
@@ -867,7 +898,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let status = if pod_ready {
                 ServiceStatus::Ready
             } else {
-                ServiceStatus::NotReady
+                ServiceStatus::NotReady(oomed.then_some(NotReadyReason::OomKilled))
             };
             let time = if let Some(time) = last_probe_time {
                 time.0

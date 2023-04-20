@@ -12,22 +12,24 @@ transaction_isolation                       | `strict serializable`     | The tr
 
 Name                                        | Default value             |  Description  |
 --------------------------------------------|---------------------------|---------------|
+auto_route_introspection_queries            | `true`                    | Boolean flag indicating whether to force queries that depend only on system tables to run on the `mz_introspection` cluster for improved performance.
 application_name                            |                           | The application name to be reported in statistics and logs. This variable is typically set by an application upon connection to Materialize (e.g. `psql`).
 client_encoding                             | `UTF8`                    | The client's character set encoding. The only supported value is `UTF-8`.
 client_min_messages                         | `notice`                  | The message levels that are sent to the client. <br/><br/> Accepts values: `debug5`, `debug4`, `debug3`, `debug2`, `debug1`, `log`, `notice`, `warning`, `error`. Each level includes all the levels that follow it.
 datestyle                                   | `ISO, MDY`                | The display format for date and time values. The only supported value is `ISO, MDY`.
 emit_timestamp_notice                       | `false`                   | Boolean flag indicating whether to send a `notice` specifying query timestamps.
 emit_trace_id_notice                        | `false`                   | Boolean flag indicating whether to send a `notice` specifying the trace ID, when available.
-extra_float_digits                          | `3`                       | Adjusts the number of digits displayed for floating-point values.
+enable_session_rbac_checks                  | `false`                   | **Read-only.** Boolean flag indicating whether RBAC is enabled for the current session.
+extra_float_digits                          | `3`                       | Boolean flag indicating whether to adjust the number of digits displayed for floating-point values.
 failpoints                                  |                           | Allows failpoints to be dynamically activated.
 idle_in_transaction_session_timeout         | `120 seconds`             | The maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout.
-integer_datetimes                           | `true`                    | **Read-only.** Reports whether the server uses 64-bit-integer dates and times.
+integer_datetimes                           | `true`                    | **Read-only.** Boolean flag indicating whether the server uses 64-bit-integer dates and times.
 intervalstyle                               | `postgres`                | The display format for interval values. The only supported value is `postgres`.
 is_superuser                                |                           | **Read-only.** Reports whether the current session is a _superuser_ with admin privileges.
 mz_version                                  | Version-dependent         | **Read-only.** Shows the Materialize server version.
 server_version                              | Version-dependent         | **Read-only.** The PostgreSQL compatible server version.
 server_version_num                          | Version-dependent         | **Read-only.** The PostgreSQL compatible server version as an integer.
-sql_safe_updates                            | `false`                   | Prohibits SQL statements that may be overly destructive.
-standard_conforming_strings                 | `true`                    | Causes ordinary string literals (`'...'`) to treat backslashes literally. The only supported value is `true`.
+sql_safe_updates                            | `false`                   | Boolean flag indicating whether to prohibit SQL statements that may be overly destructive.
+standard_conforming_strings                 | `true`                    | Boolean flag indicating whether ordinary string literals (`'...'`) should treat backslashes literally. The only supported value is `true`.
 statement_timeout                           | `10 seconds`              | The maximum allowed duration of `INSERT`, `SELECT`, `UPDATE`, and `DELETE` operations. If this value is specified without units, it is taken as milliseconds.
 timezone                                    | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.

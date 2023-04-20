@@ -27,7 +27,7 @@ SERVICES = [
         port="30123:30123",
         allow_host_ports=True,
         extra_environment=[
-            f"KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
+            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
             "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
@@ -60,7 +60,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         env=dict(
             os.environ,
             ZOOKEEPER_ADDR=f"localhost:{c.default_port('zookeeper')}",
-            KAFKA_ADDRS=f"localhost:30123",
+            KAFKA_ADDRS="localhost:30123",
             SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
             POSTGRES_URL=postgres_url,
             COCKROACH_URL=cockroach_url,

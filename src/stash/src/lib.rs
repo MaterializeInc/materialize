@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -938,6 +936,37 @@ where
         });
         // Check for uniqueness violation.
         if let Err(err) = self.verify() {
+            self.pending = pending;
+            Err(err)
+        } else {
+            Ok(changed)
+        }
+    }
+
+    /// Migrates k, v pairs. `f` is a function that can return `Some((K, V))` if the key and value should
+    /// be updated, otherwise `None`. Returns the number of changed entries.
+    ///
+    /// Returns an error if the uniqueness check failed.
+    pub fn migrate<F: Fn(&K, &V) -> Option<(K, V)>>(&mut self, f: F) -> Result<Diff, StashError> {
+        let mut changed = 0;
+        // Keep a copy of pending in case of uniqueness violation.
+        let pending = self.pending.clone();
+        self.for_values_mut(|p, k, v| {
+            if let Some((new_k, new_v)) = f(k, v) {
+                changed += 1;
+
+                // If the key has changed, delete the old entry.
+                if *k != new_k {
+                    p.insert(k.clone(), None);
+                }
+
+                // Insert the new key and value.
+                p.insert(new_k, Some(new_v));
+            }
+        });
+        // Check for uniqueness violation.
+        if let Err(err) = self.verify() {
+            // Reset our pending set if we have a violation.
             self.pending = pending;
             Err(err)
         } else {

@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="495" height="475">
+   <polygon points="9 61 1 57 1 65"/>
+   <polygon points="17 61 9 57 9 65"/>
+   <rect x="31" y="47" width="70" height="32" rx="10"/>
+   <rect x="29"
+         y="45"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="65">GRANT</text>
+   <rect x="141" y="47" width="76" height="32"/>
+   <rect x="139" y="45" width="76" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="149" y="65">privilege</text>
+   <rect x="141" y="3" width="24" height="32" rx="10"/>
+   <rect x="139"
+         y="1"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="149" y="21">,</text>
+   <rect x="257" y="47" width="40" height="32"/>
+   <rect x="255" y="45" width="40" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="265" y="65">ON</text>
+   <rect x="337" y="79" width="66" height="32" rx="10"/>
+   <rect x="335"
+         y="77"
+         width="66"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="97">TABLE</text>
+   <rect x="337" y="123" width="56" height="32" rx="10"/>
+   <rect x="335"
+         y="121"
+         width="56"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="141">TYPE</text>
+   <rect x="337" y="167" width="76" height="32" rx="10"/>
+   <rect x="335"
+         y="165"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="185">SECRET</text>
+   <rect x="337" y="211" width="116" height="32" rx="10"/>
+   <rect x="335"
+         y="209"
+         width="116"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="229">CONNECTION</text>
+   <rect x="337" y="255" width="98" height="32" rx="10"/>
+   <rect x="335"
+         y="253"
+         width="98"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="273">DATABASE</text>
+   <rect x="337" y="299" width="82" height="32" rx="10"/>
+   <rect x="335"
+         y="297"
+         width="82"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="317">SCHEMA</text>
+   <rect x="337" y="343" width="84" height="32" rx="10"/>
+   <rect x="335"
+         y="341"
+         width="84"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="361">CLUSTER</text>
+   <rect x="65" y="409" width="104" height="32"/>
+   <rect x="63" y="407" width="104" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="73" y="427">object_name</text>
+   <rect x="189" y="409" width="40" height="32" rx="10"/>
+   <rect x="187"
+         y="407"
+         width="40"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="197" y="427">TO</text>
+   <rect x="269" y="441" width="70" height="32" rx="10"/>
+   <rect x="267"
+         y="439"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="277" y="459">GROUP</text>
+   <rect x="379" y="409" width="88" height="32"/>
+   <rect x="377" y="407" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="387" y="427">role_name</text>
+   <path class="line"
+         d="m17 61 h2 m0 0 h10 m70 0 h10 m20 0 h10 m76 0 h10 m-116 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m96 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-96 0 h10 m24 0 h10 m0 0 h52 m20 44 h10 m40 0 h10 m20 0 h10 m0 0 h126 m-156 0 h20 m136 0 h20 m-176 0 q10 0 10 10 m156 0 q0 -10 10 -10 m-166 10 v12 m156 0 v-12 m-156 12 q0 10 10 10 m136 0 q10 0 10 -10 m-146 10 h10 m66 0 h10 m0 0 h50 m-146 -10 v20 m156 0 v-20 m-156 20 v24 m156 0 v-24 m-156 24 q0 10 10 10 m136 0 q10 0 10 -10 m-146 10 h10 m56 0 h10 m0 0 h60 m-146 -10 v20 m156 0 v-20 m-156 20 v24 m156 0 v-24 m-156 24 q0 10 10 10 m136 0 q10 0 10 -10 m-146 10 h10 m76 0 h10 m0 0 h40 m-146 -10 v20 m156 0 v-20 m-156 20 v24 m156 0 v-24 m-156 24 q0 10 10 10 m136 0 q10 0 10 -10 m-146 10 h10 m116 0 h10 m-146 -10 v20 m156 0 v-20 m-156 20 v24 m156 0 v-24 m-156 24 q0 10 10 10 m136 0 q10 0 10 -10 m-146 10 h10 m98 0 h10 m0 0 h18 m-146 -10 v20 m156 0 v-20 m-156 20 v24 m156 0 v-24 m-156 24 q0 10 10 10 m136 0 q10 0 10 -10 m-146 10 h10 m82 0 h10 m0 0 h34 m-146 -10 v20 m156 0 v-20 m-156 20 v24 m156 0 v-24 m-156 24 q0 10 10 10 m136 0 q10 0 10 -10 m-146 10 h10 m84 0 h10 m0 0 h32 m22 -296 l2 0 m2 0 l2 0 m2 0 l2 0 m-452 362 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m104 0 h10 m0 0 h10 m40 0 h10 m20 0 h10 m0 0 h80 m-110 0 h20 m90 0 h20 m-130 0 q10 0 10 10 m110 0 q0 -10 10 -10 m-120 10 v12 m110 0 v-12 m-110 12 q0 10 10 10 m90 0 q10 0 10 -10 m-100 10 h10 m70 0 h10 m20 -32 h10 m88 0 h10 m3 0 h-3"/>
+   <polygon points="485 423 493 419 493 427"/>
+   <polygon points="485 423 477 419 477 427"/>
+</svg>

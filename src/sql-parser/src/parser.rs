@@ -1104,7 +1104,7 @@ impl<'a> Parser<'a> {
                 }
                 COLLATE => Ok(Expr::Collate {
                     expr: Box::new(expr),
-                    collation: self.parse_object_name()?,
+                    collation: self.parse_item_name()?,
                 }),
                 // Can only happen if `get_next_precedence` got out of sync with this function
                 _ => panic!("No infix parser for token {:?}", tok),
@@ -1976,7 +1976,7 @@ impl<'a> Parser<'a> {
     fn parse_create_connection(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(CONNECTION)?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
         let expect_paren = match self.expect_one_of_keywords(&[FOR, TO])? {
             FOR => false,
             TO => true,
@@ -2397,7 +2397,7 @@ impl<'a> Parser<'a> {
     fn parse_create_subsource(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SUBSOURCE)?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
 
         let (columns, constraints) = self.parse_columns(Mandatory)?;
 
@@ -2442,7 +2442,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SOURCE)?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
         let (col_names, key_constraint) = self.parse_source_columns()?;
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
@@ -2471,7 +2471,12 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::LParen)?;
             let subsources = self.parse_comma_separated(Parser::parse_subsource_references)?;
             self.expect_token(&Token::RParen)?;
-            Some(ReferencedSubsources::Subset(subsources))
+            Some(ReferencedSubsources::SubsetTables(subsources))
+        } else if self.parse_keywords(&[FOR, SCHEMAS]) {
+            self.expect_token(&Token::LParen)?;
+            let schemas = self.parse_comma_separated(Parser::parse_identifier)?;
+            self.expect_token(&Token::RParen)?;
+            Some(ReferencedSubsources::SubsetSchemas(schemas))
         } else if self.parse_keywords(&[FOR, ALL, TABLES]) {
             Some(ReferencedSubsources::All)
         } else {
@@ -2479,7 +2484,7 @@ impl<'a> Parser<'a> {
         };
 
         let progress_subsource = if self.parse_keywords(&[EXPOSE, PROGRESS, AS]) {
-            Some(self.parse_deferred_object_name()?)
+            Some(self.parse_deferred_item_name()?)
         } else {
             None
         };
@@ -2511,9 +2516,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_subsource_references(&mut self) -> Result<CreateSourceSubsource<Raw>, ParserError> {
-        let reference = self.parse_object_name()?;
+        let reference = self.parse_item_name()?;
         let subsource = if self.parse_one_of_keywords(&[AS, INTO]).is_some() {
-            Some(self.parse_deferred_object_name()?)
+            Some(self.parse_deferred_item_name()?)
         } else {
             None
         };
@@ -2595,7 +2600,7 @@ impl<'a> Parser<'a> {
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;
@@ -2731,7 +2736,7 @@ impl<'a> Parser<'a> {
                 let _ = self.consume_token(&Token::Eq);
 
                 let value = self
-                    .parse_option_sequence(Parser::parse_object_name)?
+                    .parse_option_sequence(Parser::parse_item_name)?
                     .map(|inner| {
                         WithOptionValue::Sequence(
                             inner
@@ -2831,7 +2836,7 @@ impl<'a> Parser<'a> {
 
     fn parse_view_definition(&mut self) -> Result<ViewDefinition<Raw>, ParserError> {
         // ANSI SQL and Postgres support RECURSIVE here, but we don't.
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
         // Postgres supports WITH options here, but we don't.
         self.expect_keyword(AS)?;
@@ -2856,7 +2861,7 @@ impl<'a> Parser<'a> {
             if_exists = IfExistsBehavior::Skip;
         }
 
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
         let in_cluster = self.parse_optional_in_cluster()?;
 
@@ -3017,7 +3022,7 @@ impl<'a> Parser<'a> {
     fn parse_create_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SECRET)?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
         self.expect_keyword(AS)?;
         let value = self.parse_expr()?;
         Ok(Statement::CreateSecret(CreateSecretStatement {
@@ -3029,7 +3034,7 @@ impl<'a> Parser<'a> {
 
     fn parse_create_type(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(TYPE)?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
         self.expect_keyword(AS)?;
 
         match self.parse_one_of_keywords(&[LIST, MAP]) {
@@ -3244,7 +3249,7 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists()?;
         match object_type {
             ObjectType::Database => {
-                let name = UnresolvedName::Database(self.parse_database_name()?);
+                let name = UnresolvedObjectName::Database(self.parse_database_name()?);
                 let restrict = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(RESTRICT),
@@ -3257,7 +3262,7 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::Schema => {
-                let name = UnresolvedName::Schema(self.parse_schema_name()?);
+                let name = UnresolvedObjectName::Schema(self.parse_schema_name()?);
                 let cascade = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(CASCADE),
@@ -3271,7 +3276,7 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Role => {
                 let names = self.parse_comma_separated(|parser| {
-                    Ok(UnresolvedName::Role(parser.parse_identifier()?))
+                    Ok(UnresolvedObjectName::Role(parser.parse_identifier()?))
                 })?;
                 Ok(Statement::DropObjects(DropObjectsStatement {
                     object_type: ObjectType::Role,
@@ -3292,7 +3297,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Secret
             | ObjectType::Connection => {
                 let names = self.parse_comma_separated(|parser| {
-                    Ok(UnresolvedName::Item(parser.parse_object_name()?))
+                    Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
                 let cascade = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
@@ -3315,7 +3320,7 @@ impl<'a> Parser<'a> {
 
     fn parse_drop_clusters(&mut self, if_exists: bool) -> Result<Statement<Raw>, ParserError> {
         let names = self.parse_comma_separated(|parser| {
-            Ok(UnresolvedName::Cluster(parser.parse_identifier()?))
+            Ok(UnresolvedObjectName::Cluster(parser.parse_identifier()?))
         })?;
         let cascade = matches!(
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
@@ -3334,7 +3339,7 @@ impl<'a> Parser<'a> {
         if_exists: bool,
     ) -> Result<Statement<Raw>, ParserError> {
         let names = self.parse_comma_separated(|p| {
-            Ok(UnresolvedName::ClusterReplica(
+            Ok(UnresolvedObjectName::ClusterReplica(
                 p.parse_cluster_replica_name()?,
             ))
         })?;
@@ -3357,7 +3362,7 @@ impl<'a> Parser<'a> {
         let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
         self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let table_name = self.parse_object_name()?;
+        let table_name = self.parse_item_name()?;
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns(Mandatory)?;
 
@@ -3399,7 +3404,7 @@ impl<'a> Parser<'a> {
             } else if let Some(column_name) = self.consume_identifier() {
                 let data_type = self.parse_data_type()?;
                 let collation = if self.parse_keyword(COLLATE) {
-                    Some(self.parse_object_name()?)
+                    Some(self.parse_item_name()?)
                 } else {
                     None
                 };
@@ -3458,7 +3463,7 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(UNIQUE) {
             ColumnOption::Unique { is_primary: false }
         } else if self.parse_keyword(REFERENCES) {
-            let foreign_table = self.parse_object_name()?;
+            let foreign_table = self.parse_item_name()?;
             let referred_columns = self.parse_parenthesized_column_list(Mandatory)?;
             ColumnOption::ForeignKey {
                 foreign_table,
@@ -3633,7 +3638,7 @@ impl<'a> Parser<'a> {
             ObjectType::Connection => self.parse_alter_connection(),
             ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
                 let if_exists = self.parse_if_exists()?;
-                let name = self.parse_object_name()?;
+                let name = self.parse_item_name()?;
                 let action = self.expect_one_of_keywords(&[RENAME, OWNER])?;
                 self.expect_keyword(TO)?;
                 match action {
@@ -3651,7 +3656,7 @@ impl<'a> Parser<'a> {
                         Ok(Statement::AlterOwner(AlterOwnerStatement {
                             object_type,
                             if_exists,
-                            name: UnresolvedName::Item(name),
+                            name: UnresolvedObjectName::Item(name),
                             new_owner,
                         }))
                     }
@@ -3660,7 +3665,7 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Type => {
                 let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedName::Item(self.parse_object_name()?);
+                let name = UnresolvedObjectName::Item(self.parse_item_name()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
@@ -3672,7 +3677,7 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Cluster => {
                 let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedName::Cluster(self.parse_identifier()?);
+                let name = UnresolvedObjectName::Cluster(self.parse_identifier()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
@@ -3684,7 +3689,7 @@ impl<'a> Parser<'a> {
             }
             ObjectType::ClusterReplica => {
                 let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedName::ClusterReplica(self.parse_cluster_replica_name()?);
+                let name = UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
@@ -3696,7 +3701,7 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Database => {
                 let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedName::Database(self.parse_database_name()?);
+                let name = UnresolvedObjectName::Database(self.parse_database_name()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
@@ -3708,7 +3713,7 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Schema => {
                 let if_exists = self.parse_if_exists()?;
-                let name = UnresolvedName::Schema(self.parse_schema_name()?);
+                let name = UnresolvedObjectName::Schema(self.parse_schema_name()?);
                 self.expect_keywords(&[OWNER, TO])?;
                 let new_owner = self.parse_identifier()?;
                 Ok(Statement::AlterOwner(AlterOwnerStatement {
@@ -3728,7 +3733,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_source(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
 
         Ok(
             match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
@@ -3772,7 +3777,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Source,
                         if_exists,
-                        name: UnresolvedName::Item(name),
+                        name: UnresolvedObjectName::Item(name),
                         new_owner,
                     })
                 }
@@ -3783,7 +3788,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
 
         Ok(
             match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
@@ -3827,7 +3832,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Index,
                         if_exists,
-                        name: UnresolvedName::Item(name),
+                        name: UnresolvedObjectName::Item(name),
                         new_owner,
                     })
                 }
@@ -3838,7 +3843,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
 
         Ok(match self.expect_one_of_keywords(&[AS, RENAME, OWNER])? {
             AS => {
@@ -3867,7 +3872,7 @@ impl<'a> Parser<'a> {
                 Statement::AlterOwner(AlterOwnerStatement {
                     object_type: ObjectType::Secret,
                     if_exists,
-                    name: UnresolvedName::Item(name),
+                    name: UnresolvedObjectName::Item(name),
                     new_owner,
                 })
             }
@@ -3878,7 +3883,7 @@ impl<'a> Parser<'a> {
     /// Parse an ALTER SINK statement.
     fn parse_alter_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
 
         Ok(
             match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
@@ -3923,7 +3928,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Sink,
                         if_exists,
-                        name: UnresolvedName::Item(name),
+                        name: UnresolvedObjectName::Item(name),
                         new_owner,
                     })
                 }
@@ -3962,7 +3967,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_connection(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
 
         Ok(
             match self.expect_one_of_keywords(&[RENAME, ROTATE, OWNER])? {
@@ -3989,7 +3994,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Connection,
                         if_exists,
-                        name: UnresolvedName::Item(name),
+                        name: UnresolvedObjectName::Item(name),
                         new_owner,
                     })
                 }
@@ -4294,7 +4299,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.prev_token();
                     RawDataType::Other {
-                        name: RawItemName::Name(self.parse_object_name()?),
+                        name: RawItemName::Name(self.parse_item_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
@@ -4396,7 +4401,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_deferred_object_name(&mut self) -> Result<DeferredItemName<Raw>, ParserError> {
+    fn parse_deferred_item_name(&mut self) -> Result<DeferredItemName<Raw>, ParserError> {
         Ok(match self.parse_raw_name()? {
             named @ RawItemName::Id(..) => DeferredItemName::Named(named),
             RawItemName::Name(name) => DeferredItemName::Deferred(name),
@@ -4410,7 +4415,7 @@ impl<'a> Parser<'a> {
                 _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
             };
             self.expect_keyword(AS)?;
-            let name = self.parse_object_name()?;
+            let name = self.parse_item_name()?;
             // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
             if name.0.len() < 2 {
                 return parser_err!(
@@ -4422,7 +4427,7 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RBracket)?;
             Ok(RawItemName::Id(id, name))
         } else {
-            Ok(RawItemName::Name(self.parse_object_name()?))
+            Ok(RawItemName::Name(self.parse_item_name()?))
         }
     }
 
@@ -4440,8 +4445,34 @@ impl<'a> Parser<'a> {
 
     /// Parse a possibly qualified, possibly quoted object identifier, e.g.
     /// `foo` or `myschema."table"`
-    fn parse_object_name(&mut self) -> Result<UnresolvedItemName, ParserError> {
+    fn parse_item_name(&mut self) -> Result<UnresolvedItemName, ParserError> {
         Ok(UnresolvedItemName(self.parse_identifiers()?))
+    }
+
+    /// Parse an object name.
+    fn parse_object_name(
+        &mut self,
+        object_type: ObjectType,
+    ) -> Result<UnresolvedObjectName, ParserError> {
+        Ok(match object_type {
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
+            ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
+            ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
+            ObjectType::ClusterReplica => {
+                UnresolvedObjectName::ClusterReplica(self.parse_cluster_replica_name()?)
+            }
+            ObjectType::Database => UnresolvedObjectName::Database(self.parse_database_name()?),
+            ObjectType::Schema => UnresolvedObjectName::Schema(self.parse_schema_name()?),
+        })
     }
 
     ///Parse one or more simple one-word identifiers separated by a '.'
@@ -4566,7 +4597,7 @@ impl<'a> Parser<'a> {
 
     fn parse_delete(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(FROM)?;
-        let table_name = RawItemName::Name(self.parse_object_name()?);
+        let table_name = RawItemName::Name(self.parse_item_name()?);
         let alias = self.parse_optional_table_alias()?;
         let using = if self.parse_keyword(USING) {
             self.parse_comma_separated(Parser::parse_table_and_joins)?
@@ -5249,7 +5280,7 @@ impl<'a> Parser<'a> {
             } else if self.parse_keywords(&[ROWS, FROM]) {
                 return self.parse_rows_from();
             } else {
-                let name = self.parse_object_name()?;
+                let name = self.parse_item_name()?;
                 self.expect_token(&Token::LParen)?;
                 let args = self.parse_optional_args(false)?;
                 let alias = self.parse_optional_table_alias()?;
@@ -5349,7 +5380,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_table_function(&mut self) -> Result<TableFunction<Raw>, ParserError> {
-        let name = self.parse_object_name()?;
+        let name = self.parse_item_name()?;
         self.expect_token(&Token::LParen)?;
         Ok(TableFunction {
             name,
@@ -5420,7 +5451,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let table_name = RawItemName::Name(self.parse_object_name()?);
+        let table_name = RawItemName::Name(self.parse_item_name()?);
 
         self.expect_keyword(SET)?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;
@@ -5899,27 +5930,117 @@ impl<'a> Parser<'a> {
     /// Parse a `GRANT` statement, assuming that the `GRANT` token
     /// has already been consumed.
     fn parse_grant(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let role_name = self.parse_identifier()?;
-        self.expect_keyword(TO)?;
-        let _ = self.parse_keyword(GROUP);
-        let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
-        Ok(Statement::GrantRole(GrantRoleStatement {
-            role_name,
-            member_names,
-        }))
+        match self.parse_privileges() {
+            Some(privileges) => {
+                self.expect_keyword(ON)?;
+                // If the object type is omitted, then it is assumed to be a table.
+                let object_type = self.parse_object_type().unwrap_or(ObjectType::Table);
+                match object_type {
+                    ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            format!("For object type {object_type}, you must specify 'TABLE' or omit the object type")
+                        );
+                    }
+                    ObjectType::Sink
+                    | ObjectType::Index
+                    | ObjectType::ClusterReplica
+                    | ObjectType::Role
+                    | ObjectType::Func => {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            format!("Unsupported GRANT on {object_type}")
+                        );
+                    }
+                    ObjectType::Table
+                    | ObjectType::Type
+                    | ObjectType::Cluster
+                    | ObjectType::Secret
+                    | ObjectType::Connection
+                    | ObjectType::Database
+                    | ObjectType::Schema => {}
+                }
+                let name = self.parse_object_name(object_type)?;
+                self.expect_keyword(TO)?;
+                let role = self.parse_identifier()?;
+                Ok(Statement::GrantPrivilege(GrantPrivilegeStatement {
+                    privileges,
+                    object_type,
+                    name,
+                    role,
+                }))
+            }
+            None => {
+                let role_name = self.parse_identifier()?;
+                self.expect_keyword(TO)?;
+                let _ = self.parse_keyword(GROUP);
+                let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
+                Ok(Statement::GrantRole(GrantRoleStatement {
+                    role_name,
+                    member_names,
+                }))
+            }
+        }
     }
 
     /// Parse a `REVOKE` statement, assuming that the `REVOKE` token
     /// has already been consumed.
     fn parse_revoke(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let role_name = self.parse_identifier()?;
-        self.expect_keyword(FROM)?;
-        let _ = self.parse_keyword(GROUP);
-        let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
-        Ok(Statement::RevokeRole(RevokeRoleStatement {
-            role_name,
-            member_names,
-        }))
+        match self.parse_privileges() {
+            Some(privileges) => {
+                self.expect_keyword(ON)?;
+                // If the object type is omitted, then it is assumed to be a table.
+                let object_type = self.parse_object_type().unwrap_or(ObjectType::Table);
+                match object_type {
+                    ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            format!("For object type {object_type}, you must specify 'TABLE' or omit the object type")
+                        );
+                    }
+                    ObjectType::Sink
+                    | ObjectType::Index
+                    | ObjectType::ClusterReplica
+                    | ObjectType::Role
+                    | ObjectType::Func => {
+                        return parser_err!(
+                            self,
+                            self.peek_prev_pos(),
+                            format!("Unsupported REVOKE on {object_type}")
+                        );
+                    }
+                    ObjectType::Table
+                    | ObjectType::Type
+                    | ObjectType::Cluster
+                    | ObjectType::Secret
+                    | ObjectType::Connection
+                    | ObjectType::Database
+                    | ObjectType::Schema => {}
+                }
+                let name = self.parse_object_name(object_type)?;
+                self.expect_keyword(FROM)?;
+                let role = self.parse_identifier()?;
+                Ok(Statement::RevokePrivilege(RevokePrivilegeStatement {
+                    privileges,
+                    object_type,
+                    name,
+                    role,
+                }))
+            }
+            None => {
+                let role_name = self.parse_identifier()?;
+                self.expect_keyword(FROM)?;
+                let _ = self.parse_keyword(GROUP);
+                let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
+                Ok(Statement::RevokeRole(RevokeRoleStatement {
+                    role_name,
+                    member_names,
+                }))
+            }
+        }
     }
 
     /// Bail out if the current token is not an object type, or consume and return it if it is.
@@ -5947,6 +6068,58 @@ impl<'a> Parser<'a> {
                 MATERIALIZED => {
                     self.expect_keyword(VIEW)?;
                     ObjectType::MaterializedView
+                }
+                SOURCE => ObjectType::Source,
+                SINK => ObjectType::Sink,
+                INDEX => ObjectType::Index,
+                TYPE => ObjectType::Type,
+                ROLE | USER => ObjectType::Role,
+                CLUSTER => {
+                    if self.parse_keyword(REPLICA) {
+                        ObjectType::ClusterReplica
+                    } else {
+                        ObjectType::Cluster
+                    }
+                }
+                SECRET => ObjectType::Secret,
+                CONNECTION => ObjectType::Connection,
+                DATABASE => ObjectType::Database,
+                SCHEMA => ObjectType::Schema,
+                FUNCTION => ObjectType::Func,
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    /// Look for an object type and return it if it matches.
+    fn parse_object_type(&mut self) -> Option<ObjectType> {
+        Some(
+            match self.parse_one_of_keywords(&[
+                TABLE,
+                VIEW,
+                MATERIALIZED,
+                SOURCE,
+                SINK,
+                INDEX,
+                TYPE,
+                ROLE,
+                USER,
+                CLUSTER,
+                SECRET,
+                CONNECTION,
+                DATABASE,
+                SCHEMA,
+                FUNCTION,
+            ])? {
+                TABLE => ObjectType::Table,
+                VIEW => ObjectType::View,
+                MATERIALIZED => {
+                    if self.parse_keyword(VIEW) {
+                        ObjectType::MaterializedView
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
                 }
                 SOURCE => ObjectType::Source,
                 SINK => ObjectType::Sink,
@@ -6021,6 +6194,38 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
         )
+    }
+
+    /// Look for a privilege and return it if it matches.
+    fn parse_privilege(&mut self) -> Option<Privilege> {
+        Some(
+            match self.parse_one_of_keywords(&[INSERT, SELECT, UPDATE, DELETE, USAGE, CREATE])? {
+                INSERT => Privilege::INSERT,
+                SELECT => Privilege::SELECT,
+                UPDATE => Privilege::UPDATE,
+                DELETE => Privilege::DELETE,
+                USAGE => Privilege::USAGE,
+                CREATE => Privilege::CREATE,
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    /// Parse one or more privileges separated by a ','.
+    fn parse_privileges(&mut self) -> Option<Vec<Privilege>> {
+        let mut privileges = Vec::new();
+        while let Some(privilege) = self.parse_privilege() {
+            privileges.push(privilege);
+            if !self.consume_token(&Token::Comma) {
+                break;
+            }
+        }
+
+        if privileges.is_empty() {
+            None
+        } else {
+            Some(privileges)
+        }
     }
 }
 

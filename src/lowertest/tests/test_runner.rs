@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -212,7 +210,10 @@ mod tests {
                 }
             } else if type_name == "usize" {
                 if let TokenTree::Literal(literal) = first_arg {
-                    let litval = literal.to_string().parse::<usize>().map_err_to_string()?;
+                    let litval = literal
+                        .to_string()
+                        .parse::<usize>()
+                        .map_err_to_string_with_causes()?;
                     return Ok(Some(format!("{}", litval + 1)));
                 }
             }
@@ -254,7 +255,7 @@ mod tests {
         let result: Option<TestEnum> = create_test_enum(s, args)?;
         // 2) Go from TestEnum back to a new spec.
         let (json, new_s) = if let Some(result) = &result {
-            let json = serde_json::to_value(result).map_err_to_string()?;
+            let json = serde_json::to_value(result).map_err_to_string_with_causes()?;
             let new_s = if args.get("override").is_some() {
                 serialize::<TestEnum, _>(
                     &json,

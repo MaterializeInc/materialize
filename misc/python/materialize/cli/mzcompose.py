@@ -90,6 +90,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     )
     BuildCommand.register(parser, subparsers)
     ConfigCommand.register(parser, subparsers)
+    CpCommand.register(parser, subparsers)
     CreateCommand.register(parser, subparsers)
     DescribeCommand().register(parser, subparsers)
     DownCommand().register(parser, subparsers)
@@ -424,6 +425,8 @@ class DockerComposeCommand(Command):
                 # coverage directory as the current user, so Docker doesn't create
                 # it as root.
                 (composition.path / "coverage").mkdir(exist_ok=True)
+                # Need materialize user to be able to write to coverage
+                os.chmod(composition.path / "coverage", 0o777)
             self.check_docker_resource_limits()
             composition.dependencies.acquire()
 
@@ -595,6 +598,7 @@ To see the available workflows, run:
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")
 ConfigCommand = DockerComposeCommand("config", "validate and view the Compose file")
+CpCommand = DockerComposeCommand("cp", "copy files/folders", runs_containers=True)
 CreateCommand = DockerComposeCommand("create", "create services", runs_containers=True)
 
 

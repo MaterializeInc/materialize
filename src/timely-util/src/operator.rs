@@ -10,10 +10,13 @@
 //! Common operator transformations on timely streams and differential collections.
 
 use std::future::Future;
+use std::rc::Weak;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::trace::{Batch, Trace, TraceReader};
+use differential_dataflow::{AsCollection, Collection, Hashable};
+
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -143,6 +146,11 @@ where
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
     fn pass_through<R: Data>(&self, name: &str, unit: R) -> Stream<G, (D1, G::Timestamp, R)>;
+
+    /// Wraps the stream with an operator that passes through all received inputs as long as the
+    /// provided token can be upgraded. Once the token cannot be upgraded anymore, all data flowing
+    /// into the operator is dropped.
+    fn with_token(&self, token: Weak<()>) -> Stream<G, D1>;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -207,6 +215,21 @@ where
         E: Data,
         IE: Fn(D1, R) -> (E, R) + 'static,
         R: num_traits::sign::Signed;
+
+    /// Wraps the collection with an operator that passes through all received inputs as long as
+    /// the provided token can be upgraded. Once the token cannot be upgraded anymore, all data
+    /// flowing into the operator is dropped.
+    fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
+
+    /// Consolidates the collection if `must_consolidate` is `true` and leaves it
+    /// untouched otherwise.
+    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hashable,
+        R: Semigroup + differential_dataflow::ExchangeData,
+        G::Timestamp: Lattice,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr::Batch: Batch;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -390,6 +413,20 @@ where
             }
         })
     }
+
+    fn with_token(&self, token: Weak<()>) -> Stream<G, D1> {
+        self.unary(Pipeline, "WithToken", move |_cap, _info| {
+            let mut vector = Default::default();
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    if token.upgrade().is_some() {
+                        data.swap(&mut vector);
+                        output.session(&cap).give_container(&mut vector);
+                    }
+                });
+            }
+        })
+    }
 }
 
 impl<G, D1, R> CollectionExt<G, D1, R> for Collection<G, D1, R>
@@ -478,6 +515,25 @@ where
                 })
             });
         (oks.as_collection(), errs.as_collection())
+    }
+
+    fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R> {
+        self.inner.with_token(token).as_collection()
+    }
+
+    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hashable,
+        R: Semigroup + differential_dataflow::ExchangeData,
+        G::Timestamp: Lattice,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr::Batch: Batch,
+    {
+        if must_consolidate {
+            self.consolidate_named::<Tr>(name)
+        } else {
+            self
+        }
     }
 }
 

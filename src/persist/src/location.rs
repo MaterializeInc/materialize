@@ -15,6 +15,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
 use mz_proto::RustType;
 use serde::{Deserialize, Serialize};
@@ -394,7 +395,7 @@ pub const BLOB_GET_LIVENESS_KEY: &str = "LIVENESS";
 #[async_trait]
 pub trait Blob: std::fmt::Debug {
     /// Returns a reference to the value corresponding to the key.
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError>;
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError>;
 
     /// List all of the keys in the map with metadata about the entry.
     ///
@@ -488,15 +489,27 @@ pub mod tests {
         blob0
             .set(k0, values[0].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob0.get(k0).await?, Some(values[0].clone()));
-        assert_eq!(blob1.get(k0).await?, Some(values[0].clone()));
+        assert_eq!(
+            blob0.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[0].clone())
+        );
+        assert_eq!(
+            blob1.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[0].clone())
+        );
 
         // Set a key with RequireAtomic and get it back.
         blob0
             .set("k0a", values[0].clone().into(), RequireAtomic)
             .await?;
-        assert_eq!(blob0.get("k0a").await?, Some(values[0].clone()));
-        assert_eq!(blob1.get("k0a").await?, Some(values[0].clone()));
+        assert_eq!(
+            blob0.get("k0a").await?.map(|s| s.into_contiguous()),
+            Some(values[0].clone())
+        );
+        assert_eq!(
+            blob1.get("k0a").await?.map(|s| s.into_contiguous()),
+            Some(values[0].clone())
+        );
 
         // Blob contains the key we just inserted.
         let mut blob_keys = get_keys(&blob0).await?;
@@ -510,14 +523,26 @@ pub mod tests {
         blob0
             .set(k0, values[1].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob0.get(k0).await?, Some(values[1].clone()));
-        assert_eq!(blob1.get(k0).await?, Some(values[1].clone()));
+        assert_eq!(
+            blob0.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
+        assert_eq!(
+            blob1.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
         // Can overwrite a key with RequireAtomic.
         blob0
             .set("k0a", values[1].clone().into(), RequireAtomic)
             .await?;
-        assert_eq!(blob0.get("k0a").await?, Some(values[1].clone()));
-        assert_eq!(blob1.get("k0a").await?, Some(values[1].clone()));
+        assert_eq!(
+            blob0.get("k0a").await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
+        assert_eq!(
+            blob1.get("k0a").await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
 
         // Can delete a key.
         assert_eq!(blob0.delete(k0).await, Ok(Some(2)));
@@ -545,8 +570,14 @@ pub mod tests {
         blob0
             .set(k0, values[1].clone().into(), AllowNonAtomic)
             .await?;
-        assert_eq!(blob1.get(k0).await?, Some(values[1].clone()));
-        assert_eq!(blob0.get(k0).await?, Some(values[1].clone()));
+        assert_eq!(
+            blob1.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
+        assert_eq!(
+            blob0.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
 
         // Insert multiple keys back to back and validate that we can list
         // them all out.
@@ -588,7 +619,10 @@ pub mod tests {
 
         // We can open a new blob to the same path and use it.
         let blob3 = new_fn("path0").await?;
-        assert_eq!(blob3.get(k0).await?, Some(values[1].clone()));
+        assert_eq!(
+            blob3.get(k0).await?.map(|s| s.into_contiguous()),
+            Some(values[1].clone())
+        );
 
         Ok(())
     }

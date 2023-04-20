@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -87,13 +85,14 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Context;
 use clap::Parser;
 use once_cell::sync::Lazy;
 
 use mz_adapter::{
     catalog::{
         storage::{self as catalog, BootstrapArgs},
-        Catalog, Config,
+        Catalog, ClusterReplicaSizeMap, Config,
     },
     DUMMY_AVAILABILITY_ZONE,
 };
@@ -137,7 +136,9 @@ enum Action {
     /// or error message. Exits with 0 if the upgrade would succeed, otherwise
     /// non-zero. Can be used on a running environmentd. Operates without
     /// interfering with it or committing any data to that stash.
-    UpgradeCheck,
+    UpgradeCheck {
+        cluster_replica_sizes: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -180,10 +181,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             let stash = factory.open(args.postgres_url, None, tls).await?;
             edit(stash, usage, collection, key, value).await
         }
-        Action::UpgradeCheck => {
+        Action::UpgradeCheck {
+            cluster_replica_sizes,
+        } => {
             // upgrade needs fake writes, so use a savepoint.
             let stash = factory.open_savepoint(args.postgres_url, tls).await?;
-            upgrade_check(stash, usage).await
+            let cluster_replica_sizes: ClusterReplicaSizeMap = match cluster_replica_sizes {
+                None => Default::default(),
+                Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
+            };
+            upgrade_check(stash, usage, cluster_replica_sizes).await
         }
     }
 }
@@ -206,8 +213,12 @@ async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<
     write!(&mut target, "\n")?;
     Ok(())
 }
-async fn upgrade_check(stash: Stash, usage: Usage) -> Result<(), anyhow::Error> {
-    let msg = usage.upgrade_check(stash).await?;
+async fn upgrade_check(
+    stash: Stash,
+    usage: Usage,
+    cluster_replica_sizes: ClusterReplicaSizeMap,
+) -> Result<(), anyhow::Error> {
+    let msg = usage.upgrade_check(stash, cluster_replica_sizes).await?;
     println!("{msg}");
     Ok(())
 }
@@ -368,7 +379,11 @@ impl Usage {
         anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
     }
 
-    async fn upgrade_check(&self, stash: Stash) -> Result<String, anyhow::Error> {
+    async fn upgrade_check(
+        &self,
+        stash: Stash,
+        cluster_replica_sizes: ClusterReplicaSizeMap,
+    ) -> Result<String, anyhow::Error> {
         if !matches!(self, Self::Catalog) {
             anyhow::bail!("upgrade_check expected Catalog stash, found {:?}", self);
         }
@@ -394,7 +409,7 @@ impl Usage {
             now,
             skip_migrations: false,
             metrics_registry,
-            cluster_replica_sizes: Default::default(),
+            cluster_replica_sizes,
             default_storage_cluster_size: None,
             bootstrap_system_parameters: Default::default(),
             availability_zones: vec![],

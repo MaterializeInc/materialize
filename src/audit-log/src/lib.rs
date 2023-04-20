@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -220,11 +218,14 @@ pub enum EventDetails {
     CreateSourceSinkV2(CreateSourceSinkV2),
     AlterSourceSinkV1(AlterSourceSinkV1),
     GrantRoleV1(GrantRoleV1),
+    GrantRoleV2(GrantRoleV2),
     RevokeRoleV1(RevokeRoleV1),
+    RevokeRoleV2(RevokeRoleV2),
     IdFullNameV1(IdFullNameV1),
     RenameItemV1(RenameItemV1),
     IdNameV1(IdNameV1),
     SchemaV1(SchemaV1),
+    SchemaV2(SchemaV2),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -310,9 +311,25 @@ pub struct GrantRoleV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct GrantRoleV2 {
+    pub role_id: String,
+    pub member_id: String,
+    pub grantor_id: String,
+    pub executed_by: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct RevokeRoleV1 {
     pub role_id: String,
     pub member_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct RevokeRoleV2 {
+    pub role_id: String,
+    pub member_id: String,
+    pub grantor_id: String,
+    pub executed_by: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -320,6 +337,13 @@ pub struct SchemaV1 {
     pub id: String,
     pub name: String,
     pub database_name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct SchemaV2 {
+    pub id: String,
+    pub name: String,
+    pub database_name: Option<String>,
 }
 
 impl EventDetails {
@@ -335,11 +359,14 @@ impl EventDetails {
             EventDetails::RenameItemV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::IdNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::SchemaV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::SchemaV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::GrantRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::GrantRoleV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::RevokeRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::RevokeRoleV2(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }

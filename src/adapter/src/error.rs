@@ -15,6 +15,7 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_repr::adt::timestamp::TimestampError;
+use smallvec::SmallVec;
 use tokio::sync::oneshot;
 
 use mz_compute_client::controller::error as compute_error;
@@ -145,6 +146,11 @@ pub enum AdapterError {
     SubscribeOnlyTransaction,
     /// An error occurred in the MIR stage of the optimizer.
     Transform(TransformError),
+    /// A query depends on items which are not allowed to be referenced from the current cluster.
+    UnallowedOnCluster {
+        depends_on: SmallVec<[String; 2]>,
+        cluster: String,
+    },
     /// A user tried to perform an action that they were unauthorized to do.
     Unauthorized(rbac::UnauthorizedError),
     /// The specified function cannot be called
@@ -193,10 +199,10 @@ pub enum AdapterError {
     Orchestrator(anyhow::Error),
     /// The active role was dropped while a user was logged in.
     ConcurrentRoleDrop(RoleId),
-    /// A statement tried to drop a role that still owned one or more objects.
+    /// A statement tried to drop a role that had dependent objects.
     ///
-    /// The map keys are role names and values are owned object names.
-    DependentObjectOwnership(BTreeMap<String, Vec<String>>),
+    /// The map keys are role names and values are detailed error messages.
+    DependentObject(BTreeMap<String, Vec<String>>),
 }
 
 impl AdapterError {
@@ -253,12 +259,12 @@ impl AdapterError {
             AdapterError::VarError(e) => e.detail(),
             AdapterError::ConcurrentRoleDrop(_) => Some("Please disconnect and re-connect with a valid role.".into()),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
-            AdapterError::DependentObjectOwnership(dependent_objects) => {
+            AdapterError::DependentObject(dependent_objects) => {
                 Some(dependent_objects
                     .iter()
-                    .map(|(role_name, object_names)| object_names
+                    .map(|(role_name, err_msgs)| err_msgs
                         .iter()
-                        .map(|object_name| format!("{role_name} is owner of {object_name}"))
+                        .map(|err_msg| format!("{role_name}: {err_msg}"))
                         .join("\n"))
                     .join("\n"))
             },
@@ -318,6 +324,10 @@ impl AdapterError {
             ),
             AdapterError::PlanError(e) => e.hint(),
             AdapterError::VarError(e) => e.hint(),
+            AdapterError::UnallowedOnCluster { .. } => Some(
+                "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -443,6 +453,17 @@ impl fmt::Display for AdapterError {
             AdapterError::UncallableFunction { func, context } => {
                 write!(f, "cannot call {} in {}", func, context)
             }
+            AdapterError::UnallowedOnCluster {
+                depends_on,
+                cluster,
+            } => {
+                let items = depends_on.into_iter().map(|item| item.quoted()).join(", ");
+                write!(
+                    f,
+                    "querying the following items {items} is not allowed from the {} cluster",
+                    cluster.quoted()
+                )
+            }
             AdapterError::Unauthorized(unauthorized) => {
                 write!(f, "{unauthorized}")
             }
@@ -488,7 +509,7 @@ impl fmt::Display for AdapterError {
             AdapterError::ConcurrentRoleDrop(role_id) => {
                 write!(f, "role {role_id} was concurrently dropped")
             }
-            AdapterError::DependentObjectOwnership(dependent_objects) => {
+            AdapterError::DependentObject(dependent_objects) => {
                 let role_str = if dependent_objects.keys().count() == 1 {
                     "role"
                 } else {

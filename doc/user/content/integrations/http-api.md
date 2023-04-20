@@ -65,7 +65,7 @@ Accessing the endpoint requires [basic authentication](https://developer.mozilla
 * **User ID:** Your email to access Materialize.
 * **Password:** Your app password.
 
-#### Query Parameters
+#### Query parameters
 
 You can optionally specify session variables for each request, as a URL-encoded JSON object, with the `options` query parameter:
 

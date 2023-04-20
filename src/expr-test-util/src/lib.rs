@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -271,7 +269,10 @@ impl MirScalarExprDeserializeContext {
     fn build_column(&mut self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
         if let Some(TokenTree::Literal(literal)) = token {
             return Ok(MirScalarExpr::Column(
-                literal.to_string().parse::<usize>().map_err_to_string()?,
+                literal
+                    .to_string()
+                    .parse::<usize>()
+                    .map_err_to_string_with_causes()?,
             ));
         }
         Err(format!(
@@ -357,7 +358,9 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
             None
         };
         match result {
-            Some(result) => Ok(Some(serde_json::to_string(&result).map_err_to_string()?)),
+            Some(result) => Ok(Some(
+                serde_json::to_string(&result).map_err_to_string_with_causes()?,
+            )),
             None => Ok(None),
         }
     }
@@ -612,7 +615,9 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                     if let Some(result) =
                         self.build_special_mir_if_able(first_arg, rest_of_stream)?
                     {
-                        return Ok(Some(serde_json::to_string(&result).map_err_to_string()?));
+                        return Ok(Some(
+                            serde_json::to_string(&result).map_err_to_string_with_causes()?,
+                        ));
                     }
                 } else if type_name == "usize" {
                     if let TokenTree::Punct(punct) = first_arg {

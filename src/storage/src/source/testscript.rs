@@ -55,9 +55,16 @@ impl SourceRender for TestScriptSourceConnection {
         _connection_context: ConnectionContext,
         _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     ) -> (
-        Collection<G, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>, Diff>,
+        Collection<
+            G,
+            (
+                usize,
+                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
+            ),
+            Diff,
+        >,
         Option<Stream<G, Infallible>>,
-        Stream<G, HealthStatusUpdate>,
+        Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name, scope.clone());
@@ -74,15 +81,16 @@ impl SourceRender for TestScriptSourceConnection {
                     ScriptCommand::Emit { key, value, offset } => {
                         // For now we only support `Finalized` messages
                         let msg = Ok(SourceMessage {
-                            // For now, we only support single-output, single partition
-                            output: 0,
                             upstream_time_millis: None,
                             key: key.map(|k| k.into_bytes()),
                             value: Some(value.into_bytes()),
                             headers: None,
                         });
                         let ts = MzOffset::from(offset);
-                        data_output.give(&cap.delayed(&ts), (msg, ts, 1)).await;
+
+                        // For now, we only support single-output, single partition, so output
+                        // to the 0th output.
+                        data_output.give(&cap.delayed(&ts), ((0, msg), ts, 1)).await;
                         cap.downgrade(&(ts + 1));
                     }
                     ScriptCommand::Terminate => return,
@@ -92,7 +100,7 @@ impl SourceRender for TestScriptSourceConnection {
             futures::future::pending::<()>().await;
         });
 
-        let status = [HealthStatusUpdate::from(HealthStatus::Running)].to_stream(scope);
+        let status = [(0, HealthStatusUpdate::status(HealthStatus::Running))].to_stream(scope);
         (
             stream.as_collection(),
             None,

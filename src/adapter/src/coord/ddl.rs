@@ -22,12 +22,15 @@ use tracing::{event, warn};
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{self, SystemVars, Var};
-use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
+use mz_storage_client::controller::{
+    CreateExportToken, ExportDescription, ReadPolicy, StorageError,
+};
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
 
@@ -116,9 +119,16 @@ impl Coordinator {
                                             .connection
                                             .config(&*self.connection_context.secrets_reader)
                                             .await
-                                            .unwrap_or_else(|e| {
-                                                panic!("Postgres source {id} missing secrets: {e}")
-                                            });
+                                            .map_err(|e| {
+                                                AdapterError::Storage(StorageError::Generic(
+                                                    anyhow::anyhow!(
+                                                        "error creating Postgres client for \
+                                                        dropping acquired slots: {}",
+                                                        e.display_with_causes()
+                                                    ),
+                                                ))
+                                            })?;
+
                                         replication_slots_to_drop
                                             .push((config, conn.publication_details.slot.clone()));
                                     }
@@ -822,7 +832,6 @@ impl Coordinator {
                     new_databases += 1;
                 }
                 Op::CreateSchema { database_id, .. } => {
-                    // Users can't create schemas in the ambient database.
                     if let ResolvedDatabaseSpecifier::Id(database_id) = database_id {
                         *new_schemas_per_database.entry(database_id).or_insert(0) += 1;
                     }
@@ -896,8 +905,10 @@ impl Coordinator {
                         ObjectId::Database(_) => {
                             new_databases -= 1;
                         }
-                        ObjectId::Schema((database_id, _)) => {
-                            *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
+                        ObjectId::Schema((database_spec, _)) => {
+                            if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
+                                *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
+                            }
                         }
                         ObjectId::Role(_) => {
                             new_roles -= 1;
@@ -949,6 +960,7 @@ impl Coordinator {
                 | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
+                | Op::UpdatePrivilege { .. }
                 | Op::GrantRole { .. }
                 | Op::RenameItem { .. }
                 | Op::UpdateOwner { .. }

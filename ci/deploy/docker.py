@@ -18,8 +18,8 @@ from materialize.xcompile import Arch
 
 def main() -> None:
     repos = [
-        mzbuild.Repository(Path("."), Arch.X86_64),
-        mzbuild.Repository(Path("."), Arch.AARCH64),
+        mzbuild.Repository(Path("."), Arch.X86_64, coverage=False),
+        mzbuild.Repository(Path("."), Arch.AARCH64, coverage=False),
     ]
     buildkite_tag = os.environ["BUILDKITE_TAG"]
 
@@ -29,7 +29,7 @@ def main() -> None:
         # tags.
         return image.publish and (not buildkite_tag or image.mainline)
 
-    print(f"--- Tagging Docker images")
+    print("--- Tagging Docker images")
     deps = [
         repo.resolve_dependencies(image for image in repo if include_image(image))
         for repo in repos

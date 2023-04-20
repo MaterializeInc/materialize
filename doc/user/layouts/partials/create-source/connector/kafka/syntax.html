@@ -3,4 +3,3 @@
 **INCLUDE PARTITION** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause.
 **INCLUDE OFFSET** | Include an `offset` column containing the Kafka message offset. The column can be renamed with the optional **AS** *name* clause.
 **INCLUDE TIMESTAMP** | Include a `timestamp` column containing the Kafka message timestamp. The column can be renamed with the optional **AS** *name* clause. <br><br>Note that the timestamp of a Kafka message depends on how the topic and its producers are configured. See the [Confluent documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time) for details.
-**PRIMARY KEY (** _col_list_ **) NOT ENFORCED** | Declare a set of columns as a primary key. For more information, see [`Defining primary keys`](#defining-primary-keys).

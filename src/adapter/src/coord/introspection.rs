@@ -21,6 +21,7 @@
 use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::Plan;
+use smallvec::SmallVec;
 
 use crate::catalog::{Catalog, Cluster};
 use crate::notice::AdapterNotice;
@@ -39,15 +40,8 @@ pub fn auto_run_on_introspection<'a, 's>(
     session: &'s mut Session,
     depends_on: impl IntoIterator<Item = GlobalId>,
 ) -> Option<&'a Cluster> {
-    // We consider the feature to be enabled if we're in unsafe mode (e.g. testing) or
-    // the LaunchDarkly flag is set (e.g. in prod).
-    let feature_enabled = catalog.unsafe_mode()
-        || catalog
-            .system_config()
-            .enable_auto_route_introspection_queries();
-
-    // Bail if the feature isn't enabled, or the user has disabled it via the SessionVar.
-    if !feature_enabled || !session.vars().auto_route_introspection_queries() {
+    // Bail if the user has disabled it via the SessionVar.
+    if !session.vars().auto_route_introspection_queries() {
         return None;
     }
 
@@ -84,6 +78,50 @@ pub fn auto_run_on_introspection<'a, 's>(
         Some(intros_cluster)
     } else {
         None
+    }
+}
+
+/// Checks if we're currently running on the [`MZ_INTROSPECTION_CLUSTER`], and if so, do
+/// we depend on any objects that we're not allowed to query from the cluster.
+pub fn check_cluster_restrictions(
+    catalog: &impl SessionCatalog,
+    plan: &Plan,
+    depends_on: &Vec<GlobalId>,
+) -> Result<(), AdapterError> {
+    // We only impose restrictions if the current cluster is the introspection cluster.
+    let cluster = catalog.active_cluster();
+    if cluster != MZ_INTROSPECTION_CLUSTER.name {
+        return Ok(());
+    }
+
+    // Allows explain queries.
+    if let Plan::Explain(_) = plan {
+        return Ok(());
+    }
+
+    // Collect any items that are not allowed to be run on the introspection cluster.
+    let unallowed_dependents: SmallVec<[String; 2]> = depends_on
+        .iter()
+        .filter_map(|id| {
+            let item = catalog.get_item(id);
+            let full_name = catalog.resolve_full_name(item.name());
+
+            if !catalog.is_system_schema(&full_name.schema) {
+                Some(full_name.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // If the query depends on unallowed items, error out.
+    if !unallowed_dependents.is_empty() {
+        Err(AdapterError::UnallowedOnCluster {
+            depends_on: unallowed_dependents,
+            cluster: MZ_INTROSPECTION_CLUSTER.name.to_string(),
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -171,6 +209,8 @@ pub fn user_privilege_hack(
         | Plan::RotateKeys(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
+        | Plan::GrantPrivilege(_)
+        | Plan::RevokePrivilege(_)
         | Plan::CopyRows(_) => {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::Privilege {

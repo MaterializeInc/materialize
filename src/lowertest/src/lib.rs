@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -126,7 +124,7 @@ pub struct ReflectedTypeInfo {
 
 /// Converts `s` into a [proc_macro2::TokenStream]
 pub fn tokenize(s: &str) -> Result<TokenStream, String> {
-    s.parse::<TokenStream>().map_err_to_string()
+    s.parse::<TokenStream>().map_err_to_string_with_causes()
 }
 
 /// Changes `"\"foo\""` to `"foo"`

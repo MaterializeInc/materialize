@@ -17,5 +17,4 @@ SELECT rolname FROM pg_roles ORDER BY oid
 ----
 mz_system
 mz_introspection
-default_owner
 materialize

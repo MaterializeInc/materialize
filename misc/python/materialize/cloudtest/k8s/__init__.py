@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import subprocess
 from typing import Any, Optional
 
@@ -68,7 +69,10 @@ class K8sResource:
         if tag is not None:
             return f"materialize/{service}:{tag}"
         else:
-            repo = mzbuild.Repository(ROOT, release_mode=release_mode)
+            coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+            repo = mzbuild.Repository(
+                ROOT, release_mode=release_mode, coverage=coverage
+            )
             deps = repo.resolve_dependencies([repo.images[service]])
             rimage = deps[service]
             return rimage.spec()
@@ -141,10 +145,11 @@ class K8sService(K8sResource):
         self,
         port: Optional[str] = None,
         user: str = "materialize",
+        autocommit: bool = True,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the service"""
         conn = self.sql_conn(port=port, user=user)
-        conn.autocommit = True
+        conn.autocommit = autocommit
         return conn.cursor()
 
     def sql(

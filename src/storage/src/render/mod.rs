@@ -227,14 +227,14 @@ mod upsert;
 pub fn build_ingestion_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
-    id: GlobalId,
+    primary_source_id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<mz_repr::Timestamp>,
     source_resume_upper: Vec<Row>,
 ) {
     let worker_id = timely_worker.index();
     let worker_logging = timely_worker.log_register().get("timely");
-    let debug_name = id.to_string();
+    let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
         // Here we need to create two scopes. One timestamped with `()`, which is the root scope,
@@ -246,11 +246,10 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let mut tokens = vec![];
 
-            let (outputs, token) = crate::render::sources::render_source(
-                root_scope,
+            let (mut outputs, health_stream, token) = crate::render::sources::render_source(
                 into_time_scope,
                 &debug_name,
-                id,
+                primary_source_id,
                 description.clone(),
                 resume_upper,
                 source_resume_upper,
@@ -258,14 +257,18 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             );
             tokens.push(token);
 
-            for (target, export) in description.source_exports {
-                let (ok, err) = &outputs[export.output_index];
+            let mut health_configs = BTreeMap::new();
+
+            for (export_id, export) in description.source_exports {
+                let (ok, err) = outputs
+                    .get_mut(export.output_index)
+                    .expect("known to exist");
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
                 let metrics = SourcePersistSinkMetrics::new(
                     &storage_state.source_metrics,
-                    target,
-                    id,
+                    export_id,
+                    primary_source_id,
                     worker_id,
                     &export.storage_metadata.data_shard,
                     export.output_index,
@@ -290,12 +293,12 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     .enable_multi_worker_storage_persist_sink
                 {
                     tracing::info!(
-                        "timely-{worker_id} rendering {target} with multi-worker persist_sink",
+                        "timely-{worker_id} rendering {export_id} with multi-worker persist_sink",
                     );
                     crate::render::multi_worker_persist_sink::render(
                         into_time_scope,
-                        target,
-                        export.storage_metadata,
+                        export_id,
+                        export.storage_metadata.clone(),
                         source_data,
                         storage_state,
                         metrics,
@@ -303,22 +306,35 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     )
                 } else {
                     tracing::info!(
-                        "timely-{worker_id} rendering {target} with single-worker persist_sink",
+                        "timely-{worker_id} rendering {export_id} with single-worker persist_sink",
                     );
                     crate::render::persist_sink::render(
                         into_time_scope,
-                        target,
+                        export_id,
                         export.output_index,
-                        export.storage_metadata,
+                        export.storage_metadata.clone(),
                         source_data,
                         storage_state,
                         metrics,
                     )
                 };
                 tokens.push(token);
+
+                health_configs.insert(export.output_index, (export_id, export.storage_metadata));
             }
 
-            storage_state.source_tokens.insert(id, Rc::new(tokens));
+            let health_token = crate::source::health_operator(
+                into_time_scope,
+                storage_state,
+                primary_source_id,
+                &health_stream,
+                health_configs,
+            );
+            tokens.push(health_token);
+
+            storage_state
+                .source_tokens
+                .insert(primary_source_id, Rc::new(tokens));
         })
     });
 }

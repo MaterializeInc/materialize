@@ -21,8 +21,7 @@ s2 mz_introspection true false false false
 query TBBBB
 SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 'u%'
 ----
-materialize true false false false
-default_owner true false false false
+materialize  true  false  false  false
 
 # Give materialize the CREATEROLE attribute.
 simple conn=mz_system,user=mz_system
@@ -55,11 +54,10 @@ CREATE USER fms
 query TBBBB
 SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles
 ----
-rj true false false false
-mz_system true true true true
-materialize true true false false
-default_owner true false false false
-mz_introspection true false false false
+rj  true  false  false  false
+mz_system  true  true  true  true
+materialize  true  true  false  false
+mz_introspection  true  false  false  false
 
 # Dropping multiple roles should not have any effect if one of the role names
 # is bad...
@@ -72,7 +70,6 @@ SELECT name FROM mz_roles
 rj
 mz_system
 materialize
-default_owner
 mz_introspection
 
 # ...unless IF EXISTS is specified.
@@ -84,7 +81,6 @@ SELECT name FROM mz_roles
 ----
 mz_system
 materialize
-default_owner
 mz_introspection
 
 # Verify that the single name version of DROP ROLE works too.
@@ -97,7 +93,6 @@ SELECT name FROM mz_roles
 nlb
 mz_system
 materialize
-default_owner
 mz_introspection
 
 statement ok
@@ -108,7 +103,6 @@ SELECT name FROM mz_roles
 ----
 mz_system
 materialize
-default_owner
 mz_introspection
 
 statement ok
@@ -247,5 +241,5 @@ DROP ROLE foo
 simple conn=foo,user=foo
 SELECT current_user();
 ----
-db error: ERROR: role u5 was concurrently dropped
+db error: ERROR: role u4 was concurrently dropped
 DETAIL: Please disconnect and re-connect with a valid role.

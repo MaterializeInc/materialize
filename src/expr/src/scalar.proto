@@ -643,6 +643,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty or = 26;
         mz_repr.relation_and_scalar.ProtoScalarType range_create = 27;
         google.protobuf.Empty make_mz_acl_item = 28;
+        google.protobuf.Empty translate = 29;
     }
 }
 

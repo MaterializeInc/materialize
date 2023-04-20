@@ -1329,6 +1329,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 limit,
                 offset,
                 monotonic,
+                expected_group_size,
             } => {
                 let arity = input.arity();
                 let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
@@ -1340,6 +1341,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     *limit,
                     arity,
                     *monotonic,
+                    *expected_group_size,
                 );
 
                 // We don't have an MFP here -- install an operator to permute the
@@ -1568,12 +1570,40 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
     /// Convert the dataflow description into one that uses render plans.
     #[tracing::instrument(
-        target = "optimizer"
+        target = "optimizer",
         level = "debug",
         skip_all,
-        fields(path.segment = "mir_to_lir")
+        fields(path.segment = "finalize_dataflow")
     )]
     pub fn finalize_dataflow(
+        desc: DataflowDescription<OptimizedMirRelationExpr>,
+        enable_monotonic_oneshot_selects: bool,
+    ) -> Result<DataflowDescription<Self>, String> {
+        // First, we lower the dataflow description from MIR to LIR.
+        let mut dataflow = Self::lower_dataflow(desc)?;
+
+        // Subsequently, we perform plan refinements for the dataflow.
+        Self::refine_source_mfps(&mut dataflow);
+
+        if enable_monotonic_oneshot_selects {
+            Self::refine_single_time_dataflow(&mut dataflow);
+        }
+
+        mz_repr::explain::trace_plan(&dataflow);
+
+        Ok(dataflow)
+    }
+
+    /// Lowers the dataflow description from MIR to LIR. To this end, the
+    /// method collects all available arrangements and based on this information
+    /// creates plans for every object to be built for the dataflow.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment ="mir_to_lir")
+    )]
+    fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
     ) -> Result<DataflowDescription<Self>, String> {
         // Collect available arrangements by identifier.
@@ -1617,7 +1647,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
-        let mut dataflow = DataflowDescription {
+        let dataflow = DataflowDescription {
             source_imports: desc.source_imports,
             index_imports: desc.index_imports,
             objects_to_build,
@@ -1628,6 +1658,20 @@ This is not expected to cause incorrect results, but could indicate a performanc
             debug_name: desc.debug_name,
         };
 
+        mz_repr::explain::trace_plan(&dataflow);
+
+        Ok(dataflow)
+    }
+
+    /// Refines the source instance descriptions for sources imported by `dataflow` to
+    /// push down common MFP expressions.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_source_mfps")
+    )]
+    fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
         // Extract MFPs from Get operators for sources, and extract what we can for the source.
         // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
         for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
@@ -1674,10 +1718,60 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 source.arguments.operators = Some(mfp);
             }
         }
+        mz_repr::explain::trace_plan(dataflow);
+    }
 
-        mz_repr::explain::trace_plan(&dataflow);
+    /// Refines the plans of objects to be built as part of `dataflow` to take advantage
+    /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
+    /// one-shot SELECT query.
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "refine_single_time_dataflow")
+    )]
+    fn refine_single_time_dataflow(dataflow: &mut DataflowDescription<Self>) {
+        // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
+        if !dataflow.is_single_time() {
+            return;
+        }
 
-        Ok(dataflow)
+        // Upgrade single-time plans to monotonic.
+        for build_desc in dataflow.objects_to_build.iter_mut() {
+            let mut todo = vec![&mut build_desc.plan];
+            while let Some(expression) = todo.pop() {
+                match expression {
+                    Plan::Reduce { plan, .. } => {
+                        // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
+                        match plan {
+                            ReducePlan::Collation(collation) => {
+                                collation.as_monotonic(true);
+                            }
+                            ReducePlan::Hierarchical(hierarchical) => {
+                                hierarchical.as_monotonic(true);
+                            }
+                            _ => {
+                                // Nothing to do for other plans, and doing nothing is safe for future variants.
+                            }
+                        }
+                        todo.extend(expression.children_mut());
+                    }
+                    Plan::TopK { top_k_plan, .. } => {
+                        top_k_plan.as_monotonic(true);
+                        todo.extend(expression.children_mut());
+                    }
+                    Plan::LetRec { body, .. } => {
+                        // Only the non-recursive `body` is restricted to a single time.
+                        todo.push(body);
+                    }
+                    _ => {
+                        // Nothing to do for other expressions, and doing nothing is safe for future expressions.
+                        todo.extend(expression.children_mut());
+                    }
+                }
+            }
+        }
+        mz_repr::explain::trace_plan(dataflow);
     }
 
     /// Partitions the plan into `parts` many disjoint pieces.
@@ -1941,6 +2035,26 @@ impl<T> CollectionPlan for Plan<T> {
             }
         }
     }
+}
+
+/// Returns bucket sizes, descending, suitable for hierarchical decomposition of an operator, based
+/// on the expected number of rows that will have the same group key.
+fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64> {
+    let mut buckets = vec![];
+    let mut current = 16;
+
+    // Plan for 4B records in the expected case if the user didn't specify a group size.
+    let limit = expected_group_size.unwrap_or(4_000_000_000);
+
+    // Distribute buckets in powers of 16, so that we can strike a balance between how many inputs
+    // each layer gets from the preceding layer, while also limiting the number of layers.
+    while current < limit {
+        buckets.push(current);
+        current = current.saturating_mul(16);
+    }
+
+    buckets.reverse();
+    buckets
 }
 
 #[cfg(test)]

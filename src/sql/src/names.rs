@@ -9,6 +9,7 @@
 
 //! Structured name types for SQL objects.
 
+use anyhow::anyhow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -23,6 +24,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::UnresolvedObjectName;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
@@ -251,7 +253,7 @@ impl From<Option<String>> for RawDatabaseSpecifier {
 }
 
 /// An id of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
@@ -275,9 +277,9 @@ impl AstDisplay for ResolvedDatabaseSpecifier {
     }
 }
 
-impl From<u64> for ResolvedDatabaseSpecifier {
-    fn from(id: u64) -> Self {
-        Self::Id(DatabaseId(id))
+impl From<DatabaseId> for ResolvedDatabaseSpecifier {
+    fn from(id: DatabaseId) -> Self {
+        Self::Id(id)
     }
 }
 
@@ -315,12 +317,13 @@ impl AstDisplay for SchemaSpecifier {
     }
 }
 
-impl From<u64> for SchemaSpecifier {
-    fn from(id: u64) -> Self {
-        if id == Self::TEMPORARY_SCHEMA_ID {
-            Self::Temporary
-        } else {
-            Self::Id(SchemaId(id))
+impl From<SchemaId> for SchemaSpecifier {
+    fn from(id: SchemaId) -> SchemaSpecifier {
+        match id {
+            SchemaId::User(id) if id == SchemaSpecifier::TEMPORARY_SCHEMA_ID => {
+                SchemaSpecifier::Temporary
+            }
+            schema_id => SchemaSpecifier::Id(schema_id),
         }
     }
 }
@@ -328,7 +331,7 @@ impl From<u64> for SchemaSpecifier {
 impl From<&SchemaSpecifier> for SchemaId {
     fn from(schema_spec: &SchemaSpecifier) -> Self {
         match schema_spec {
-            SchemaSpecifier::Temporary => SchemaId(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
             SchemaSpecifier::Id(id) => id.clone(),
         }
     }
@@ -337,21 +340,9 @@ impl From<&SchemaSpecifier> for SchemaId {
 impl From<SchemaSpecifier> for SchemaId {
     fn from(schema_spec: SchemaSpecifier) -> Self {
         match schema_spec {
-            SchemaSpecifier::Temporary => SchemaId(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
             SchemaSpecifier::Id(id) => id,
         }
-    }
-}
-
-impl From<&SchemaSpecifier> for u64 {
-    fn from(schema_spec: &SchemaSpecifier) -> Self {
-        SchemaId::from(schema_spec).0
-    }
-}
-
-impl From<SchemaSpecifier> for u64 {
-    fn from(schema_spec: SchemaSpecifier) -> Self {
-        SchemaId::from(schema_spec).0
     }
 }
 
@@ -442,6 +433,16 @@ pub enum ResolvedSchemaName {
 
 impl ResolvedSchemaName {
     /// Panics if this is `Self::Error`.
+    pub fn database_spec(&self) -> &ResolvedDatabaseSpecifier {
+        match self {
+            ResolvedSchemaName::Schema { database_spec, .. } => database_spec,
+            ResolvedSchemaName::Error => {
+                unreachable!("should have been handled by name resolution")
+            }
+        }
+    }
+
+    /// Panics if this is `Self::Error`.
     pub fn schema_spec(&self) -> &SchemaSpecifier {
         match self {
             ResolvedSchemaName::Schema { schema_spec, .. } => schema_spec,
@@ -473,6 +474,18 @@ pub enum ResolvedDatabaseName {
     Error,
 }
 
+impl ResolvedDatabaseName {
+    /// Panics if this is `Self::Error`.
+    pub fn database_id(&self) -> &DatabaseId {
+        match self {
+            ResolvedDatabaseName::Database { id, .. } => id,
+            ResolvedDatabaseName::Error => {
+                unreachable!("should have been handled by name resolution")
+            }
+        }
+    }
+}
+
 impl AstDisplay for ResolvedDatabaseName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
@@ -501,6 +514,18 @@ impl AstDisplay for ResolvedClusterName {
         } else {
             f.write_str(format!("[{}]", self.id))
         }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResolvedClusterReplicaName {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+}
+
+impl AstDisplay for ResolvedClusterReplicaName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("[{}.{}]", self.cluster_id, self.replica_id))
     }
 }
 
@@ -619,6 +644,29 @@ impl AstDisplay for ResolvedRoleName {
     }
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ResolvedObjectName {
+    Cluster(ResolvedClusterName),
+    ClusterReplica(ResolvedClusterReplicaName),
+    Database(ResolvedDatabaseName),
+    Schema(ResolvedSchemaName),
+    Role(ResolvedRoleName),
+    Item(ResolvedItemName),
+}
+
+impl AstDisplay for ResolvedObjectName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ResolvedObjectName::Cluster(n) => f.write_node(n),
+            ResolvedObjectName::ClusterReplica(n) => f.write_node(n),
+            ResolvedObjectName::Database(n) => f.write_node(n),
+            ResolvedObjectName::Schema(n) => f.write_node(n),
+            ResolvedObjectName::Role(n) => f.write_node(n),
+            ResolvedObjectName::Item(n) => f.write_node(n),
+        }
+    }
+}
+
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
     type ItemName = ResolvedItemName;
@@ -628,23 +676,32 @@ impl AstInfo for Aug {
     type DataType = ResolvedDataType;
     type CteId = LocalId;
     type RoleName = ResolvedRoleName;
+    type ObjectName = ResolvedObjectName;
 }
 
 /// The identifier for a schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct SchemaId(pub u64);
+pub enum SchemaId {
+    User(u64),
+    System(u64),
+}
 
 impl SchemaId {
-    /// Constructs a new schema identifier. It is the caller's responsibility
-    /// to provide a unique `id`.
-    pub fn new(id: u64) -> Self {
-        SchemaId(id)
+    pub fn is_user(&self) -> bool {
+        matches!(self, SchemaId::User(_))
+    }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, SchemaId::System(_))
     }
 }
 
 impl fmt::Display for SchemaId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            SchemaId::System(id) => write!(f, "s{}", id),
+            SchemaId::User(id) => write!(f, "u{}", id),
+        }
     }
 }
 
@@ -652,26 +709,47 @@ impl FromStr for SchemaId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: u64 = s.parse()?;
-        Ok(SchemaId(val))
+        if s.len() < 2 {
+            return Err(PlanError::Unstructured(format!(
+                "couldn't parse SchemaId {}",
+                s
+            )));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next() {
+            Some('s') => Ok(SchemaId::System(val)),
+            Some('u') => Ok(SchemaId::User(val)),
+            _ => Err(PlanError::Unstructured(format!(
+                "couldn't parse SchemaId {}",
+                s
+            ))),
+        }
     }
 }
 
 /// The identifier for a database.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct DatabaseId(pub u64);
+pub enum DatabaseId {
+    User(u64),
+    System(u64),
+}
 
 impl DatabaseId {
-    /// Constructs a new database identifier. It is the caller's responsibility
-    /// to provide a unique `id`.
-    pub fn new(id: u64) -> Self {
-        DatabaseId(id)
+    pub fn is_user(&self) -> bool {
+        matches!(self, DatabaseId::User(_))
+    }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, DatabaseId::System(_))
     }
 }
 
 impl fmt::Display for DatabaseId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            DatabaseId::System(id) => write!(f, "s{}", id),
+            DatabaseId::User(id) => write!(f, "u{}", id),
+        }
     }
 }
 
@@ -679,8 +757,21 @@ impl FromStr for DatabaseId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: u64 = s.parse()?;
-        Ok(DatabaseId(val))
+        if s.len() < 2 {
+            return Err(PlanError::Unstructured(format!(
+                "couldn't parse DatabaseId {}",
+                s
+            )));
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next() {
+            Some('s') => Ok(DatabaseId::System(val)),
+            Some('u') => Ok(DatabaseId::User(val)),
+            _ => Err(PlanError::Unstructured(format!(
+                "couldn't parse DatabaseId {}",
+                s
+            ))),
+        }
     }
 }
 
@@ -691,7 +782,7 @@ pub enum ObjectId {
     Cluster(ClusterId),
     ClusterReplica((ClusterId, ReplicaId)),
     Database(DatabaseId),
-    Schema((DatabaseId, SchemaId)),
+    Schema((ResolvedDatabaseSpecifier, SchemaId)),
     Role(RoleId),
     Item(GlobalId),
 }
@@ -715,7 +806,7 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_database_id called on {self:?}"),
         }
     }
-    pub fn unwrap_schema_id(self) -> (DatabaseId, SchemaId) {
+    pub fn unwrap_schema_id(self) -> (ResolvedDatabaseSpecifier, SchemaId) {
         match self {
             ObjectId::Schema(id) => id,
             _ => panic!("ObjectId::unwrap_schema_id called on {self:?}"),
@@ -731,6 +822,30 @@ impl ObjectId {
         match self {
             ObjectId::Item(id) => id,
             _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
+        }
+    }
+}
+
+impl TryFrom<ResolvedObjectName> for ObjectId {
+    type Error = anyhow::Error;
+
+    fn try_from(name: ResolvedObjectName) -> Result<ObjectId, Self::Error> {
+        match name {
+            ResolvedObjectName::Cluster(name) => Ok(ObjectId::Cluster(name.id)),
+            ResolvedObjectName::ClusterReplica(name) => {
+                Ok(ObjectId::ClusterReplica((name.cluster_id, name.replica_id)))
+            }
+            ResolvedObjectName::Database(name) => Ok(ObjectId::Database(*name.database_id())),
+            ResolvedObjectName::Schema(name) => Ok(ObjectId::Schema((
+                *name.database_spec(),
+                name.schema_spec().into(),
+            ))),
+            ResolvedObjectName::Role(name) => Ok(ObjectId::Role(name.id)),
+            ResolvedObjectName::Item(name) => match name {
+                ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id)),
+                ResolvedItemName::Cte { .. } => Err(anyhow!("CTE does not correspond to object")),
+                ResolvedItemName::Error => Err(anyhow!("error in name resolution")),
+            },
         }
     }
 }
@@ -1216,6 +1331,45 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             }
         }
     }
+    fn fold_object_name(
+        &mut self,
+        name: <Raw as AstInfo>::ObjectName,
+    ) -> <Aug as AstInfo>::ObjectName {
+        match name {
+            UnresolvedObjectName::Cluster(name) => ResolvedObjectName::Cluster(
+                self.fold_cluster_name(RawClusterName::Unresolved(name)),
+            ),
+            UnresolvedObjectName::ClusterReplica(name) => {
+                match self.catalog.resolve_cluster_replica(&name) {
+                    Ok(cluster_replica) => {
+                        ResolvedObjectName::ClusterReplica(ResolvedClusterReplicaName {
+                            cluster_id: cluster_replica.cluster_id(),
+                            replica_id: cluster_replica.replica_id(),
+                        })
+                    }
+                    Err(e) => {
+                        self.status = Err(e.into());
+                        ResolvedObjectName::ClusterReplica(ResolvedClusterReplicaName {
+                            // The ID is arbitrary here; we just need some dummy
+                            // value to return.
+                            cluster_id: ClusterId::System(0),
+                            replica_id: 0,
+                        })
+                    }
+                }
+            }
+            UnresolvedObjectName::Database(name) => {
+                ResolvedObjectName::Database(self.fold_database_name(name))
+            }
+            UnresolvedObjectName::Schema(name) => {
+                ResolvedObjectName::Schema(self.fold_schema_name(name))
+            }
+            UnresolvedObjectName::Role(name) => ResolvedObjectName::Role(self.fold_role_name(name)),
+            UnresolvedObjectName::Item(name) => {
+                ResolvedObjectName::Item(self.fold_item_name(RawItemName::Name(name)))
+            }
+        }
+    }
 }
 
 /// Resolves names in an AST node using the provided catalog.
@@ -1329,6 +1483,12 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
         node
     }
     fn fold_role_name(&mut self, node: <Aug as AstInfo>::RoleName) -> <Aug as AstInfo>::RoleName {
+        node
+    }
+    fn fold_object_name(
+        &mut self,
+        node: <Aug as AstInfo>::ObjectName,
+    ) -> <Aug as AstInfo>::ObjectName {
         node
     }
 }

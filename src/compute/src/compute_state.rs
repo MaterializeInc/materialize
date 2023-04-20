@@ -737,7 +737,7 @@ impl PendingPeek {
                     .peek
                     .map_filter_project
                     .evaluate_into(&mut borrow, &arena, &mut row_builder)
-                    .map_err_to_string()?
+                    .map_err_to_string_with_causes()?
                 {
                     let mut copies = 0;
                     cursor.map_times(&storage, |time, diff| {

@@ -1635,6 +1635,13 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') 
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR SCHEMAS (one, two);
+----
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR SCHEMAS (one, two)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetSchemas([Ident("one"), Ident("two")])), progress_subsource: None })
+
+parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES WITH (SIZE = 'small');
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES WITH (SIZE = 'small')
@@ -1653,7 +1660,7 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (foo, bar AS qux, baz AS zop) WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]) WITH (SIZE = 'small');
@@ -1667,7 +1674,7 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FO
 ----
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]) WITH (SIZE = 'small')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(Subset([CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedItemName([Ident("foo"), Ident("bar")])))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedItemName([Ident("foo"), Ident("bar")])))) }])), progress_subsource: None })
 
 parse-statement
 CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz) WITH (SIZE = 'small');
@@ -1927,3 +1934,101 @@ ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
 ALTER MATERIALIZED VIEW IF EXISTS foo OWNER TO joe
 =>
 AlterOwner(AlterOwnerStatement { object_type: MaterializedView, if_exists: true, name: Item(UnresolvedItemName([Ident("foo")])), new_owner: Ident("joe") })
+
+parse-statement
+GRANT USAGE, CREATE ON CLUSTER foo TO joe
+----
+GRANT USAGE, CREATE ON CLUSTER foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE, CREATE], object_type: Cluster, name: Cluster(Ident("foo")), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE, CREATE ON CLUSTER REPLICA foo.r TO joe
+----
+error: Unsupported GRANT on CLUSTER REPLICA
+GRANT USAGE, CREATE ON CLUSTER REPLICA foo.r TO joe
+                               ^
+
+parse-statement
+GRANT CREATE ON DATABASE foo TO joe
+----
+GRANT CREATE ON DATABASE foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [CREATE], object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE ON SCHEMA foo TO joe
+----
+GRANT USAGE ON SCHEMA foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
+----
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [SELECT, INSERT, UPDATE, DELETE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE ON foo TO joe
+----
+GRANT USAGE ON TABLE foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE ON SINK foo TO joe
+----
+error: Unsupported GRANT on SINK
+GRANT USAGE ON SINK foo TO joe
+               ^
+
+parse-statement
+GRANT USAGE ON SOURCE foo TO joe
+----
+error: For object type SOURCE, you must specify 'TABLE' or omit the object type
+GRANT USAGE ON SOURCE foo TO joe
+               ^
+
+parse-statement
+GRANT USAGE ON INDEX foo TO joe
+----
+error: Unsupported GRANT on INDEX
+GRANT USAGE ON INDEX foo TO joe
+               ^
+
+parse-statement
+GRANT USAGE ON SECRET foo TO joe
+----
+GRANT USAGE ON SECRET foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT USAGE ON CONNECTION foo TO joe
+----
+GRANT USAGE ON CONNECTION foo TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+
+parse-statement
+GRANT SELECT ON VIEW foo TO joe
+----
+error: For object type VIEW, you must specify 'TABLE' or omit the object type
+GRANT SELECT ON VIEW foo TO joe
+                ^
+
+parse-statement
+GRANT SELECT ON MATERIALIZED VIEW foo TO joe
+----
+error: For object type MATERIALIZED VIEW, you must specify 'TABLE' or omit the object type
+GRANT SELECT ON MATERIALIZED VIEW foo TO joe
+                             ^
+
+parse-statement
+GRANT FAKE ON TABLE t TO joe
+----
+error: Expected TO, found ON
+GRANT FAKE ON TABLE t TO joe
+           ^

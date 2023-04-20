@@ -27,6 +27,7 @@ use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::strconv;
@@ -37,8 +38,9 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    GrantRoleStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedItemName,
-    UnresolvedName, UnresolvedSchemaName, Value,
+    GrantPrivilegeStatement, GrantRoleStatement, Privilege, RevokePrivilegeStatement,
+    RevokeRoleStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -85,14 +87,13 @@ use crate::ast::{
     TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, CatalogType,
-    CatalogTypeDetails,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, DatabaseId, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, SchemaId, SchemaSpecifier,
+    ResolvedItemName, ResolvedObjectName, ResolvedRoleName, SchemaId, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -110,10 +111,12 @@ use crate::plan::{
     CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, FullItemName, GrantRolePlan, HirScalarExpr, Index, Ingestion,
-    MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan,
-    Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
+    DropObjectsPlan, FullItemName, GrantPrivilegePlan, GrantRolePlan, HirScalarExpr, Index,
+    Ingestion, MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokePrivilegePlan,
+    RevokeRolePlan, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
+    View,
 };
+use crate::session::user::SYSTEM_USER;
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -810,7 +813,7 @@ pub fn plan_create_source(
         available_subsources,
         referenced_subsources,
     ) {
-        (Some(available_subsources), Some(ReferencedSubsources::Subset(subsources))) => {
+        (Some(available_subsources), Some(ReferencedSubsources::SubsetTables(subsources))) => {
             let mut requested_subsources = vec![];
             for subsource in subsources {
                 let name = subsource.reference.clone();
@@ -830,7 +833,8 @@ pub fn plan_create_source(
             // Multi-output sources must have a table selection clause
             sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
         }
-        (None, Some(_)) | (Some(_), Some(ReferencedSubsources::All)) => {
+        (None, Some(_))
+        | (Some(_), Some(ReferencedSubsources::All | ReferencedSubsources::SubsetSchemas(_))) => {
             sql_bail!("[internal error] subsources should be resolved during purification")
         }
         (None, None) => (BTreeMap::new(), vec![]),
@@ -1321,19 +1325,22 @@ pub(crate) fn load_generator_ast_to_generator(
     Ok((load_generator, available_subsources))
 }
 
-fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
-    let (before_idx, before_ty) = value_desc
-        .get_by_name(&"before".into())
-        .ok_or_else(|| sql_err!("'before' column missing from debezium input"))?;
+fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize), PlanError> {
+    let before = value_desc.get_by_name(&"before".into());
     let (after_idx, after_ty) = value_desc
         .get_by_name(&"after".into())
         .ok_or_else(|| sql_err!("'after' column missing from debezium input"))?;
-    if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
-        sql_bail!("'before' column must be of type record");
-    }
-    if before_ty != after_ty {
-        sql_bail!("'before' type differs from 'after' column");
-    }
+    let before_idx = if let Some((before_idx, before_ty)) = before {
+        if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
+            sql_bail!("'before' column must be of type record");
+        }
+        if before_ty != after_ty {
+            sql_bail!("'before' type differs from 'after' column");
+        }
+        Some(before_idx)
+    } else {
+        None
+    };
     Ok((before_idx, after_idx))
 }
 
@@ -3377,20 +3384,22 @@ pub fn plan_drop_objects(
     let mut ids = Vec::new();
     for name in names {
         let id = match name {
-            UnresolvedName::Cluster(name) => {
+            UnresolvedObjectName::Cluster(name) => {
                 plan_drop_cluster(scx, if_exists, name, cascade)?.map(ObjectId::Cluster)
             }
-            UnresolvedName::ClusterReplica(name) => {
+            UnresolvedObjectName::ClusterReplica(name) => {
                 plan_drop_cluster_replica(scx, if_exists, name)?.map(ObjectId::ClusterReplica)
             }
-            UnresolvedName::Database(name) => {
+            UnresolvedObjectName::Database(name) => {
                 plan_drop_database(scx, if_exists, name, cascade)?.map(ObjectId::Database)
             }
-            UnresolvedName::Schema(name) => {
+            UnresolvedObjectName::Schema(name) => {
                 plan_drop_schema(scx, if_exists, name, cascade)?.map(ObjectId::Schema)
             }
-            UnresolvedName::Role(name) => plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role),
-            UnresolvedName::Item(name) => {
+            UnresolvedObjectName::Role(name) => {
+                plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role)
+            }
+            UnresolvedObjectName::Item(name) => {
                 plan_drop_item(scx, object_type, if_exists, name, cascade)?.map(ObjectId::Item)
             }
         };
@@ -3408,9 +3417,21 @@ fn plan_drop_schema(
     if_exists: bool,
     name: UnresolvedSchemaName,
     cascade: bool,
-) -> Result<Option<(DatabaseId, SchemaId)>, PlanError> {
-    Ok(match resolve_schema(scx, name, if_exists, "drop")? {
-        Some((database_id, schema_id, schema)) => {
+) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaId)>, PlanError> {
+    Ok(match resolve_schema(scx, name.clone(), if_exists)? {
+        Some((database_spec, schema_spec)) => {
+            if let ResolvedDatabaseSpecifier::Ambient = database_spec {
+                sql_bail!(
+                    "cannot drop schema {name} because it is required by the database system",
+                );
+            }
+            let schema_id = match schema_spec {
+                SchemaSpecifier::Temporary => {
+                    sql_bail!("cannot drop schema {name} because it is a temporary schema",)
+                }
+                SchemaSpecifier::Id(id) => id,
+            };
+            let schema = scx.get_schema(&database_spec, &schema_spec);
             if !cascade && schema.has_items() {
                 let full_schema_name = FullSchemaName {
                     database: match schema.name().database {
@@ -3426,7 +3447,7 @@ fn plan_drop_schema(
                     full_schema_name
                 );
             }
-            Some((database_id, schema_id))
+            Some((database_spec, schema_id))
         }
         None => None,
     })
@@ -3442,6 +3463,17 @@ fn plan_drop_role(
             let id = role.id();
             if &id == scx.catalog.active_role_id() {
                 sql_bail!("current role cannot be dropped");
+            }
+            for role in scx.catalog.get_roles() {
+                for (member_id, grantor_id) in role.membership() {
+                    if &id == grantor_id {
+                        let member_role = scx.catalog.get_role(member_id);
+                        sql_bail!(
+                            "cannot drop role {}: still depended up by membership of role {} in role {}",
+                            name.as_str(), role.name(), member_role.name()
+                        );
+                    }
+                }
             }
             Ok(Some(role.id()))
         }
@@ -3703,19 +3735,19 @@ pub fn plan_alter_owner(
     }: AlterOwnerStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     match (object_type, name) {
-        (ObjectType::Cluster, UnresolvedName::Cluster(name)) => {
+        (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
             plan_alter_cluster_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::ClusterReplica, UnresolvedName::ClusterReplica(name)) => {
+        (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
             plan_alter_cluster_replica_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::Database, UnresolvedName::Database(name)) => {
+        (ObjectType::Database, UnresolvedObjectName::Database(name)) => {
             plan_alter_database_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::Schema, UnresolvedName::Schema(name)) => {
+        (ObjectType::Schema, UnresolvedObjectName::Schema(name)) => {
             plan_alter_schema_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::Role, UnresolvedName::Role(_)) => unreachable!("rejected by the parser"),
+        (ObjectType::Role, UnresolvedObjectName::Role(_)) => unreachable!("rejected by the parser"),
         (
             object_type @ ObjectType::Cluster
             | object_type @ ObjectType::ClusterReplica
@@ -3726,15 +3758,15 @@ pub fn plan_alter_owner(
         )
         | (
             object_type,
-            name @ UnresolvedName::Cluster(_)
-            | name @ UnresolvedName::ClusterReplica(_)
-            | name @ UnresolvedName::Database(_)
-            | name @ UnresolvedName::Schema(_)
-            | name @ UnresolvedName::Role(_),
+            name @ UnresolvedObjectName::Cluster(_)
+            | name @ UnresolvedObjectName::ClusterReplica(_)
+            | name @ UnresolvedObjectName::Database(_)
+            | name @ UnresolvedObjectName::Schema(_)
+            | name @ UnresolvedObjectName::Role(_),
         ) => {
             unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
         }
-        (object_type, UnresolvedName::Item(name)) => {
+        (object_type, UnresolvedObjectName::Item(name)) => {
             plan_alter_item_owner(scx, object_type, if_exists, name, new_owner.id)
         }
     }
@@ -3800,12 +3832,25 @@ fn plan_alter_schema_owner(
     name: UnresolvedSchemaName,
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
-    match resolve_schema(scx, name, if_exists, "alter")? {
-        Some((database_id, schema_id, _)) => Ok(Plan::AlterOwner(AlterOwnerPlan {
-            id: ObjectId::Schema((database_id, schema_id)),
-            object_type: ObjectType::Schema,
-            new_owner,
-        })),
+    match resolve_schema(scx, name.clone(), if_exists)? {
+        Some((database_spec, schema_spec)) => {
+            if let ResolvedDatabaseSpecifier::Ambient = database_spec {
+                sql_bail!(
+                    "cannot alter schema {name} because it is required by the database system",
+                );
+            }
+            let schema_id = match schema_spec {
+                SchemaSpecifier::Temporary => {
+                    sql_bail!("cannot alter schema {name} because it is a temporary schema",)
+                }
+                SchemaSpecifier::Id(id) => id,
+            };
+            Ok(Plan::AlterOwner(AlterOwnerPlan {
+                id: ObjectId::Schema((database_spec, schema_id)),
+                object_type: ObjectType::Schema,
+                new_owner,
+            }))
+        }
         None => Ok(Plan::AlterNoop(AlterNoopPlan {
             object_type: ObjectType::Database,
         })),
@@ -4214,7 +4259,16 @@ pub fn plan_grant_role(
         member_names,
     }: GrantRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let grantor_id = scx.catalog.active_role_id().clone();
+    // In PostgreSQL, the grantor must either be a role with ADMIN OPTION on the role being granted,
+    // or the bootstrap superuser. We do not have ADMIN OPTION implemented and 'mz_system' is our
+    // equivalent of the bootstrap superuser. Therefore the grantor is always 'mz_system'.
+    // For more details see:
+    // https://github.com/postgres/postgres/blob/064eb89e83ea0f59426c92906329f1e6c423dfa4/src/backend/commands/user.c#L2180-L2238
+    let grantor_id = scx
+        .catalog
+        .resolve_role(&SYSTEM_USER.name)
+        .expect("system user must exist")
+        .id();
     Ok(Plan::GrantRole(GrantRolePlan {
         role_id: role_name.id,
         member_ids: member_names
@@ -4233,19 +4287,172 @@ pub fn describe_revoke_role(
 }
 
 pub fn plan_revoke_role(
-    _: &StatementContext,
+    scx: &StatementContext,
     RevokeRoleStatement {
         role_name,
         member_names,
     }: RevokeRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    // In PostgreSQL, the same role membership can be granted multiple times by different grantors.
+    // When revoking a role membership, only the membership granted by the specified grantor is
+    // revoked. The grantor must either be a role with ADMIN OPTION on the role being granted,
+    // or the bootstrap superuser. We do not have ADMIN OPTION implemented and 'mz_system' is our
+    // equivalent of the bootstrap superuser. Therefore the grantor is always 'mz_system'.
+    // For more details see:
+    // https://github.com/postgres/postgres/blob/064eb89e83ea0f59426c92906329f1e6c423dfa4/src/backend/commands/user.c#L2180-L2238
+    let grantor_id = scx
+        .catalog
+        .resolve_role(&SYSTEM_USER.name)
+        .expect("system user must exist")
+        .id();
     Ok(Plan::RevokeRole(RevokeRolePlan {
         role_id: role_name.id,
         member_ids: member_names
             .into_iter()
             .map(|member_name| member_name.id)
             .collect(),
+        grantor_id,
     }))
+}
+
+pub fn describe_grant_privilege(
+    _: &StatementContext,
+    _: GrantPrivilegeStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_grant_privilege(
+    scx: &StatementContext,
+    GrantPrivilegeStatement {
+        privileges,
+        object_type,
+        name,
+        role,
+    }: GrantPrivilegeStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let (acl_mode, object_id, grantee, grantor) =
+        plan_update_privilege(scx, privileges, object_type, name, role)?;
+    Ok(Plan::GrantPrivilege(GrantPrivilegePlan {
+        acl_mode,
+        object_id,
+        grantee,
+        grantor,
+    }))
+}
+
+pub fn describe_revoke_privilege(
+    _: &StatementContext,
+    _: RevokePrivilegeStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_revoke_privilege(
+    scx: &StatementContext,
+    RevokePrivilegeStatement {
+        privileges,
+        object_type,
+        name,
+        role,
+    }: RevokePrivilegeStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let (acl_mode, object_id, revokee, grantor) =
+        plan_update_privilege(scx, privileges, object_type, name, role)?;
+    Ok(Plan::RevokePrivilege(RevokePrivilegePlan {
+        acl_mode,
+        object_id,
+        revokee,
+        grantor,
+    }))
+}
+
+fn plan_update_privilege(
+    scx: &StatementContext,
+    privileges: Vec<Privilege>,
+    object_type: ObjectType,
+    name: ResolvedObjectName,
+    role: ResolvedRoleName,
+) -> Result<(AclMode, ObjectId, RoleId, RoleId), PlanError> {
+    let mut acl_mode = AclMode::empty();
+    // PostgreSQL doesn't care about duplicate privileges, so we don't either.
+    for privilege in privileges {
+        acl_mode |= privilege_to_acl_mode(privilege);
+    }
+    let object_id = name
+        .try_into()
+        .expect("name resolution should handle invalid objects");
+    if let ObjectId::Item(id) = &object_id {
+        let item = scx.get_item(id);
+        let item_type: ObjectType = item.item_type().into();
+        if (item_type == ObjectType::View
+            || item_type == ObjectType::MaterializedView
+            || item_type == ObjectType::Source)
+            && object_type == ObjectType::Table
+        {
+            // This is an expected mis-match to match PostgreSQL semantics.
+        } else if item_type != object_type {
+            let object_name = scx.catalog.resolve_full_name(item.name()).to_string();
+            return Err(PlanError::InvalidObjectType {
+                expected_type: object_type,
+                actual_type: item_type,
+                object_name,
+            });
+        }
+    }
+
+    let actual_object_type = scx.get_object_type(&object_id);
+    let all_object_privileges = scx.catalog.all_object_privileges(actual_object_type);
+    let invalid_acl_mode = acl_mode.difference(all_object_privileges);
+    if !invalid_acl_mode.is_empty() {
+        let invalid_privileges = acl_mode_to_privileges(invalid_acl_mode);
+        return Err(PlanError::InvalidPrivilegeTypes {
+            privilege_types: invalid_privileges,
+            object_type: actual_object_type,
+        });
+    }
+
+    // In PostgreSQL, the grantor must always be either the object owner or some role that has been
+    // been explicitly granted grant options. In Materialize, we haven't implemented grant options
+    // so the grantor is always the object owner.
+    //
+    // For more details see:
+    // https://github.com/postgres/postgres/blob/78d5952dd0e66afc4447eec07f770991fa406cce/src/backend/utils/adt/acl.c#L5154-L5246
+    let grantor = scx
+        .catalog
+        .get_owner_id(&object_id)
+        .expect("cannot revoke privileges on objects without owners");
+
+    Ok((acl_mode, object_id, role.id, grantor))
+}
+
+fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
+    match privilege {
+        Privilege::SELECT => AclMode::SELECT,
+        Privilege::INSERT => AclMode::INSERT,
+        Privilege::UPDATE => AclMode::UPDATE,
+        Privilege::DELETE => AclMode::DELETE,
+        Privilege::USAGE => AclMode::USAGE,
+        Privilege::CREATE => AclMode::CREATE,
+    }
+}
+
+fn acl_mode_to_privileges(acl_mode: AclMode) -> Vec<Privilege> {
+    let mut privileges = Vec::new();
+    const ALL_PRIVILEGES: [Privilege; 6] = [
+        Privilege::SELECT,
+        Privilege::INSERT,
+        Privilege::UPDATE,
+        Privilege::DELETE,
+        Privilege::USAGE,
+        Privilege::CREATE,
+    ];
+    for privilege in ALL_PRIVILEGES {
+        if acl_mode.contains(privilege_to_acl_mode(privilege.clone())) {
+            privileges.push(privilege);
+        }
+    }
+    privileges
 }
 
 fn resolve_cluster<'a>(
@@ -4304,28 +4511,9 @@ fn resolve_schema<'a>(
     scx: &'a StatementContext,
     name: UnresolvedSchemaName,
     if_exists: bool,
-    action: &str,
-) -> Result<Option<(DatabaseId, SchemaId, &'a dyn CatalogSchema)>, PlanError> {
+) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
     match scx.resolve_schema(name) {
-        Ok(schema) => {
-            let database_id = match schema.database() {
-                ResolvedDatabaseSpecifier::Ambient => sql_bail!(
-                    "cannot {action} schema {} because it is required by the database system",
-                    schema.name().schema
-                ),
-                ResolvedDatabaseSpecifier::Id(id) => id,
-            };
-            let schema_id = match schema.id() {
-                // This branch should be unreachable because the temporary schema is in the ambient
-                // database, but this is just to protect against the case that ever changes.
-                SchemaSpecifier::Temporary => sql_bail!(
-                    "cannot {action} schema {} because it is a temporary schema",
-                    schema.name().schema,
-                ),
-                SchemaSpecifier::Id(id) => id,
-            };
-            Ok(Some((*database_id, *schema_id, schema)))
-        }
+        Ok(schema) => Ok(Some((schema.database().clone(), schema.id().clone()))),
         // TODO(benesch/jkosh44): generate a notice indicating that the
         // schema does not exist.
         Err(_) if if_exists => Ok(None),

@@ -91,7 +91,8 @@ def main() -> None:
     args = parser.parse_args()
 
     os.chdir(ROOT)
-    repo = mzbuild.Repository(ROOT)
+    coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+    repo = mzbuild.Repository(ROOT, coverage=coverage)
 
     wait_for_confluent(args.confluent_host)
 
@@ -138,7 +139,7 @@ def main() -> None:
         TO KAFKA (BROKER '{args.confluent_host}:9092')"""
     )
     cur.execute(
-        f"""CREATE SOURCE src
+        """CREATE SOURCE src
         FROM KAFKA CONNECTION kafka_conn (TOPIC 'bench_data')
         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn"""
     )

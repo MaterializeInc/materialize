@@ -51,8 +51,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -94,13 +92,15 @@
 #[cfg(feature = "test")]
 pub mod assert;
 pub mod bits;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes_")))]
+#[cfg(feature = "bytes_")]
+pub mod bytes;
 pub mod cast;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "cli")))]
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod codegen;
 pub mod collections;
-pub mod display;
 pub mod env;
 pub mod error;
 pub mod fmt;
