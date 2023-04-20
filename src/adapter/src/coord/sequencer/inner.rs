@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use futures::future::BoxFuture;
-use itertools::{Itertools};
 use maplit::btreeset;
 use mz_transform::Optimizer;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
