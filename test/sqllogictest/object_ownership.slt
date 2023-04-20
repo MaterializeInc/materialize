@@ -1465,6 +1465,21 @@ SELECT mz_indexes.name, mz_roles.name
 i1  joe
 i2  joe
 
+simple conn=joe,user=joe
+DROP INDEX i1
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP INDEX i2
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DROP TABLE t
+----
+COMPLETE 0
+
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
