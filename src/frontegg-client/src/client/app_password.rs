@@ -7,16 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-
 use mz_frontegg_auth::AppPassword;
 use reqwest::Method;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::ErrorExtended;
 
-use super::{Client, APP_PASSWORDS_PATH, CREATE_APP_PASSWORDS_PATH};
+use super::Client;
+
+const APP_PASSWORDS_PATH: [&str; 5] = ["identity", "resources", "users", "api-tokens", "v1"];
+const CREATE_APP_PASSWORDS_PATH: [&str; 6] = [
+    "frontegg",
+    "identity",
+    "resources",
+    "users",
+    "api-tokens",
+    "v1",
+];
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +32,11 @@ use super::{Client, APP_PASSWORDS_PATH, CREATE_APP_PASSWORDS_PATH};
 pub struct FronteggAppPassword {
     description: String,
     created_at: String,
+}
+
+#[derive(Serialize)]
+struct AppPasswordCreateRequest {
+    description: String,
 }
 
 impl Client {
@@ -40,10 +53,7 @@ impl Client {
         description: String,
     ) -> Result<AppPassword, ErrorExtended> {
         let req = self.build_request(Method::POST, CREATE_APP_PASSWORDS_PATH);
-        let mut body = BTreeMap::new();
-        body.insert("description", description);
-
-        let req = req.json(&body);
+        let req = req.json(&AppPasswordCreateRequest { description });
 
         // Temp AppPassword structure implementing Deserialization to avoid having any impact in `frontegg-auth`.
         #[derive(Debug, Deserialize)]

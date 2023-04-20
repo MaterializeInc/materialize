@@ -29,41 +29,30 @@ const REFRESH_AUTH_PATH: [&str; 7] = [
     "token",
     "refresh",
 ];
-const USERS_PATH: [&str; 4] = ["identity", "resources", "users", "v3"];
-const CREATE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v2"];
-const APP_PASSWORDS_PATH: [&str; 5] = ["identity", "resources", "users", "api-tokens", "v1"];
-const CREATE_APP_PASSWORDS_PATH: [&str; 6] = [
-    "frontegg",
-    "identity",
-    "resources",
-    "users",
-    "api-tokens",
-    "v1",
-];
 
 pub mod app_password;
 pub mod user;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthenticationResponse {
-    pub access_token: String,
-    pub expires: String,
-    pub expires_in: i64,
-    pub refresh_token: String,
+struct AuthenticationResponse {
+    access_token: String,
+    expires: String,
+    expires_in: i64,
+    refresh_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthenticationRequest<'a> {
-    pub client_id: &'a str,
-    pub secret: &'a str,
+struct AuthenticationRequest<'a> {
+    client_id: &'a str,
+    secret: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RefreshRequest<'a> {
-    pub refresh_token: &'a str,
+struct RefreshRequest<'a> {
+    refresh_token: &'a str,
 }
 
 #[derive(Debug, Clone)]
@@ -71,10 +60,8 @@ pub struct Auth {
     pub token: String,
     /// Refresh at indicates the time at which the token should be refreshed.
     /// It equals the expiring time / 2
-    pub refresh_at: SystemTime,
-    pub expires: String,
-    pub expires_in: i64,
-    pub refresh_token: String,
+    refresh_at: SystemTime,
+    refresh_token: String,
 }
 
 /// An API client for Frontegg.
@@ -199,8 +186,6 @@ impl Client {
             refresh_at: SystemTime::now()
                 + (Duration::from_secs(res.expires_in.try_into().unwrap()) / 2),
             refresh_token: res.refresh_token,
-            expires: res.expires,
-            expires_in: res.expires_in,
         });
         Ok(auth.clone().unwrap())
     }

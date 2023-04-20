@@ -10,16 +10,19 @@
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
-use crate::{client::CREATE_USERS_PATH, error::ErrorExtended, parse::Paginated};
+use crate::{error::ErrorExtended, parse::Paginated};
 
-use super::{Client, USERS_PATH};
+use super::Client;
+
+const USERS_PATH: [&str; 4] = ["identity", "resources", "users", "v3"];
+const CREATE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v2"];
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UserCreationRequest {
     email: String,
     name: String,
     provider: String,
-    #[serde(rename = "roleIds")]
     role_ids: Vec<String>,
 }
 
