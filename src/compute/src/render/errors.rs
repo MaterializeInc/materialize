@@ -10,11 +10,13 @@
 //! Helpers for handling errors encountered by operators.
 
 use std::hash::Hash;
-use std::rc::Weak;
 
 use differential_dataflow::ExchangeData;
-use mz_repr::Row;
 use timely::container::columnation::Columnation;
+
+use mz_repr::Row;
+
+use super::context::ShutdownToken;
 
 /// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
 /// specialized for use in compute.  Validation code will only run when the error constructor is
@@ -77,22 +79,15 @@ where
 /// the process of shutting down.
 #[derive(Clone)]
 pub(super) struct ErrorLogger {
-    token: Option<Weak<()>>,
+    token: ShutdownToken,
     dataflow_name: String,
 }
 
 impl ErrorLogger {
-    pub fn new(token: Option<Weak<()>>, dataflow_name: String) -> Self {
+    pub fn new(token: ShutdownToken, dataflow_name: String) -> Self {
         Self {
             token,
             dataflow_name,
-        }
-    }
-
-    fn token_alive(&self) -> bool {
-        match &self.token {
-            Some(t) => t.upgrade().is_some(),
-            None => true,
         }
     }
 
@@ -113,7 +108,7 @@ impl ErrorLogger {
     ///
     // TODO(#18214): Rethink or justify our error logging strategy.
     pub fn log(&self, message: &'static str, details: &str) {
-        if self.token_alive() {
+        if !self.token.in_shutdown() {
             self.log_always(message, details);
         }
     }

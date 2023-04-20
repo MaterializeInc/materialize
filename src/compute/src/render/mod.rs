@@ -137,6 +137,8 @@ use crate::typedefs::{ErrSpine, RowKeySpine};
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 
+use self::context::ShutdownToken;
+
 pub mod context;
 mod errors;
 mod flat_map;
@@ -299,7 +301,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // Build declared objects.
                     for object in dataflow.objects_to_build {
                         let object_token = Rc::new(());
-                        context.shutdown_token = Some(Rc::downgrade(&object_token));
+                        context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
                         tokens.insert(object.id, object_token);
 
                         let bundle = context.render_recursive_plan(0, object.plan);
@@ -353,7 +355,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
                     let object_token = Rc::new(());
-                    context.shutdown_token = Some(Rc::downgrade(&object_token));
+                    context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
                     tokens.insert(object.id, object_token);
 
                     context.build_object(object);
@@ -651,7 +653,7 @@ where
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
                 let mut oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation");
-                if let Some(token) = &self.shutdown_token {
+                if let Some(token) = &self.shutdown_token.get_inner() {
                     oks = oks.with_token(Weak::clone(token));
                 }
                 oks_v.set(&oks);
@@ -668,7 +670,7 @@ where
                         move |_k, _s, t| t.push(((), 1)),
                     )
                     .as_collection(|k, _| k.clone());
-                if let Some(token) = &self.shutdown_token {
+                if let Some(token) = &self.shutdown_token.get_inner() {
                     errs = errs.with_token(Weak::clone(token));
                 }
                 err_v.set(&errs);
