@@ -1087,7 +1087,7 @@ impl Coordinator {
                 session,
                 plan.name.clone(),
                 plan.view.clone(),
-                plan.replace,
+                plan.drop_ids,
                 depends_on,
             )
             .await?;
@@ -1166,7 +1166,8 @@ impl Coordinator {
                     column_names,
                     cluster_id,
                 },
-            replace,
+            replace: _,
+            drop_ids,
             if_not_exists,
             ambiguous_columns,
         } = plan;
@@ -1221,7 +1222,7 @@ impl Coordinator {
 
         let mut ops = Vec::new();
         ops.extend(
-            replace
+            drop_ids
                 .into_iter()
                 .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
         );
@@ -1407,7 +1408,7 @@ impl Coordinator {
         let mut dropped_active_cluster = false;
 
         let mut dropped_roles: BTreeMap<_, _> = plan
-            .ids
+            .drop_ids
             .iter()
             .filter_map(|id| match id {
                 ObjectId::Role(role_id) => Some(role_id),
@@ -1440,7 +1441,7 @@ impl Coordinator {
             }
         }
 
-        for id in &plan.ids {
+        for id in &plan.drop_ids {
             match id {
                 ObjectId::Database(id) => {
                     let name = self.catalog().get_database(id).name();
@@ -1477,7 +1478,7 @@ impl Coordinator {
             }
         }
 
-        ops.extend(plan.ids.into_iter().map(catalog::Op::DropObject));
+        ops.extend(plan.drop_ids.into_iter().map(catalog::Op::DropObject));
         self.catalog_transact(Some(session), ops).await?;
 
         fail::fail_point!("after_sequencer_drop_replica");

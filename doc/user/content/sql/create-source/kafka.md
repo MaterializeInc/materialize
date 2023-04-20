@@ -38,10 +38,6 @@ The same syntax, supported formats and features can be used to connect to a [Red
 
 {{< diagram "strat.svg" >}}
 
-#### `key_constraint`
-
-{{< diagram "key-constraint.svg" >}}
-
 #### `with_options`
 
 {{< diagram "with-options.svg" >}}
@@ -91,14 +87,6 @@ CREATE SOURCE kafka_upsert
 Note that:
 
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
-
-#### Defining primary keys
-
-{{< warning >}}
-Materialize will **not enforce** the constraint and will produce wrong results if it's not unique.
-{{</ warning >}}
-
-Primary keys are **automatically** inferred for Kafka sources using the `UPSERT` or `DEBEZIUM` envelopes. For other source configurations, you can manually define a column (or set of columns) as a primary key using the `PRIMARY KEY (...) NOT ENFORCED` [syntax](#key_constraint). This enables optimizations and constructs that rely on a key to be present when it cannot be inferred.
 
 ### Using Debezium
 

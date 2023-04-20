@@ -345,10 +345,11 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::RevokeRole(_) => Vec::new(),
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
-        | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => {
-            replace.iter().map(|id| ObjectId::Item(*id)).collect()
-        }
-        Plan::DropObjects(plan) => plan.ids.clone(),
+        | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
+            .map(|id| vec![ObjectId::Item(id)])
+            .unwrap_or_default(),
+        // Do not need ownership of descendant objects.
+        Plan::DropObjects(plan) => plan.referenced_ids.clone(),
         Plan::AlterIndexSetOptions(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterIndexResetOptions(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterSink(plan) => vec![ObjectId::Item(plan.id)],
