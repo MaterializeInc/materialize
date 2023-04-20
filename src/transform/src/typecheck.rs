@@ -57,6 +57,18 @@ impl Typecheck {
     }
 }
 
+// Either return an error (when soft assertions are enabled)
+// ... or just log an error (when soft assertions are disabled)
+macro_rules! type_error {
+    ($($arg:tt)+) => {{
+        if mz_ore::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+            return Err(TransformError::Internal(format!($($arg)+)));
+        } else {
+            ::tracing::error!($($arg)+);
+        }
+    }}
+}
+
 impl crate::Transform for Typecheck {
     fn transform(
         &self,
@@ -66,10 +78,10 @@ impl crate::Transform for Typecheck {
         let ctx = self.ctx.borrow();
 
         if let Err(err) = relation.typecheck(&ctx) {
-            return Err(TransformError::Internal(format!(
+            type_error!(
                 "TYPE ERROR: {err}\nIN UNKNOWN QUERY:\n{}",
                 relation.pretty()
-            )));
+            );
         }
 
         Ok(())
@@ -86,10 +98,10 @@ impl crate::Transform for Typecheck {
         let expected = ctx.get(&Id::Global(*id));
 
         if self.disallow_new_globals && expected.is_none() && !id.is_transient() {
-            return Err(TransformError::Internal(format!(
+            type_error!(
                 "FOUND NEW NON-TRANSIENT TOP LEVEL QUERY BOUND TO {id}:\n{}",
                 plan.pretty()
-            )));
+            );
         }
 
         let got = plan.typecheck(&ctx);
@@ -102,10 +114,10 @@ impl crate::Transform for Typecheck {
                     let got = columns_pretty(&got, &humanizer);
                     let expected = columns_pretty(expected, &humanizer);
 
-                    return Err(TransformError::Internal(format!(
+                    type_error!(
                         "TYPE ERROR: GLOBAL ID TYPE CHANGED\ngot {got} expected {expected} \nIN KNOWN QUERY BOUND TO {id}:\n{}",
                         plan.pretty()
-                    )));
+                    );
                 }
             }
             (Ok(got), None) => {
@@ -120,10 +132,10 @@ impl crate::Transform for Typecheck {
                     None => ("no expected type".to_string(), "NEW".to_string()),
                 };
 
-                return Err(TransformError::Internal(format!(
+                type_error!(
                     "TYPE ERROR:\n{err}\n{expected}\nIN {known} QUERY BOUND TO {id}:\n{}",
                     plan.pretty()
-                )));
+                );
             }
         }
 
