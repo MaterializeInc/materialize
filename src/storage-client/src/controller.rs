@@ -620,22 +620,78 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
 
 /// A trait that is used to calculate safe _resumption frontiers_ for a source.
 ///
-/// Use [`ResumptionFrontierCalculator::initialize_state`] for creating an
-/// opaque state that you should keep around. Then repeatedly call
-/// [`ResumptionFrontierCalculator::calculate_resumption_frontier`] with the
-/// state to efficiently calculate an up-to-date frontier.
+/// Use [`CreateResumptionFrontierCalc::create_calc`] to create a [`ResumptionFrontierCalculator`].
+/// Then repeatedly call [`ResumptionFrontierCalculator::calculate_resumption_frontier`] to
+/// efficiently calculate an up-to-date frontier.
 #[async_trait]
-pub trait ResumptionFrontierCalculator<T> {
-    /// Opaque state that a `ResumptionFrontierCalculator` needs to repeatedly
-    /// (and efficiently) calculate a _resumption frontier_.
-    type State;
+pub trait CreateResumptionFrontierCalc<T: Timestamp + Lattice + Codec64> {
+    /// Creates a [`ResumptionFrontierCalculator`], which can be used to efficiently calculate a new
+    /// _resumption frontier_ when needed.
+    async fn create_calc(
+        &self,
+        client_cache: &PersistClientCache,
+    ) -> ResumptionFrontierCalculator<T>;
+}
 
-    /// Creates an opaque state type that can be used to efficiently calculate a
-    /// new _resumption frontier_ when needed.
-    async fn initialize_state(&self, client_cache: &PersistClientCache) -> Self::State;
+pub struct UpperState<T: Timestamp + Lattice + Codec64> {
+    handle: WriteHandle<SourceData, (), T, Diff>,
+    last_upper: Antichain<T>,
+}
 
-    /// Calculates a new, safe _resumption frontier_.
-    async fn calculate_resumption_frontier(&self, state: &mut Self::State) -> Antichain<T>;
+impl<T: Timestamp + Lattice + Codec64> UpperState<T> {
+    pub fn new(handle: WriteHandle<SourceData, (), T, Diff>) -> Self {
+        UpperState {
+            handle,
+            last_upper: Antichain::from_elem(T::minimum()),
+        }
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> std::fmt::Debug for UpperState<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpperState")
+            .field("handle", &"<omitted>")
+            .field("last_upper", &self.last_upper)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct ResumptionFrontierCalculator<T: Timestamp + Lattice + Codec64> {
+    initial_frontier: Antichain<T>,
+    upper_states: BTreeMap<GlobalId, UpperState<T>>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
+    pub fn new(
+        initial_frontier: Antichain<T>,
+        upper_states: BTreeMap<GlobalId, UpperState<T>>,
+    ) -> Self {
+        ResumptionFrontierCalculator {
+            initial_frontier,
+            upper_states,
+        }
+    }
+
+    pub async fn calculate_resumption_frontier(&mut self) -> Antichain<T> {
+        // Refresh all write handles' uppers.
+        for UpperState { handle, last_upper } in self.upper_states.values_mut() {
+            *last_upper = handle.fetch_recent_upper().await.clone();
+        }
+
+        let mut resume_upper = self.initial_frontier.clone();
+
+        for t in self
+            .upper_states
+            .values()
+            .map(|UpperState { last_upper, .. }| last_upper.elements())
+            .flatten()
+        {
+            resume_upper.insert(t.clone());
+        }
+
+        resume_upper
+    }
 }
 
 /// The subset of [`CollectionMetadata`] that must be durable stored.
@@ -1574,8 +1630,8 @@ where
                         instance_id: ingestion.instance_id,
                         remap_collection_id: ingestion.remap_collection_id,
                     };
-                    let mut state = desc.initialize_state(&self.persist).await;
-                    let resume_upper = desc.calculate_resumption_frontier(&mut state).await;
+                    let mut calc = desc.create_calc(&self.persist).await;
+                    let resume_upper = calc.calculate_resumption_frontier().await;
 
                     // Fetch the client for this ingestion's instance.
                     let client = self

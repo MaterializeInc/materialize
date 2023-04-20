@@ -24,7 +24,6 @@ use itertools::Itertools;
 use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
@@ -50,7 +49,9 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 use uuid::Uuid;
 
-use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use crate::controller::{
+    CollectionMetadata, CreateResumptionFrontierCalc, ResumptionFrontierCalculator, UpperState,
+};
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::{DataflowError, ProtoDataflowError};
 use crate::types::instances::StorageInstanceId;
@@ -112,15 +113,14 @@ pub struct SourceExport<S = ()> {
 }
 
 #[async_trait]
-impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
+impl<T: Timestamp + Lattice + Codec64> CreateResumptionFrontierCalc<T>
     for IngestionDescription<CollectionMetadata>
 {
-    // A `WriteHandle` per used shard. Once we have source envelopes that keep additional shards we
-    // have to specialize this some more.
-    type State = Vec<WriteHandle<SourceData, (), T, Diff>>;
-
-    async fn initialize_state(&self, client_cache: &PersistClientCache) -> Self::State {
-        let mut handles = vec![];
+    async fn create_calc(
+        &self,
+        client_cache: &PersistClientCache,
+    ) -> ResumptionFrontierCalculator<T> {
+        let mut upper_states = BTreeMap::new();
         for (id, export) in self.source_exports.iter() {
             // Explicit destructuring to force a compile error when the metadata change
             let CollectionMetadata {
@@ -143,7 +143,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 )
                 .await
                 .unwrap();
-            handles.push(handle);
+            upper_states.insert(*id, UpperState::new(handle));
         }
 
         let remap_relation_desc = self.desc.connection.timestamp_desc();
@@ -157,7 +157,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             relation_desc: _,
         } = &self.ingestion_metadata
         {
-            let remap_handle = client_cache
+            let handle = client_cache
                 .open(persist_location.clone())
                 .await
                 .expect("error creating persist client")
@@ -170,27 +170,10 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
                 )
                 .await
                 .unwrap();
-            handles.push(remap_handle);
+            upper_states.insert(self.remap_collection_id, UpperState::new(handle));
         }
 
-        handles
-    }
-
-    async fn calculate_resumption_frontier(&self, handles: &mut Self::State) -> Antichain<T> {
-        // An ingestion can resume at the minimum of..
-        let mut resume_upper = Antichain::new();
-
-        // ..the upper frontier of each shard
-        for handle in handles {
-            handle.fetch_recent_upper().await;
-            for t in handle.upper().elements() {
-                resume_upper.insert(t.clone());
-            }
-        }
-
-        // ..the upper of an implied envelope state shard. Eventually this could become actual
-        // state shards and this section will be removed.
-        let envelope_upper = match self.desc.envelope {
+        let initial_frontier = match self.desc.envelope {
             // We can only resume with the None envelope, which is stateless,
             // or with the [Debezium] Upsert envelope, which is easy
             //   (re-ingest the last emitted state)
@@ -198,11 +181,8 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T>
             // Otherwise re-ingest everything
             _ => Antichain::from_elem(T::minimum()),
         };
-        for t in envelope_upper {
-            resume_upper.insert(t);
-        }
 
-        resume_upper
+        ResumptionFrontierCalculator::new(initial_frontier, upper_states)
     }
 }
 
