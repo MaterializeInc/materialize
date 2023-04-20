@@ -90,6 +90,9 @@ pub enum AdapterNotice {
         member_name: String,
     },
     AutoRunOnIntrospectionCluster,
+    AlterIndexOwner {
+        name: String,
+    },
 }
 
 impl AdapterNotice {
@@ -114,6 +117,7 @@ impl AdapterNotice {
             },
             AdapterNotice::RbacSystemDisabled => Some("To enable RBAC please reach out to support with a request to turn RBAC on.".into()),
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
+            AdapterNotice::AlterIndexOwner {name: _} => Some("Change the ownership of the index's relation, instead.".into()),
             _ => None
         }
     }
@@ -230,6 +234,9 @@ impl fmt::Display for AdapterNotice {
                 f,
                 "query was automatically run on the \"mz_introspection\" cluster"
             ),
+            AdapterNotice::AlterIndexOwner { name } => {
+                write!(f, "cannot change owner of {}", name.quoted())
+            }
         }
     }
 }

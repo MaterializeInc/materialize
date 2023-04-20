@@ -309,7 +309,6 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::CreateSecret(_)
         | Plan::CreateSink(_)
         | Plan::CreateTable(_)
-        | Plan::CreateIndex(_)
         | Plan::CreateType(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
@@ -344,6 +343,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::Raise(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_) => Vec::new(),
+        Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => {
             replace.iter().map(|id| ObjectId::Item(*id)).collect()
