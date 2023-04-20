@@ -633,6 +633,13 @@ pub trait CreateResumptionFrontierCalc<T: Timestamp + Lattice + Codec64> {
     ) -> ResumptionFrontierCalculator<T>;
 }
 
+/// Holds both the [`WriteHandle`] and the last effective upper we want to use for that handle.
+///
+/// We use the term "effective upper" because we might want to "move the upper backward" so that the
+/// shard's upper appears to be the resumption frontier. This upper, then, is _not_ appropriate to
+/// use with [`WriteHandle::compare_and_append`] (i.e. it is not appropriate to use as the
+/// `expected_upper` argument), but is meant to be used in contexts where [`WriteHandle::append`] is
+/// appropriate.
 pub struct UpperState<T: Timestamp + Lattice + Codec64> {
     handle: WriteHandle<SourceData, (), T, Diff>,
     last_upper: Antichain<T>,
@@ -657,6 +664,11 @@ impl<T: Timestamp + Lattice + Codec64> std::fmt::Debug for UpperState<T> {
 }
 
 #[derive(Debug)]
+/// Provides convenience method to to efficiently calculate a new _resumption frontier_ from the
+/// shards desribed by its `upper_states.
+///
+/// For details about the resumption frontier calculation logic, see
+/// [`Self::calculate_resumption_frontier`]'s implementation.
 pub struct ResumptionFrontierCalculator<T: Timestamp + Lattice + Codec64> {
     initial_frontier: Antichain<T>,
     upper_states: BTreeMap<GlobalId, UpperState<T>>,
@@ -673,6 +685,8 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
         }
     }
 
+    /// Determine the resumption frontier of an ingestion comprised of the shards described by
+    /// `upper_states`.
     pub async fn calculate_resumption_frontier(&mut self) -> Antichain<T> {
         // Refresh all write handles' uppers.
         for UpperState { handle, last_upper } in self.upper_states.values_mut() {
@@ -681,6 +695,7 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
 
         let mut resume_upper = self.initial_frontier.clone();
 
+        // The resumption frontier is the min of (the stored initial frontier, all uppers).
         for t in self
             .upper_states
             .values()
@@ -690,7 +705,24 @@ impl<T: Timestamp + Lattice + Codec64> ResumptionFrontierCalculator<T> {
             resume_upper.insert(t.clone());
         }
 
+        // Ensure no upper exceeds the resume upper; however, uppers are permitted to be below it;
+        // this is currently the same as setting each upper to the resume upper, but will, in the
+        // future, let us add collections whose uppers are beneath the resume upper.
+        for UpperState { last_upper, .. } in self.upper_states.values_mut() {
+            if PartialOrder::less_than(&resume_upper, last_upper) {
+                *last_upper = resume_upper.clone();
+            }
+        }
+
         resume_upper
+    }
+
+    /// Get the most recent uppers of the shards used to generate the last resumption frontier.
+    pub fn get_uppers(&self) -> BTreeMap<GlobalId, Antichain<T>> {
+        self.upper_states
+            .iter()
+            .map(|(id, state)| (*id, state.last_upper.clone()))
+            .collect()
     }
 }
 

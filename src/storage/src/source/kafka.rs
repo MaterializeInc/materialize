@@ -222,8 +222,7 @@ impl SourceRender for KafkaSourceConnection {
             let mut partition_capabilities = BTreeMap::new();
             let mut max_pid = None;
             let resume_upper = Antichain::from_iter(
-                config
-                    .source_resume_upper
+                config.source_resume_upper[&config.id]
                     .iter()
                     .map(Partitioned::<_, _>::decode_row),
             );

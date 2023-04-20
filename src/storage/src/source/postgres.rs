@@ -129,8 +129,14 @@ impl SourceRender for PostgresSourceConnection {
         Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
-        let resume_upper =
-            Antichain::from_iter(config.source_resume_upper.iter().map(MzOffset::decode_row));
+        // TODO: make snapshot::render take all resume uppers, but only send main resume upper to replication::render
+        let resume_upper = Antichain::from_iter(
+            config.source_resume_upper[&config.id]
+                .iter()
+                .map(MzOffset::decode_row),
+        );
+
+        tracing::warn!("PG {:?} resumer_upper {:?}", config.id, resume_upper);
 
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();

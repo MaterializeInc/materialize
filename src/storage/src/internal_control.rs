@@ -6,6 +6,7 @@
 //! Types for cluster-internal control messages that can be broadcast to all
 //! workers from individual operators/workers.
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use mz_repr::{GlobalId, Row};
@@ -63,7 +64,7 @@ pub enum InternalStorageCommand {
         /// The frontier at which we should (re-)start ingestion.
         resumption_frontier: Antichain<mz_repr::Timestamp>,
         /// The frontier at which we should (re-)start ingestion in the source time domain.
-        source_resumption_frontier: Vec<Row>,
+        source_resumption_frontier: BTreeMap<GlobalId, Vec<Row>>,
     },
     /// Render a sink dataflow.
     CreateSinkDataflow(
