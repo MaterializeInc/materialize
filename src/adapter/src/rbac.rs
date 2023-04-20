@@ -254,7 +254,9 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
         | Plan::Execute(_)
         | Plan::Deallocate(_)
         | Plan::Raise(_)
-        | Plan::RotateKeys(_) => None,
+        | Plan::RotateKeys(_)
+        | Plan::GrantPrivilege(_)
+        | Plan::RevokePrivilege(_) => None,
     }
 }
 
@@ -355,6 +357,8 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         Plan::AlterSecret(plan) => vec![ObjectId::Item(plan.id)],
         Plan::RotateKeys(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterOwner(plan) => vec![plan.id.clone()],
+        Plan::GrantPrivilege(plan) => vec![plan.object_id.clone()],
+        Plan::RevokePrivilege(plan) => vec![plan.object_id.clone()],
     }
 }
 

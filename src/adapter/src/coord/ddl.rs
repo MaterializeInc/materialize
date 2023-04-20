@@ -960,6 +960,7 @@ impl Coordinator {
                 | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
+                | Op::UpdatePrivilege { .. }
                 | Op::GrantRole { .. }
                 | Op::RenameItem { .. }
                 | Op::UpdateOwner { .. }

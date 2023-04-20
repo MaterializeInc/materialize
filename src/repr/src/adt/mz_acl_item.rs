@@ -16,6 +16,7 @@ use columnation::{CloneRegion, Columnation};
 use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::mem::size_of;
 use std::ops::BitOrAssign;
@@ -189,6 +190,27 @@ impl MzAclItem {
 
     pub const fn binary_size() -> usize {
         RoleId::binary_size() + RoleId::binary_size() + size_of::<u64>()
+    }
+
+    pub fn group_by_grantee(items: Vec<MzAclItem>) -> BTreeMap<RoleId, Vec<MzAclItem>> {
+        items
+            .into_iter()
+            .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
+                accum
+                    .entry(mz_acl_item.grantee)
+                    .or_default()
+                    .push(mz_acl_item);
+                accum
+            })
+    }
+
+    pub fn flatten(items: &BTreeMap<RoleId, Vec<MzAclItem>>) -> Vec<MzAclItem> {
+        items
+            .values()
+            .map(|items| items.into_iter())
+            .flatten()
+            .cloned()
+            .collect()
     }
 }
 

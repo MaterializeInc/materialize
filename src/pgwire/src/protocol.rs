@@ -1405,10 +1405,12 @@ where
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedObject(_)
+            | ExecuteResponse::GrantedPrivilege
             | ExecuteResponse::GrantedRole
             | ExecuteResponse::Inserted(..)
             | ExecuteResponse::Prepare
             | ExecuteResponse::Raised
+            | ExecuteResponse::RevokedPrivilege
             | ExecuteResponse::RevokedRole
             | ExecuteResponse::StartedTransaction { .. }
             | ExecuteResponse::TransactionCommitted

@@ -9,6 +9,7 @@
 
 //! Structured name types for SQL objects.
 
+use anyhow::anyhow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -685,6 +686,16 @@ pub enum SchemaId {
     System(u64),
 }
 
+impl SchemaId {
+    pub fn is_user(&self) -> bool {
+        matches!(self, SchemaId::User(_))
+    }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, SchemaId::System(_))
+    }
+}
+
 impl fmt::Display for SchemaId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -721,6 +732,16 @@ impl FromStr for SchemaId {
 pub enum DatabaseId {
     User(u64),
     System(u64),
+}
+
+impl DatabaseId {
+    pub fn is_user(&self) -> bool {
+        matches!(self, DatabaseId::User(_))
+    }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, DatabaseId::System(_))
+    }
 }
 
 impl fmt::Display for DatabaseId {
@@ -801,6 +822,30 @@ impl ObjectId {
         match self {
             ObjectId::Item(id) => id,
             _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
+        }
+    }
+}
+
+impl TryFrom<ResolvedObjectName> for ObjectId {
+    type Error = anyhow::Error;
+
+    fn try_from(name: ResolvedObjectName) -> Result<ObjectId, Self::Error> {
+        match name {
+            ResolvedObjectName::Cluster(name) => Ok(ObjectId::Cluster(name.id)),
+            ResolvedObjectName::ClusterReplica(name) => {
+                Ok(ObjectId::ClusterReplica((name.cluster_id, name.replica_id)))
+            }
+            ResolvedObjectName::Database(name) => Ok(ObjectId::Database(*name.database_id())),
+            ResolvedObjectName::Schema(name) => Ok(ObjectId::Schema((
+                *name.database_spec(),
+                name.schema_spec().into(),
+            ))),
+            ResolvedObjectName::Role(name) => Ok(ObjectId::Role(name.id)),
+            ResolvedObjectName::Item(name) => match name {
+                ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id)),
+                ResolvedItemName::Cte { .. } => Err(anyhow!("CTE does not correspond to object")),
+                ResolvedItemName::Error => Err(anyhow!("error in name resolution")),
+            },
         }
     }
 }
