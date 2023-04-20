@@ -29,11 +29,11 @@ Component                | Use
 ### Clusters
 
 Materialize isolates user workspaces into clusters. Each cluster allocates
-compute resources to process your data. When you create a dataflow object like a
+compute resources to process your data. When you create a Materialize object like a
 source or an index, you must specify a cluster or your resource will use the
 `default` cluster.
 
-Clusters rely on cluster replicas to run dataflows. Without a replica, clusters
+Clusters rely on cluster replicas to data computation. Without a replica, clusters
 cannot perform data operations. Clusters are similar to a VPC while cluster replicas are similar to compute
 instances within a VPC. The cluster is the architectural foundation that
 provides operational resources to objects and the
@@ -52,7 +52,7 @@ cluster replicas in more detail.
 ### Cluster replicas
 
 Cluster replicas are compute instances within clusters that create and maintain
-your Materialize dataflows.
+your Materialize data resources.
 
 Each replica within a cluster is built with the same resource requirements you
 set in your `CREATE CLUSTER` or `CREATE CLUSTER REPLICA` statement. Replicas
@@ -60,13 +60,13 @@ within a cluster receive a copy of all data from your sources and each perform
 identical computations on the data. As long as one replica is available, the cluster continues operations and gives
 you active replication in Materialize. 
 
-All dataflows of a cluster share the same resources on each replica. Depending
-on your dataflow needs, you may consider distributing replicas across multiple
+All replicas share the same resources of a cluster share the same resources. Depending
+on your data needs, you may consider distributing replicas across multiple
 clusters or provisioning more replicas within your clusters.
 
 #### Cluster replica deployment options
 
-For greater data throughput or for managing more complex dataflows consider
+For greater data throughput or for managing more complex data computation consider
 deploying larger sized replicas in your cluster.
 
 You can also add more replicas to your clusters to increase fault tolerance if a
@@ -167,7 +167,7 @@ views that query it.
 
 Materialize returns the dataflow's current result set from storage when it
 receives a read operation on a materialized view. To improve the speed of queries on
-materialized views, we recommend creating indexes based on
+materialized views, we recommend [creating](creating) indexes based on
 common query patterns.
 
 #### Non-materialized views
