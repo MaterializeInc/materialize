@@ -394,14 +394,8 @@ pub fn describe_subscribe(
                 .into_owned()
         }
         SubscribeRelation::Query(query) => {
-            let query = Query::query(query);
-            let query::PlannedQuery { desc, .. } = plan_query(
-                scx,
-                query,
-                &Params::empty(),
-                QueryLifetime::OneShot(scx.pcx()?),
-            )?;
-
+            let query::PlannedQuery { desc, .. } =
+                query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
             desc
         }
     };
