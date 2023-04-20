@@ -18,7 +18,7 @@ use std::rc::Rc;
 use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
 use mz_repr::Timestamp;
-use mz_storage_client::controller::ResumptionFrontierCalculator;
+use mz_storage_client::controller::CreateResumptionFrontierCalc;
 use mz_timely_util::builder_async::OperatorBuilder;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
@@ -44,7 +44,7 @@ pub fn resumption_operator<G, R>(
 ) -> (timely::dataflow::Stream<G, ()>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp> + Clone,
-    R: ResumptionFrontierCalculator<Timestamp> + 'static,
+    R: CreateResumptionFrontierCalc<Timestamp> + 'static,
 {
     let RawSourceCreationConfig {
         id,
@@ -81,13 +81,13 @@ where
         // See <https://docs.rs/tokio/latest/tokio/time/struct.Interval.html#method.tick>
         interval.tick().await;
 
-        let mut calc_state = calc.initialize_state(&persist_clients).await;
+        let mut calc = calc.create_calc(&persist_clients).await;
 
         while !upper.is_empty() {
             interval.tick().await;
 
             // Get a new lower bound for the resumption frontier
-            let new_upper = calc.calculate_resumption_frontier(&mut calc_state).await;
+            let new_upper = calc.calculate_resumption_frontier().await;
 
             if PartialOrder::less_than(&upper, &new_upper) {
                 tracing::debug!(

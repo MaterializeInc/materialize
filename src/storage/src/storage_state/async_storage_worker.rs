@@ -24,7 +24,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::local::Activatable;
-use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
+use mz_storage_client::controller::{CollectionMetadata, CreateResumptionFrontierCalc};
 use mz_storage_client::types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, PostgresSourceConnection, SourceConnection, SourceData,
@@ -162,14 +162,12 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                         ingestion_description,
                         _phantom_data,
                     ) => {
-                        let mut state = ingestion_description
-                            .initialize_state(&persist_clients)
+                        let mut calc = ingestion_description
+                            .create_calc(&persist_clients)
                             .instrument(span.clone())
                             .await;
-                        let resume_upper: Antichain<T> = ingestion_description
-                            .calculate_resumption_frontier(&mut state)
-                            .instrument(span)
-                            .await;
+                        let resume_upper: Antichain<T> =
+                            calc.calculate_resumption_frontier().instrument(span).await;
 
                         // Create a specialized description to be able to call the generic method
                         let source_resume_upper = match ingestion_description.desc.connection {
