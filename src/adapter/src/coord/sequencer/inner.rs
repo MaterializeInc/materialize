@@ -39,7 +39,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
@@ -76,7 +76,7 @@ use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::{
     self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
-    StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
+    StorageSinkConnectionState, UpdatePrivilegeVariant, LINKED_CLUSTER_REPLICA_NAME,
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
@@ -3674,6 +3674,47 @@ impl Coordinator {
             grantor,
         }: GrantPrivilegePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        self.sequence_update_privilege(
+            session,
+            acl_mode,
+            object_id,
+            grantee,
+            grantor,
+            UpdatePrivilegeVariant::Grant,
+        )
+        .await
+    }
+
+    pub(super) async fn sequence_revoke_privilege(
+        &mut self,
+        session: &mut Session,
+        RevokePrivilegePlan {
+            acl_mode,
+            object_id,
+            revokee,
+            grantor,
+        }: RevokePrivilegePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.sequence_update_privilege(
+            session,
+            acl_mode,
+            object_id,
+            revokee,
+            grantor,
+            UpdatePrivilegeVariant::Revoke,
+        )
+        .await
+    }
+
+    async fn sequence_update_privilege(
+        &mut self,
+        session: &mut Session,
+        acl_mode: AclMode,
+        object_id: ObjectId,
+        grantee: RoleId,
+        grantor: RoleId,
+        variant: UpdatePrivilegeVariant,
+    ) -> Result<ExecuteResponse, AdapterError> {
         self.catalog()
             .ensure_not_reserved_object(&object_id, session.conn_id())?;
 
@@ -3690,70 +3731,41 @@ impl Coordinator {
             })
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
-        // The granted privileges already exists so we can return early.
-        if existing_privilege.acl_mode.contains(acl_mode) {
-            return Ok(ExecuteResponse::GrantedPrivilege);
+
+        match variant {
+            UpdatePrivilegeVariant::Grant => {
+                if existing_privilege.acl_mode.contains(acl_mode) {
+                    // The granted privileges already exists so we can return early.
+                    return Ok(ExecuteResponse::GrantedPrivilege);
+                }
+            }
+            UpdatePrivilegeVariant::Revoke => {
+                if existing_privilege
+                    .acl_mode
+                    .intersection(acl_mode)
+                    .is_empty()
+                {
+                    // The revoked privileges don't exist so we can return early.
+                    return Ok(ExecuteResponse::RevokedPrivilege);
+                }
+            }
         }
 
-        let op = catalog::Op::GrantPrivilege {
+        let op = catalog::Op::UpdatePrivilege {
             object_id,
             privilege: MzAclItem {
                 grantee,
                 grantor,
                 acl_mode,
             },
+            variant,
         };
         self.catalog_transact(Some(session), vec![op])
             .await
-            .map(|_| ExecuteResponse::GrantedPrivilege)
-    }
-
-    pub(super) async fn sequence_revoke_privilege(
-        &mut self,
-        session: &mut Session,
-        RevokePrivilegePlan {
-            acl_mode,
-            object_id,
-            revokee,
-            grantor,
-        }: RevokePrivilegePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog()
-            .ensure_not_reserved_object(&object_id, session.conn_id())?;
-
-        let privileges = self
-            .catalog()
-            .get_privileges(&object_id, session.conn_id())
-            .expect("cannot revoke privileges on objects without privileges");
-        let existing_privilege = privileges
-            .get(&revokee)
-            .and_then(|privileges| {
-                privileges
-                    .into_iter()
-                    .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+            .map(|_| match variant {
+                UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
+                UpdatePrivilegeVariant::Revoke => ExecuteResponse::RevokedPrivilege,
             })
-            .map(Cow::Borrowed)
-            .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(revokee, grantor)));
-        // The revoked privileges don't exist so we can return early.
-        if existing_privilege
-            .acl_mode
-            .intersection(acl_mode)
-            .is_empty()
-        {
-            return Ok(ExecuteResponse::RevokedPrivilege);
-        }
-
-        let op = catalog::Op::RevokePrivilege {
-            object_id,
-            privilege: MzAclItem {
-                grantee: revokee,
-                grantor,
-                acl_mode,
-            },
-        };
-        self.catalog_transact(Some(session), vec![op])
-            .await
-            .map(|_| ExecuteResponse::RevokedPrivilege)
     }
 
     pub(super) async fn sequence_grant_role(

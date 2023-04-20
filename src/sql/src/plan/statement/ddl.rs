@@ -93,7 +93,7 @@ use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, DatabaseId, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, SchemaId, SchemaSpecifier,
+    ResolvedItemName, ResolvedObjectName, ResolvedRoleName, SchemaId, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -4326,58 +4326,12 @@ pub fn plan_grant_privilege(
         role,
     }: GrantPrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let mut acl_mode = AclMode::empty();
-    // PostgreSQL doesn't care about duplicate privileges, so we don't either.
-    for privilege in privileges {
-        acl_mode |= privilege_to_acl_mode(privilege);
-    }
-    let object_id = name
-        .try_into()
-        .expect("name resolution should handle invalid objects");
-    if let ObjectId::Item(id) = &object_id {
-        let item = scx.get_item(id);
-        let item_type: ObjectType = item.item_type().into();
-        if (item_type == ObjectType::View
-            || item_type == ObjectType::MaterializedView
-            || item_type == ObjectType::Source)
-            && object_type == ObjectType::Table
-        {
-            // This is an expected mis-match to match PostgreSQL semantics.
-        } else if item_type != object_type {
-            let object_name = scx.catalog.resolve_full_name(item.name()).to_string();
-            return Err(PlanError::InvalidObjectType {
-                expected_type: object_type,
-                actual_type: item_type,
-                object_name,
-            });
-        }
-    }
-
-    let actual_object_type = scx.get_object_type(&object_id);
-    let all_object_privileges = scx.catalog.all_object_privileges(actual_object_type);
-    let invalid_acl_mode = acl_mode.difference(all_object_privileges);
-    if !invalid_acl_mode.is_empty() {
-        let invalid_privileges = acl_mode_to_privileges(invalid_acl_mode);
-        return Err(PlanError::InvalidPrivilegeTypes {
-            privilege_types: invalid_privileges,
-            object_type: actual_object_type,
-        });
-    }
-
-    // In PostgreSQL, the grantor must always be either the object owner or some role that has been
-    // been explicitly granted grant options. In Materialize, we haven't implemented grant options
-    // so the grantor is always the object owner.
-    //
-    // For more details see:
-    // https://github.com/postgres/postgres/blob/78d5952dd0e66afc4447eec07f770991fa406cce/src/backend/utils/adt/acl.c#L5154-L5246
-    let grantor = scx
-        .catalog
-        .get_owner_id(&object_id)
-        .expect("cannot grant privileges on objects without owners");
+    let (acl_mode, object_id, grantee, grantor) =
+        plan_update_privilege(scx, privileges, object_type, name, role)?;
     Ok(Plan::GrantPrivilege(GrantPrivilegePlan {
         acl_mode,
         object_id,
-        grantee: role.id,
+        grantee,
         grantor,
     }))
 }
@@ -4398,6 +4352,23 @@ pub fn plan_revoke_privilege(
         role,
     }: RevokePrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    let (acl_mode, object_id, revokee, grantor) =
+        plan_update_privilege(scx, privileges, object_type, name, role)?;
+    Ok(Plan::RevokePrivilege(RevokePrivilegePlan {
+        acl_mode,
+        object_id,
+        revokee,
+        grantor,
+    }))
+}
+
+fn plan_update_privilege(
+    scx: &StatementContext,
+    privileges: Vec<Privilege>,
+    object_type: ObjectType,
+    name: ResolvedObjectName,
+    role: ResolvedRoleName,
+) -> Result<(AclMode, ObjectId, RoleId, RoleId), PlanError> {
     let mut acl_mode = AclMode::empty();
     // PostgreSQL doesn't care about duplicate privileges, so we don't either.
     for privilege in privileges {
@@ -4446,12 +4417,8 @@ pub fn plan_revoke_privilege(
         .catalog
         .get_owner_id(&object_id)
         .expect("cannot revoke privileges on objects without owners");
-    Ok(Plan::RevokePrivilege(RevokePrivilegePlan {
-        acl_mode,
-        object_id,
-        revokee: role.id,
-        grantor,
-    }))
+
+    Ok((acl_mode, object_id, role.id, grantor))
 }
 
 fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {

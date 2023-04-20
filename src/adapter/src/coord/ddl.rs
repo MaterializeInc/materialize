@@ -960,11 +960,10 @@ impl Coordinator {
                 | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
                 | Op::DropTimeline(_)
-                | Op::GrantPrivilege { .. }
+                | Op::UpdatePrivilege { .. }
                 | Op::GrantRole { .. }
                 | Op::RenameItem { .. }
                 | Op::UpdateOwner { .. }
-                | Op::RevokePrivilege { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }

@@ -5765,188 +5765,109 @@ impl Catalog {
                         }),
                     )?;
                 }
-                Op::GrantPrivilege {
+                Op::UpdatePrivilege {
                     object_id,
                     privilege,
-                } => match object_id {
-                    ObjectId::Cluster(id) => {
-                        let cluster_name = state.get_cluster(id).name().to_string();
-                        if id.is_system() {
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlyCluster(cluster_name),
-                            )));
+                    variant,
+                } => {
+                    let update_privilege_fn = |privileges, privilege| match variant {
+                        UpdatePrivilegeVariant::Grant => {
+                            Self::grant_object_privilege(privileges, privilege)
                         }
-                        builtin_table_updates.push(state.pack_cluster_update(&cluster_name, -1));
-                        let cluster = state.get_cluster_mut(id);
-                        Self::grant_object_privilege(&mut cluster.privileges, privilege);
-                        tx.update_cluster(id, cluster)?;
-                        builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
-                    }
-                    ObjectId::Database(id) => {
-                        let database = state.get_database(&id);
-                        if id.is_system() {
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlyDatabase(database.name().to_string()),
-                            )));
+                        UpdatePrivilegeVariant::Revoke => {
+                            Self::revoke_object_privilege(privileges, privilege)
                         }
-                        builtin_table_updates.push(state.pack_database_update(database, -1));
-                        let database = state.get_database_mut(&id);
-                        Self::grant_object_privilege(&mut database.privileges, privilege);
-                        let database = state.get_database(&id);
-                        tx.update_database(id, database)?;
-                        builtin_table_updates.push(state.pack_database_update(database, 1));
-                    }
-                    ObjectId::Schema((database_spec, schema_id)) => {
-                        if schema_id.is_system() {
-                            let schema = state.get_schema(
+                    };
+                    match object_id {
+                        ObjectId::Cluster(id) => {
+                            let cluster_name = state.get_cluster(id).name().to_string();
+                            if id.is_system() {
+                                return Err(AdapterError::Catalog(Error::new(
+                                    ErrorKind::ReadOnlyCluster(cluster_name),
+                                )));
+                            }
+                            builtin_table_updates
+                                .push(state.pack_cluster_update(&cluster_name, -1));
+                            let cluster = state.get_cluster_mut(id);
+                            update_privilege_fn(&mut cluster.privileges, privilege);
+                            tx.update_cluster(id, cluster)?;
+                            builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
+                        }
+                        ObjectId::Database(id) => {
+                            let database = state.get_database(&id);
+                            if id.is_system() {
+                                return Err(AdapterError::Catalog(Error::new(
+                                    ErrorKind::ReadOnlyDatabase(database.name().to_string()),
+                                )));
+                            }
+                            builtin_table_updates.push(state.pack_database_update(database, -1));
+                            let database = state.get_database_mut(&id);
+                            update_privilege_fn(&mut database.privileges, privilege);
+                            let database = state.get_database(&id);
+                            tx.update_database(id, database)?;
+                            builtin_table_updates.push(state.pack_database_update(database, 1));
+                        }
+                        ObjectId::Schema((database_spec, schema_id)) => {
+                            if schema_id.is_system() {
+                                let schema = state.get_schema(
+                                    &database_spec,
+                                    &schema_id.into(),
+                                    session
+                                        .map(|session| session.conn_id())
+                                        .unwrap_or(SYSTEM_CONN_ID),
+                                );
+                                return Err(AdapterError::Catalog(Error::new(
+                                    ErrorKind::ReadOnlySystemSchema(schema.name().schema.clone()),
+                                )));
+                            }
+                            builtin_table_updates.push(state.pack_schema_update(
+                                &database_spec,
+                                &schema_id,
+                                -1,
+                            ));
+                            let schema = state.get_schema_mut(
                                 &database_spec,
                                 &schema_id.into(),
                                 session
                                     .map(|session| session.conn_id())
                                     .unwrap_or(SYSTEM_CONN_ID),
                             );
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlySystemSchema(schema.name().schema.clone()),
-                            )));
-                        }
-                        builtin_table_updates.push(state.pack_schema_update(
-                            &database_spec,
-                            &schema_id,
-                            -1,
-                        ));
-                        let schema = state.get_schema_mut(
-                            &database_spec,
-                            &schema_id.into(),
-                            session
-                                .map(|session| session.conn_id())
-                                .unwrap_or(SYSTEM_CONN_ID),
-                        );
-                        Self::grant_object_privilege(&mut schema.privileges, privilege);
-                        let database_id = match &database_spec {
-                            ResolvedDatabaseSpecifier::Ambient => None,
-                            ResolvedDatabaseSpecifier::Id(id) => Some(*id),
-                        };
-                        tx.update_schema(database_id, schema_id, schema)?;
-                        builtin_table_updates.push(state.pack_schema_update(
-                            &database_spec,
-                            &schema_id,
-                            1,
-                        ));
-                    }
-                    ObjectId::Item(id) => {
-                        if id.is_system() {
-                            let entry = state.get_entry(&id);
-                            let full_name = state.resolve_full_name(
-                                entry.name(),
-                                session.map(|session| session.conn_id()),
-                            );
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlyItem(full_name.to_string()),
-                            )));
-                        }
-                        builtin_table_updates.extend(state.pack_item_update(id, -1));
-                        let entry = state.get_entry_mut(&id);
-                        Self::grant_object_privilege(&mut entry.privileges, privilege);
-                        tx.update_item(
-                            id,
-                            &entry.name().item,
-                            &Self::serialize_item(entry.item()),
-                        )?;
-                        builtin_table_updates.extend(state.pack_item_update(id, 1));
-                    }
-                    ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
-                },
-                Op::RevokePrivilege {
-                    object_id,
-                    privilege,
-                } => match object_id {
-                    ObjectId::Cluster(id) => {
-                        let cluster_name = state.get_cluster(id).name().to_string();
-                        if id.is_system() {
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlyCluster(cluster_name),
-                            )));
-                        }
-                        builtin_table_updates.push(state.pack_cluster_update(&cluster_name, -1));
-                        let cluster = state.get_cluster_mut(id);
-                        Self::revoke_object_privilege(&mut cluster.privileges, privilege);
-                        tx.update_cluster(id, cluster)?;
-                        builtin_table_updates.push(state.pack_cluster_update(&cluster_name, 1));
-                    }
-                    ObjectId::Database(id) => {
-                        let database = state.get_database(&id);
-                        if id.is_system() {
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlyDatabase(database.name().to_string()),
-                            )));
-                        }
-                        builtin_table_updates.push(state.pack_database_update(database, -1));
-                        let database = state.get_database_mut(&id);
-                        Self::revoke_object_privilege(&mut database.privileges, privilege);
-                        let database = state.get_database(&id);
-                        tx.update_database(id, database)?;
-                        builtin_table_updates.push(state.pack_database_update(database, 1));
-                    }
-                    ObjectId::Schema((database_spec, schema_id)) => {
-                        if schema_id.is_system() {
-                            let schema = state.get_schema(
+                            update_privilege_fn(&mut schema.privileges, privilege);
+                            let database_id = match &database_spec {
+                                ResolvedDatabaseSpecifier::Ambient => None,
+                                ResolvedDatabaseSpecifier::Id(id) => Some(*id),
+                            };
+                            tx.update_schema(database_id, schema_id, schema)?;
+                            builtin_table_updates.push(state.pack_schema_update(
                                 &database_spec,
-                                &schema_id.into(),
-                                session
-                                    .map(|session| session.conn_id())
-                                    .unwrap_or(SYSTEM_CONN_ID),
-                            );
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlySystemSchema(schema.name().schema.clone()),
-                            )));
+                                &schema_id,
+                                1,
+                            ));
                         }
-                        builtin_table_updates.push(state.pack_schema_update(
-                            &database_spec,
-                            &schema_id,
-                            -1,
-                        ));
-                        let schema = state.get_schema_mut(
-                            &database_spec,
-                            &schema_id.into(),
-                            session
-                                .map(|session| session.conn_id())
-                                .unwrap_or(SYSTEM_CONN_ID),
-                        );
-                        Self::revoke_object_privilege(&mut schema.privileges, privilege);
-                        let database_id = match &database_spec {
-                            ResolvedDatabaseSpecifier::Ambient => None,
-                            ResolvedDatabaseSpecifier::Id(id) => Some(*id),
-                        };
-                        tx.update_schema(database_id, schema_id, schema)?;
-                        builtin_table_updates.push(state.pack_schema_update(
-                            &database_spec,
-                            &schema_id,
-                            1,
-                        ));
-                    }
-                    ObjectId::Item(id) => {
-                        if id.is_system() {
-                            let entry = state.get_entry(&id);
-                            let full_name = state.resolve_full_name(
-                                entry.name(),
-                                session.map(|session| session.conn_id()),
-                            );
-                            return Err(AdapterError::Catalog(Error::new(
-                                ErrorKind::ReadOnlyItem(full_name.to_string()),
-                            )));
+                        ObjectId::Item(id) => {
+                            if id.is_system() {
+                                let entry = state.get_entry(&id);
+                                let full_name = state.resolve_full_name(
+                                    entry.name(),
+                                    session.map(|session| session.conn_id()),
+                                );
+                                return Err(AdapterError::Catalog(Error::new(
+                                    ErrorKind::ReadOnlyItem(full_name.to_string()),
+                                )));
+                            }
+                            builtin_table_updates.extend(state.pack_item_update(id, -1));
+                            let entry = state.get_entry_mut(&id);
+                            update_privilege_fn(&mut entry.privileges, privilege);
+                            tx.update_item(
+                                id,
+                                &entry.name().item,
+                                &Self::serialize_item(entry.item()),
+                            )?;
+                            builtin_table_updates.extend(state.pack_item_update(id, 1));
                         }
-                        builtin_table_updates.extend(state.pack_item_update(id, -1));
-                        let entry = state.get_entry_mut(&id);
-                        Self::revoke_object_privilege(&mut entry.privileges, privilege);
-                        tx.update_item(
-                            id,
-                            &entry.name().item,
-                            &Self::serialize_item(entry.item()),
-                        )?;
-                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                        ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     }
-                    ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
-                },
+                }
                 Op::RenameItem {
                     id,
                     to_name,
@@ -6924,6 +6845,12 @@ fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) 
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum UpdatePrivilegeVariant {
+    Grant,
+    Revoke,
+}
+
 #[derive(Debug, Clone)]
 pub enum Op {
     AlterSink {
@@ -6979,10 +6906,6 @@ pub enum Op {
     },
     DropObject(ObjectId),
     DropTimeline(Timeline),
-    GrantPrivilege {
-        object_id: ObjectId,
-        privilege: MzAclItem,
-    },
     GrantRole {
         role_id: RoleId,
         member_id: RoleId,
@@ -6997,9 +6920,10 @@ pub enum Op {
         id: ObjectId,
         new_owner: RoleId,
     },
-    RevokePrivilege {
+    UpdatePrivilege {
         object_id: ObjectId,
         privilege: MzAclItem,
+        variant: UpdatePrivilegeVariant,
     },
     RevokeRole {
         role_id: RoleId,
