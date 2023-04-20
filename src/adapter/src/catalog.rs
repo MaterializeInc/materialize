@@ -706,7 +706,7 @@ impl CatalogState {
         name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
-        privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
+        privileges: PrivilegeMap,
     ) {
         if !id.is_system() && !item.is_placeholder() {
             info!(
@@ -882,7 +882,7 @@ impl CatalogState {
                     custom_logical_compaction_window: None,
                 }),
                 MZ_SYSTEM_ROLE_ID,
-                BTreeMap::new(),
+                PrivilegeMap::new(),
             );
             log_indexes.insert(log.variant.clone(), index_id);
         }
@@ -1631,8 +1631,7 @@ impl Role {
 #[serde(into = "BTreeMap<String, RoleId>")]
 #[serde(try_from = "BTreeMap<String, RoleId>")]
 pub struct RoleMembership {
-    /// Key is the role
-    /// that some role is a member of, value is the grantor role ID.
+    /// Key is the role that some role is a member of, value is the grantor role ID.
     // TODO(jkosh44) This structure does not allow a role to have multiple of the same membership
     // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
     // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
@@ -2957,7 +2956,7 @@ impl Catalog {
                             name.clone(),
                             CatalogItem::Func(Func { inner: func.inner }),
                             MZ_SYSTEM_ROLE_ID,
-                            BTreeMap::new(),
+                            PrivilegeMap::new(),
                         );
                     }
 
@@ -3123,7 +3122,7 @@ impl Catalog {
                         name,
                         item,
                         MZ_SYSTEM_ROLE_ID,
-                        BTreeMap::new(),
+                        PrivilegeMap::new(),
                     );
                 }
                 Builtin::Log(_)
@@ -7721,7 +7720,7 @@ mod tests {
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
-    use mz_sql::catalog::CatalogDatabase;
+    use mz_sql::catalog::{CatalogDatabase, PrivilegeMap};
     use mz_sql::names;
     use mz_sql::names::{
         DatabaseId, ItemQualifiers, PartialItemName, QualifiedItemName, ResolvedDatabaseSpecifier,
@@ -8731,7 +8730,7 @@ mod tests {
         let other_role = RoleId::User(3);
 
         // older owner exists as grantor.
-        let mut privileges = BTreeMap::new();
+        let mut privileges = PrivilegeMap::new();
         privileges.insert(
             other_role,
             vec![
@@ -8759,7 +8758,7 @@ mod tests {
         );
 
         // older owner exists as grantee.
-        let mut privileges = BTreeMap::new();
+        let mut privileges = PrivilegeMap::new();
         privileges.insert(
             old_owner,
             vec![MzAclItem {
@@ -8788,7 +8787,7 @@ mod tests {
         );
 
         // older owner exists as grantee and grantor.
-        let mut privileges = BTreeMap::new();
+        let mut privileges = PrivilegeMap::new();
         privileges.insert(
             old_owner,
             vec![MzAclItem {

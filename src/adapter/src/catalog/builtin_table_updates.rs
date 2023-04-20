@@ -29,7 +29,9 @@ use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, PrivilegeMap, TypeCategory,
+};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -1232,7 +1234,7 @@ impl CatalogState {
         }
     }
 
-    fn pack_privilege_array_row(&self, privileges: &BTreeMap<RoleId, Vec<MzAclItem>>) -> Row {
+    fn pack_privilege_array_row(&self, privileges: &PrivilegeMap) -> Row {
         let mut row = Row::default();
         let flat_privileges = MzAclItem::flatten(privileges);
         row.packer()
