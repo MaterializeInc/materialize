@@ -116,7 +116,7 @@ impl crate::Transform for Typecheck {
                     let expected = columns_pretty(expected, &humanizer);
 
                     type_error!(
-                        "TYPE ERROR: GLOBAL ID TYPE CHANGED\ngot {got} expected {expected} \nIN KNOWN QUERY BOUND TO {id}:\n{}",
+                        "TYPE ERROR: GLOBAL ID TYPE CHANGED\n     got {got}\nexpected {expected} \nIN KNOWN QUERY BOUND TO {id}:\n{}",
                         plan.pretty()
                     );
                 }

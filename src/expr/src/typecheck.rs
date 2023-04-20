@@ -700,7 +700,7 @@ impl<'a> TypeError<'a> {
                 let expected = humanizer.humanize_column_type(expected);
                 writeln!(
                     f,
-                    "mismatched column types: {message}\ngot {got}\nexpected {expected}"
+                    "mismatched column types: {message}\n      got {got}\nexpected {expected}"
                 )?
             }
             MismatchColumns {
@@ -714,7 +714,7 @@ impl<'a> TypeError<'a> {
 
                 writeln!(
                     f,
-                    "mismatched relation types: {message}\ngot {got}\nexpected {expected}"
+                    "mismatched relation types: {message}\n      got {got}\nexpected {expected}"
                 )?
             }
             BadConstantRow {
@@ -726,7 +726,7 @@ impl<'a> TypeError<'a> {
 
                 writeln!(
                     f,
-                    "bad constant row\ngot {got}\nexpected row of type {expected}"
+                    "bad constant row\n      got {got}\nexpected row of type {expected}"
                 )?
             }
             BadProject {
