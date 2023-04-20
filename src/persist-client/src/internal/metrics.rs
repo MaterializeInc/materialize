@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
@@ -1542,7 +1543,7 @@ impl MetricsBlob {
 
 #[async_trait]
 impl Blob for MetricsBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let res = self
             .metrics
             .blob

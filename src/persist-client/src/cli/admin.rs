@@ -17,6 +17,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -287,7 +288,7 @@ struct ReadOnly<T>(T);
 
 #[async_trait]
 impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         self.0.get(key).await
     }
 

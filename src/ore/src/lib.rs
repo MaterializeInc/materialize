@@ -92,6 +92,9 @@
 #[cfg(feature = "test")]
 pub mod assert;
 pub mod bits;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes_")))]
+#[cfg(feature = "bytes_")]
+pub mod bytes;
 pub mod cast;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "cli")))]
 #[cfg(feature = "cli")]

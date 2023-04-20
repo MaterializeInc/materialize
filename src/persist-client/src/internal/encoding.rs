@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::location::{SeqNo, VersionedData};
@@ -622,7 +622,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         Ok(self.state)
     }
 
-    pub fn decode(build_version: &Version, buf: &[u8]) -> Self {
+    pub fn decode(build_version: &Version, buf: impl Buf) -> Self {
         let proto = ProtoStateRollup::decode(buf)
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
@@ -1021,6 +1021,7 @@ impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnri
 mod tests {
     use std::sync::atomic::Ordering;
 
+    use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_persist::location::SeqNo;
 
@@ -1043,16 +1044,17 @@ mod tests {
         let state = TypedState::<(), (), u64, i64>::new(v2.clone(), shard_id, "".to_owned(), 0);
         let mut buf = Vec::new();
         state.encode(&mut buf);
+        let bytes = Bytes::from(buf);
 
         // We can read it back using persist code v2 and v3.
         assert_eq!(
-            UntypedState::<u64>::decode(&v2, &buf)
+            UntypedState::<u64>::decode(&v2, bytes.clone())
                 .check_codecs(&shard_id)
                 .as_ref(),
             Ok(&state)
         );
         assert_eq!(
-            UntypedState::<u64>::decode(&v3, &buf)
+            UntypedState::<u64>::decode(&v3, bytes.clone())
                 .check_codecs(&shard_id)
                 .as_ref(),
             Ok(&state)
@@ -1062,7 +1064,8 @@ mod tests {
         // losing or misinterpreting something written out by a future version
         // of code.
         mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
-        let v1_res = mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, &buf));
+        let v1_res =
+            mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
         assert!(v1_res.is_err());
     }
 

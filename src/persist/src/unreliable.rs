@@ -16,6 +16,7 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use rand::prelude::SmallRng;
 use rand::{Rng, SeedableRng};
 use tracing::trace;
@@ -140,7 +141,7 @@ impl UnreliableBlob {
 
 #[async_trait]
 impl Blob for UnreliableBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         self.handle.run_op("get", || self.blob.get(key)).await
     }
 
