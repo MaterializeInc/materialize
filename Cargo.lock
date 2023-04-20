@@ -4360,10 +4360,18 @@ dependencies = [
  "chrono",
  "dec",
  "mz-ore",
+ "mz-pgrepr-consts",
  "mz-repr",
  "once_cell",
  "postgres-types",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-pgrepr-consts"
+version = "0.0.0"
+dependencies = [
  "workspace-hack",
 ]
 

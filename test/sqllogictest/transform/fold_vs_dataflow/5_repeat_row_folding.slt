@@ -1,0 +1,48 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# -------------------------------
+# repeat row (=> this panics!)
+# -------------------------------
+
+statement ok
+CREATE TABLE t_base (data int, diff bigint);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+# see also: https://github.com/MaterializeInc/materialize/issues/17758
+# statement error
+# CREATE VIEW v_using_constant_folding AS
+#  SELECT data FROM (
+#     SELECT * FROM (
+#         VALUES (1, 9223372036854775807),
+#                (1, 9223372036854775807)
+#         ) AS t_base(data, diff),
+#         repeat_row(diff)
+# );
+# resulting in:
+# thread 'coordinator' panicked at 'attempt to multiply with overflow', src/transform/src/fold_constants.rs:629:49
+# note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+# query I
+# SELECT SUM(data)
+# FROM v_using_constant_folding;
+# ----
+
+# query T multiline
+# EXPLAIN SELECT SUM(data)
+# FROM v_using_constant_folding;
+# ----
+# EOF

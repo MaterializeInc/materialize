@@ -8,22 +8,27 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
-mz-cloud-resources = { path = "../cloud-resources" }
-mz-ore = { path = "../ore", features = ["async"] }
-mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr" }
-mz-ssh-util = { path = "../ssh-util" }
+mz-cloud-resources = { path = "../cloud-resources", optional = true }
+mz-ore = { path = "../ore", features = ["async"], optional = true }
+mz-proto = { path = "../proto", optional = true }
+mz-repr = { path = "../repr", optional = true }
+mz-ssh-util = { path = "../ssh-util", optional = true }
 openssl = { version = "0.10.48", features = ["vendored"] }
-openssh = { version = "0.9.8", default-features = false, features = ["native-mux"] }
+openssh = { version = "0.9.8", default-features = false, features = ["native-mux"], optional = true }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-serde = { version = "1.0.152", features = ["derive"] }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"], optional = true }
+prost = { version = "0.11.3", features = ["no-recursion-limit"], optional = true }
+serde = { version = "1.0.152", features = ["derive"], optional = true }
 thiserror = "1.0.37"
 tokio = { version = "1.24.2", features = ["fs", "rt", "sync"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack", "schemas", "tunnel"]
+schemas = ["prost", "serde", "proptest", "mz-proto", "tunnel"]
+tunnel = ["mz-cloud-resources", "serde", "mz-ssh-util", "mz-repr", "openssh", "mz-ore"]
 
 [build-dependencies]
 prost-build = "0.11.2"

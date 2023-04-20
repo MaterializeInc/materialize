@@ -37,6 +37,7 @@ members = [
     "src/persist-types",
     "src/pgcopy",
     "src/pgrepr",
+    "src/pgrepr-consts",
     "src/pgtest",
     "src/pgwire",
     "src/pid-file",
