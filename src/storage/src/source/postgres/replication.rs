@@ -63,7 +63,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection};
@@ -108,7 +108,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
     context: ConnectionContext,
-    resume_upper: Antichain<MzOffset>,
+    subsource_resume_uppers: BTreeMap<GlobalId, Antichain<MzOffset>>,
     table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
     rewind_stream: &Stream<G, RewindRequest>,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
@@ -140,6 +140,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             if !config.responsible_for("slot") {
                 return Ok(());
             }
+
+            let resume_upper = Antichain::from_iter(
+                subsource_resume_uppers
+                    .values()
+                    .flat_map(|f| f.elements())
+                    .cloned(),
+            );
 
             let Some(resume_lsn) = resume_upper.into_option() else {
                 return Ok(());
