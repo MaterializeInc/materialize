@@ -1728,7 +1728,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("reason", ScalarType::String.nullable(true))
         .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -3397,6 +3397,15 @@ pub const MZ_CLUSTER_REPLICA_SIZES_IND: BuiltinIndex = BuiltinIndex {
     sql: "CREATE INDEX mz_cluster_replica_sizes_ind
 IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_sizes (size)",
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_CLUSTER_REPLICA_STATUSES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_statuses_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replica_statuses_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_replica_statuses (replica_id)",
     is_retained_metrics_object: true,
 };
 
