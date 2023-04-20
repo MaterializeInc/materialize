@@ -466,12 +466,16 @@ Fixing merge skew is usually as simple as identifying the above situation
 and adjusting the new function call or test case to account for the change
 in the other PR.
 
-While there _are_ tools that can prevent merge skew, like [Bors], they introduce
-quite a bit of latency and flakiness when merging a PR. As long as merge skew is
-fairly rare—right now it seems to happen once every month or two—net
-productivity is still higher without Bors. If, however, the incidence of merge
-skew increases to about once per week, it's probably time to reevaluate this
-decision and consider a tool like Bors.
+We have a CI job called *Merge skew cargo check*, which is triggered in pull
+requests. It conducts a merge with the target branch and runs `cargo check` to
+validate the merge result.
+Since the job is not triggered on pushes to the target branch (usually `main`),
+merge skew can still occur, in particular when a PR is stale for a long time
+before its merge.
+In addition, the job does not run any linters or tests as of now.
+Further tools like [Bors] exist that can prevent merge skew. However, they introduce
+quite a bit of latency and flakiness when merging a PR, and are currently not
+in use.
 
 #### Branch restrictions
 
