@@ -29,7 +29,7 @@ use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct UpsertKey([u8; 32]);
 
 thread_local! {
@@ -174,7 +174,13 @@ where
 
         consolidation::consolidate(&mut snapshot);
 
+        // The main key->value used to store previous values.
         let mut state = HashMap::new();
+
+        // A re-usable buffer of changes, per key. This is a `std`
+        // `HashMap` so we can use `HashMap::drain` below.
+        #[allow(clippy::disallowed_types)]
+        let mut commands_state = std::collections::HashMap::new();
 
         for ((key, value), diff) in snapshot {
             assert_eq!(diff, 1, "invalid upsert state");
@@ -203,6 +209,15 @@ where
                     // Find the prefix that we can emit
                     let idx = stash.partition_point(|(ts, _, _, _)| !upper.less_equal(ts));
 
+                    // Read the previous values _per key_ out of `state`, recording it
+                    // along with the value with the _latest timestamp for that key_.
+                    commands_state.clear();
+                    for (_, key, _, _) in stash.iter().take(idx) {
+                        commands_state
+                            .entry(*key)
+                            .or_insert_with(|| state.get(key).cloned());
+                    }
+
                     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
                     // order to only process the command with the maximum order within the (ts,
                     // key) group. This is achieved by wrapping order in `Reverse(order)` above.
@@ -211,22 +226,40 @@ where
                         a_ts == b_ts && a_key == b_key
                     });
 
+                    // Upsert the values into `commands_state`, by recording the latest
+                    // value (or deletion). These will be synced at the end to the `state`.
                     while let Some((ts, key, _, value)) = commands.next() {
+                        let command_state = commands_state
+                            .get_mut(&key)
+                            .expect("key missing from commands_state");
                         match value {
                             Some(value) => {
-                                if let Some(old_value) = state.insert(key, value.clone()) {
+                                if let Some(old_value) = command_state.replace(value.clone()) {
                                     output_updates.push((old_value, ts.clone(), -1));
                                 }
                                 output_updates.push((value, ts, 1));
                             }
                             None => {
-                                if let Some(old_value) = state.remove(&key) {
+                                if let Some(old_value) = command_state.take() {
                                     output_updates.push((old_value, ts, -1));
                                 }
                             }
                         }
                     }
 
+                    // Record the changes in `state`.
+                    for (key, command_state) in commands_state.drain() {
+                        match command_state {
+                            Some(value) => {
+                                state.insert(key, value);
+                            }
+                            None => {
+                                state.remove(&key);
+                            }
+                        }
+                    }
+
+                    // Emit the _consolidated_ changes to the output.
                     output_handle
                         .give_container(&output_cap, &mut output_updates)
                         .await;
