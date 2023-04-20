@@ -57,7 +57,7 @@ struct RefreshRequest<'a> {
 
 #[derive(Debug, Clone)]
 pub struct Auth {
-    pub token: String,
+    token: String,
     /// Refresh at indicates the time at which the token should be refreshed.
     /// It equals the expiring time / 2
     refresh_at: SystemTime,
@@ -109,7 +109,7 @@ impl Client {
     where
         T: DeserializeOwned,
     {
-        let token = self.auth().await?.token;
+        let token = self.auth().await?;
         let req = req.bearer_auth(token);
         self.send_unauthenticated_request(req).await
     }
@@ -151,13 +151,14 @@ impl Client {
 
     /// Authenticates with the server, if not already authenticated,
     /// and returns the authentication token.
-    pub async fn auth(&self) -> Result<Auth, ErrorExtended> {
+    pub async fn auth(&self) -> Result<String, ErrorExtended> {
         let mut auth = self.auth.lock().await;
         let mut req;
+
         match &*auth {
             Some(auth) => {
                 if SystemTime::now() < auth.refresh_at {
-                    return Ok(auth.clone());
+                    return Ok(auth.token.clone());
                 } else {
                     // Auth is available in the client but needs a refresh request.
                     req = self.build_request(Method::POST, REFRESH_AUTH_PATH);
@@ -187,6 +188,6 @@ impl Client {
                 + (Duration::from_secs(res.expires_in.try_into().unwrap()) / 2),
             refresh_token: res.refresh_token,
         });
-        Ok(auth.clone().unwrap())
+        Ok(res.access_token)
     }
 }
