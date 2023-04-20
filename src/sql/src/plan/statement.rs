@@ -712,7 +712,9 @@ impl<'a> StatementContext<'a> {
 
     pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
         if !self.unsafe_mode() {
-            sql_bail!("{} is unsupported", feature_name)
+            return Err(PlanError::RequiresUnsafe {
+                feature: feature_name.to_string(),
+            });
         }
         Ok(())
     }
