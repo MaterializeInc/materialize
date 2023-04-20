@@ -20,6 +20,7 @@ use itertools::Itertools;
 use mz_storage_client::types::sources::MzOffset;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use smallvec::SmallVec;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
@@ -124,26 +125,31 @@ struct State(Result<Row, UpsertError>, UpsertOrder);
 /// | Err()   | N        |None   |Some() | k > p always since Some > None|
 ///
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) struct UpsertOrder(Option<Vec<i128>>);
+pub(crate) struct UpsertOrder(Option<SmallVec<[i128; 2]>>);
 
 impl From<MzOffset> for UpsertOrder {
     fn from(val: MzOffset) -> Self {
-        UpsertOrder(Some(vec![val
-            .offset
-            .try_into()
-            .expect("Unexpected u64 overflow to i128")]))
+        let mut order = SmallVec::new();
+        order.push(
+            val.offset
+                .try_into()
+                .expect("Unexpected u64 overflow to i128"),
+        );
+        UpsertOrder(Some(order))
     }
 }
 
 /// Gets the ordering information extracting out the value from the row
 /// based on the given index, and the default fallback value.
+/// Using smallvec with max size 2 as currently there can only be max two columns
+/// (timestamp and offset) to order things by
 pub(crate) fn get_order(
     row_or_error: &Result<Row, UpsertError>,
-    order_by_index: &Vec<usize>,
+    order_by_indices: &SmallVec<[usize; 2]>,
 ) -> UpsertOrder {
     let order = match row_or_error {
-        Ok(row) if !order_by_index.is_empty() => {
-            let order_col = order_by_index
+        Ok(row) if !order_by_indices.is_empty() => {
+            let order_col = order_by_indices
                 .iter()
                 .map(|idx| {
                     let datum = row
@@ -161,7 +167,7 @@ pub(crate) fn get_order(
                         ),
                     }
                 })
-                .collect::<Vec<i128>>();
+                .collect();
             Some(order_col)
         }
         _ => None,
@@ -174,7 +180,7 @@ pub(crate) fn get_order(
 pub(crate) fn upsert<G: Scope>(
     input: &Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, UpsertOrder), Diff>,
     mut key_indices: Vec<usize>,
-    order_by_indices: Vec<usize>,
+    order_by_indices: SmallVec<[usize; 2]>,
     resume_upper: Antichain<G::Timestamp>,
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,

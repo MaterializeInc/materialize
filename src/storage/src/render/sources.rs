@@ -251,6 +251,9 @@ where
             SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
             SourceDataEncoding::Single(value) => (None, value),
         };
+
+        let metadata_arity = metadata_columns.len();
+
         // CDCv2 can't quite be slotted in to the below code, since it determines
         // its own diffs/timestamps as part of decoding.
         //
@@ -352,7 +355,8 @@ where
                     (debezium_ok, Some(errors))
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => {
-                    let upsert_input = upsert_commands(results, upsert_envelope.clone());
+                    let upsert_input =
+                        upsert_commands(results, upsert_envelope.clone(), metadata_arity);
 
                     let persist_clients = Arc::clone(&storage_state.persist_clients);
 
@@ -385,7 +389,7 @@ where
                     let upsert = crate::render::upsert::upsert(
                         &upsert_input,
                         upsert_envelope.key_indices.clone(),
-                        upsert_envelope.order_by_indices.clone(),
+                        upsert_envelope.order_by_indices.clone().into(),
                         resume_upper,
                         previous,
                         previous_token,
@@ -467,7 +471,16 @@ fn append_metadata_to_value<G: Scope>(
 fn upsert_commands<G: Scope>(
     input: Collection<G, DecodeResult, Diff>,
     upsert_envelope: UpsertEnvelope,
+    metadata_arity: usize,
 ) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, UpsertOrder), Diff> {
+    // Converting from source indices to metadata indices for optional order by
+    let key_value_arity = upsert_envelope.source_arity - metadata_arity;
+    let metadata_indices = upsert_envelope
+        .order_by_indices
+        .iter()
+        .map(|row_pos| row_pos - key_value_arity)
+        .collect();
+
     let mut row_buf = Row::default();
     input.map(move |result| {
         let metadata = result.metadata;
@@ -475,15 +488,6 @@ fn upsert_commands<G: Scope>(
         let order = if upsert_envelope.order_by_indices.is_empty() {
             result.position.into()
         } else {
-            let metadata_arity = metadata.iter().count();
-            let key_value_arity = upsert_envelope.source_arity - metadata_arity;
-            // Converting absolute row position to get the index in metadata row
-            let metadata_indices = upsert_envelope
-                .order_by_indices
-                .iter()
-                .map(|row_pos| row_pos - key_value_arity)
-                .collect();
-
             // Getting the ordering information from metadata
             crate::render::upsert::get_order(&Ok(metadata.clone()), &metadata_indices)
         };
