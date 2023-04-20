@@ -1892,7 +1892,6 @@ impl MirRelationExpr {
         }
     }
 }
-
 /// Augment non-nullability of columns, by observing either
 /// 1. Predicates that explicitly test for null values, and
 /// 2. Columns that if null would make a predicate be null.

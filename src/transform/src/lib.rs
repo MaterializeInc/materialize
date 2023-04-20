@@ -451,7 +451,7 @@ pub struct Optimizer {
 
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
-    pub fn logical_optimizer(ctx: &crate::typecheck::Context) -> Self {
+    pub fn logical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx))),
             // 1. Structure-agnostic cleanup
@@ -521,7 +521,7 @@ impl Optimizer {
     /// This is meant to be used for optimizing each view within a dataflow
     /// once view inlining has already happened, right before dataflow
     /// rendering.
-    pub fn physical_optimizer(ctx: &crate::typecheck::Context) -> Self {
+    pub fn physical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
@@ -595,7 +595,7 @@ impl Optimizer {
     /// Set `allow_new_globals` when you will use these as the first passes.
     /// The first instance of the typechecker in an optimizer pipeline should
     /// allow new globals (or it will crash when it encounters them).
-    pub fn logical_cleanup_pass(ctx: &crate::typecheck::Context, allow_new_globals: bool) -> Self {
+    pub fn logical_cleanup_pass(ctx: &crate::typecheck::SharedContext, allow_new_globals: bool) -> Self {
         let mut typechecker = crate::typecheck::Typecheck::new(Rc::clone(ctx));
 
         if !allow_new_globals {
