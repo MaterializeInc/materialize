@@ -164,17 +164,19 @@ impl LazyUnaryFunc for CastArrayToArray {
         let arr = a.unwrap_array();
         let dims = arr.dims().into_iter().collect::<Vec<ArrayDimension>>();
 
-        let casted_datums = arr.elements().iter().map(|datum| {
-            self.cast_expr.eval(&[datum], temp_storage)
-        }).collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
+        let casted_datums = arr
+            .elements()
+            .iter()
+            .map(|datum| self.cast_expr.eval(&[datum], temp_storage))
+            .collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
 
-        Ok(temp_storage.make_datum(|packer| { packer.push_array(&dims, casted_datums).unwrap(); }))
+        Ok(temp_storage.make_datum(|packer| {
+            packer.push_array(&dims, casted_datums).unwrap();
+        }))
     }
 
     fn output_type(&self, _input_type: ColumnType) -> ColumnType {
-        self.return_ty
-            .clone()
-            .nullable(true)
+        self.return_ty.clone().nullable(true)
     }
 
     fn propagates_nulls(&self) -> bool {

@@ -4794,10 +4794,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                     cast_exprs: inner.cast_exprs.into_proto(),
                 })
             }
-            UnaryFunc::CastArrayToArray(inner) => CastArrayToArray(Box::new(ProtoCastToVariableType {
-                return_ty: Some(inner.return_ty.into_proto()),
-                cast_expr: Some(inner.cast_expr.into_proto()),
-            })),
+            UnaryFunc::CastArrayToArray(inner) => {
+                CastArrayToArray(Box::new(ProtoCastToVariableType {
+                    return_ty: Some(inner.return_ty.into_proto()),
+                    cast_expr: Some(inner.cast_expr.into_proto()),
+                }))
+            }
             UnaryFunc::CastArrayToString(func) => CastArrayToString(func.ty.into_proto()),
             UnaryFunc::CastListToString(func) => CastListToString(func.ty.into_proto()),
             UnaryFunc::CastList1ToList2(inner) => {
@@ -5181,8 +5183,12 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 }
                 .into()),
                 CastArrayToArray(inner) => Ok(impls::CastArrayToArray {
-                    return_ty: inner.return_ty.into_rust_if_some("ProtoCastArrayToArray::return_ty")?,
-                    cast_expr: inner.cast_expr.into_rust_if_some("ProtoCastArrayToArray::cast_expr")?,
+                    return_ty: inner
+                        .return_ty
+                        .into_rust_if_some("ProtoCastArrayToArray::return_ty")?,
+                    cast_expr: inner
+                        .cast_expr
+                        .into_rust_if_some("ProtoCastArrayToArray::cast_expr")?,
                 }
                 .into()),
                 CastArrayToString(ty) => Ok(impls::CastArrayToString {
