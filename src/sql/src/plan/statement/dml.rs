@@ -22,7 +22,7 @@ use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::SubscribeOutput;
+use mz_sql_parser::ast::{SubscribeOutput, OrderByExpr, Expr};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -504,51 +504,40 @@ pub fn plan_subscribe(
     let when = query::plan_as_of(scx, as_of)?;
     let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
 
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let ecx = ExprContext {
+        qcx: &qcx,
+        name: "",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: true,
+        allow_windows: false,
+    };
+
     let output = match output {
         SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
         SubscribeOutput::EnvelopeUpsert { key_columns } => {
             scx.require_envelope_upsert_in_subscribe()?;
-            let key_columns = key_columns
-                .into_iter()
-                .map(normalize::column_name)
-                .collect::<Vec<_>>();
-            let duplicates = key_columns.iter().duplicates().collect_vec();
-            if !duplicates.is_empty() {
+            let order_by = key_columns.iter().map(|ident| OrderByExpr{ expr: Expr::Identifier(vec![ident.clone()]), asc: None, nulls_last: None } ).collect_vec();
+            let (order_by, map_exprs) = query::plan_order_by_exprs(
+                &ExprContext{name: "ENVELOPE UPSERT KEY clause", ..ecx},
+                &order_by[..],
+                &[],
+            )?;
+            if !map_exprs.is_empty() {
                 sql_bail!(
-                    "Repeated column names in subscribe envelope key: {}",
-                    duplicates.iter().join(", ")
-                );
+                        "Unsupported keys in SUBSCRIBE ENVELOPE UPSERT (KEY (..)); all keys must be columns on the underlying relation"
+                    );
             }
-            let key_indices = key_columns
-                .iter()
-                .map(|col| -> anyhow::Result<usize> {
-                    let name_idx = desc
-                        .get_by_name(col)
-                        .map(|(idx, _type)| idx)
-                        .ok_or_else(|| sql_err!("No such column: {}", col))?;
-                    if desc.get_unambiguous_name(name_idx).is_none() {
-                        sql_err!("Ambiguous column: {}", col);
-                    }
-                    Ok(name_idx)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            let key_indices = order_by.iter().map(|co| co.column).collect_vec();
             plan::SubscribeOutput::EnvelopeUpsert { key_indices }
         }
         SubscribeOutput::WithinTimestampOrderBy { order_by } => {
             scx.require_within_timestamp_order_by_in_subscribe()?;
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-            let ecx = ExprContext {
-                qcx: &qcx,
-                name: "WITHIN TIMESTAMP ORDER BY clause",
-                scope: &scope,
-                relation_type: desc.typ(),
-                allow_aggregates: false,
-                allow_subqueries: true,
-                allow_windows: false,
-            };
             let mz_diff_fake_column = usize::MAX;
             let (mut order_by, map_exprs) = query::plan_order_by_exprs(
-                &ecx,
+                &ExprContext{name: "WITHIN TIMESTAMP ORDER BY clause", ..ecx},
                 &order_by[..],
                 &[(mz_diff_fake_column, &"mz_diff".into())],
             )?;
