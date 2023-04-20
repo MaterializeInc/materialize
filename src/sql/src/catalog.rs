@@ -311,6 +311,9 @@ impl CatalogConfig {
     }
 }
 
+/// Key is the role that granted the privilege, value is the privilege itself.
+pub type PrivilegeMap = BTreeMap<RoleId, Vec<MzAclItem>>;
+
 /// A database in a [`SessionCatalog`].
 pub trait CatalogDatabase {
     /// Returns a fully-specified name of the database.
@@ -330,8 +333,7 @@ pub trait CatalogDatabase {
     fn owner_id(&self) -> RoleId;
 
     /// Returns the privileges associated with the database.
-    /// Key is the role that granted the privilege, value is the privilege itself.
-    fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>>;
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// A schema in a [`SessionCatalog`].
@@ -356,8 +358,7 @@ pub trait CatalogSchema {
     fn owner_id(&self) -> RoleId;
 
     /// Returns the privileges associated with the schema.
-    /// Key is the role that granted the privilege, value is the privilege itself.
-    fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>>;
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 // TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
@@ -512,8 +513,7 @@ pub trait CatalogCluster<'a> {
     fn owner_id(&self) -> RoleId;
 
     /// Returns the privileges associated with the cluster.
-    /// Key is the role that granted the privilege, value is the privilege itself.
-    fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>>;
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// A cluster replica in a [`SessionCatalog`]
@@ -601,8 +601,7 @@ pub trait CatalogItem {
     fn owner_id(&self) -> RoleId;
 
     /// Returns the privileges associated with the item.
-    /// Key is the role that granted the privilege, value is the privilege itself.
-    fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>>;
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// The type of a [`CatalogItem`].

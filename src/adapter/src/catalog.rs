@@ -58,7 +58,7 @@ use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
     CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
-    NameReference, RoleAttributes, SessionCatalog, TypeReference,
+    NameReference, PrivilegeMap, RoleAttributes, SessionCatalog, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -1547,8 +1547,7 @@ pub struct Database {
     pub schemas_by_id: BTreeMap<SchemaId, Schema>,
     pub schemas_by_name: BTreeMap<String, SchemaId>,
     pub owner_id: RoleId,
-    // Key is the role that granted the privilege, value is the privilege itself.
-    pub privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
+    pub privileges: PrivilegeMap,
 }
 
 impl Database {
@@ -1586,8 +1585,7 @@ pub struct Schema {
     pub items: BTreeMap<String, GlobalId>,
     pub functions: BTreeMap<String, GlobalId>,
     pub owner_id: RoleId,
-    // Key is the role that granted the privilege, value is the privilege itself.
-    pub privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
+    pub privileges: PrivilegeMap,
 }
 
 impl Schema {
@@ -1633,7 +1631,8 @@ impl Role {
 #[serde(into = "BTreeMap<String, RoleId>")]
 #[serde(try_from = "BTreeMap<String, RoleId>")]
 pub struct RoleMembership {
-    /// Key is the role that some role is a member of, value is the grantor role ID.
+    /// Key is the role
+    /// that some role is a member of, value is the grantor role ID.
     // TODO(jkosh44) This structure does not allow a role to have multiple of the same membership
     // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
     // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
@@ -1684,8 +1683,7 @@ pub struct Cluster {
     pub replica_id_by_name: BTreeMap<String, ReplicaId>,
     pub replicas_by_id: BTreeMap<ReplicaId, ClusterReplica>,
     pub owner_id: RoleId,
-    // Key is the role that granted the privilege, value is the privilege itself.
-    pub privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
+    pub privileges: PrivilegeMap,
 }
 
 impl Cluster {
@@ -1750,8 +1748,7 @@ pub struct CatalogEntry {
     oid: u32,
     name: QualifiedItemName,
     owner_id: RoleId,
-    // Key is the role that granted the privilege, value is the privilege itself.
-    privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
+    privileges: PrivilegeMap,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4652,12 +4649,7 @@ impl Catalog {
     }
 
     /// Returns the privileges of an object by its ID.
-    /// Key is the role that granted the privilege, value is the privilege itself.
-    pub fn get_privileges(
-        &self,
-        id: &ObjectId,
-        conn_id: ConnectionId,
-    ) -> Option<&BTreeMap<RoleId, Vec<MzAclItem>>> {
+    pub fn get_privileges(&self, id: &ObjectId, conn_id: ConnectionId) -> Option<&PrivilegeMap> {
         match id {
             ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
             ObjectId::Database(id) => Some(self.get_database(id).privileges()),
