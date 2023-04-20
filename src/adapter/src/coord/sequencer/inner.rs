@@ -57,8 +57,7 @@ use mz_sql::plan::{
     CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantRolePlan, IndexOption,
     InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
     ReadThenWritePlan, ResetVariablePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan,
-    VariableValue, View,
+    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::Var;

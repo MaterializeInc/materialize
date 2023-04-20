@@ -15,15 +15,14 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-
 use itertools::Itertools;
-use mz_expr::{MirRelationExpr};
+use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::{SubscribeOutput};
+use mz_sql_parser::ast::SubscribeOutput;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
