@@ -14,16 +14,16 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::iter;
+
 
 use itertools::Itertools;
-use mz_expr::{ColumnOrder, MirRelationExpr};
+use mz_expr::{MirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::{OrderByExpr, SubscribeOutput};
+use mz_sql_parser::ast::{SubscribeOutput};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -35,7 +35,7 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedItemName};
-use crate::plan::query::{plan_up_to, resolve_desc_and_nulls_last, ExprContext, QueryLifetime};
+use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
