@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::ClientContext;
 use tracing::warn;
@@ -93,6 +93,10 @@ async fn discover_topic_configs<C: ClientContext>(
             e
         )
     })?;
+
+    if config.entries.is_empty() {
+        bail!("read empty custer configuration; do we have DescribeConfigs permissions?")
+    }
 
     for entry in config.entries {
         if entry.name == "num.partitions" && partition_count == -1 {
