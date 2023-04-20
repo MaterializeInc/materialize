@@ -30,8 +30,8 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
-    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput,
+    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
     UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
