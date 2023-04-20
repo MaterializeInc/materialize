@@ -34,7 +34,7 @@ impl Client {
         Ok(passwords)
     }
 
-    /// Lists all existing app passwords.
+    /// Creates a new app password with the provided description.
     pub async fn create_app_password(
         &self,
         description: String,
