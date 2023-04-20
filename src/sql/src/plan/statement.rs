@@ -715,7 +715,7 @@ impl<'a> StatementContext<'a> {
                 .system_vars()
                 .enable_envelope_upsert_in_subscribe()
         {
-            sql_bail!("`ENVELOPE UPSERT KEY (..)` is not enabled")
+            sql_bail!("`ENVELOPE UPSERT (KEY (..))` is not enabled")
         }
         Ok(())
     }
@@ -727,7 +727,7 @@ impl<'a> StatementContext<'a> {
                 .system_vars()
                 .enable_within_timestamp_order_by()
         {
-            sql_bail!("`WITHIN TIMESTAMP ORDER BY (..)` is not enabled")
+            sql_bail!("`WITHIN TIMESTAMP ORDER BY ..` is not enabled")
         }
         Ok(())
     }

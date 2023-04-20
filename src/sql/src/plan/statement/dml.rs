@@ -394,19 +394,7 @@ pub fn describe_subscribe(
                 .into_owned()
         }
         SubscribeRelation::Query(query) => {
-            let mut query = Query::query(query);
-            if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &stmt.output {
-                query.order_by = order_by
-                    .iter()
-                    .cloned()
-                    .filter(|obe| match &obe.expr {
-                        mz_sql_parser::ast::Expr::Identifier(ids) => {
-                            ids.len() != 1 || ids[0].as_str() != "mz_diff"
-                        }
-                        _ => true,
-                    })
-                    .collect();
-            }
+            let query = Query::query(query);
             let query::PlannedQuery { desc, .. } = plan_query(
                 scx,
                 query,
@@ -499,13 +487,14 @@ pub fn plan_subscribe(
             // directly. So we wrap the query in another query so that the
             // user-supplied query is planned as a subquery whose `ORDER
             // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
+            let query = Query::query(query);
             let query = plan_query(
                 scx,
-                Query::query(query),
+                query,
                 &Params::empty(),
                 QueryLifetime::OneShot(scx.pcx()?),
             )?;
-
+            assert!(query.finishing.is_trivial(query.desc.arity()));
             let desc = query.desc.clone();
             (
                 SubscribeFrom::Query {
