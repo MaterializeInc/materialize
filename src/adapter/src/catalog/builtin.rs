@@ -3733,6 +3733,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
     ]);
 
