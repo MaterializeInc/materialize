@@ -2195,7 +2195,7 @@ fn plan_group_by_expr<'a>(
 ///
 /// Returns the determined column orderings and a list of scalar expressions
 /// that must be mapped onto the underlying relation expression.
-fn plan_order_by_exprs(
+pub(crate) fn plan_order_by_exprs(
     ecx: &ExprContext,
     order_by_exprs: &[OrderByExpr<Aug>],
     output_columns: &[(usize, &ColumnName)],

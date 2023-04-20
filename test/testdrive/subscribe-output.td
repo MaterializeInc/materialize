@@ -16,6 +16,17 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
 
 > BEGIN
+! DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY a, mz_diff
+contains: column "c" does not exist
+
+> FETCH 1 c
+<TIMESTAMP> 1 1 2
+
+> FETCH 1 c
+<TIMESTAMP> 1 2 1
+> COMMIT
+
+> BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY a, b
 > FETCH 1 c
 <TIMESTAMP> 1 1 2

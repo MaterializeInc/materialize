@@ -14,15 +14,16 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter;
 
 use itertools::Itertools;
-use mz_expr::MirRelationExpr;
+use mz_expr::{MirRelationExpr, ColumnOrder};
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::SubscribeOutput;
+use mz_sql_parser::ast::{SubscribeOutput, OrderByExpr};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -34,7 +35,8 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedItemName};
-use crate::plan::query::{plan_up_to, resolve_desc_and_nulls_last, QueryLifetime};
+use crate::plan::query::{plan_up_to, resolve_desc_and_nulls_last, QueryLifetime, ExprContext};
+use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
@@ -392,7 +394,10 @@ pub fn describe_subscribe(
         SubscribeRelation::Query(query) => {
             let mut query = Query::query(query);
             if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &stmt.output {
-                query.order_by = order_by.clone();
+                query.order_by = order_by.iter().cloned().filter(|obe| match &obe.expr {
+                    mz_sql_parser::ast::Expr::Identifier(ids) => ids.len() != 1 || ids[0].as_str() != "mz_diff",
+                    _ => true,
+                }).collect();
             }
             let query::PlannedQuery { desc, .. } = plan_query(
                 scx,
@@ -478,26 +483,24 @@ pub fn plan_subscribe(
             // In constrast to a query, the order by cannot be very fancy, it's just column names
             let mut order_by_col = Vec::new();
             if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &output {
-                for mut obe in order_by.clone() {
-                    let idx = match obe.expr.take() {
-                        mz_sql_parser::ast::Expr::Identifier(mut id) => {
-                            let id = normalize::column_name(id.pop().expect("shouldn't be empty"));
-                            let idx = desc
-                                .get_by_name(&id)
-                                .map(|(idx, _type)| idx)
-                                .ok_or_else(|| sql_err!("No such column: {}", id))?;
-                            if desc.get_unambiguous_name(idx).is_none() {
-                                sql_bail!("Ambiguous column: {}", id);
-                            }
-                            idx
-                        }
-                        expr => sql_bail!(
-                            "Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY: {}",
-                            expr
-                        ),
-                    };
-                    order_by_col.push(resolve_desc_and_nulls_last(&obe, idx));
+
+                let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+                let ecx = ExprContext {
+                    qcx: &qcx,
+                    name: "WITHIN TIMESTAMP ORDER BY clause",
+                    scope: &Scope::empty(),
+                    relation_type: desc.typ(),
+                    allow_aggregates: false,
+                    allow_subqueries: false,
+                    allow_windows: false,
+                };
+                let (order_by, map_exprs) = query::plan_order_by_exprs(&ecx, &order_by[..], &[(usize::MAX, &"mz_diff".into())])?;
+                if !map_exprs.is_empty() {
+                    sql_bail!(
+                        "Unsupported ORDER BY in SUBSCRIBE view WITHIN TIMESTAMP ORDER BY; all order by must be variables"
+                    );
                 }
+                order_by_col = order_by;
             }
 
             let arity = desc.arity();
@@ -515,16 +518,38 @@ pub fn plan_subscribe(
             // user-supplied query is planned as a subquery whose `ORDER
             // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
             let mut query = Query::query(query);
+            let is_mz_diff = |obe: &OrderByExpr<Aug>| match &obe.expr {
+                mz_sql_parser::ast::Expr::Identifier(ids) => ids.len() == 1 || ids[0].as_str() == "mz_diff",
+                _ => false,
+            };
             if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &output {
-                query.order_by = order_by.clone();
+                query.order_by = order_by.iter().cloned().filter(|obe| !is_mz_diff(&obe)).collect();
             }
-            let query = plan_query(
+            let mut query = plan_query(
                 scx,
                 query,
                 &Params::empty(),
                 QueryLifetime::OneShot(scx.pcx()?),
             )?;
             let desc = query.desc.clone();
+
+            // Re-stitch the mz_diff columns that may be present in the order by
+            if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &output {
+                assert_eq!(order_by.len(), query.finishing.order_by.len());
+                let mut idx: usize = 0;
+                let mut new_order_by = Vec::new();
+                for obe in order_by {
+                    if is_mz_diff(obe) {
+                        new_order_by.push(resolve_desc_and_nulls_last(obe, 0));
+                    } else {
+                        new_order_by.push(query.finishing.order_by[idx].clone());
+                        new_order_by.last_mut().unwrap().column += 1;
+                        idx += 1;
+                    }
+                }
+                query.finishing.order_by = new_order_by;
+                //query.finishing.project = iter::once(0).chain(query.finishing.project.iter().map(|i| i+1)).collect();
+            }
             (
                 SubscribeFrom::Query {
                     expr: query.expr,

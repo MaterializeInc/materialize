@@ -112,8 +112,14 @@ impl ActiveSubscribe {
                                 let mut right_datum_vec = mz_repr::DatumVec::new();
                                 rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
                                     left_time.cmp(right_time).then_with(|| {
-                                        let left_datums = left_datum_vec.borrow_with(left_row);
-                                        let right_datums = right_datum_vec.borrow_with(right_row);
+                                        //let left_datums = left_datum_vec.borrow_with(left_row);
+                                        //let right_datums = right_datum_vec.borrow_with(right_row);
+                                        let mut left_datums = left_datum_vec.borrow();
+                                        left_datums.extend(&[Datum::Int64(*left_diff)]);
+                                        left_datums.extend(left_row.iter());
+                                        let mut right_datums = right_datum_vec.borrow();
+                                        right_datums.extend(&[Datum::Int64(*right_diff)]);
+                                        right_datums.extend(right_row.iter());
                                         compare_columns(order_by, &left_datums, &right_datums, || {
                                             left_row.cmp(right_row).then(left_diff.cmp(right_diff))
                                         })
