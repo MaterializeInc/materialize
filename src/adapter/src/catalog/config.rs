@@ -80,7 +80,7 @@ pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 impl Default for ClusterReplicaSizeMap {
     // Used for testing and local purposes. This default value should not be used in production.
     //
-    // Credits per hour are calculated as (scale * worker). This is not necessarily how the
+    // Credits per hour are calculated as being equal to scale. This is not necessarily how the
     // value is computed in production.
     fn default() -> Self {
         // {
@@ -110,7 +110,7 @@ impl Default for ClusterReplicaSizeMap {
                         cpu_limit: None,
                         scale: 1,
                         workers: workers.into(),
-                        credits_per_hour: (1 * workers).into(),
+                        credits_per_hour: 1.into(),
                     },
                 )
             })
@@ -125,7 +125,7 @@ impl Default for ClusterReplicaSizeMap {
                     cpu_limit: None,
                     scale,
                     workers: 1,
-                    credits_per_hour: (scale * 1).into(),
+                    credits_per_hour: scale.into(),
                 },
             );
 
@@ -136,7 +136,7 @@ impl Default for ClusterReplicaSizeMap {
                     cpu_limit: None,
                     scale,
                     workers: scale.into(),
-                    credits_per_hour: (scale * scale).into(),
+                    credits_per_hour: scale.into(),
                 },
             );
         }
@@ -148,7 +148,7 @@ impl Default for ClusterReplicaSizeMap {
                 cpu_limit: None,
                 scale: 2,
                 workers: 4,
-                credits_per_hour: (2 * 4).into(),
+                credits_per_hour: 2.into(),
             },
         );
         Self(inner)
