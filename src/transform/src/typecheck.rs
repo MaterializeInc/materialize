@@ -80,6 +80,12 @@ pub enum TypeError<'a> {
         got: Vec<usize>,
         input_type: Vec<ColumnType>,
     },
+    /// An equivalence class in a join was malformed
+    BadJoinEquivalence {
+        source: &'a MirRelationExpr,
+        got: Vec<ColumnType>,
+        message: String,
+    },
     /// TopK grouping by non-existent column
     BadTopKGroupKey {
         source: &'a MirRelationExpr,
@@ -129,6 +135,8 @@ pub struct Typecheck {
     ctx: SharedContext,
     /// Whether or not this is the first run of the transform
     disallow_new_globals: bool,
+    /// Whether or not to be strict about join equivalences having the same nullability
+    strict_join_equivalences: bool,
     /// Recursion guard for checked recursion
     recursion_guard: RecursionGuard,
 }
@@ -145,6 +153,7 @@ impl Typecheck {
         Self {
             ctx,
             disallow_new_globals: false,
+            strict_join_equivalences: false,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
@@ -154,6 +163,14 @@ impl Typecheck {
     /// Only turn this on after the context has been appropraitely populated by, e.g., an earlier run
     pub fn disallow_new_globals(mut self) -> Self {
         self.disallow_new_globals = true;
+        self
+    }
+
+    /// Equivalence classes in joins must not only agree on scalar type, but also on nullability
+    ///
+    /// Only turn this on before `JoinImplementation`
+    pub fn strict_join_equivalences(mut self) -> Self {
+        self.strict_join_equivalences = true;
         self
     }
 
@@ -312,21 +329,50 @@ impl Typecheck {
                 for eq_class in equivalences {
                     let mut t_exprs: Vec<ColumnType> = Vec::with_capacity(eq_class.len());
 
+                    let mut found_non_null = false;
+
                     for scalar_expr in eq_class {
                         let t_expr = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
 
                         if let Some(t_first) = t_exprs.get(0) {
-                            // ??? do we care about matching nullability?
                             if !t_expr.scalar_type.base_eq(&t_first.scalar_type) {
                                 return Err(TypeError::MismatchColumn {
                                     source: expr,
                                     got: t_expr,
                                     expected: t_first.clone(),
-                                    message: "equivalence class members do not match".into(),
+                                    message: "equivalence class members have different scalar types".into(),
                                 });
+                            }
+
+                            // equivalences may or may not match on nullability
+                            // before JoinImplementation runs, nullability should match.
+                            // but afterwards, some nulls may appear that are actually being filtered out elsewhere
+                            //
+                            // TODO(mgree) find a more consistent way to handle this invariant
+                            if self.strict_join_equivalences {
+                                if !t_expr.nullable {
+                                    found_non_null = true;
+                                }
+
+                                if t_expr.nullable != t_first.nullable {
+                                    return Err(TypeError::MismatchColumn {
+                                        source: expr,
+                                        got: t_expr,
+                                        expected: t_first.clone(),
+                                        message: "equivalence class members have different nullability (and join equivalence checking is strict)".to_string(),
+                                    });
+                                }
                             }
                         }
                         t_exprs.push(t_expr);
+                    }
+
+                    if self.strict_join_equivalences && !found_non_null {
+                        return Err(TypeError::BadJoinEquivalence {
+                            source: expr,
+                            got: t_exprs,
+                            message: "all expressions were nullable (and join equivalence checking is strict)".to_string(),
+                        });
                     }
                 }
 
@@ -500,6 +546,7 @@ impl Typecheck {
                 }
 
                 // temporary hack: steal info from the Gets inside to learn the expected types
+                // if no get occurs in any definition or the body, that means that relation is dead code (which is okay)
                 let mut ctx = ctx.clone();
                 // calling tc.collect_recursive_variable_types(expr, ...) triggers a panic due to nested letrecs with shadowing IDs
                 for inner_expr in values.iter().chain(std::iter::once(body.as_ref())) {
@@ -524,6 +571,7 @@ impl Typecheck {
                             })?;
                         }
                     } else {
+                        // dead code: no `Get` references this relation anywhere. we record the type anyway
                         ctx.insert(id, typ);
                     }
                 }
@@ -882,6 +930,7 @@ impl<'a> TypeError<'a> {
             | MismatchColumns { source, .. }
             | BadConstantRow { source, .. }
             | BadProject { source, .. }
+            | BadJoinEquivalence { source, .. }
             | BadTopKGroupKey { source, .. }
             | BadTopKOrdering { source, .. }
             | BadLetRecBindings { source }
@@ -959,6 +1008,15 @@ impl<'a> TypeError<'a> {
                     f,
                     "projection of non-existant columns {got:?} from type {input_type}"
                 )?
+            }
+            BadJoinEquivalence {
+                source: _,
+                got,
+                message,
+            } => {
+                let got = columns_pretty(got, humanizer);
+
+                writeln!(f, "bad join equivalence {got}: {message}")?
             }
             BadTopKGroupKey {
                 source: _,
