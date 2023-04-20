@@ -3961,9 +3961,6 @@ dependencies = [
 name = "mz-frontegg-client"
 version = "0.0.0"
 dependencies = [
- "anyhow",
- "base64 0.13.1",
- "derivative",
  "jsonwebtoken",
  "mz-frontegg-auth",
  "mz-ore",
@@ -3973,7 +3970,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tracing",
  "url",
  "uuid",
  "workspace-hack",
