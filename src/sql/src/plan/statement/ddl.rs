@@ -1732,17 +1732,22 @@ pub fn plan_create_view(
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
+            Some(id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let drop_ids = replace
+        .map(|id| {
             scx.catalog
                 .item_dependents(id)
                 .into_iter()
                 .map(|id| id.unwrap_item_id())
                 .collect()
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
+        })
+        .unwrap_or_default();
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -1760,6 +1765,7 @@ pub fn plan_create_view(
         name,
         view,
         replace,
+        drop_ids,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
@@ -1820,7 +1826,7 @@ pub fn plan_create_materialized_view(
         sql_bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
-    let mut replace = Vec::new();
+    let mut replace = None;
     let mut if_not_exists = false;
     match stmt.if_exists {
         IfExistsBehavior::Replace => {
@@ -1841,17 +1847,21 @@ pub fn plan_create_materialized_view(
                         scx.catalog.resolve_full_name(item.name())
                     );
                 }
-                replace.extend(
-                    scx.catalog
-                        .item_dependents(id)
-                        .into_iter()
-                        .map(|id| id.unwrap_item_id()),
-                );
+                replace = Some(id);
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
         IfExistsBehavior::Error => (),
     }
+    let drop_ids = replace
+        .map(|id| {
+            scx.catalog
+                .item_dependents(id)
+                .into_iter()
+                .map(|id| id.unwrap_item_id())
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -1874,6 +1884,7 @@ pub fn plan_create_materialized_view(
             cluster_id,
         },
         replace,
+        drop_ids,
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
@@ -3376,7 +3387,7 @@ pub fn plan_drop_objects(
 ) -> Result<Plan, PlanError> {
     assert_ne!(object_type, ObjectType::Func, "rejected in parser");
 
-    let mut ids = Vec::new();
+    let mut referenced_ids = Vec::new();
     for name in names {
         let id = match name {
             UnresolvedObjectName::Cluster(name) => {
@@ -3399,12 +3410,16 @@ pub fn plan_drop_objects(
             }
         };
         if let Some(id) = id {
-            ids.push(id);
+            referenced_ids.push(id);
         }
     }
-    let ids = scx.catalog.object_dependents(ids);
+    let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
-    Ok(Plan::DropObjects(DropObjectsPlan { ids, object_type }))
+    Ok(Plan::DropObjects(DropObjectsPlan {
+        referenced_ids,
+        drop_ids,
+        object_type,
+    }))
 }
 
 fn plan_drop_schema(
