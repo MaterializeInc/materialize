@@ -83,7 +83,7 @@ class CreatePostgresTable(Action):
 
     def run(self, c: Composition) -> None:
         if self.new_postgres_table:
-            primary_key = f"PRIMARY KEY" if self.postgres_table.has_pk else ""
+            primary_key = "PRIMARY KEY" if self.postgres_table.has_pk else ""
             c.testdrive(
                 dedent(
                     f"""

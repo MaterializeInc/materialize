@@ -539,9 +539,8 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-http"
-version = "0.53.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29dcab29afbea7726f5c10c7be0c38666d7eb07db551580b3b26ed7cfb5d1935"
+version = "0.53.2"
+source = "git+https://github.com/parker-timmerman/smithy-rs.git?branch=v0.53.2#2865b0455f363646976cdcd419baa4701b24e3e8"
 dependencies = [
  "aws-smithy-eventstream",
  "aws-smithy-types",
@@ -1008,7 +1007,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "chrono"
 version = "0.4.24"
-source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#84bbea51313b0c705fcf0ba82196234fe940050f"
+source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#5bc022ca811a81d0dd79e3254214ae05a74898b6"
 dependencies = [
  "iana-time-zone",
  "num-integer",
@@ -3422,6 +3421,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "smallvec",
  "thiserror",
  "timely",
  "tokio",
@@ -4238,6 +4238,7 @@ dependencies = [
  "paste",
  "pin-project",
  "prometheus",
+ "proptest",
  "scopeguard",
  "sentry",
  "sentry-tracing",
@@ -4353,6 +4354,7 @@ dependencies = [
  "bytes",
  "mz-proto",
  "parquet2",
+ "proptest",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -4380,10 +4382,18 @@ dependencies = [
  "chrono",
  "dec",
  "mz-ore",
+ "mz-pgrepr-consts",
  "mz-repr",
  "once_cell",
  "postgres-types",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-pgrepr-consts"
+version = "0.0.0"
+dependencies = [
  "workspace-hack",
 ]
 
@@ -4577,6 +4587,23 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "proc-macro2",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-rocksdb"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "mz-ore",
+ "mz-persist-types",
+ "prometheus",
+ "rocksdb",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
  "workspace-hack",
 ]
 

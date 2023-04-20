@@ -7,8 +7,6 @@ menu:
 
 ---
 
-{{< show-command-note >}}
-
 `SHOW CLUSTERS` lists the [clusters](/overview/key-concepts/#clusters) configured in Materialize.
 
 ## Syntax

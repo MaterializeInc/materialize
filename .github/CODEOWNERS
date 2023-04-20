@@ -65,6 +65,7 @@
 /src/repr                           @MaterializeInc/storage @MaterializeInc/compute
 /src/repr/src/row                   @MaterializeInc/persist
 /src/repr-test-util                 @MaterializeInc/compute
+/src/rocksdb                        @MaterializeInc/storage
 /src/s3-datagen                     @MaterializeInc/storage
 /src/secrets                        @MaterializeInc/cloud
 /src/segment                        @benesch

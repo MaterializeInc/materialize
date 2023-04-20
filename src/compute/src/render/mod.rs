@@ -101,17 +101,15 @@
 //! if/when the errors are retracted.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::Hash;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::{AsCollection, ExchangeData};
+use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
-use timely::container::columnation::Columnation;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -129,16 +127,18 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::source::persist_source::FlowControl;
 use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::{self, ProbeNotify};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::logging::compute::LogImportFrontiers;
-use crate::typedefs::ErrSpine;
+use crate::typedefs::{ErrSpine, RowKeySpine};
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
 
 pub mod context;
+mod errors;
 mod flat_map;
 mod join;
 mod reduce;
@@ -165,14 +165,14 @@ pub fn build_compute_dataflow<A: Allocate>(
         }
     });
 
-    // Determine indexes to export
+    // Determine indexes to export, and their dependencies.
     let indexes = dataflow
         .index_exports
         .iter()
         .map(|(idx_id, (idx, _typ))| (*idx_id, dataflow.depends_on(idx.on_id), idx.clone()))
         .collect::<Vec<_>>();
 
-    // Determine sinks to export
+    // Determine sinks to export, and their dependencies.
     let sinks = dataflow
         .sink_exports
         .iter()
@@ -298,16 +298,20 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                     // Build declared objects.
                     for object in dataflow.objects_to_build {
+                        let object_token = Rc::new(());
+                        context.shutdown_token = Some(Rc::downgrade(&object_token));
+                        tokens.insert(object.id, object_token);
+
                         let bundle = context.render_recursive_plan(0, object.plan);
                         context.insert_id(Id::Global(object.id), bundle);
                     }
 
                     // Export declared indexes.
-                    for (idx_id, imports, idx) in indexes {
+                    for (idx_id, dependencies, idx) in indexes {
                         context.export_index_iterative(
                             compute_state,
                             &mut tokens,
-                            imports,
+                            dependencies,
                             idx_id,
                             &idx,
                             output_probes.clone(),
@@ -315,11 +319,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                     }
 
                     // Export declared sinks.
-                    for (sink_id, imports, sink) in sinks {
+                    for (sink_id, dependencies, sink) in sinks {
                         context.export_sink(
                             compute_state,
                             &mut tokens,
-                            imports,
+                            dependencies,
                             sink_id,
                             &sink,
                             output_probes.clone(),
@@ -348,15 +352,19 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
+                    let object_token = Rc::new(());
+                    context.shutdown_token = Some(Rc::downgrade(&object_token));
+                    tokens.insert(object.id, object_token);
+
                     context.build_object(object);
                 }
 
                 // Export declared indexes.
-                for (idx_id, imports, idx) in indexes {
+                for (idx_id, dependencies, idx) in indexes {
                     context.export_index(
                         compute_state,
                         &mut tokens,
-                        imports,
+                        dependencies,
                         idx_id,
                         &idx,
                         output_probes.clone(),
@@ -364,11 +372,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                 }
 
                 // Export declared sinks.
-                for (sink_id, imports, sink) in sinks {
+                for (sink_id, dependencies, sink) in sinks {
                     context.export_sink(
                         compute_state,
                         &mut tokens,
-                        imports,
+                        dependencies,
                         sink_id,
                         &sink,
                         output_probes.clone(),
@@ -468,15 +476,15 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
+        dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
+        for dep_id in dependency_ids {
+            if let Some(token) = tokens.get(&dep_id) {
                 needed_tokens.push(Rc::clone(token));
             }
         }
@@ -533,15 +541,15 @@ where
         &mut self,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
+        dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
+        for dep_id in dependency_ids {
+            if let Some(token) = tokens.get(&dep_id) {
                 needed_tokens.push(Rc::clone(token));
             }
         }
@@ -640,22 +648,30 @@ where
                 let (oks, err) = bundle.collection.clone().unwrap();
                 self.insert_id(Id::Local(*id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
+
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                use crate::typedefs::RowKeySpine;
-                oks_v.set(&oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation"));
+                let mut oks = oks.consolidate_named::<RowKeySpine<_, _, _>>("LetRecConsolidation");
+                if let Some(token) = &self.shutdown_token {
+                    oks = oks.with_token(Weak::clone(token));
+                }
+                oks_v.set(&oks);
+
                 // Set err variable to the distinct elements of `err`.
                 // Distinctness is important, as we otherwise might add the same error each iteration,
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
-                err_v.set(
-                    &err.arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
-                        .reduce_abelian::<_, ErrSpine<_, _, _>>(
-                            "Distinct recursive err",
-                            move |_k, _s, t| t.push(((), 1)),
-                        )
-                        .as_collection(|k, _| k.clone()),
-                );
+                let mut errs = err
+                    .arrange_named::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
+                    .reduce_abelian::<_, ErrSpine<_, _, _>>(
+                        "Distinct recursive err",
+                        move |_k, _s, t| t.push(((), 1)),
+                    )
+                    .as_collection(|k, _| k.clone());
+                if let Some(token) = &self.shutdown_token {
+                    errs = errs.with_token(Weak::clone(token));
+                }
+                err_v.set(&errs);
             }
             // Now extract each of the bindings into the outer scope.
             for id in ids.into_iter() {
@@ -919,56 +935,5 @@ impl<T: Timestamp + Lattice> RenderTimestamp for Product<mz_repr::Timestamp, T> 
     }
     fn step_back(&self) -> Self {
         Product::new(self.outer.saturating_sub(1), self.inner.clone())
-    }
-}
-
-/// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
-/// specialized for use in compute.  Validation code will only run when the error constructor is
-/// Some.
-trait MaybeValidatingRow<T, E>: ExchangeData + Columnation + Hash {
-    fn ok(t: T) -> Self;
-    fn into_error() -> Option<fn(E) -> Self>;
-}
-
-impl<E> MaybeValidatingRow<Row, E> for Row {
-    fn ok(t: Row) -> Self {
-        t
-    }
-    fn into_error() -> Option<fn(E) -> Self> {
-        None
-    }
-}
-
-impl<E> MaybeValidatingRow<(), E> for () {
-    fn ok(t: ()) -> Self {
-        t
-    }
-    fn into_error() -> Option<fn(E) -> Self> {
-        None
-    }
-}
-
-impl<E, R> MaybeValidatingRow<Vec<R>, E> for Vec<R>
-where
-    R: ExchangeData + Columnation + Hash,
-{
-    fn ok(t: Vec<R>) -> Self {
-        t
-    }
-    fn into_error() -> Option<fn(E) -> Self> {
-        None
-    }
-}
-
-impl<T, E> MaybeValidatingRow<T, E> for Result<T, E>
-where
-    T: ExchangeData + Columnation + Hash,
-    E: ExchangeData + Columnation + Hash,
-{
-    fn ok(row: T) -> Self {
-        Ok(row)
-    }
-    fn into_error() -> Option<fn(E) -> Self> {
-        Some(Err)
     }
 }

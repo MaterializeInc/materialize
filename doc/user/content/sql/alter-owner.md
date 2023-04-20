@@ -46,3 +46,5 @@ ALTER CLUSTER REPLICA production.r1 OWNER TO admin;
 - [DROP USER](../drop-user)
 - [GRANT ROLE](../grant-role)
 - [REVOKE ROLE](../revoke-role)
+- [GRANT PRIVILEGE](../grant-privilege)
+- [REVOKE PRIVILEGE](../revoke-privilege)

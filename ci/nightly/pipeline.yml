@@ -17,7 +17,6 @@ steps:
       - select: Tests
         key: tests
         options:
-          - { value: coverage }
           - { value: kafka-matrix }
           - { value: kafka-multi-broker }
           - { value: redpanda-testdrive }
@@ -99,14 +98,6 @@ steps:
           args:
              - --other-tag
              - latest
-
-  - id: coverage
-    label: Code coverage
-    timeout_in_minutes: 240
-    command: bin/ci-builder run stable bin/pyactivate -m ci.nightly.coverage
-    artifact_paths: coverage-*.json
-    agents:
-      queue: linux-x86_64
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions

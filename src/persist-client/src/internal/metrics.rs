@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
@@ -528,11 +529,11 @@ impl CmdMetrics {
     ) -> Result<R, E>
     where
         F: std::future::Future<Output = Result<R, E>>,
-        CmdFn: FnOnce(CmdCasMismatchMetric) -> F,
+        CmdFn: FnOnce() -> F,
     {
         self.started.inc();
         let start = Instant::now();
-        let res = cmd_fn(CmdCasMismatchMetric(self.cas_mismatch.clone())).await;
+        let res = cmd_fn().await;
         self.seconds.inc_by(start.elapsed().as_secs_f64());
         match res.as_ref() {
             Ok(_) => {
@@ -1542,7 +1543,7 @@ impl MetricsBlob {
 
 #[async_trait]
 impl Blob for MetricsBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let res = self
             .metrics
             .blob

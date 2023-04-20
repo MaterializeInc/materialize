@@ -132,5 +132,7 @@ where
         StatementKind::Raise => "raise",
         StatementKind::GrantRole => "grant_role",
         StatementKind::RevokeRole => "revoke_role",
+        StatementKind::GrantPrivilege => "grant_privilege",
+        StatementKind::RevokePrivilege => "revoke_privilege",
     }
 }

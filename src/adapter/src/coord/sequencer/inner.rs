@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
@@ -38,6 +39,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
@@ -55,10 +57,11 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantRolePlan, IndexOption,
-    InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
-    ReadThenWritePlan, ResetVariablePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
+    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan, GrantRolePlan,
+    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
+    QueryWhen, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
+    SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::Var;
@@ -73,7 +76,7 @@ use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::{
     self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
-    StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
+    StorageSinkConnectionState, UpdatePrivilegeVariant, LINKED_CLUSTER_REPLICA_NAME,
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
@@ -1400,7 +1403,7 @@ impl Coordinator {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
 
-        let mut dropped_roles = plan
+        let mut dropped_roles: BTreeMap<_, _> = plan
             .ids
             .iter()
             .filter_map(|id| match id {
@@ -1412,6 +1415,9 @@ impl Coordinator {
                 (*id, name)
             })
             .collect();
+        for role_id in dropped_roles.keys() {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
         self.validate_dropped_role_ownership(&dropped_roles)?;
         // If any role is a member of a dropped role, then we must revoke that membership.
         let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
@@ -1422,6 +1428,11 @@ impl Coordinator {
                 ops.push(catalog::Op::RevokeRole {
                     role_id: **dropped_role_id,
                     member_id: role.id(),
+                    grantor_id: *role
+                        .membership
+                        .map
+                        .get(*dropped_role_id)
+                        .expect("included in keys above"),
                 })
             }
         }
@@ -1451,10 +1462,11 @@ impl Coordinator {
                     let name = role.name();
                     dropped_roles.insert(*id, name);
                     // We must revoke all role memberships that the dropped roles belongs to.
-                    for group_id in role.membership.map.keys() {
+                    for (group_id, grantor_id) in &role.membership.map {
                         ops.push(catalog::Op::RevokeRole {
                             role_id: *group_id,
                             member_id: *id,
+                            grantor_id: *grantor_id,
                         });
                     }
                 }
@@ -1484,29 +1496,90 @@ impl Coordinator {
         &self,
         dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
+        fn privilege_check(
+            privileges: &BTreeMap<RoleId, Vec<MzAclItem>>,
+            dropped_roles: &BTreeMap<RoleId, &str>,
+            dependent_objects: &mut BTreeMap<String, Vec<String>>,
+            object_type: ObjectType,
+            object_name: &str,
+            catalog: &Catalog,
+        ) {
+            let object_type = object_type.to_string().to_lowercase();
+            for (_, privileges) in privileges {
+                for privilege in privileges {
+                    if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
+                        let grantor_name = catalog.get_role(&privilege.grantor).name();
+                        dependent_objects
+                            .entry(role_name.to_string())
+                            .or_default()
+                            .push(format!(
+                            "privileges on {object_type} {object_name} granted by {grantor_name}",
+                        ));
+                    }
+                    if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
+                        let grantee_name = catalog.get_role(&privilege.grantee).name();
+                        dependent_objects
+                            .entry(role_name.to_string())
+                            .or_default()
+                            .push(format!(
+                            "privileges granted on {object_type} {object_name} to {grantee_name}"
+                        ));
+                    }
+                }
+            }
+        }
+
         let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for entry in self.catalog.entries() {
             if let Some(role_name) = dropped_roles.get(entry.owner_id()) {
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("{} {}", entry.item().typ(), entry.name().item));
+                    .push(format!(
+                        "owner of {} {}",
+                        entry.item().typ(),
+                        entry.name().item
+                    ));
             }
+            privilege_check(
+                entry.privileges(),
+                dropped_roles,
+                &mut dependent_objects,
+                entry.item().typ().into(),
+                &entry.name().item,
+                self.catalog(),
+            );
         }
         for database in self.catalog.databases() {
             if let Some(role_name) = dropped_roles.get(&database.owner_id) {
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("database {}", database.name()));
+                    .push(format!("owner of database {}", database.name()));
             }
+            privilege_check(
+                &database.privileges,
+                dropped_roles,
+                &mut dependent_objects,
+                ObjectType::Database,
+                database.name(),
+                self.catalog(),
+            );
             for schema in database.schemas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&schema.owner_id) {
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("schema {}", schema.name().schema));
+                        .push(format!("owner of schema {}", schema.name().schema));
                 }
+                privilege_check(
+                    &schema.privileges,
+                    dropped_roles,
+                    &mut dependent_objects,
+                    ObjectType::Schema,
+                    &schema.name().schema,
+                    self.catalog(),
+                );
             }
         }
         for cluster in self.catalog.clusters() {
@@ -1514,20 +1587,28 @@ impl Coordinator {
                 dependent_objects
                     .entry(role_name.to_string())
                     .or_default()
-                    .push(format!("cluster {}", cluster.name()));
+                    .push(format!("owner of cluster {}", cluster.name()));
             }
+            privilege_check(
+                &cluster.privileges,
+                dropped_roles,
+                &mut dependent_objects,
+                ObjectType::Cluster,
+                cluster.name(),
+                self.catalog(),
+            );
             for replica in cluster.replicas_by_id.values() {
                 if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
                     dependent_objects
                         .entry(role_name.to_string())
                         .or_default()
-                        .push(format!("cluster replica {}", replica.name));
+                        .push(format!("owner of cluster replica {}", replica.name));
                 }
             }
         }
 
         if !dependent_objects.is_empty() {
-            Err(AdapterError::DependentObjectOwnership(dependent_objects))
+            Err(AdapterError::DependentObject(dependent_objects))
         } else {
             Ok(())
         }
@@ -2145,7 +2226,7 @@ impl Coordinator {
             .collect();
         let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
         // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
+        let mut dataflow = DataflowDesc::new(format!("oneshot-select-{}", view_id));
         dataflow.set_as_of(timestamp_context.antichain());
         let mut builder = self.dataflow_builder(cluster_id);
         builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
@@ -2514,10 +2595,15 @@ impl Coordinator {
                 _ => None,
             };
 
-            // Execute the `optimize/mir_to_lir` stage.
-            let dataflow_plan = catch_unwind(no_errors, "mir_to_lir", || {
-                Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
-                    .map_err(AdapterError::Internal)
+            // Execute the `optimize/finalize_dataflow` stage.
+            let dataflow_plan = catch_unwind(no_errors, "finalize_dataflow", || {
+                Plan::<mz_repr::Timestamp>::finalize_dataflow(
+                    dataflow,
+                    self.catalog()
+                        .system_config()
+                        .enable_monotonic_oneshot_selects(),
+                )
+                .map_err(AdapterError::Internal)
             })?;
 
             // Trace the resulting plan for the top-level `optimize` path.
@@ -3583,6 +3669,110 @@ impl Coordinator {
         session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
     }
 
+    pub(super) async fn sequence_grant_privilege(
+        &mut self,
+        session: &mut Session,
+        GrantPrivilegePlan {
+            acl_mode,
+            object_id,
+            grantee,
+            grantor,
+        }: GrantPrivilegePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.sequence_update_privilege(
+            session,
+            acl_mode,
+            object_id,
+            grantee,
+            grantor,
+            UpdatePrivilegeVariant::Grant,
+        )
+        .await
+    }
+
+    pub(super) async fn sequence_revoke_privilege(
+        &mut self,
+        session: &mut Session,
+        RevokePrivilegePlan {
+            acl_mode,
+            object_id,
+            revokee,
+            grantor,
+        }: RevokePrivilegePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.sequence_update_privilege(
+            session,
+            acl_mode,
+            object_id,
+            revokee,
+            grantor,
+            UpdatePrivilegeVariant::Revoke,
+        )
+        .await
+    }
+
+    async fn sequence_update_privilege(
+        &mut self,
+        session: &mut Session,
+        acl_mode: AclMode,
+        object_id: ObjectId,
+        grantee: RoleId,
+        grantor: RoleId,
+        variant: UpdatePrivilegeVariant,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.catalog()
+            .ensure_not_reserved_object(&object_id, session.conn_id())?;
+
+        let privileges = self
+            .catalog()
+            .get_privileges(&object_id, session.conn_id())
+            .expect("cannot grant privileges on objects without privileges");
+        let existing_privilege = privileges
+            .get(&grantee)
+            .and_then(|privileges| {
+                privileges
+                    .into_iter()
+                    .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+            })
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
+
+        match variant {
+            UpdatePrivilegeVariant::Grant => {
+                if existing_privilege.acl_mode.contains(acl_mode) {
+                    // The granted privileges already exists so we can return early.
+                    return Ok(ExecuteResponse::GrantedPrivilege);
+                }
+            }
+            UpdatePrivilegeVariant::Revoke => {
+                if existing_privilege
+                    .acl_mode
+                    .intersection(acl_mode)
+                    .is_empty()
+                {
+                    // The revoked privileges don't exist so we can return early.
+                    return Ok(ExecuteResponse::RevokedPrivilege);
+                }
+            }
+        }
+
+        let op = catalog::Op::UpdatePrivilege {
+            object_id,
+            privilege: MzAclItem {
+                grantee,
+                grantor,
+                acl_mode,
+            },
+            variant,
+        };
+        self.catalog_transact(Some(session), vec![op])
+            .await
+            .map(|_| match variant {
+                UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
+                UpdatePrivilegeVariant::Revoke => ExecuteResponse::RevokedPrivilege,
+            })
+    }
+
     pub(super) async fn sequence_grant_role(
         &mut self,
         session: &mut Session,
@@ -3595,7 +3785,8 @@ impl Coordinator {
         let catalog = self.catalog();
         let mut ops = Vec::new();
         for member_id in member_ids {
-            let member_membership: BTreeSet<_> = catalog.get_role(&member_id).membership();
+            let member_membership: BTreeSet<_> =
+                catalog.get_role(&member_id).membership().keys().collect();
             if member_membership.contains(&role_id) {
                 let role_name = catalog.get_role(&role_id).name().to_string();
                 let member_name = catalog.get_role(&member_id).name().to_string();
@@ -3630,12 +3821,14 @@ impl Coordinator {
         RevokeRolePlan {
             role_id,
             member_ids,
+            grantor_id,
         }: RevokeRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog();
         let mut ops = Vec::new();
         for member_id in member_ids {
-            let member_membership: BTreeSet<_> = catalog.get_role(&member_id).membership();
+            let member_membership: BTreeSet<_> =
+                catalog.get_role(&member_id).membership().keys().collect();
             if !member_membership.contains(&role_id) {
                 let role_name = catalog.get_role(&role_id).name().to_string();
                 let member_name = catalog.get_role(&member_id).name().to_string();
@@ -3647,7 +3840,11 @@ impl Coordinator {
                     member_name,
                 });
             } else {
-                ops.push(catalog::Op::RevokeRole { role_id, member_id });
+                ops.push(catalog::Op::RevokeRole {
+                    role_id,
+                    member_id,
+                    grantor_id,
+                });
             }
         }
 

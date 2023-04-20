@@ -446,8 +446,10 @@ impl Coordinator {
                     | Statement::CreateMaterializedView(_)
                     | Statement::Delete(_)
                     | Statement::DropObjects(_)
+                    | Statement::GrantPrivilege(_)
                     | Statement::GrantRole(_)
                     | Statement::Insert(_)
+                    | Statement::RevokePrivilege(_)
                     | Statement::RevokeRole(_)
                     | Statement::Update(_) => {
                         return tx.send(

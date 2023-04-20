@@ -31,8 +31,8 @@ use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
     Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedName,
-    UnresolvedSchemaName, Value,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -91,6 +91,8 @@ pub enum Statement<T: AstInfo> {
     Raise(RaiseStatement),
     GrantRole(GrantRoleStatement<T>),
     RevokeRole(RevokeRoleStatement<T>),
+    GrantPrivilege(GrantPrivilegeStatement<T>),
+    RevokePrivilege(RevokePrivilegeStatement<T>),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -147,6 +149,8 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Raise(stmt) => f.write_node(stmt),
             Statement::GrantRole(stmt) => f.write_node(stmt),
             Statement::RevokeRole(stmt) => f.write_node(stmt),
+            Statement::GrantPrivilege(stmt) => f.write_node(stmt),
+            Statement::RevokePrivilege(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -1405,7 +1409,7 @@ impl<T: AstInfo> AstDisplay for CreateTypeMapOption<T> {
 pub struct AlterOwnerStatement<T: AstInfo> {
     pub object_type: ObjectType,
     pub if_exists: bool,
-    pub name: UnresolvedName,
+    pub name: UnresolvedObjectName,
     pub new_owner: T::RoleName,
 }
 
@@ -1668,7 +1672,7 @@ pub struct DropObjectsStatement {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<UnresolvedName>,
+    pub names: Vec<UnresolvedObjectName>,
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` or no drop behavior at all was specified.
     pub cascade: bool,
@@ -2453,7 +2457,7 @@ impl ExplainStage {
             ExplainStage::RawPlan => "optimize/raw",
             ExplainStage::DecorrelatedPlan => "optimize/hir_to_mir",
             ExplainStage::OptimizedPlan => "optimize/global",
-            ExplainStage::PhysicalPlan => "optimize/mir_to_lir",
+            ExplainStage::PhysicalPlan => "optimize/finalize_dataflow",
             ExplainStage::Trace => unreachable!(),
             ExplainStage::Timestamp => unreachable!(),
         }
@@ -2851,3 +2855,85 @@ impl<T: AstInfo> AstDisplay for RevokeRoleStatement<T> {
     }
 }
 impl_display_t!(RevokeRoleStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Privilege {
+    SELECT,
+    INSERT,
+    UPDATE,
+    DELETE,
+    USAGE,
+    CREATE,
+}
+
+impl AstDisplay for Privilege {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            Privilege::SELECT => "SELECT",
+            Privilege::INSERT => "INSERT",
+            Privilege::UPDATE => "UPDATE",
+            Privilege::DELETE => "DELETE",
+            Privilege::CREATE => "CREATE",
+            Privilege::USAGE => "USAGE",
+        });
+    }
+}
+impl_display!(Privilege);
+
+/// `GRANT ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GrantPrivilegeStatement<T: AstInfo> {
+    /// The privileges being granted on an object.
+    pub privileges: Vec<Privilege>,
+    /// The type of object.
+    ///
+    /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
+    pub object_type: ObjectType,
+    /// The name of the object.
+    pub name: T::ObjectName,
+    /// The role that will granted the privileges.
+    pub role: T::RoleName,
+}
+
+impl<T: AstInfo> AstDisplay for GrantPrivilegeStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("GRANT ");
+        f.write_node(&display::comma_separated(&self.privileges));
+        f.write_str(" ON ");
+        f.write_node(&self.object_type);
+        f.write_str(" ");
+        f.write_node(&self.name);
+        f.write_str(" TO ");
+        f.write_node(&self.role);
+    }
+}
+impl_display_t!(GrantPrivilegeStatement);
+
+/// `REVOKE ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RevokePrivilegeStatement<T: AstInfo> {
+    /// The privileges being revoked.
+    pub privileges: Vec<Privilege>,
+    /// The type of object.
+    ///
+    /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
+    pub object_type: ObjectType,
+    /// The name of the object.
+    pub name: T::ObjectName,
+    /// The role that will have privileges revoked.
+    pub role: T::RoleName,
+}
+
+impl<T: AstInfo> AstDisplay for RevokePrivilegeStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("REVOKE ");
+        f.write_node(&display::comma_separated(&self.privileges));
+        f.write_str(" ON ");
+        f.write_node(&self.object_type);
+        f.write_str(" ");
+        f.write_node(&self.name);
+        f.write_str(" FROM ");
+        f.write_node(&self.role);
+    }
+}
+impl_display_t!(RevokePrivilegeStatement);

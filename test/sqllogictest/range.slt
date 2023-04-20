@@ -665,12 +665,12 @@ true
 query B
 select '(,)'::int4range > 'empty'::int4range;
 ----
-false
+true
 
 query B
 select '(,)'::int4range >= 'empty'::int4range;
 ----
-false
+true
 
 query B
 select '(,)'::int4range < 'empty'::int4range;
@@ -1817,12 +1817,12 @@ true
 query B
 select '(,)'::int8range > 'empty'::int8range;
 ----
-false
+true
 
 query B
 select '(,)'::int8range >= 'empty'::int8range;
 ----
-false
+true
 
 query B
 select '(,)'::int8range < 'empty'::int8range;
@@ -2904,12 +2904,12 @@ true
 query B
 select '(,)'::daterange > 'empty'::daterange;
 ----
-false
+true
 
 query B
 select '(,)'::daterange >= 'empty'::daterange;
 ----
-false
+true
 
 query B
 select '(,)'::daterange < 'empty'::daterange;
@@ -4067,12 +4067,12 @@ true
 query B
 select '(,)'::numrange > 'empty'::numrange;
 ----
-false
+true
 
 query B
 select '(,)'::numrange >= 'empty'::numrange;
 ----
-false
+true
 
 query B
 select '(,)'::numrange < 'empty'::numrange;
@@ -4083,6 +4083,81 @@ query B
 select '(,)'::numrange <= 'empty'::numrange;
 ----
 false
+
+query B
+select '(1,2)'::numrange < '(3,4)'::numrange;
+----
+true
+
+query B
+select '(1,2)'::numrange <= '(3,4)'::numrange;
+----
+true
+
+query B
+select '(1,2)'::numrange = '(3,4)'::numrange;
+----
+false
+
+query B
+select '(1,2)'::numrange >= '(3,4)'::numrange;
+----
+false
+
+query B
+select '(1,2)'::numrange > '(3,4)'::numrange;
+----
+false
+
+query B
+select '(3,4)'::numrange >= '(3,4)'::numrange;
+----
+true
+
+query B
+select '(3,4)'::numrange = '(3,4)'::numrange;
+----
+true
+
+query B
+select '(3,4)'::numrange <= '(3,4)'::numrange;
+----
+true
+
+query B
+select '(3,4)'::numrange < '(3,4)'::numrange;
+----
+false
+
+query B
+select '(3,4)'::numrange > '(3,4)'::numrange;
+----
+false
+
+query B
+select '(5,6)'::numrange < '(3,4)'::numrange;
+----
+false
+
+query B
+select '(5,6)'::numrange <= '(3,4)'::numrange;
+----
+false
+
+query B
+select '(5,6)'::numrange = '(3,4)'::numrange;
+----
+false
+
+query B
+select '(5,6)'::numrange >= '(3,4)'::numrange;
+----
+true
+
+query B
+select '(5,6)'::numrange > '(3,4)'::numrange;
+----
+true
 
 statement ok
 CREATE TABLE numrange_test_values (v numrange);
@@ -5806,12 +5881,12 @@ true
 query B
 select '(,)'::tsrange > 'empty'::tsrange;
 ----
-false
+true
 
 query B
 select '(,)'::tsrange >= 'empty'::tsrange;
 ----
-false
+true
 
 query B
 select '(,)'::tsrange < 'empty'::tsrange;
@@ -7532,12 +7607,12 @@ true
 query B
 select '(,)'::tstzrange > 'empty'::tstzrange;
 ----
-false
+true
 
 query B
 select '(,)'::tstzrange >= 'empty'::tstzrange;
 ----
-false
+true
 
 query B
 select '(,)'::tstzrange < 'empty'::tstzrange;

@@ -76,7 +76,7 @@ class SubscribeParallel(Scenario):
 class SubscribeParallelTable(SubscribeParallel):
     def create_subscribe_source(self) -> str:
         return dedent(
-            f"""
+            """
              > DROP TABLE IF EXISTS s1;
              > CREATE TABLE s1 (f1 TEXT);
              """
@@ -89,7 +89,7 @@ class SubscribeParallelTable(SubscribeParallel):
 class SubscribeParallelTableWithIndex(SubscribeParallel):
     def create_subscribe_source(self) -> str:
         return dedent(
-            f"""
+            """
              > DROP TABLE IF EXISTS s1;
              > CREATE TABLE s1 (f1 INTEGER);
              > CREATE DEFAULT INDEX ON s1;

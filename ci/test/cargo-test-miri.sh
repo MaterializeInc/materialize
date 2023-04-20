@@ -19,4 +19,4 @@ set -euo pipefail
 export CARGO_TARGET_DIR="$PWD/miri-target"
 export MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-strict-provenance"
 # exclude netwrok based tests, they mostly fail on epoll_wait
-cargo miri nextest run -j"$(nproc)" --no-fail-fast --workspace --exclude 'mz-adapter*' --exclude 'mz-environmentd*' --exclude 'mz-expr*' --exclude 'mz-compute-client*' --exclude 'mz-persist-client*' --exclude 'mz-ssh-util*'
+cargo miri nextest run -j"$(nproc)" --no-fail-fast --workspace --exclude 'mz-adapter*' --exclude 'mz-environmentd*' --exclude 'mz-expr*' --exclude 'mz-compute-client*' --exclude 'mz-persist-client*' --exclude 'mz-ssh-util*' --exclude 'mz-rocksdb*'

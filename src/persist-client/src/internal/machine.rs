@@ -666,10 +666,23 @@ where
         &mut self,
         as_of: &Antichain<T>,
     ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
+        // To reduce log spam, we log "not yet available" only once at info if
+        // it passes a certain threshold. Then, if it did one info log, we log
+        // again at info when it resolves.
+        let mut logged_at_info = false;
         let mut retry: Option<MetricsRetryStream> = None;
         loop {
             let upper = match self.applier.snapshot(as_of) {
-                Ok(Ok(x)) => return Ok(x),
+                Ok(Ok(x)) => {
+                    if logged_at_info {
+                        info!(
+                            "snapshot {} as of {:?} now available",
+                            self.shard_id(),
+                            as_of.elements(),
+                        );
+                    }
+                    return Ok(x);
+                }
                 Ok(Err(Upper(upper))) => {
                     // The upper isn't ready yet, fall through and try again.
                     upper
@@ -689,20 +702,21 @@ where
                     // Use a duration based threshold here instead of the usual
                     // INFO_MIN_ATTEMPTS because here we're waiting on an
                     // external thing to arrive.
-                    if retry.next_sleep() >= Duration::from_millis(64) {
+                    if !logged_at_info && retry.next_sleep() >= Duration::from_millis(1024) {
+                        logged_at_info = true;
                         info!(
                             "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
                             self.shard_id(),
-                            as_of,
-                            upper,
+                            as_of.elements(),
+                            upper.elements(),
                             retry.next_sleep()
                         );
                     } else {
                         debug!(
                             "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
                             self.shard_id(),
-                            as_of,
-                            upper,
+                            as_of.elements(),
+                            upper.elements(),
                             retry.next_sleep()
                         );
                     }

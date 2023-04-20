@@ -136,7 +136,7 @@ database_objects = [
     DatabaseObject(
         name="materialized_view_constant",
         testdrive=dedent(
-            f"""
+            """
             > CREATE MATERIALIZED VIEW obj AS SELECT generate_series::text , REPEAT('x', 1024) FROM generate_series(1, 1024)
             """
         ),
@@ -147,7 +147,7 @@ database_objects = [
     DatabaseObject(
         name="materialized_view_small_output",
         testdrive=dedent(
-            f"""
+            """
             > CREATE TABLE t1 (f1 TEXT)
             > INSERT INTO t1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
 
@@ -161,7 +161,7 @@ database_objects = [
         name="pg_cdc_source",
         testdrive=PG_CDC_SETUP
         + dedent(
-            f"""
+            """
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE TABLE pg_table (f1 TEXT);
             INSERT INTO pg_table SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
@@ -179,7 +179,7 @@ database_objects = [
         name="pg_cdc_subsource",
         testdrive=PG_CDC_SETUP
         + dedent(
-            f"""
+            """
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE TABLE pg_table1 (f1 TEXT);
             INSERT INTO pg_table1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)

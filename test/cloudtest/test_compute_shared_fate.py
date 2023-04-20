@@ -92,7 +92,7 @@ def kill_clusterd(
     mz: MaterializeApplication, compute_id: int, signal: str = "SIGKILL"
 ) -> None:
     cluster_id, replica_id = mz.environmentd.sql_query(
-        f"SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'shared_fate_replica'"
+        "SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'shared_fate_replica'"
     )[0]
 
     pod_name = cluster_pod_name(cluster_id, replica_id, compute_id)

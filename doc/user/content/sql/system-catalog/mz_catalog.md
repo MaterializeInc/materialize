@@ -69,17 +69,18 @@ Field               | Type      | Meaning
 `cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `size`              | [`text`]  | The cluster replica's size, selected during creation.
 `availability_zone` | [`text`]  | The availability zone in which the cluster is running.
-`owner_id`          | [`text`]    | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`owner_id`          | [`text`]  | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 
 ### `mz_clusters`
 
 The `mz_clusters` table contains a row for each cluster in the system.
 
-Field          | Type       | Meaning
----------------|------------|--------
-`id`           | [`text`]   | Materialize's unique ID for the cluster.
-`name`         | [`text`]   | The name of the cluster.
-`owner_id`     | [`text`]    | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field          | Type                 | Meaning
+---------------|----------------------|--------
+`id`           | [`text`]             | Materialize's unique ID for the cluster.
+`name`         | [`text`]             | The name of the cluster.
+`owner_id`     | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`   | [`mz_aclitem array`] | The privileges belonging to the cluster.
 
 ### `mz_columns`
 
@@ -100,25 +101,27 @@ Field            | Type        | Meaning
 
 The `mz_connections` table contains a row for each connection in the system.
 
-Field            | Type        | Meaning
------------------|-------------|--------
-`id`             | [`text`]    | The unique ID of the connection.
-`oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the connection.
-`schema_id`      | [`uint8`]   | The ID of the schema to which the connection belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`           | [`text`]    | The name of the connection.
-`type`           | [`text`]    | The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.
-`owner_id`       | [`text`]    | The role ID of the owner of the connection. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field        | Type                 | Meaning
+-------------|----------------------|--------
+`id`         | [`text`]             | The unique ID of the connection.
+`oid`        | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the connection.
+`schema_id`  | [`uint8`]            | The ID of the schema to which the connection belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`       | [`text`]             | The name of the connection.
+`type`       | [`text`]             | The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.
+`owner_id`   | [`text`]             | The role ID of the owner of the connection. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges` | [`mz_aclitem array`] | The privileges belonging to the connection.
 
 ### `mz_databases`
 
 The `mz_databases` table contains a row for each database in the system.
 
-Field      | Type       | Meaning
------------|------------|--------
-`id`       | [`uint8`]  | Materialize's unique ID for the database.
-`oid`      | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
-`name`     | [`text`]   | The name of the database.
-`owner_id` | [`text`]    | The role ID of the owner of the database. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field       | Type                 | Meaning
+------------|----------------------|--------
+`id`        | [`uint8`]            | Materialize's unique ID for the database.
+`oid`       | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the database.
+`name`      | [`text`]             | The name of the database.
+`owner_id`  | [`text`]             | The role ID of the owner of the database. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`| [`mz_aclitem array`] | The privileges belonging to the database.
 
 ### `mz_egress_ips`
 
@@ -217,15 +220,16 @@ Field          | Type       | Meaning
 
 The `mz_materialized_views` table contains a row for each materialized view in the system.
 
-Field          | Type      | Meaning
----------------|-----------|----------
-`id`           | [`text`]  | Materialize's unique ID for the materialized view.
-`oid`          | [`oid`]   | A [PostgreSQL-compatible OID][oid] for the materialized view.
-`schema_id`    | [`uint8`] | The ID of the schema to which the materialized view belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`         | [`text`]  | The name of the materialized view.
-`cluster_id`   | [`text`]  | The ID of the cluster maintaining the materialized view. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
-`definition`   | [`text`]  | The materialized view definition (a `SELECT` query).
-`owner_id`     | [`text`]  | The role ID of the owner of the materialized view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field          | Type                 | Meaning
+---------------|----------------------|----------
+`id`           | [`text`]             | Materialize's unique ID for the materialized view.
+`oid`          | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the materialized view.
+`schema_id`    | [`uint8`]            | The ID of the schema to which the materialized view belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`         | [`text`]             | The name of the materialized view.
+`cluster_id`   | [`text`]             | The ID of the cluster maintaining the materialized view. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
+`definition`   | [`text`]             | The materialized view definition (a `SELECT` query).
+`owner_id`     | [`text`]             | The role ID of the owner of the materialized view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`   | [`mz_aclitem array`] | The privileges belonging to the materialized view.
 
 ### `mz_objects`
 
@@ -236,14 +240,15 @@ IDs for all objects represented in `mz_objects` share a namespace. If there is a
 with ID u1, there will never be a table, source, view, materialized view, sink, index,
 connection, secret, type, or function with ID u1.
 
-Field       | Type       | Meaning
-------------|------------|--------
-`id`        | [`text`]   | Materialize's unique ID for the object.
-`oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the object.
-`schema_id` | [`uint8`]  | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`      | [`text`]   | The name of the object.
-`type`      | [`text`]   | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
-`owner_id`  | [`text`]    | The role ID of the owner of the object. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field       | Type                 | Meaning
+------------|----------------------|--------
+`id`        | [`text`]             | Materialize's unique ID for the object.
+`oid`       | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the object.
+`schema_id` | [`uint8`]            | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`      | [`text`]             | The name of the object.
+`type`      | [`text`]             | The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+`owner_id`  | [`text`]             | The role ID of the owner of the object. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`| [`mz_aclitem array`] | The privileges belonging to the object.
 
 ### `mz_pseudo_types`
 
@@ -258,14 +263,15 @@ Field          | Type       | Meaning
 The `mz_relations` view contains a row for each table, source, view, and
 materialized view in the system.
 
-Field       | Type       | Meaning
-------------|------------|--------
-`id`        | [`text`]   | Materialize's unique ID for the relation.
-`oid`       | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the relation.
-`schema_id` | [`uint8`]  | The ID of the schema to which the relation belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`      | [`text`]   | The name of the relation.
-`type`      | [`text`]   | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
-`owner_id`  | [`text`]    | The role ID of the owner of the relation. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field       | Type                 | Meaning
+------------|----------------------|--------
+`id`        | [`text`]             | Materialize's unique ID for the relation.
+`oid`       | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the relation.
+`schema_id` | [`uint8`]            | The ID of the schema to which the relation belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`      | [`text`]             | The name of the relation.
+`type`      | [`text`]             | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
+`owner_id`  | [`text`]             | The role ID of the owner of the relation. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`| [`mz_aclitem array`] | The privileges belonging to the relation.
 
 ### `mz_roles`
 
@@ -295,24 +301,26 @@ Field     | Type       | Meaning
 
 The `mz_schemas` table contains a row for each schema in the system.
 
-Field         | Type       | Meaning
---------------|------------|--------
-`id`          | [`uint8`]  | Materialize's unique ID for the schema.
-`oid`         | [`oid`]    | A [PostgreSQL-compatible oid][oid] for the schema.
-`database_id` | [`uint8`]  | The ID of the database containing the schema. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_databases).
-`name`        | [`text`]   | The name of the schema.
-`owner_id`    | [`text`]    | The role ID of the owner of the schema. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field         | Type                 | Meaning
+--------------|----------------------|--------
+`id`          | [`uint8`]            | Materialize's unique ID for the schema.
+`oid`         | [`oid`]              | A [PostgreSQL-compatible oid][oid] for the schema.
+`database_id` | [`uint8`]            | The ID of the database containing the schema. Corresponds to [`mz_databases.id`](/sql/system-catalog/mz_catalog/#mz_databases).
+`name`        | [`text`]             | The name of the schema.
+`owner_id`    | [`text`]             | The role ID of the owner of the schema. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`  | [`mz_aclitem array`] | The privileges belonging to the schema.
 
 ### `mz_secrets`
 
 The `mz_secrets` table contains a row for each connection in the system.
 
-Field            | Type        | Meaning
------------------|-------------|--------
-`id`             | [`text`]    | The unique ID of the secret.
-`schema_id`      | [`uint8`]   | The ID of the schema to which the secret belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`           | [`text`]    | The name of the secret.
-`owner_id`       | [`text`]    | The role ID of the owner of the secret. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field            | Type                 | Meaning
+-----------------|----------------------|--------
+`id`             | [`text`]             | The unique ID of the secret.
+`schema_id`      | [`uint8`]            | The ID of the schema to which the secret belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`           | [`text`]             | The name of the secret.
+`owner_id`       | [`text`]             | The role ID of the owner of the secret. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`     | [`mz_aclitem array`] | The privileges belonging to the secret.
 
 ### `mz_ssh_tunnel_connections`
 
@@ -346,18 +354,19 @@ Field            | Type        | Meaning
 
 The `mz_sources` table contains a row for each source in the system.
 
-Field            | Type       | Meaning
------------------|------------|----------
-`id`             | [`text`]   | Materialize's unique ID for the source.
-`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
-`schema_id`      | [`uint8`]  | The ID of the schema to which the source belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`           | [`text`]   | The name of the source.
-`type`           | [`text`]   | The type of the source: `kafka`, `postgres`, `load-generator`, or `subsource`.
-`connection_id`  | [`text`]   | The ID of the connection associated with the source, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
-`size`           | [`text`]   | The [size](/sql/create-source/#sizing-a-source) of the source.
-`envelope_type`  | [`text`]   | The [envelope](/sql/create-source/#envelopes) of the source: `none`, `upsert`, or `debezium`.
-`cluster_id`     | [`text`]   | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
-`owner_id`       | [`text`]    | The role ID of the owner of the source. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field            | Type                 | Meaning
+-----------------|----------------------|----------
+`id`             | [`text`]             | Materialize's unique ID for the source.
+`oid`            | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the source.
+`schema_id`      | [`uint8`]            | The ID of the schema to which the source belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`           | [`text`]             | The name of the source.
+`type`           | [`text`]             | The type of the source: `kafka`, `postgres`, `load-generator`, or `subsource`.
+`connection_id`  | [`text`]             | The ID of the connection associated with the source, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
+`size`           | [`text`]             | The [size](/sql/create-source/#sizing-a-source) of the source.
+`envelope_type`  | [`text`]             | The [envelope](/sql/create-source/#envelopes) of the source: `none`, `upsert`, or `debezium`.
+`cluster_id`     | [`text`]             | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
+`owner_id`       | [`text`]             | The role ID of the owner of the source. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`     | [`mz_aclitem array`] | The privileges belonging to the source.
 
 ### `mz_storage_usage`
 
@@ -375,38 +384,41 @@ Field                  | Type                         | Meaning
 
 The `mz_tables` table contains a row for each table in the system.
 
-Field            | Type       | Meaning
------------------|------------|----------
-`id`             | [`text`]   | Materialize's unique ID for the table.
-`oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the table.
-`schema_id`      | [`uint8`]  | The ID of the schema to which the table belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`           | [`text`]   | The name of the table.
-`owner_id`       | [`text`]   | The role ID of the owner of the table. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field        | Type                 | Meaning
+-------------|----------------------|----------
+`id`         | [`text`]             | Materialize's unique ID for the table.
+`oid`        | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the table.
+`schema_id`  | [`uint8`]            | The ID of the schema to which the table belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`       | [`text`]             | The name of the table.
+`owner_id`   | [`text`]             | The role ID of the owner of the table. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges` | [`mz_aclitem array`] | The privileges belonging to the table.
 
 ### `mz_types`
 
 The `mz_types` table contains a row for each type in the system.
 
-Field          | Type       | Meaning
----------------|------------|----------
-`id`           | [`text`]   | Materialize's unique ID for the type.
-`oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the type.
-`schema_id`    | [`uint8`]  | The ID of the schema to which the type belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`         | [`text`]   | The name of the type.
-`owner_id`     | [`text`]    | The role ID of the owner of the type. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field          | Type                 | Meaning
+---------------|----------------------|----------
+`id`           | [`text`]             | Materialize's unique ID for the type.
+`oid`          | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the type.
+`schema_id`    | [`uint8`]            | The ID of the schema to which the type belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`         | [`text`]             | The name of the type.
+`owner_id`     | [`text`]             | The role ID of the owner of the type. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`   | [`mz_aclitem array`] | The privileges belonging to the type.
 
 ### `mz_views`
 
 The `mz_views` table contains a row for each view in the system.
 
-Field          | Type        | Meaning
----------------|-------------|----------
-`id`           | [`text`]    | Materialize's unique ID for the view.
-`oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the view.
-`schema_id`    | [`uint8`]   | The ID of the schema to which the view belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
-`name`         | [`text`]    | The name of the view.
-`definition`   | [`text`]    | The view definition (a `SELECT` query).
-`owner_id`     | [`text`]    | The role ID of the owner of the view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+Field          | Type                 | Meaning
+---------------|----------------------|----------
+`id`           | [`text`]             | Materialize's unique ID for the view.
+`oid`          | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the view.
+`schema_id`    | [`uint8`]            | The ID of the schema to which the view belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
+`name`         | [`text`]             | The name of the view.
+`definition`   | [`text`]             | The view definition (a `SELECT` query).
+`owner_id`     | [`text`]             | The role ID of the owner of the view. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`privileges`   | [`mz_aclitem array`] | The privileges belonging to the view.
 
 [`bigint`]: /sql/types/bigint
 [`boolean`]: /sql/types/boolean

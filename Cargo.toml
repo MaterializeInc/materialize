@@ -38,6 +38,7 @@ members = [
     "src/persist-types",
     "src/pgcopy",
     "src/pgrepr",
+    "src/pgrepr-consts",
     "src/pgtest",
     "src/pgwire",
     "src/pid-file",
@@ -46,6 +47,7 @@ members = [
     "src/proto",
     "src/repr",
     "src/repr-test-util",
+    "src/rocksdb",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
@@ -116,3 +118,4 @@ postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 vte = { git = "https://github.com/alacritty/vte" }
+aws-smithy-http = { git = "https://github.com/parker-timmerman/smithy-rs.git", branch = "v0.53.2" }

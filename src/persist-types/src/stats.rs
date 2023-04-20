@@ -160,6 +160,10 @@ pub struct JsonStats {
     /// Recursive statistics about the set of keys present in any maps/objects
     /// in the column, or None if there were no maps/objects.
     pub map: BTreeMap<String, JsonStats>,
+    /// True if maps may be present. (This is _almost_ redundant
+    /// with the above, but handles the case where a map may not have any fields
+    /// or fields have been pruned.)
+    pub maps: bool,
 }
 
 impl std::fmt::Debug for JsonStats {
@@ -171,6 +175,7 @@ impl std::fmt::Debug for JsonStats {
             numeric,
             list,
             map,
+            maps,
         } = self;
         let mut f = &mut f.debug_tuple("json");
         if json_nulls > &0 {
@@ -190,6 +195,9 @@ impl std::fmt::Debug for JsonStats {
         }
         if !map.is_empty() {
             f = f.field(map);
+        }
+        if *maps {
+            f = f.field(&"maps")
         }
         f.finish()
     }
@@ -612,6 +620,7 @@ mod impls {
                     .iter()
                     .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
                     .collect(),
+                no_maps: !self.maps.into_proto(),
             }
         }
 
@@ -627,6 +636,7 @@ mod impls {
                 numeric: proto.numeric.into_rust()?,
                 list: proto.list.into_rust()?,
                 map,
+                maps: !proto.no_maps.into_rust()?,
             })
         }
     }
@@ -812,6 +822,8 @@ mod impls {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     #[test]
@@ -839,6 +851,29 @@ mod tests {
         testcase(&[1, 255], 2, true);
         testcase(&[255, 255], 2, true);
         testcase(&[255, 255, 255], 2, false);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn test_truncate_bytes_proptest() {
+        fn testcase(x: &[u8]) {
+            for max_len in 0..=x.len() {
+                let lower = truncate_bytes(x, max_len, TruncateBound::Lower)
+                    .expect("lower should always exist");
+                let upper = truncate_bytes(x, max_len, TruncateBound::Upper);
+                assert!(lower.len() <= max_len);
+                assert!(lower.as_slice() <= x);
+                if let Some(upper) = upper {
+                    assert!(upper.len() <= max_len);
+                    assert!(upper.as_slice() >= x);
+                }
+            }
+        }
+
+        proptest!(|(x in any::<Vec<u8>>())| {
+            // The proptest! macro interferes with rustfmt.
+            testcase(x.as_slice())
+        });
     }
 
     #[test]
@@ -879,5 +914,28 @@ mod tests {
             truncate_string("⛄⛄", 3, TruncateBound::Upper),
             Some("⛅".to_string())
         );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn test_truncate_string_proptest() {
+        fn testcase(x: &str) {
+            for max_len in 0..=x.len() {
+                let lower = truncate_string(x, max_len, TruncateBound::Lower)
+                    .expect("lower should always exist");
+                let upper = truncate_string(x, max_len, TruncateBound::Upper);
+                assert!(lower.len() <= max_len);
+                assert!(lower.as_str() <= x);
+                if let Some(upper) = upper {
+                    assert!(upper.len() <= max_len);
+                    assert!(upper.as_str() >= x);
+                }
+            }
+        }
+
+        proptest!(|(x in any::<String>())| {
+            // The proptest! macro interferes with rustfmt.
+            testcase(x.as_str())
+        });
     }
 }

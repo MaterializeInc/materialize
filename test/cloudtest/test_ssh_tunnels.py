@@ -94,7 +94,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    environmentd_pod_name = f"pod/environmentd-0"
+    environmentd_pod_name = "pod/environmentd-0"
 
     # Kill environmentd to force a restart, to test reloading secrets on restart
     mz.kubectl(

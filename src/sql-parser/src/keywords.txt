@@ -370,6 +370,7 @@ Up
 Update
 Upsert
 Url
+Usage
 User
 Username
 Users

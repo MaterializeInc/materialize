@@ -17,15 +17,15 @@ reset-server
 statement ok
 CREATE SCHEMA foo
 
-query IT rowsort
+query TT rowsort
 SELECT id, name FROM mz_schemas
 ----
-1 mz_catalog
-2 pg_catalog
-3 public
-4 mz_internal
-5 information_schema
-6 foo
+s1 mz_catalog
+s2 pg_catalog
+u3 public
+s4 mz_internal
+s5 information_schema
+u6 foo
 
 statement ok
 DROP schema foo
@@ -33,24 +33,24 @@ DROP schema foo
 statement ok
 CREATE schema bar
 
-query IT rowsort
+query TT rowsort
 SELECT id, name FROM mz_schemas
 ----
-1 mz_catalog
-2 pg_catalog
-3 public
-4 mz_internal
-5 information_schema
-7 bar
+s1 mz_catalog
+s2 pg_catalog
+u3 public
+s4 mz_internal
+s5 information_schema
+u7 bar
 
 statement ok
 CREATE DATABASE foo
 
-query IT rowsort
+query TT rowsort
 SELECT id, name FROM mz_databases
 ----
-1 materialize
-2 foo
+u1 materialize
+u2 foo
 
 statement ok
 DROP DATABASE foo
@@ -58,11 +58,11 @@ DROP DATABASE foo
 statement ok
 CREATE DATABASE bar
 
-query IT rowsort
+query TT rowsort
 SELECT id, name FROM mz_databases
 ----
-1 materialize
-3 bar
+u1 materialize
+u3 bar
 
 statement ok
 CREATE ROLE foo
@@ -70,11 +70,10 @@ CREATE ROLE foo
 query TT rowsort
 SELECT id, name FROM mz_roles
 ----
-s1 mz_system
-s2 mz_introspection
-u1 default_owner
-u2 materialize
-u3 foo
+s1  mz_system
+s2  mz_introspection
+u1  materialize
+u2  foo
 
 statement ok
 DROP ROLE foo
@@ -85,11 +84,10 @@ CREATE ROLE bar
 query TT rowsort
 SELECT id, name FROM mz_roles
 ----
-s1 mz_system
-s2 mz_introspection
-u1 default_owner
-u2 materialize
-u4 bar
+s1  mz_system
+s2  mz_introspection
+u1  materialize
+u3  bar
 
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (size '1'))

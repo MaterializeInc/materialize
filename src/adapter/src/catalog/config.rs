@@ -12,11 +12,14 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytesize::ByteSize;
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
+use mz_orchestrator::MemoryLimit;
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
@@ -95,6 +98,10 @@ impl Default for ClusterReplicaSizeMap {
         //     "2-1": {"scale": 2, "workers": 1},
         //     ...
         //     "16-1": {"scale": 16, "workers": 1},
+        //     /// Used in the cloudtest tests that force OOMs
+        //     "mem-2": { "memory_limit": 2Gb },
+        //     ...
+        //     "mem-16": { "memory_limit": 16Gb },
         // }
         let mut inner = (0..=5)
             .map(|i| {
@@ -130,6 +137,16 @@ impl Default for ClusterReplicaSizeMap {
                     cpu_limit: None,
                     scale,
                     workers: scale.into(),
+                },
+            );
+
+            inner.insert(
+                format!("mem-{scale}"),
+                ReplicaAllocation {
+                    memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
+                    cpu_limit: None,
+                    scale: 1,
+                    workers: 8,
                 },
             );
         }

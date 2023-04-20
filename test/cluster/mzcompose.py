@@ -553,24 +553,28 @@ def workflow_test_github_15496(c: Composition) -> None:
                     WORKERS 2
                 )
             );
+            -- Set data for test up.
+            SET cluster = cluster1;
+            CREATE TABLE base (data bigint, diff bigint);
+            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            INSERT INTO base VALUES (1, 1);
+            INSERT INTO base VALUES (1, -1), (1, -1);
+
+            -- Create a materialized view to ensure non-monotonic rendering.
+            -- Note that we employ below a query hint to hit the case of not yet
+            -- generating a SQL-level error, given the partial fix to bucketed
+            -- aggregates introduced in PR #17918.
+            CREATE MATERIALIZED VIEW sum_and_max AS
+            SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
             """
         )
         c.testdrive(
             dedent(
-                f"""
-            # Set data for test up
+                """
             > SET cluster = cluster1;
 
-            > CREATE TABLE base (data bigint, diff bigint);
-
-            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
-
-            > INSERT INTO base VALUES (1, 1);
-
-            > INSERT INTO base VALUES (1, -1), (1, -1);
-
             # Run a query that would generate a panic before the fix.
-            ! SELECT SUM(data), MAX(data) FROM data OPTIONS (EXPECTED GROUP SIZE = 1);
+            ! SELECT * FROM sum_and_max;
             contains:Non-positive accumulation in ReduceMinsMaxes
             """
             )
@@ -578,7 +582,7 @@ def workflow_test_github_15496(c: Composition) -> None:
 
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd_nopanic", capture=True)
-        assert "Mismatched aggregates for key in ReduceCollation" in c1.stdout
+        assert "Non-positive accumulation in ReduceMinsMaxes" in c1.stdout
 
 
 def workflow_test_github_17177(c: Composition) -> None:
@@ -614,7 +618,7 @@ def workflow_test_github_17177(c: Composition) -> None:
         )
         c.testdrive(
             dedent(
-                f"""
+                """
             # Set data for test up
             > SET cluster = cluster1;
 
@@ -715,7 +719,7 @@ def workflow_test_github_17510(c: Composition) -> None:
         )
         c.testdrive(
             dedent(
-                f"""
+                """
             > SET cluster = cluster1;
 
             # Run a queries that would generate panics before the fix.
@@ -840,36 +844,39 @@ def workflow_test_github_17509(c: Composition) -> None:
                     WORKERS 2
                 )
             );
+            -- Set data for test up.
+            SET cluster = cluster1;
+            CREATE TABLE base (data bigint, diff bigint);
+            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            INSERT INTO base VALUES (1, 1);
+            INSERT INTO base VALUES (1, -1), (1, -1);
+
+            -- Create materialized views to ensure non-monotonic rendering.
+            CREATE MATERIALIZED VIEW max_data AS
+            SELECT MAX(data) FROM data;
+            CREATE MATERIALIZED VIEW max_group_by_data AS
+            SELECT data, MAX(data) FROM data GROUP BY data;
             """
         )
         c.testdrive(
             dedent(
-                f"""
-            # Set data for test up
+                """
             > SET cluster = cluster1;
 
-            > CREATE TABLE base (data bigint, diff bigint);
-
-            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
-
-            > INSERT INTO base VALUES (1, 1);
-
-            > INSERT INTO base VALUES (1, -1), (1, -1);
-
             # The query below would return a null previously, but now fails cleanly.
-            ! SELECT MAX(data) FROM data;
+            ! SELECT * FROM max_data;
             contains:Invalid data in source, saw non-positive accumulation for key
 
-            ! SELECT data, MAX(data) FROM data GROUP BY data;
+            ! SELECT * FROM max_group_by_data;
             contains:Invalid data in source, saw non-positive accumulation for key
 
             # Repairing the error must be possible.
             > INSERT INTO base VALUES (1, 2), (2, 1);
 
-            > SELECT MAX(data) FROM data;
+            > SELECT * FROM max_data;
             2
 
-            > SELECT data, MAX(data) FROM data GROUP BY data;
+            > SELECT * FROM max_group_by_data;
             1 1
             2 2
             """
@@ -983,21 +990,19 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 
         c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
         c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
+        c.run("testdrive", "pg-snapshot-resumption/03-ensure-source-down.td")
 
         # Temporarily disabled because it is timing out.
         # https://github.com/MaterializeInc/materialize/issues/14533
         # # clusterd should crash
-        # c.run("testdrive", "pg-snapshot-resumption/03-while-clusterd-down.td")
-
-        print("Sleeping to ensure that clusterd crashes")
-        time.sleep(10)
+        # c.run("testdrive", "pg-snapshot-resumption/04-while-clusterd-down.td")
 
         with c.override(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
             c.up("storage")
-            c.run("testdrive", "pg-snapshot-resumption/04-verify-data.td")
+            c.run("testdrive", "pg-snapshot-resumption/05-verify-data.td")
 
 
 def workflow_test_bootstrap_vars(c: Composition) -> None:
@@ -1313,7 +1318,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         future.
         """
         output = c.sql_query(
-            f"""
+            """
             SELECT s.user, c.name, t.name
             FROM mz_internal.mz_subscriptions s
               JOIN mz_clusters c ON (c.id = s.cluster_id)

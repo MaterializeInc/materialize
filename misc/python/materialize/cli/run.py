@@ -26,7 +26,7 @@ from materialize.ui import UIError
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
 REQUIRED_SERVICES = ["clusterd"]
 
-DEFAULT_POSTGRES = f"postgres://root@localhost:26257/materialize"
+DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
 
 # sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
 MACOS_ENTITLEMENTS_DATA = """
@@ -186,10 +186,10 @@ def main() -> int:
                 # Setting the listen addresses below to 0.0.0.0 is required
                 # to allow Prometheus running in Docker (misc/prometheus)
                 # access these services to scrape metrics.
-                f"--internal-http-listen-addr=0.0.0.0:6878",
-                f"--orchestrator=process",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--orchestrator=process",
                 f"--orchestrator-process-secrets-directory={mzdata}/secrets",
-                f"--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
+                "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
                 f"--orchestrator-process-prometheus-service-discovery-directory={mzdata}/prometheus",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--persist-blob-url=file://{mzdata}/persist/blob",

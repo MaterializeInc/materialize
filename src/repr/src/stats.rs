@@ -191,6 +191,7 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
                 let key_stats = stats.map.entry(k.to_owned()).or_default();
                 let () = jsonb_stats_datum(key_stats, v)?;
             }
+            stats.maps = true;
         }
         _ => {
             return Err(format!(

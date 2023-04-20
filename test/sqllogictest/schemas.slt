@@ -105,3 +105,11 @@ query T
 SELECT current_schemas(false)
 ----
 {pg_catalog}
+
+query TT
+SELECT id, name FROM mz_schemas WHERE name = 'mz_catalog' OR name = 'pg_catalog' OR name = 'mz_internal' OR name = 'information_schema';
+----
+s1  mz_catalog
+s2  pg_catalog
+s4  mz_internal
+s5  information_schema

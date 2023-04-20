@@ -121,7 +121,7 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
         "ssh-bastion-host",
         "bash",
         "-c",
-        f"cat /etc/ssh/keys/ssh_host_ed25519_key.pub",
+        "cat /etc/ssh/keys/ssh_host_ed25519_key.pub",
         capture=True,
     ).stdout.strip()
 
@@ -145,7 +145,7 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
         "ssh-bastion-host",
         "bash",
         "-c",
-        f"cat /etc/ssh/keys/ssh_host_ed25519_key.pub",
+        "cat /etc/ssh/keys/ssh_host_ed25519_key.pub",
         capture=True,
     ).stdout.strip()
     assert (

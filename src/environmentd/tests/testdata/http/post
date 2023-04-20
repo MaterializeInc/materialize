@@ -245,7 +245,7 @@ http
 {"query":"SHOW VIEWS"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[["v"]],"col_names":["name"],"notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[["v"]],"col_names":["name"],"notices":[{"message":"query was automatically run on the \"mz_introspection\" cluster","severity":"debug"}]}]}
 
 http
 {"query":"SET cluster = default"}

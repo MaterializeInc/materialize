@@ -30,11 +30,12 @@ use mz_build_info::BuildInfo;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{Expr, ObjectType};
+use mz_sql_parser::ast::{QualifiedReplica, UnresolvedItemName};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
 
@@ -155,6 +156,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Panics if `id` does not specify a valid role.
     fn get_role(&self, id: &RoleId) -> &dyn CatalogRole;
 
+    /// Gets all roles.
+    fn get_roles(&self) -> Vec<&dyn CatalogRole>;
+
     /// Collects all role IDs that `id` is transitively a member of.
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId>;
 
@@ -165,6 +169,12 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
         &'a self,
         cluster_name: Option<&'b str>,
     ) -> Result<&dyn CatalogCluster<'a>, CatalogError>;
+
+    /// Resolves the named cluster replica.
+    fn resolve_cluster_replica<'a, 'b>(
+        &'a self,
+        cluster_replica_name: &'b QualifiedReplica,
+    ) -> Result<&dyn CatalogClusterReplica<'a>, CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -258,6 +268,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// earlier in the list than `id`. This is particularly userful for the order to drop
     /// objects.
     fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId>;
+
+    /// Returns all possible privileges associated with an object type.
+    fn all_object_privileges(&self, object_type: ObjectType) -> AclMode;
 }
 
 /// Configuration associated with a catalog.
@@ -298,6 +311,9 @@ impl CatalogConfig {
     }
 }
 
+/// Key is the role that granted the privilege, value is the privilege itself.
+pub type PrivilegeMap = BTreeMap<RoleId, Vec<MzAclItem>>;
+
 /// A database in a [`SessionCatalog`].
 pub trait CatalogDatabase {
     /// Returns a fully-specified name of the database.
@@ -315,6 +331,9 @@ pub trait CatalogDatabase {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the database.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// A schema in a [`SessionCatalog`].
@@ -337,6 +356,9 @@ pub trait CatalogSchema {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the schema.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 // TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
@@ -458,8 +480,11 @@ pub trait CatalogRole {
     /// Indicates whether the role has the cluster creation attribute.
     fn create_cluster(&self) -> bool;
 
-    /// Returns all role IDs that this role is an immediate a member of.
-    fn membership(&self) -> BTreeSet<&RoleId>;
+    /// Returns all role IDs that this role is an immediate a member of, and the grantor of that
+    /// membership.
+    ///
+    /// Key is the role that some role is a member of, value is the grantor role ID.
+    fn membership(&self) -> &BTreeMap<RoleId, RoleId>;
 }
 
 /// A cluster in a [`SessionCatalog`].
@@ -486,12 +511,21 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the cluster.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// A cluster replica in a [`SessionCatalog`]
 pub trait CatalogClusterReplica<'a> {
     /// Returns the name of the cluster replica.
     fn name(&self) -> &str;
+
+    /// Returns a stable ID for the cluster that the replica belongs to.
+    fn cluster_id(&self) -> ClusterId;
+
+    /// Returns a stable ID for the replica.
+    fn replica_id(&self) -> ReplicaId;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -565,6 +599,9 @@ pub trait CatalogItem {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the item.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// The type of a [`CatalogItem`].

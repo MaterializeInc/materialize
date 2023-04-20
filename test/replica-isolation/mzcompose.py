@@ -156,7 +156,7 @@ class ArrangedIndex(AllowCompactionCheck):
     def find_ids(self, c: Composition) -> None:
         cursor = c.sql_cursor()
         cursor.execute(
-            f"""
+            """
                 SELECT idx.id FROM mz_catalog.mz_views AS views, mz_catalog.mz_indexes AS idx
                 WHERE views.name = 'ct1' AND views.id = idx.on_id
             """

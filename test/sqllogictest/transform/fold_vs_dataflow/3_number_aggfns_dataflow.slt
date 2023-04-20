@@ -1,0 +1,107 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# use mode cockroach because it "respects the scale of a Decimal type and the precision of a floating point number"
+# even though mode standard would allow easier file comparisons with the other computation mode
+mode cockroach
+
+# -------------------------------
+# aggregate functions with big numbers
+# -------------------------------
+
+statement ok
+CREATE TABLE t_using_dataflow_rendering (real1 REAL, double1 DOUBLE PRECISION, numeric1 NUMERIC, tint1 INT2, tint2 INT2);
+
+statement ok
+INSERT INTO t_using_dataflow_rendering VALUES
+ (1e38::real, 1e38::double, 1e38::numeric, (-32767)::INT2, (-1)::INT2),
+ (2, 2, 2, 32767::INT2, 1::INT2);
+
+# DIFF TO CONSTANT FOLDING ([SUM, AVG] with types [REAL, DOUBLE])!
+# to be addressed with https://github.com/MaterializeInc/materialize/issues/15186
+query IIIIIIIIIIIIIIIIIIIIIIII
+SELECT
+ SUM(real1), SUM(double1), SUM(numeric1),
+ SUM(real1 + real1), SUM(double1 + double1), SUM(numeric1 + numeric1),
+ MIN(real1), MIN(double1), MIN(numeric1),
+ MIN(real1 + real1), MIN(double1 + double1), MIN(numeric1 + numeric1),
+ MAX(real1), MAX(double1), MAX(numeric1),
+ MAX(real1 + real1), MAX(double1 + double1), MAX(numeric1 + numeric1),
+ AVG(real1), AVG(double1), AVG(numeric1),
+ AVG(real1 + real1), AVG(double1 + double1), AVG(numeric1 + numeric1)
+FROM t_using_dataflow_rendering;
+----
+-9223372036854775808  -9223372036854775808  100000000000000000000000000000000000002  -9223372036854775808  -9223372036854775808  200000000000000000000000000000000000004  2  2  2  4  4  4  9223372036854775807  9223372036854775807  100000000000000000000000000000000000000  9223372036854775807  9223372036854775807  200000000000000000000000000000000000000  -9223372036854775808  -9223372036854775808  9223372036854775807  -9223372036854775808  -9223372036854775808  9223372036854775807
+
+query T multiline
+EXPLAIN
+SELECT
+ SUM(real1), SUM(double1), SUM(numeric1),
+ SUM(real1 + real1), SUM(double1 + double1), SUM(numeric1 + numeric1),
+ MIN(real1), MIN(double1), MIN(numeric1),
+ MIN(real1 + real1), MIN(double1 + double1), MIN(numeric1 + numeric1),
+ MAX(real1), MAX(double1), MAX(numeric1),
+ MAX(real1 + real1), MAX(double1 + double1), MAX(numeric1 + numeric1),
+ AVG(real1), AVG(double1), AVG(numeric1),
+ AVG(real1 + real1), AVG(double1 + double1), AVG(numeric1 + numeric1)
+FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Return
+    Project (#0..=#17, #30..=#35)
+      Map ((#18 / bigint_to_real(case when (#19 = 0) then null else #19 end)), (#20 / bigint_to_double(case when (#21 = 0) then null else #21 end)), (numeric_to_double(#22) / bigint_to_double(case when (#23 = 0) then null else #23 end)), (#24 / bigint_to_real(case when (#25 = 0) then null else #25 end)), (#26 / bigint_to_double(case when (#27 = 0) then null else #27 end)), (numeric_to_double(#28) / bigint_to_double(case when (#29 = 0) then null else #29 end)))
+        Union
+          Project (#0..=#17, #0, #18, #1, #19, #2, #20, #3, #21, #4, #22, #5, #23)
+            Get l0
+          Map (null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, 0, null, 0, null, 0, null, 0, null, 0)
+            Union
+              Negate
+                Project ()
+                  Get l0
+              Constant
+                - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0), sum(#1), sum(#2), sum((#0 + #0)), sum((#1 + #1)), sum((#2 + #2)), min(#0), min(#1), min(#2), min((#0 + #0)), min((#1 + #1)), min((#2 + #2)), max(#0), max(#1), max(#2), max((#0 + #0)), max((#1 + #1)), max((#2 + #2)), count(#0), count(#1), count(#2), count((#0 + #0)), count((#1 + #1)), count((#2 + #2))]
+        Project (#0..=#2)
+          Get materialize.public.t_using_dataflow_rendering
+
+EOF
+
+query error
+SELECT
+ STDDEV(real1)
+FROM t_using_dataflow_rendering;
+
+query T multiline
+EXPLAIN
+SELECT
+ STDDEV(real1)
+FROM t_using_dataflow_rendering;
+----
+Explained Query:
+  Return
+    Project (#3)
+      Map (sqrtf64(real_to_double(((#0 - ((#1 * #1) / bigint_to_real(case when (#2 = 0) then null else #2 end))) / bigint_to_real(case when (0 = (#2 - 1)) then null else (#2 - 1) end)))))
+        Union
+          Get l0
+          Map (null, null, 0)
+            Union
+              Negate
+                Project ()
+                  Get l0
+              Constant
+                - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
+        Project (#0)
+          Get materialize.public.t_using_dataflow_rendering
+
+EOF

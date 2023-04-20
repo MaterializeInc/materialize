@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="177" height="257">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="51" y="3" width="74" height="32" rx="10"/>
+   <rect x="49"
+         y="1"
+         width="74"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="21">SELECT</text>
+   <rect x="51" y="47" width="70" height="32" rx="10"/>
+   <rect x="49"
+         y="45"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="65">INSERT</text>
+   <rect x="51" y="91" width="78" height="32" rx="10"/>
+   <rect x="49"
+         y="89"
+         width="78"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="109">UPDATE</text>
+   <rect x="51" y="135" width="72" height="32" rx="10"/>
+   <rect x="49"
+         y="133"
+         width="72"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="153">DELETE</text>
+   <rect x="51" y="179" width="76" height="32" rx="10"/>
+   <rect x="49"
+         y="177"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="197">CREATE</text>
+   <rect x="51" y="223" width="68" height="32" rx="10"/>
+   <rect x="49"
+         y="221"
+         width="68"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="241">USAGE</text>
+   <path class="line"
+         d="m17 17 h2 m20 0 h10 m74 0 h10 m0 0 h4 m-118 0 h20 m98 0 h20 m-138 0 q10 0 10 10 m118 0 q0 -10 10 -10 m-128 10 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m70 0 h10 m0 0 h8 m-108 -10 v20 m118 0 v-20 m-118 20 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m78 0 h10 m-108 -10 v20 m118 0 v-20 m-118 20 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m72 0 h10 m0 0 h6 m-108 -10 v20 m118 0 v-20 m-118 20 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m76 0 h10 m0 0 h2 m-108 -10 v20 m118 0 v-20 m-118 20 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m68 0 h10 m0 0 h10 m23 -220 h-3"/>
+   <polygon points="167 17 175 13 175 21"/>
+   <polygon points="167 17 159 13 159 21"/>
+</svg>

@@ -8,8 +8,6 @@ aliases:
     - /sql/show-object
 ---
 
-{{< show-command-note >}}
-
 `SHOW OBJECTS` returns a list of all objects available to your Materialize instances in a given schema.
 Objects include tables, sources, sinks, views, indexes, secrets and connections.
 

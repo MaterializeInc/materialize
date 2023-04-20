@@ -20,10 +20,10 @@ def main() -> None:
     repo = mzbuild.Repository(Path("."), coverage=False)
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
-    print(f"--- Checking version")
+    print("--- Checking version")
     assert repo.rd.cargo_workspace.crates["mz"].version == VERSION
 
-    print(f"--- Building mz")
+    print("--- Building mz")
     deps = repo.resolve_dependencies([repo.images["mz"]])
     deps.ensure()
     # Extract the mz binary from the Docker image.
@@ -47,7 +47,7 @@ def main() -> None:
     print(f"--- Uploading {target} binary tarball")
     deploy_util.deploy_tarball(target, mz)
 
-    print(f"--- Publishing Debian package")
+    print("--- Publishing Debian package")
     filename = f"mz_{VERSION}_{repo.rd.arch.go_str()}.deb"
     print(f"Publishing {filename}")
     spawn.runv(

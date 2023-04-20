@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
@@ -118,8 +119,9 @@ impl MemBlob {
 
 #[async_trait]
 impl Blob for MemBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        self.core.lock().await.get(key)
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        let maybe_bytes = self.core.lock().await.get(key)?;
+        Ok(maybe_bytes.map(SegmentedBytes::from))
     }
 
     async fn list_keys_and_metadata(

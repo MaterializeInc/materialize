@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ skip-if
+SELECT mz_version_num() <= 5200;
+
 > SELECT name FROM mz_roles;
 default_owner
 group
@@ -24,8 +27,11 @@ SELECT 1;
 joe
 group
 
+$ skip-if
+SELECT mz_version_num() >= 5200;
+
 > SELECT role.name AS role, member.name AS member, grantor.name AS grantor FROM mz_role_members membership LEFT JOIN mz_roles role ON membership.role_id = role.id LEFT JOIN mz_roles member ON membership.member = member.id LEFT JOIN mz_roles grantor ON membership.grantor = grantor.id;
-group  joe  materialize
+group  joe  mz_system
 
 > DROP ROLE superuser_login;
 

@@ -250,7 +250,7 @@ pub async fn fetch_state_rollup(
         .get(&rollup_key.complete(&shard_id))
         .await?
         .expect("fetching the specified state rollup");
-    let proto = ProtoStateRollup::decode(rollup_buf.as_slice()).expect("invalid encoded state");
+    let proto = ProtoStateRollup::decode(rollup_buf).expect("invalid encoded state");
     Ok(proto)
 }
 
@@ -283,8 +283,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
             .await
             .unwrap();
         if let Some(rollup_buf) = rollup_buf {
-            let proto =
-                ProtoStateRollup::decode(rollup_buf.as_slice()).expect("invalid encoded state");
+            let proto = ProtoStateRollup::decode(rollup_buf).expect("invalid encoded state");
             rollup_states.insert(key.to_string(), proto);
         }
     }
@@ -500,7 +499,7 @@ pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
         };
 
         let state: State<u64> =
-            UntypedState::decode(&cfg.build_version, &rollup).check_ts_codec(&shard)?;
+            UntypedState::decode(&cfg.build_version, rollup).check_ts_codec(&shard)?;
 
         let leased_readers = state.collections.leased_readers.len();
         let critical_readers = state.collections.critical_readers.len();
