@@ -184,6 +184,7 @@ where
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
 {
     let cfg = clients.cfg().clone();
+    let metrics = clients.metrics.shards.shard(&shard_id);
     let worker_index = scope.index();
     let num_workers = scope.peers();
 
@@ -412,7 +413,13 @@ where
                                     // TODO(mfp): Push the filter down into the Subscribe?
                                     if cfg.dynamic.stats_filter_enabled() {
                                         let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| should_fetch_part(stats));
-                                        if !should_fetch {
+                                        let bytes = u64::cast_from(part_desc.encoded_size_bytes);
+                                        if should_fetch {
+                                            metrics.pushdown.parts_fetched_count.inc();
+                                            metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                                        } else {
+                                            metrics.pushdown.parts_filtered_count.inc();
+                                            metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
                                             // TODO(mfp): We'll want to run this auditing in prod
                                             // for e.g. some random fraction of parts. For now, turn
                                             // it on for every part in CI via soft assert. We'll

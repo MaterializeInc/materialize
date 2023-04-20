@@ -1106,6 +1106,10 @@ pub struct ShardsMetrics {
     usage_referenced_not_current_state_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_not_leaked_not_referenced_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_leaked_bytes: mz_ore::metrics::UIntGaugeVec,
+    pushdown_parts_filtered_count: mz_ore::metrics::IntCounterVec,
+    pushdown_parts_filtered_bytes: mz_ore::metrics::IntCounterVec,
+    pushdown_parts_fetched_count: mz_ore::metrics::IntCounterVec,
+    pushdown_parts_fetched_bytes: mz_ore::metrics::IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1218,6 +1222,26 @@ impl ShardsMetrics {
                 help: "data reclaimable by a leaked blob detector",
                 var_labels: ["shard"],
             )),
+            pushdown_parts_filtered_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_filtered_count",
+                help: "count of parts filtered by pushdown",
+                var_labels: ["shard"],
+            )),
+            pushdown_parts_filtered_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_filtered_bytes",
+                help: "total size of parts filtered by pushdown in bytes",
+                var_labels: ["shard"],
+            )),
+            pushdown_parts_fetched_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_fetched_count",
+                help: "count of parts not filtered by pushdown",
+                var_labels: ["shard"],
+            )),
+            pushdown_parts_fetched_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_fetched_bytes",
+                help: "total size of parts not filtered by pushdown in bytes",
+                var_labels: ["shard"],
+            )),
             shards,
         }
     }
@@ -1279,6 +1303,8 @@ pub struct ShardMetrics {
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+
+    pub pushdown: PushdownMetrics,
 }
 
 impl ShardMetrics {
@@ -1339,7 +1365,8 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             usage_leaked_bytes: shards_metrics
                 .usage_leaked_bytes
-                .get_delete_on_drop_gauge(vec![shard]),
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            pushdown: PushdownMetrics::for_shard(&shard, shards_metrics),
         }
     }
 
@@ -1535,6 +1562,33 @@ impl WatchMetrics {
                 name: "mz_persist_watch_notify_wait_finished",
                 help: "count of watch wait calls resolved",
             )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PushdownMetrics {
+    pub(crate) parts_filtered_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) parts_filtered_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) parts_fetched_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) parts_fetched_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+}
+
+impl PushdownMetrics {
+    fn for_shard(shard_id: &str, shards_metrics: &ShardsMetrics) -> Self {
+        PushdownMetrics {
+            parts_filtered_count: shards_metrics
+                .pushdown_parts_filtered_count
+                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
+            parts_filtered_bytes: shards_metrics
+                .pushdown_parts_filtered_bytes
+                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
+            parts_fetched_count: shards_metrics
+                .pushdown_parts_fetched_count
+                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
+            parts_fetched_bytes: shards_metrics
+                .pushdown_parts_fetched_bytes
+                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
         }
     }
 }
