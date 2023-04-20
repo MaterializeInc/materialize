@@ -13,6 +13,7 @@
 //! CAUTION: This is not meant for high-throughput data processing but for
 //! one-off requests that we need to do every now and then.
 
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -66,23 +67,20 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
         GlobalId,
         IngestionDescription<CollectionMetadata>,
         Antichain<T>,
-        Vec<Row>,
+        BTreeMap<GlobalId, Vec<Row>>,
     ),
 }
 
 async fn reclock_resume_frontier<C, IntoTime>(
     persist_clients: &PersistClientCache,
     ingestion_description: &IngestionDescription<CollectionMetadata>,
-    resume_upper: &Antichain<IntoTime>,
-) -> Antichain<C::Time>
+    resume_uppers: &BTreeMap<GlobalId, Antichain<IntoTime>>,
+) -> BTreeMap<GlobalId, Antichain<C::Time>>
 where
     C: SourceConnection + SourceRender,
     IntoTime: Timestamp + Lattice + Codec64 + Display,
 {
-    if **resume_upper == [IntoTime::minimum()] {
-        return Antichain::from_elem(C::Time::minimum());
-    }
-
+    // Open up remap shard's handles.
     let metadata = &ingestion_description.ingestion_metadata;
 
     let persist_client = persist_clients
@@ -90,8 +88,8 @@ where
         .await
         .expect("location unavailable");
 
-    let read_handle = persist_client
-        .open_leased_reader::<SourceData, (), IntoTime, Diff>(
+    let (write_handle, read_handle) = persist_client
+        .open::<SourceData, (), IntoTime, Diff>(
             metadata.remap_shard.clone().unwrap(),
             "reclock",
             Arc::new(ingestion_description.desc.connection.timestamp_desc()),
@@ -100,28 +98,57 @@ where
         .await
         .expect("shard unavailable");
 
+    let remap_shard_write_handle_upper = write_handle.upper();
+
+    // Ensure that no collection's have advanced beyond the remap shard.
+    if let Some((id, resume_upper)) = resume_uppers
+        .iter()
+        .find(|(_, upper)| PartialOrder::less_than(remap_shard_write_handle_upper, upper))
+    {
+        mz_ore::halt!(
+            "{}'s resume upper of {:?} in advance of remap shard upper {:?}",
+            id,
+            remap_shard_write_handle_upper,
+            resume_upper
+        )
+    }
+
     let as_of = read_handle.since().clone();
+    let mut upper = as_of.clone();
 
     let mut remap_updates = vec![];
 
-    let mut subscription = read_handle
-        .subscribe(as_of.clone())
-        .await
-        .expect("always valid to read at since");
+    // If we have written any data to the remap handle, advance the upper as far as the join of the
+    // resumer uppers.
+    //
+    // Note that if we haven't written any data to the remap handle, it's not possible to open the
+    // subscribe in the first place.
+    if remap_shard_write_handle_upper.elements() != [IntoTime::minimum()] {
+        // If upper is not the minimum timestamp, advance
+        let mut subscription = read_handle
+            .subscribe(as_of.clone())
+            .await
+            .expect("always valid to read at since");
 
-    let mut upper = as_of.clone();
-    while PartialOrder::less_than(&upper, resume_upper) {
-        for event in subscription.fetch_next().await {
-            match event {
-                ListenEvent::Updates(updates) => {
-                    for ((k, v), t, d) in updates {
-                        let row: Row = k.expect("invalid binding").0.expect("invalid binding");
-                        let _v: () = v.expect("invalid binding");
-                        let from_ts = C::Time::decode_row(&row);
-                        remap_updates.push((from_ts, t, d));
+        let mut resume_upper = Antichain::from_elem(IntoTime::minimum());
+
+        for (_id, upper) in resume_uppers {
+            resume_upper.join_assign(upper);
+        }
+
+        while PartialOrder::less_than(&upper, &resume_upper) {
+            for event in subscription.fetch_next().await {
+                match event {
+                    ListenEvent::Updates(updates) => {
+                        for ((k, v), t, d) in updates {
+                            let row: Row = k.expect("invalid binding").0.expect("invalid binding");
+                            let _v: () = v.expect("invalid binding");
+                            let from_ts = C::Time::decode_row(&row);
+                            remap_updates.push((from_ts, t, d));
+                        }
                     }
+                    ListenEvent::Progress(f) => upper = f,
                 }
-                ListenEvent::Progress(f) => upper = f,
             }
         }
     }
@@ -131,11 +158,22 @@ where
         upper,
     };
 
+    // This cannot be instantiated earlier because `AsyncStorageWorker` then needs to be `+ Send +
+    // Sync`.
     let mut timestamper = ReclockFollower::new(as_of);
     timestamper.push_trace_batch(reclock_batch);
-    timestamper
-        .source_upper_at_frontier(resume_upper.borrow())
-        .expect("enough data is loaded")
+
+    let mut reclocked_resume_frontiers = BTreeMap::new();
+
+    for (id, resume_upper) in resume_uppers {
+        let reclocked = timestamper
+            .source_upper_at_frontier(resume_upper.borrow())
+            .expect("enough data is loaded");
+
+        reclocked_resume_frontiers.insert(*id, reclocked);
+    }
+
+    reclocked_resume_frontiers
 }
 
 impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
@@ -166,48 +204,65 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             .create_calc(&persist_clients)
                             .instrument(span.clone())
                             .await;
-                        let resume_upper: Antichain<T> =
+
+                        let resume_upper =
                             calc.calculate_resumption_frontier().instrument(span).await;
+
+                        let export_uppers = calc.get_uppers();
+
+                        /// Convenience macro to convert `BTreeMap<GlobalId, Antichain<C>>` to
+                        /// `BTreeMap<GlobalId, Vec<Row>>`.
+                        fn to_vec_row<T: SourceTimestamp>(
+                            uppers: BTreeMap<GlobalId, Antichain<T>>,
+                        ) -> BTreeMap<GlobalId, Vec<Row>> {
+                            uppers
+                                .into_iter()
+                                .map(|(id, upper)| {
+                                    (id, upper.into_iter().map(|ts| ts.encode_row()).collect())
+                                })
+                                .collect()
+                        }
 
                         // Create a specialized description to be able to call the generic method
                         let source_resume_upper = match ingestion_description.desc.connection {
                             GenericSourceConnection::Kafka(_) => {
-                                let upper = reclock_resume_frontier::<KafkaSourceConnection, _>(
+                                let uppers = reclock_resume_frontier::<KafkaSourceConnection, _>(
                                     &persist_clients,
                                     &ingestion_description,
-                                    &resume_upper,
+                                    &export_uppers,
                                 )
                                 .await;
-                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                                to_vec_row(uppers)
                             }
                             GenericSourceConnection::Postgres(_) => {
-                                let upper = reclock_resume_frontier::<PostgresSourceConnection, _>(
-                                    &persist_clients,
-                                    &ingestion_description,
-                                    &resume_upper,
-                                )
-                                .await;
-                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                                let uppers =
+                                    reclock_resume_frontier::<PostgresSourceConnection, _>(
+                                        &persist_clients,
+                                        &ingestion_description,
+                                        &export_uppers,
+                                    )
+                                    .await;
+                                to_vec_row(uppers)
                             }
                             GenericSourceConnection::LoadGenerator(_) => {
-                                let upper =
+                                let uppers =
                                     reclock_resume_frontier::<LoadGeneratorSourceConnection, _>(
                                         &persist_clients,
                                         &ingestion_description,
-                                        &resume_upper,
+                                        &export_uppers,
                                     )
                                     .await;
-                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                                to_vec_row(uppers)
                             }
                             GenericSourceConnection::TestScript(_) => {
-                                let upper =
+                                let uppers =
                                     reclock_resume_frontier::<TestScriptSourceConnection, _>(
                                         &persist_clients,
                                         &ingestion_description,
-                                        &resume_upper,
+                                        &export_uppers,
                                     )
                                     .await;
-                                upper.into_iter().map(|ts| ts.encode_row()).collect()
+                                to_vec_row(uppers)
                             }
                         };
 

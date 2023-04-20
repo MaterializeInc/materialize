@@ -123,11 +123,13 @@ pub struct RawSourceCreationConfig {
     pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
     pub resume_upper: Antichain<mz_repr::Timestamp>,
-    /// The upper frontier this source should resume ingestion at in the source time domain. Since
-    /// every source has a different timestamp type we carry the timestamps of this frontier in an
-    /// encoded `Vec<Row>` form which will get decoded once we reach the connection specialized
-    /// functions.
-    pub source_resume_upper: Vec<Row>,
+    /// For each source export, the upper frontier this source should resume ingestion at in the
+    /// source time domain.
+    ///
+    /// Since every source has a different timestamp type we carry the timestamps of this frontier
+    /// in an encoded `Vec<Row>` form which will get decoded once we reach the connection
+    /// specialized functions.
+    pub source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
     /// A handle to the persist client cache
     pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
