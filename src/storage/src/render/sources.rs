@@ -12,6 +12,7 @@
 //! See [`render_source`] for more details.
 
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -73,7 +74,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<mz_repr::Timestamp>,
-    source_resume_upper: Vec<Row>,
+    source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     Vec<(

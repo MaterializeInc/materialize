@@ -228,7 +228,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     primary_source_id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
     resume_upper: Antichain<mz_repr::Timestamp>,
-    source_resume_upper: Vec<Row>,
+    source_resume_upper: BTreeMap<GlobalId, Vec<Row>>,
 ) {
     let worker_id = timely_worker.index();
     let worker_logging = timely_worker.log_register().get("timely");

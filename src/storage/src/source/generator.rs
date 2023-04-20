@@ -104,8 +104,11 @@ impl SourceRender for LoadGeneratorSourceConnection {
                 return;
             }
 
-            let resume_upper =
-                Antichain::from_iter(config.source_resume_upper.iter().map(MzOffset::decode_row));
+            let resume_upper = Antichain::from_iter(
+                config.source_resume_upper[&config.id]
+                    .iter()
+                    .map(MzOffset::decode_row),
+            );
 
             let Some(mut offset) = resume_upper.into_option() else {
                 return
