@@ -2325,7 +2325,10 @@ impl Coordinator {
                 )?;
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
-                let desc = RelationDesc::new(RelationType::new(expr.typ().column_types), desc.iter_names());
+                let desc = RelationDesc::new(
+                    RelationType::new(expr.typ().column_types),
+                    desc.iter_names(),
+                );
                 let sink_desc = make_sink_desc(self, session, id, desc)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);

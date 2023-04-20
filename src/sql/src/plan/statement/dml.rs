@@ -17,13 +17,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 
 use itertools::Itertools;
-use mz_expr::{MirRelationExpr, ColumnOrder};
+use mz_expr::{ColumnOrder, MirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::{SubscribeOutput, OrderByExpr};
+use mz_sql_parser::ast::{OrderByExpr, SubscribeOutput};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -35,7 +35,7 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedItemName};
-use crate::plan::query::{plan_up_to, resolve_desc_and_nulls_last, QueryLifetime, ExprContext};
+use crate::plan::query::{plan_up_to, resolve_desc_and_nulls_last, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
@@ -397,10 +397,16 @@ pub fn describe_subscribe(
         SubscribeRelation::Query(query) => {
             let mut query = Query::query(query);
             if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &stmt.output {
-                query.order_by = order_by.iter().cloned().filter(|obe| match &obe.expr {
-                    mz_sql_parser::ast::Expr::Identifier(ids) => ids.len() != 1 || ids[0].as_str() != "mz_diff",
-                    _ => true,
-                }).collect();
+                query.order_by = order_by
+                    .iter()
+                    .cloned()
+                    .filter(|obe| match &obe.expr {
+                        mz_sql_parser::ast::Expr::Identifier(ids) => {
+                            ids.len() != 1 || ids[0].as_str() != "mz_diff"
+                        }
+                        _ => true,
+                    })
+                    .collect();
             }
             let query::PlannedQuery { desc, .. } = plan_query(
                 scx,
@@ -487,11 +493,7 @@ pub fn plan_subscribe(
                 _ => None,
             };
             let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
-            (
-                SubscribeFrom::Id(entry.id()),
-                desc.into_owned(),
-                scope,
-            )
+            (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
             // There's no way to apply finishing operations to a `SUBSCRIBE`
@@ -552,30 +554,34 @@ pub fn plan_subscribe(
         }
         SubscribeOutput::WithinTimestampOrderBy { order_by } => {
             scx.require_within_timestamp_order_by_in_subscribe()?;
-                let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-                let ecx = ExprContext {
-                    qcx: &qcx,
-                    name: "WITHIN TIMESTAMP ORDER BY clause",
-                    scope: &scope,
-                    relation_type: desc.typ(),
-                    allow_aggregates: false,
-                    allow_subqueries: true,
-                    allow_windows: false,
-                };
-                let mz_diff_fake_column = usize::MAX;
-                let (mut order_by, map_exprs) = query::plan_order_by_exprs(&ecx, &order_by[..], &[(mz_diff_fake_column, &"mz_diff".into())])?;
-                if !map_exprs.is_empty() {
-                    sql_bail!(
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+            let ecx = ExprContext {
+                qcx: &qcx,
+                name: "WITHIN TIMESTAMP ORDER BY clause",
+                scope: &scope,
+                relation_type: desc.typ(),
+                allow_aggregates: false,
+                allow_subqueries: true,
+                allow_windows: false,
+            };
+            let mz_diff_fake_column = usize::MAX;
+            let (mut order_by, map_exprs) = query::plan_order_by_exprs(
+                &ecx,
+                &order_by[..],
+                &[(mz_diff_fake_column, &"mz_diff".into())],
+            )?;
+            if !map_exprs.is_empty() {
+                sql_bail!(
                         "Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY; all order bys must be variables that are getting returned"
                     );
+            }
+            for column_order in &mut order_by {
+                if column_order.column == mz_diff_fake_column {
+                    column_order.column = 0;
+                } else {
+                    column_order.column += 1;
                 }
-                for column_order in &mut order_by {
-                    if column_order.column == mz_diff_fake_column {
-                        column_order.column = 0;
-                    } else {
-                        column_order.column += 1;
-                    }
-                }
+            }
 
             plan::SubscribeOutput::WithinTimestampOrderBy { order_by }
         }
