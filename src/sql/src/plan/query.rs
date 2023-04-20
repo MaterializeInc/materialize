@@ -81,7 +81,7 @@ use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::{transform_ast, PlanContext, SendRowsPlan};
+use crate::plan::{transform_ast, PlanContext, ShowCreatePlan};
 use crate::plan::{Params, QueryWhen};
 
 use super::statement::show;
@@ -1427,14 +1427,10 @@ fn plan_set_expr(
             // directly. Convert both of these to the needed Hir and Scope.
 
             fn to_hirscope(
-                plan: SendRowsPlan,
+                plan: ShowCreatePlan,
                 desc: StatementDesc,
             ) -> Result<(HirRelationExpr, Scope), PlanError> {
-                let rows = plan
-                    .rows
-                    .iter()
-                    .map(|row| row.iter().collect::<Vec<_>>())
-                    .collect::<Vec<_>>();
+                let rows = vec![plan.row.iter().collect::<Vec<_>>()];
                 let desc = desc.relation_desc.expect("must exist");
                 let expr = HirRelationExpr::constant(rows, desc.typ().clone());
                 let scope = Scope::from_source(None, desc.iter_names());

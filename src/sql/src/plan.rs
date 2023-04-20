@@ -105,7 +105,7 @@ pub enum Plan {
     DropObjects(DropObjectsPlan),
     EmptyQuery,
     ShowAllVariables,
-    ShowCreate(SendRowsPlan),
+    ShowCreate(ShowCreatePlan),
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
@@ -232,7 +232,7 @@ impl Plan {
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
             Plan::CreateSource(_) => "create source",
-            Plan::CreateSources(_) => "create sources",
+            Plan::CreateSources(_) => "create source",
             Plan::CreateSecret(_) => "create secret",
             Plan::CreateSink(_) => "create sink",
             Plan::CreateTable(_) => "create table",
@@ -621,8 +621,9 @@ pub enum SubscribeFrom {
 }
 
 #[derive(Debug)]
-pub struct SendRowsPlan {
-    pub rows: Vec<Row>,
+pub struct ShowCreatePlan {
+    pub id: GlobalId,
+    pub row: Row,
 }
 
 #[derive(Debug)]

@@ -33,16 +33,18 @@ the subsection headers, tables, and SQL statements.
 
 #### Docs
 
-- [Roles](https://www.postgresql.org/docs/current/user-manag.html)
-- [Privileges](https://www.postgresql.org/docs/current/ddl-priv.html)
-- [`CREATE ROLE`](https://www.postgresql.org/docs/current/sql-createrole.html)
-- [`DROP ROLE`](https://www.postgresql.org/docs/current/sql-droprole.html)
-- [`ALTER ROLE`](https://www.postgresql.org/docs/current/sql-alterrole.html)
-- [`GRANT`](https://www.postgresql.org/docs/current/sql-grant.html)
-- [`REVOKE`](https://www.postgresql.org/docs/current/sql-revoke.html)
-- [`SET ROLE`](https://www.postgresql.org/docs/current/sql-set-role.html)
-- [`REASSIGN OWNED`](https://www.postgresql.org/docs/current/sql-reassign-owned.html)
-- [`DROP OWNED`](https://www.postgresql.org/docs/current/sql-drop-owned.html)
+- [Roles](https://www.postgresql.org/docs/15/user-manag.html)
+- [Privileges](https://www.postgresql.org/docs/15/ddl-priv.html)
+- [Rules and Privileges](https://www.postgresql.org/docs/15/rules-privileges.html)
+- [Schemas and Privileges](https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PRIV)
+- [`CREATE ROLE`](https://www.postgresql.org/docs/15/sql-createrole.html)
+- [`DROP ROLE`](https://www.postgresql.org/docs/15/sql-droprole.html)
+- [`ALTER ROLE`](https://www.postgresql.org/docs/15/sql-alterrole.html)
+- [`GRANT`](https://www.postgresql.org/docs/15/sql-grant.html)
+- [`REVOKE`](https://www.postgresql.org/docs/15/sql-revoke.html)
+- [`SET ROLE`](https://www.postgresql.org/docs/15/sql-set-role.html)
+- [`REASSIGN OWNED`](https://www.postgresql.org/docs/15/sql-reassign-owned.html)
+- [`DROP OWNED`](https://www.postgresql.org/docs/15/sql-drop-owned.html)
 
 #### Implementation
 
@@ -238,6 +240,10 @@ We will add the following SQL commands:
     - Can only be run by the current owner (or member of owning role) or a superuser.
     - Requires membership of `<new_owner>`.
 
+The owner of an index is always kept in-sync with the owner of the underlying relation. Trying to
+alter the owner of an index will return successfully with a warning, but will not actually change
+the owner of the index. This is for PostgreSQL compatibility reasons.
+
 We will update `DROP ROLE` so that roles cannot be dropped unless no objects are owned by the role.
 
 #### Implementation Details
@@ -323,40 +329,49 @@ Below is a summary of the default privileges of all builtin objects:
 
 Here is a summary of all the privileges, attributes, and ownership needed to perform certain actions:
 
-| Operation                            | Privilege, Attribute, and OwnerShip                                         |
-|--------------------------------------|-----------------------------------------------------------------------------|
-| `ALTER` (NOT role)                   | Ownership of the object, `SCHEMA(C)`                                        |
-| `ALTER ROLE`                         | `CREATEROLE` (NOTE: Only `SUPERUSER` can change the `SUPERUSER` attribute). |
-| `COPY TO`                            | `CLUSTER(U)`, `OBJECT(r)`                                                   |
-| `COPY FROM`                          | `OBJECT(a)`                                                                 |
-| `CREATE CLUSTER`                     | `CREATECLUSTER`                                                             |
-| `CREATE CLUSTER REPLICA`             | `CLUSTER(C)`, `CREATECLUSTER`                                               |
-| `CREATE {SECRET, TABLE, TYPE, VIEW}` | `SCHEMA(C)`                                                                 |
-| `CREATE CONNECTION`                  | `SCHEMA(C)`, sometimes `SECRET(U)`                                          |
-| `CREATE DATABASE`                    | `CREATEDATABASE`                                                            |
-| `CREATE INDEX`                       | `SCHEMA(C)`, `CLUSTER(C)`                                                   |
-| `CREATE MATERIALIZED VIEW`           | `CREATEPERSIST`, `SCHEMA(C)`, `CLUSTER(C)`                                  |
-| `CREATE SOURCE`                      | `CREATEPERSIST`, `SCHEMA(C)`, `CLUSTER(C)` sometimes `CONNECTION(U)`        |
-| `CREATE TABLE`                       | `CREATEPERSIST`, `SCHEMA(C)`                                                |
-| `CREATE {ROLE, USER}`                | `CREATEROLE` (NOTE: only `SUPERUSER`s can create other `SUPERUSER`s).       |
-| `CREATE SCHEMA`                      | `DATABASE(C)`                                                               |
-| `DELETE`                             | `OBJECT(d)` usually `CLUSTER(U)`, `OBJECT(r)`                               |
-| `DROP` (NOT ROLE)                    | Ownership of the object                                                     |
-| `DROP ROLE`                          | `CREATEROLE` (NOTE: only `SUPERUSER`s can drop other `SUPERUSER`s).         |
-| `EXPLAIN`                            | usually `OBJECT(r)`                                                         |
-| `INSERT INTO ... VALUES`             | `OBJECT(a)`                                                                 |
-| `INSERT INTO ... SELECT`             | `CLUSTER(U)`,`OBJECT(a)` usually `OBJECT(r)`                                |
-| `{SELECT, SHOW, SUBSCRIBE}`          | `CLUSTER(U)`, usually `OBJECT(r)`                                           |
-| `SET CLUSTER`                        | `CLUSTER(U)`                                                                |
-| `SET DATABASE`                       | `DATABASE(U)`                                                               |
-| resolve object in schema             | `SCHEMA(U)`                                                                 |
-| `UPDATE`                             | `OBJECT(w)` usually `CLUSTER(U)`, `OBJECT(r)`                               |
+| Operation                             | Privilege, Attribute, and OwnerShip                                               |
+|---------------------------------------|-----------------------------------------------------------------------------------|
+| `ALTER <item>`                        | Ownership of the item, `SCHEMA(C)`                                                |
+| `ALTER DATABASE`                      | Ownership of the database, `CREATEDB`                                             |
+| `ALTER SCHEMA`                        | Ownership of the schema, `DATABASE(C)`                                            |
+| `ALTER CLUSTER`                       | Ownership of the cluster, `CREATECLUSTER`                                         |
+| `ALTER CLUSTER REPLICA`               | Ownership of the replica, `CLUSTER(C)`                                            |
+| `ALTER ROLE`                          | `CREATEROLE`                                                                      |
+| `CREATE CLUSTER`                      | `CREATECLUSTER`                                                                   |
+| `CREATE CLUSTER REPLICA`              | `CLUSTER(C)`                                                                      |
+| `CREATE SECRET`                       | `SCHEMA(C)`                                                                       |
+| `CREATE {TABLE, TYPE, VIEW}`          | `SCHEMA(C)`, sometimes `TYPE(U)`                                                  |
+| `CREATE CONNECTION`                   | `SCHEMA(C)`, sometimes `SECRET(U)`, `CONNECTION(U)`                               |
+| `CREATE DATABASE`                     | `CREATEDATABASE`                                                                  |
+| `CREATE MATERIALIZED VIEW`            | `SCHEMA(C)`, `CLUSTER(C)`, sometimes `TYPE(U)`                                    |
+| `CREATE INDEX`                        | `SCHEMA(C)`, `CLUSTER(C)`, Ownership of relation, sometimes `TYPE(U)`             |
+| `CREATE SOURCE`                       | `SCHEMA(C)` sometimes `CLUSTER(U)`, `CONNECTION(U)`, `CREATECLUSTER`              |
+| `CREATE SINK`                         | `SCHEMA(C)`, `OBJECT(r)` sometimes `CLUSTER(U)`, `CONNECTION(U)`, `CREATECLUSTER` |
+| `CREATE ROLE`                         | `CREATEROLE`                                                                      |
+| `CREATE SCHEMA`                       | `DATABASE(C)`                                                                     |
+| `DROP <item>`                         | Ownership of the item, `SCHEMA(U)`                                                |
+| `DROP DATABASE`                       | Ownership of the database                                                         |
+| `DROP SCHEMA`                         | Ownership of the schema, `DATABASE(U)`                                            |
+| `DROP CLUSTER`                        | Ownership of the cluster                                                          |
+| `DROP CLUSTER REPLICA`                | Ownership of the replica, `CLUSTER(U)`                                            |
+| `DROP ROLE`                           | `CREATEROLE`                                                                      |
+| `{INSERT INTO ... VALUES, COPY FROM}` | `OBJECT(a)`, sometimes `TYPE(U)`                                                  |
+| `INSERT INTO ... SELECT`              | `OBJECT(a)` usually `CLUSTER(U)`, `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`   |
+| `DELETE`                              | `OBJECT(d)` usually `CLUSTER(U)`, `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`   |
+| `UPDATE`                              | `OBJECT(w)` usually `CLUSTER(U)`, `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`   |
+| `{SELECT, SHOW, SUBSCRIBE}`           | usually `CLUSTER(U)`, `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`               |
+| `EXPLAIN`                             | usually `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`                             |
+| `SHOW CREATE`                         | `SCHEMA(U)`                                                                       |
 
 Superusers can do anything in the above table.
 
-In order to execute a read, the role only needs `r` permission on the direct objects being read. For example, a role can
-read from a view if it has `r` privileges on that view even if it does not have `r` privileges on the underlying objects
-within that view.
+In order to execute a read from a view/materialized view, the role needs `r` permission on the
+view/materialized view and the view owner needs the required permissions to perform the query in
+the view definition.
+
+When creating a sink, Materialize will check the users privileges only at the time of sink
+creation. If the user loses privileges, the sink will keep running an potentially exposes
+information that the user no longer has access to.
 
 We will add the following SQL commands:
 
