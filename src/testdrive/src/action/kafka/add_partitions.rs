@@ -41,7 +41,7 @@ pub async fn run_add_partitions(
                 bail!(
                     "new partition count {} is not greater than current partition count {}",
                     total_partitions,
-                    total_partitions
+                    *current_partitions
                 );
             }
         }
