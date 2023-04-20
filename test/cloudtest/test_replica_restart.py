@@ -10,6 +10,7 @@
 import threading
 import time
 from io import StringIO
+from textwrap import dedent
 
 from pg8000 import Connection
 
@@ -50,12 +51,19 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
     def verify_cluster_oomed() -> None:
         with mz.environmentd.sql_cursor(autocommit=False) as cur:
-            cur.execute("SET CLUSTER=mz_introspection")
             cur.execute(
-                """DECLARE c CURSOR FOR SUBSCRIBE TO (SELECT status, reason FROM mz_internal.mz_cluster_replica_statuses mcrs
-JOIN mz_cluster_replicas mcr ON mcrs.replica_id = mcr.id
-JOIN mz_clusters mc ON mcr.cluster_id = mc.id
-WHERE mc.name = 'default')"""
+                dedent(
+                    """
+                    SET CLUSTER=mz_introspection;
+                    DECLARE c CURSOR FOR SUBSCRIBE TO (
+                       SELECT status, reason
+                       FROM mz_internal.mz_cluster_replica_statuses mcrs
+                       JOIN mz_cluster_replicas mcr ON mcrs.replica_id = mcr.id
+                       JOIN mz_clusters mc ON mcr.cluster_id = mc.id
+                       WHERE mc.name = 'oom'
+                    )
+                    """
+                )
             )
             while True:
                 cur.execute("FETCH ALL c")
@@ -65,22 +73,25 @@ WHERE mc.name = 'default')"""
                     if status == "not-ready" and reason == "oom-killed":
                         return
 
-    mz.environmentd.sql("DROP VIEW IF EXISTS v CASCADE")
-    # Once we create an index on this view, it is practically guaranteed to OOM
+    # Once we create an index on this view in a cluster limited to 2Gb, it is practically guaranteed to OOM
     mz.environmentd.sql(
-        """
-CREATE VIEW v AS
-SELECT repeat('abc' || x || y, 1000000) FROM
-(SELECT * FROM generate_series(1, 1000000)) a(x),
-(SELECT * FROM generate_series(1, 1000000)) b(y)
-    """
+        dedent(
+            """
+            CREATE CLUSTER oom REPLICAS (oom (size 'mem-2'));
+            SET cluster=oom;
+            CREATE VIEW oom AS
+              SELECT repeat('abc' || x || y, 1000000) FROM
+              (SELECT * FROM generate_series(1, 1000000)) a(x),
+              (SELECT * FROM generate_series(1, 1000000)) b(y);
+            CREATE DEFAULT INDEX oom_idx ON oom
+            """
+        )
     )
-    mz.environmentd.sql("CREATE DEFAULT INDEX i ON v")
 
     # Wait for the cluster pod to OOM
     verify_cluster_oomed()
 
-    mz.environmentd.sql("DROP VIEW v CASCADE")
+    mz.environmentd.sql("DROP CLUSTER oom CASCADE; DROP VIEW oom CASCADE")
 
 
 # Test that a crashed (and restarted) cluster replica generates expected notice
