@@ -129,14 +129,22 @@ impl SourceRender for PostgresSourceConnection {
         Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
-        // TODO: make snapshot::render take all resume uppers, but only send main resume upper to replication::render
-        let resume_upper = Antichain::from_iter(
-            config.source_resume_upper[&config.id]
-                .iter()
-                .map(MzOffset::decode_row),
-        );
+        // Determined which collections need to be snapshot and which already have been.
+        let subsource_resume_uppers: BTreeMap<_, _> = config
+            .source_resume_upper
+            .iter()
+            .map(|(id, upper)| {
+                assert!(
+                    config.source_exports.contains_key(id),
+                    "all source resume uppers must be present in source exports"
+                );
 
-        tracing::warn!("PG {:?} resumer_upper {:?}", config.id, resume_upper);
+                (
+                    *id,
+                    Antichain::from_iter(upper.iter().map(MzOffset::decode_row)),
+                )
+            })
+            .collect();
 
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
@@ -159,7 +167,7 @@ impl SourceRender for PostgresSourceConnection {
             config.clone(),
             self.clone(),
             context.clone(),
-            resume_upper.clone(),
+            subsource_resume_uppers.clone(),
             table_info.clone(),
         );
 
@@ -168,7 +176,7 @@ impl SourceRender for PostgresSourceConnection {
             config,
             self,
             context,
-            resume_upper,
+            subsource_resume_uppers,
             table_info,
             &rewinds,
             resume_uppers,
