@@ -5784,6 +5784,11 @@ impl Catalog {
                     }
                     ObjectId::Database(id) => {
                         let database = state.get_database(&id);
+                        if id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyDatabase(database.name().to_string()),
+                            )));
+                        }
                         builtin_table_updates.push(state.pack_database_update(database, -1));
                         let database = state.get_database_mut(&id);
                         Self::grant_object_privilege(&mut database.privileges, privilege);
@@ -5792,6 +5797,18 @@ impl Catalog {
                         builtin_table_updates.push(state.pack_database_update(database, 1));
                     }
                     ObjectId::Schema((database_spec, schema_id)) => {
+                        if schema_id.is_system() {
+                            let schema = state.get_schema(
+                                &database_spec,
+                                &schema_id.into(),
+                                session
+                                    .map(|session| session.conn_id())
+                                    .unwrap_or(SYSTEM_CONN_ID),
+                            );
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlySystemSchema(schema.name().schema.clone()),
+                            )));
+                        }
                         builtin_table_updates.push(state.pack_schema_update(
                             &database_spec,
                             &schema_id,
@@ -5858,6 +5875,11 @@ impl Catalog {
                     }
                     ObjectId::Database(id) => {
                         let database = state.get_database(&id);
+                        if id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyDatabase(database.name().to_string()),
+                            )));
+                        }
                         builtin_table_updates.push(state.pack_database_update(database, -1));
                         let database = state.get_database_mut(&id);
                         Self::revoke_object_privilege(&mut database.privileges, privilege);
@@ -5866,6 +5888,18 @@ impl Catalog {
                         builtin_table_updates.push(state.pack_database_update(database, 1));
                     }
                     ObjectId::Schema((database_spec, schema_id)) => {
+                        if schema_id.is_system() {
+                            let schema = state.get_schema(
+                                &database_spec,
+                                &schema_id.into(),
+                                session
+                                    .map(|session| session.conn_id())
+                                    .unwrap_or(SYSTEM_CONN_ID),
+                            );
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlySystemSchema(schema.name().schema.clone()),
+                            )));
+                        }
                         builtin_table_updates.push(state.pack_schema_update(
                             &database_spec,
                             &schema_id,
