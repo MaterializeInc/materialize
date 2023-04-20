@@ -57,6 +57,20 @@ guarantees that there won't be multiple updates for the same row
 that looks like `(k, v1, -1), (k, v2, +1)` which are easier to handle
 for the client. If PROGRESS is set, progress messages are unaffected.
 
+Example:
+```sql
+> CREATE TABLE table(c1 int, c2 int, c3 text)
+> SUBSCRIBE table WITHIN TIMESTAMP ORDER BY c1, c2 DESC NULLS LAST, mz_diff
+mz_timestamp | mz_diff | c1            | c2   | c3
+-------------|---------|---------------|------|-----
+100          | +1      | 1             | 20   | foo
+100          | -1      | 1             | 2    | bar
+100          | +1      | 1             | 2    | boo
+100          | +1      | 1             | 0    | data
+100          | -1      | 2             | 0    | old
+100          | +1      | 2             | 0    | new
+```
+
 `ENVELOPE UPSERT`: Takes a list of columns to interpret as a key and
 within each distinct timestamp interprets the updates as a series of
 upserts. The output columns are reordered as `(mz_timestamp, mz_state,
@@ -74,6 +88,38 @@ message nulls out all the key and value columns.
 Using `ENVELOPE UPSERT` when there is more than one live value per key
 can be confusing. The upserts generated have no way to express which
 value was deleted for a given key.
+
+Example:
+```sql
+> CREATE TABLE kv_store(key int, value int, UNIQUE(key))
+> INSERT INTO kv_store VALUES (1, 2), (2, 4)
+> SUBSCRIBE kv_store ENVELOPE UPSERT (KEY (key))
+mz_timestamp | mz_state | key  | value
+-------------|----------|------|--------
+100          | upsert   | 1    | 2
+100          | upsert   | 2    | 4
+
+...
+-- at time 200, update key=1's value to 10
+...
+
+200          | upsert   | 1    | 10
+
+
+...
+-- at time 300, add a new row with key=3, value=6
+...
+
+300          | upsert   | 3    | 6
+
+...
+-- at time 400, delete all rows
+...
+
+400          | delete   | 1    | NULL
+400          | delete   | 2    | NULL
+400          | delete   | 3    | NULL
+```
 
 `ENVELOPE DEBEZIUM`: Similarly to `ENVELOPE UPSERT`, takes a list of
 columns to interpret as a key and within each distinct timestamp emits
@@ -107,19 +153,52 @@ wanted a specific sort order out of subscribe. There are few cases
 where that's useful so I propose disallowing it until there is client
 demand.
 
+Example:
+```sql
+> CREATE TABLE kv_store(key int, value int, UNIQUE(key))
+> INSERT INTO kv_store VALUES (1, 2), (2, 4)
+> SUBSCRIBE kv_store ENVELOPE DEBEZIUM (KEY (key))
+mz_timestamp | mz_state | key  | before_value | after_value
+-------------|----------|------|--------------|--------------
+100          | insert   | 1    | NULL         | 2
+100          | insert   | 2    | NULL         | 4
+
+...
+-- at time 200, update key=1's value to 10
+...
+
+200          | upsert   | 1    | 2            | 10
+
+
+...
+-- at time 300, add a new row with key=3, value=6
+...
+
+300          | insert   | 3    | NULL         | 6
+
+...
+-- at time 400, delete all rows
+...
+
+400          | delete   | 1    | 10           | NULL
+400          | delete   | 2    | 4            | NULL
+400          | delete   | 3    | 6            | NULL
+```
+
+
 ### Update table:
 [update-table]: #update-table
 
 | Updates | `ENVELOPE UPSERT` | `ENVELOPE DEBEZIUM` |
 | --- | --- | --- |
-| `(k, v1, +1)` | `(k, v1)` | `(k, NULL, v1)` |
-| `(k, v1, +1)`, `(k, v2, +1)` | `(k, v1)`, `(k, v2)` | `(k, NULL, v1)`, `(k, NULL, v2)` |
-| `(k, v1, -1)`, `(k, v2, +1)` | `(k, v2)` | `(k, v1, v2)` |
-| `(k, v1, -1)`, `(k, v2, +1)`, `(k, v3, +1)` | `(k, v2)`, `(k, v3)` | either `(k, v1, v2)`, `(k, NULL, v3)` or `(k, v1, v3)`, `(k, NULL, v2)` |
-| `(k, v1, -1)`, `(k, v2, -1)`, `(k, v3, +1)` | `(k, v3)` | either `(k, v1, NULL)`, `(k, v2, v3)` or `(k, v2, NULL)`, `(k, v1, v3)` |
-| `(k, v1, -1)`, `(k, v2, -1)`, `(k, v3, +1)`, `(k, v4, +1)` | `(k, v3)`, `(k, v4)` | `(k, v1, v3)`, `(k, v2, v4)` or `(k, v2, v3)`, `(k, v1, v4)` |
-| `(k, v1, -1)` | `(k, NULL)` | `(k, v1, NULL)` |
-| `(k, v1, -1)`, `(k, v2, -1)` | `(k, NULL)` | `(k, v1, NULL)`, `(k, v2, NULL)` |
+| `(k, v1, +1)` | `(k, upsert, v1)` | `(k, insert, NULL, v1)` |
+| `(k, v1, +1)`, `(k, v2, +1)` | `(k, upsert, v1)`, `(k, upsert, v2)` | `(k, insert, NULL, v1)`, `(k, insert, NULL, v2)` |
+| `(k, v1, -1)`, `(k, v2, +1)` | `(k, upsert, v2)` | `(k, upsert, v1, v2)` |
+| `(k, v1, -1)`, `(k, v2, +1)`, `(k, v3, +1)` | `(k, upsert, v2)`, `(k, upsert, v3)` | either `(k, upsert, v1, v2)`, `(k, insert, NULL, v3)` or `(k, upsert, v1, v3)`, `(k, insert, NULL, v2)` |
+| `(k, v1, -1)`, `(k, v2, -1)`, `(k, v3, +1)` | `(k, upsert, v3)` | either `(k, delete, v1, NULL)`, `(k, upsert, v2, v3)` or `(k, delete, v2, NULL)`, `(k, upsert, v1, v3)` |
+| `(k, v1, -1)`, `(k, v2, -1)`, `(k, v3, +1)`, `(k, v4, +1)` | `(k, upsert, v3)`, `(k, upsert, v4)` | `(k, upsert, v1, v3)`, `(k, upsert, v2, v4)` or `(k, upsert, v2, v3)`, `(k, upsert, v1, v4)` |
+| `(k, v1, -1)` | `(k, delete, NULL)` | `(k, delete, v1, NULL)` |
+| `(k, v1, -1)`, `(k, v2, -1)` | `(k, delete, NULL)` | `(k, delete, v1, NULL)`, `(k, delete, v2, NULL)` |
 
 
 We don't have to handle unconsolidated data.
