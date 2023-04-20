@@ -827,7 +827,7 @@ impl CatalogState {
         linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
-        privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
+        privileges: PrivilegeMap,
     ) {
         let mut log_indexes = BTreeMap::new();
         for (log, index_id) in introspection_source_indexes {
@@ -2516,7 +2516,7 @@ impl CatalogEntry {
     }
 
     /// Returns the privileges of the entry.
-    pub fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>> {
+    pub fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
     }
 }
@@ -2612,7 +2612,7 @@ pub struct BuiltinMigrationMetadata {
         u32,
         QualifiedItemName,
         RoleId,
-        BTreeMap<RoleId, Vec<MzAclItem>>,
+        PrivilegeMap,
         CatalogItemRebuilder,
     )>,
     pub introspection_source_index_updates:
@@ -5780,11 +5780,6 @@ impl Catalog {
                     match object_id {
                         ObjectId::Cluster(id) => {
                             let cluster_name = state.get_cluster(id).name().to_string();
-                            if id.is_system() {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyCluster(cluster_name),
-                                )));
-                            }
                             builtin_table_updates
                                 .push(state.pack_cluster_update(&cluster_name, -1));
                             let cluster = state.get_cluster_mut(id);
@@ -5794,11 +5789,6 @@ impl Catalog {
                         }
                         ObjectId::Database(id) => {
                             let database = state.get_database(&id);
-                            if id.is_system() {
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyDatabase(database.name().to_string()),
-                                )));
-                            }
                             builtin_table_updates.push(state.pack_database_update(database, -1));
                             let database = state.get_database_mut(&id);
                             update_privilege_fn(&mut database.privileges, privilege);
@@ -5807,18 +5797,6 @@ impl Catalog {
                             builtin_table_updates.push(state.pack_database_update(database, 1));
                         }
                         ObjectId::Schema((database_spec, schema_id)) => {
-                            if schema_id.is_system() {
-                                let schema = state.get_schema(
-                                    &database_spec,
-                                    &schema_id.into(),
-                                    session
-                                        .map(|session| session.conn_id())
-                                        .unwrap_or(SYSTEM_CONN_ID),
-                                );
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlySystemSchema(schema.name().schema.clone()),
-                                )));
-                            }
                             builtin_table_updates.push(state.pack_schema_update(
                                 &database_spec,
                                 &schema_id,
@@ -5844,16 +5822,6 @@ impl Catalog {
                             ));
                         }
                         ObjectId::Item(id) => {
-                            if id.is_system() {
-                                let entry = state.get_entry(&id);
-                                let full_name = state.resolve_full_name(
-                                    entry.name(),
-                                    session.map(|session| session.conn_id()),
-                                );
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlyItem(full_name.to_string()),
-                                )));
-                            }
                             builtin_table_updates.extend(state.pack_item_update(id, -1));
                             let entry = state.get_entry_mut(&id);
                             update_privilege_fn(&mut entry.privileges, privilege);
@@ -6248,7 +6216,7 @@ impl Catalog {
             database_id: DatabaseId,
             schema_name: String,
             owner_id: RoleId,
-            privileges: BTreeMap<RoleId, Vec<MzAclItem>>,
+            privileges: PrivilegeMap,
         ) -> Result<(), AdapterError> {
             info!(
                 "create schema {}.{}",
@@ -6289,7 +6257,7 @@ impl Catalog {
     /// implementation:
     /// <https://github.com/postgres/postgres/blob/43a33ef54e503b61f269d088f2623ba3b9484ad7/src/backend/utils/adt/acl.c#L1078-L1177>
     fn update_privilege_owners(
-        privileges: &mut BTreeMap<RoleId, Vec<MzAclItem>>,
+        privileges: &mut PrivilegeMap,
         old_owner: RoleId,
         new_owner: RoleId,
     ) {
@@ -6348,10 +6316,7 @@ impl Catalog {
         *privileges = MzAclItem::group_by_grantee(flat_privileges);
     }
 
-    fn grant_object_privilege(
-        privileges: &mut BTreeMap<RoleId, Vec<MzAclItem>>,
-        privilege: MzAclItem,
-    ) {
+    fn grant_object_privilege(privileges: &mut PrivilegeMap, privilege: MzAclItem) {
         let grantee_privileges = privileges.entry(privilege.grantee).or_default();
         if let Some(existing_privilege) = grantee_privileges
             .iter_mut()
@@ -6368,10 +6333,7 @@ impl Catalog {
         }
     }
 
-    fn revoke_object_privilege(
-        privileges: &mut BTreeMap<RoleId, Vec<MzAclItem>>,
-        privilege: MzAclItem,
-    ) {
+    fn revoke_object_privilege(privileges: &mut PrivilegeMap, privilege: MzAclItem) {
         let grantee_privileges = privileges.entry(privilege.grantee).or_default();
         if let Some(existing_privilege) = grantee_privileges
             .iter_mut()
@@ -7494,7 +7456,7 @@ impl mz_sql::catalog::CatalogDatabase for Database {
         self.owner_id
     }
 
-    fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>> {
+    fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
     }
 }
@@ -7524,7 +7486,7 @@ impl mz_sql::catalog::CatalogSchema for Schema {
         self.owner_id
     }
 
-    fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>> {
+    fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
     }
 }
@@ -7588,7 +7550,7 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         self.owner_id
     }
 
-    fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>> {
+    fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
     }
 }
@@ -7702,7 +7664,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.owner_id
     }
 
-    fn privileges(&self) -> &BTreeMap<RoleId, Vec<MzAclItem>> {
+    fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
     }
 }
