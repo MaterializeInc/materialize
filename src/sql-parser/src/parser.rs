@@ -1962,14 +1962,17 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(UPSERT) {
             let order_by = if self.consume_token(&Token::LParen) {
                 self.expect_keywords(&[ORDER, BY])?;
-
                 self.expect_token(&Token::LParen)?;
-                let order_by_cols = self.parse_comma_separated(Parser::parse_identifier)?;
+
+                let order_by_cols = self.parse_comma_separated(|parser| {
+                    let order_col = parser.parse_identifier()?;
+                    // only optional ASC allowed
+                    let _order = parser.parse_keyword(ASC);
+
+                    Ok(order_col)
+                })?;
+
                 self.expect_token(&Token::RParen)?;
-
-                // only optional ASC allowed
-                let _order = self.parse_keyword(ASC);
-
                 self.expect_token(&Token::RParen)?;
                 order_by_cols
             } else {

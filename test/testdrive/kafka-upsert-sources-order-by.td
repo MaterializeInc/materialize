@@ -19,7 +19,7 @@ $ kafka-create-topic topic=textbytes
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE OFFSET as o, TIMESTAMP as ts
-  ENVELOPE UPSERT ( ORDER BY ( ts, o ) ASC )
+  ENVELOPE UPSERT ( ORDER BY ( ts ASC, o ))
   WITH (SIZE = '1')
 
 > SHOW CREATE SOURCE texttext
@@ -103,7 +103,7 @@ contains:Expected left parenthesis
 # DESC ordering not allowed
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP as ts
-  ENVELOPE UPSERT ( ORDER BY (ts) DESC) WITH (SIZE = '1')
+  ENVELOPE UPSERT ( ORDER BY (ts DESC)) WITH (SIZE = '1')
 contains:Expected right parenthesis
 
 # ENVELOPE NONE does not support ORDER BY
