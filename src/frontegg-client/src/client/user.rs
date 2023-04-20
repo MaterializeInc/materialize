@@ -25,7 +25,6 @@ pub struct UserCreationRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct User {
     id: String,
     name: String,
