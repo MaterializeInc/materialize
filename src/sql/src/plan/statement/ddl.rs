@@ -1669,6 +1669,7 @@ pub fn plan_view(
         mut expr,
         mut desc,
         finishing,
+        scope: _,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
@@ -1799,6 +1800,7 @@ pub fn plan_create_materialized_view(
         mut expr,
         mut desc,
         finishing,
+        scope: _,
     } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;

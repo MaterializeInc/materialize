@@ -2325,20 +2325,7 @@ impl Coordinator {
                 )?;
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
-                let all_types = expr.typ().column_types;
-                let projected_types = match &output {
-                    SubscribeOutput::WithinTimestampOrderBy { project, .. } => project.clone(),
-                    _ => (0..desc.arity()).collect_vec(),
-                }
-                .into_iter()
-                .merge_join_by(all_types.into_iter().enumerate(), |i, (j, _ty)| i.cmp(j))
-                .filter_map(|r| match r {
-                    EitherOrBoth::Both(_, (_, ty)) => Some(ty),
-                    _ => None,
-                })
-                .collect();
-
-                let desc = RelationDesc::new(RelationType::new(projected_types), desc.iter_names());
+                let desc = RelationDesc::new(RelationType::new(expr.typ().column_types), desc.iter_names());
                 let sink_desc = make_sink_desc(self, session, id, desc)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);

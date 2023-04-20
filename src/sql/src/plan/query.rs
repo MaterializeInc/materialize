@@ -92,6 +92,7 @@ pub struct PlannedQuery<E> {
     pub expr: E,
     pub desc: RelationDesc,
     pub finishing: RowSetFinishing,
+    pub scope: Scope,
 }
 
 /// Plans a top-level query, returning the `HirRelationExpr` describing the query
@@ -133,6 +134,7 @@ pub fn plan_root_query(
         expr,
         desc,
         finishing,
+        scope,
     })
 }
 
@@ -364,6 +366,7 @@ pub fn plan_insert_query(
                 offset: 0,
                 project: (0..desc_arity).collect(),
             },
+            scope,
         }
     };
 

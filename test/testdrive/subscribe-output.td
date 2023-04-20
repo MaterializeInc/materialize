@@ -16,9 +16,7 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
 
 > BEGIN
-! DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY a, mz_diff
-contains: column "c" does not exist
-
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY a, mz_diff
 > FETCH 1 c
 <TIMESTAMP> 1 1 2
 
@@ -48,15 +46,6 @@ contains: column "c" does not exist
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY b DESC NULLS LAST, a ASC
 > FETCH 1 c
 <TIMESTAMP> 1 1 2
-
-> FETCH 1 c
-<TIMESTAMP> 1 2 1
-> COMMIT
-
-> BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT 10+10, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY b DESC NULLS LAST, 10+10 ASC
-> FETCH 1 c
-<TIMESTAMP> 1 20 2
 
 > FETCH 1 c
 <TIMESTAMP> 1 2 1
@@ -94,7 +83,7 @@ contains: column "c" does not exist
 > COMMIT
 
 > BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t) WITHIN TIMESTAMP ORDER BY c, b, a
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t) WITHIN TIMESTAMP ORDER BY c, b, mz_diff, a
 > FETCH 1 c
 <TIMESTAMP> 1 2 5 -6
 > FETCH 1 c
@@ -104,13 +93,32 @@ contains: column "c" does not exist
 > COMMIT
 
 > BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE t WITHIN TIMESTAMP ORDER BY c, b, a
+> DECLARE c CURSOR FOR SUBSCRIBE t WITHIN TIMESTAMP ORDER BY c, b, mz_diff, a
 > FETCH 1 c
 <TIMESTAMP> 1 2 5 -6
 > FETCH 1 c
 <TIMESTAMP> 1 4 0 -4
 > FETCH 1 c
 <TIMESTAMP> 1 1 2 3
+> COMMIT
+
+> CREATE TABLE t0(key int, value int, UNIQUE (key))
+> INSERT INTO t0 VALUES (1, 2), (2, 3)
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t0) WITHIN TIMESTAMP ORDER BY key, mz_diff
+> FETCH 2 c
+<TIMESTAMP> 1 1 2
+<TIMESTAMP> 1 2 3
+
+$ postgres-execute connection=mz_system
+UPDATE t0 SET value = 4 WHERE key = 1
+
+> FETCH 1 c
+<TIMESTAMP> -1 1 2
+
+> FETCH 1 c
+<TIMESTAMP> 1 1 4
 > COMMIT
 
 # make sure progress messages are ok

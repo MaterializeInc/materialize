@@ -595,7 +595,6 @@ pub enum SubscribeOutput {
     Diffs,
     WithinTimestampOrderBy {
         order_by: Vec<ColumnOrder>,
-        project: Vec<usize>,
     },
     EnvelopeUpsert {
         key_indices: Vec<usize>,

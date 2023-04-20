@@ -319,6 +319,7 @@ pub fn plan_explain(
         mut expr,
         desc,
         finishing,
+        scope: _,
     } = query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
@@ -370,12 +371,14 @@ pub fn plan_query(
         mut expr,
         desc,
         finishing,
+        scope,
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(params)?;
     Ok(query::PlannedQuery {
         expr: expr.optimize_and_lower(&scx.into())?,
         desc,
         finishing,
+        scope,
     })
 }
 
@@ -468,7 +471,7 @@ pub fn plan_subscribe(
     }: SubscribeStatement<Aug>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
-    let (from, desc, order_by, project) = match relation {
+    let (from, desc, scope) = match relation {
         SubscribeRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
             let desc = match entry.desc(&scx.catalog.resolve_full_name(entry.name())) {
@@ -479,85 +482,37 @@ pub fn plan_subscribe(
                     entry.item_type(),
                 ),
             };
-
-            // In constrast to a query, the order by cannot be very fancy, it's just column names
-            let mut order_by_col = Vec::new();
-            if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &output {
-
-                let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
-                let ecx = ExprContext {
-                    qcx: &qcx,
-                    name: "WITHIN TIMESTAMP ORDER BY clause",
-                    scope: &Scope::empty(),
-                    relation_type: desc.typ(),
-                    allow_aggregates: false,
-                    allow_subqueries: false,
-                    allow_windows: false,
-                };
-                let (order_by, map_exprs) = query::plan_order_by_exprs(&ecx, &order_by[..], &[(usize::MAX, &"mz_diff".into())])?;
-                if !map_exprs.is_empty() {
-                    sql_bail!(
-                        "Unsupported ORDER BY in SUBSCRIBE view WITHIN TIMESTAMP ORDER BY; all order by must be variables"
-                    );
-                }
-                order_by_col = order_by;
-            }
-
-            let arity = desc.arity();
+            let item_name = match name {
+                ResolvedItemName::Item { full_name, .. } => Some(full_name.into()),
+                _ => None,
+            };
+            let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
             (
                 SubscribeFrom::Id(entry.id()),
                 desc.into_owned(),
-                order_by_col,
-                (0..arity).collect(),
+                scope,
             )
         }
         SubscribeRelation::Query(query) => {
-            // With the exception of WITHIN TIMESTAMP ORDER BY,
-            // there's no way to apply finishing operations to a `SUBSCRIBE`
+            // There's no way to apply finishing operations to a `SUBSCRIBE`
             // directly. So we wrap the query in another query so that the
             // user-supplied query is planned as a subquery whose `ORDER
             // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
-            let mut query = Query::query(query);
-            let is_mz_diff = |obe: &OrderByExpr<Aug>| match &obe.expr {
-                mz_sql_parser::ast::Expr::Identifier(ids) => ids.len() == 1 || ids[0].as_str() == "mz_diff",
-                _ => false,
-            };
-            if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &output {
-                query.order_by = order_by.iter().cloned().filter(|obe| !is_mz_diff(&obe)).collect();
-            }
-            let mut query = plan_query(
+            let query = plan_query(
                 scx,
-                query,
+                Query::query(query),
                 &Params::empty(),
                 QueryLifetime::OneShot(scx.pcx()?),
             )?;
-            let desc = query.desc.clone();
 
-            // Re-stitch the mz_diff columns that may be present in the order by
-            if let SubscribeOutput::WithinTimestampOrderBy { order_by } = &output {
-                assert_eq!(order_by.len(), query.finishing.order_by.len());
-                let mut idx: usize = 0;
-                let mut new_order_by = Vec::new();
-                for obe in order_by {
-                    if is_mz_diff(obe) {
-                        new_order_by.push(resolve_desc_and_nulls_last(obe, 0));
-                    } else {
-                        new_order_by.push(query.finishing.order_by[idx].clone());
-                        new_order_by.last_mut().unwrap().column += 1;
-                        idx += 1;
-                    }
-                }
-                query.finishing.order_by = new_order_by;
-                //query.finishing.project = iter::once(0).chain(query.finishing.project.iter().map(|i| i+1)).collect();
-            }
+            let desc = query.desc.clone();
             (
                 SubscribeFrom::Query {
                     expr: query.expr,
                     desc: query.desc,
                 },
                 desc,
-                query.finishing.order_by,
-                query.finishing.project,
+                query.scope,
             )
         }
     };
@@ -595,9 +550,34 @@ pub fn plan_subscribe(
                 .collect::<Result<Vec<_>, _>>()?;
             plan::SubscribeOutput::EnvelopeUpsert { key_indices }
         }
-        SubscribeOutput::WithinTimestampOrderBy { order_by: _ } => {
+        SubscribeOutput::WithinTimestampOrderBy { order_by } => {
             scx.require_within_timestamp_order_by_in_subscribe()?;
-            plan::SubscribeOutput::WithinTimestampOrderBy { order_by, project }
+                let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+                let ecx = ExprContext {
+                    qcx: &qcx,
+                    name: "WITHIN TIMESTAMP ORDER BY clause",
+                    scope: &scope,
+                    relation_type: desc.typ(),
+                    allow_aggregates: false,
+                    allow_subqueries: true,
+                    allow_windows: false,
+                };
+                let mz_diff_fake_column = usize::MAX;
+                let (mut order_by, map_exprs) = query::plan_order_by_exprs(&ecx, &order_by[..], &[(mz_diff_fake_column, &"mz_diff".into())])?;
+                if !map_exprs.is_empty() {
+                    sql_bail!(
+                        "Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY; all order bys must be variables that are getting returned"
+                    );
+                }
+                for column_order in &mut order_by {
+                    if column_order.column == mz_diff_fake_column {
+                        column_order.column = 0;
+                    } else {
+                        column_order.column += 1;
+                    }
+                }
+
+            plan::SubscribeOutput::WithinTimestampOrderBy { order_by }
         }
     };
 
