@@ -97,9 +97,27 @@ impl LocalId {
     }
 }
 
+impl Default for LocalId {
+    fn default() -> LocalId {
+        LocalId::new(0)
+    }
+}
+
 impl From<&LocalId> for u64 {
     fn from(id: &LocalId) -> Self {
         id.0
+    }
+}
+
+impl From<LocalId> for u64 {
+    fn from(id: LocalId) -> Self {
+        id.0
+    }
+}
+
+impl From<u64> for LocalId {
+    fn from(id: u64) -> Self {
+        LocalId::new(id)
     }
 }
 

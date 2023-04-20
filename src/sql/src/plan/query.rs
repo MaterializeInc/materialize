@@ -45,6 +45,7 @@ use uuid::Uuid;
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
+use mz_ore::id_gen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
 use mz_repr::adt::char::CharLength;
@@ -1154,6 +1155,7 @@ pub fn plan_ctes(
         )
     }
 
+    let mut max_local_id_used = LocalId::new(0);
     match &q.ctes {
         CteBlock::Simple(ctes) => {
             // Plan all CTEs, introducing the types for non-recursive CTEs as we go.
@@ -1175,6 +1177,9 @@ pub fn plan_ctes(
                         desc,
                     },
                 );
+                if cte.id > max_local_id_used {
+                    max_local_id_used = cte.id
+                }
 
                 result.push((cte.id, val, shadowed));
             }
@@ -1206,6 +1211,10 @@ pub fn plan_ctes(
                 // Capture the prior value if it exists, so that it can be re-installed.
                 if let Some(shadowed) = shadowed {
                     shadowed_descs.insert(cte.id, shadowed);
+                }
+
+                if cte.id > max_local_id_used {
+                    max_local_id_used = cte.id
                 }
             }
 
@@ -1240,6 +1249,8 @@ pub fn plan_ctes(
             }
         }
     }
+
+    qcx.id_gen = id_gen::Gen::new(LocalId::new(1u64 + u64::from(max_local_id_used)));
 
     Ok(result)
 }
@@ -1395,17 +1406,30 @@ fn plan_set_expr(
                 }
                 SetOperator::Except => Hir::except(all, lhs, rhs),
                 SetOperator::Intersect => {
-                    // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
-                    // Though we believe that render() does The Right Thing (TM)
-                    // Also note that we do *not* need another threshold() at the end of the method chain
+                    let id: LocalId = qcx.id_gen.allocate_id();
+                    let lhs_get = HirRelationExpr::Get {
+                        id: mz_expr::Id::Local(id),
+                        typ: left_type.clone(),
+                    };
+
+                    // Note that we do *not* need another threshold() at the end of the method chain
                     // because the right-hand side of the outer union only produces existing records,
                     // i.e., the record counts for differential data flow definitely remain non-negative.
-                    let left_clone = lhs.clone();
-                    if *all {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
+                    let body = if *all {
+                        lhs_get
+                            .clone()
+                            .union(lhs_get.union(rhs.negate()).threshold().negate())
                     } else {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
+                        lhs_get
+                            .clone()
+                            .union(lhs_get.union(rhs.negate()).threshold().negate())
                             .distinct()
+                    };
+                    HirRelationExpr::Let {
+                        name: "lhs".to_owned(),
+                        id,
+                        value: Box::new(lhs),
+                        body: Box::new(body),
                     }
                 }
             };
@@ -5190,6 +5214,8 @@ pub struct QueryContext<'a> {
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
     pub ctes: BTreeMap<LocalId, CteDesc>,
+    /// Generator for local IDs that don't collide with those in `ctes`.
+    pub id_gen: id_gen::Gen<LocalId>,
     pub recursion_guard: RecursionGuard,
 }
 
@@ -5207,6 +5233,7 @@ impl<'a> QueryContext<'a> {
             outer_scopes: vec![],
             outer_relation_types: vec![],
             ctes: BTreeMap::new(),
+            id_gen: id_gen::Gen::new(LocalId::default()),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
@@ -5230,6 +5257,11 @@ impl<'a> QueryContext<'a> {
             outer_scopes,
             outer_relation_types,
             ctes,
+            // It's fine to clone this because any binding scopes
+            // introduced in the subquery should be disjoint from
+            // those generated in other subqueries or further on in
+            // this query.
+            id_gen: self.id_gen.clone(),
             recursion_guard: self.recursion_guard.clone(),
         }
     }
