@@ -39,7 +39,7 @@ use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,

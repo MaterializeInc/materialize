@@ -417,24 +417,19 @@ pub fn describe_subscribe(
             .into_iter()
             .map(normalize::column_name)
             .collect_vec();
-        for key in &key_columns {
-            let mut ty = relation_desc
-                .get_by_name(key)
-                .map(|(_idx, ty)| ty)
-                .ok_or_else(|| sql_err!("No such column: {}", key))?
-                .clone();
-            if progress {
-                ty.nullable = true;
-            }
-            desc = desc.with_column(key.clone(), ty);
-        }
+        let mut values_desc = RelationDesc::empty();
         for (name, mut ty) in relation_desc.into_iter() {
             if key_columns.contains(&name) {
-                continue;
+                if progress {
+                    ty.nullable = true;
+                }
+                desc = desc.with_column(name, ty);
+            } else {
+                ty.nullable = true;
+                values_desc = values_desc.with_column(name, ty);
             }
-            ty.nullable = true;
-            desc = desc.with_column(name, ty);
         }
+        desc = desc.concat(values_desc);
     } else {
         desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
         for (name, mut ty) in relation_desc.into_iter() {

@@ -593,8 +593,13 @@ pub struct PeekPlan {
 #[derive(Debug)]
 pub enum SubscribeOutput {
     Diffs,
-    WithinTimestampOrderBy { order_by: Vec<ColumnOrder> },
-    EnvelopeUpsert { key_indices: Vec<usize> },
+    WithinTimestampOrderBy {
+        /// We pretend that mz_diff is prepended to the normal columns, making it index 0
+        order_by: Vec<ColumnOrder>,
+    },
+    EnvelopeUpsert {
+        key_indices: Vec<usize>,
+    },
 }
 
 #[derive(Debug)]
