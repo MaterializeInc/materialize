@@ -102,13 +102,15 @@ ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
 <TIMESTAMP> 1 1 2 3
 > COMMIT
 
-> CREATE TABLE t0(key int, value int, UNIQUE (key))
+> CREATE TABLE t0(key int, value int)
 > INSERT INTO t0 VALUES (1, 2), (2, 3)
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t0) WITHIN TIMESTAMP ORDER BY key, mz_diff
-> FETCH 2 c
+> FETCH 1 c
 <TIMESTAMP> 1 1 2
+
+> FETCH 1 c
 <TIMESTAMP> 1 2 3
 
 $ postgres-execute connection=mz_system
