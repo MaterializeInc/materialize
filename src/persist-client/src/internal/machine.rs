@@ -665,7 +665,7 @@ where
     pub async fn snapshot(
         &mut self,
         as_of: &Antichain<T>,
-    ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
+    ) -> Result<(Vec<HollowBatch<T>>, SeqNo), Since<T>> {
         // To reduce log spam, we log "not yet available" only once at info if
         // it passes a certain threshold. Then, if it did one info log, we log
         // again at info when it resolves.
@@ -743,7 +743,7 @@ where
         }
     }
 
-    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<(HollowBatch<T>, SeqNo)> {
         self.applier.next_listen_batch(frontier)
     }
 
@@ -1398,7 +1398,7 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let as_of = args.expect_antichain("as_of");
-        let snapshot = datadriven
+        let (snapshot, _) = datadriven
             .machine
             .snapshot(&as_of)
             .await

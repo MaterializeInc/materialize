@@ -306,7 +306,7 @@ where
         });
 
         let mut batch_parts = vec![];
-        let mut lease_returner = subscription.lease_returner().clone();
+        let lease_returner = subscription.lease_returner().clone();
         let (_keep_subscribe_alive_tx, keep_subscribe_alive_rx) = tokio::sync::oneshot::channel::<()>();
         let subscription_stream = async_stream::stream! {
             // Eagerly yield the initial as_of. This makes sure that the output
@@ -377,12 +377,13 @@ where
                 Some(completed_fetch) = completed_fetches.next_mut() => {
                     match completed_fetch {
                         Event::Data(_cap, data) => {
-                            for part in data.drain(..) {
-                                lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
+                            for _part in data.drain(..) {
+
                             }
                         }
-                        Event::Progress(frontier) => {
-                            if frontier.is_empty() {
+                        Event::Progress(progress) => {
+                            lease_returner.release_leases(&progress);
+                            if progress.is_empty() {
                                 return;
                             }
                         }
@@ -412,7 +413,6 @@ where
                                         if !should_fetch {
                                             // TODO(mfp): Downgrade this to debug! at some point.
                                             info!("skipping part because of stats filter {:?}", part_desc.stats);
-                                            lease_returner.return_leased_part(part_desc);
                                             continue;
                                         }
                                     }
@@ -515,12 +515,12 @@ where
         while let Some(completed_fetch) = completed_fetches.next_mut().await {
             match completed_fetch {
                 Event::Data(_cap, data) => {
-                    for part in data.drain(..) {
-                        lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
+                    for _part in data.drain(..) {
                     }
                 }
-                Event::Progress(frontier) => {
-                    if frontier.is_empty() {
+                Event::Progress(progress) => {
+                    lease_returner.release_leases(&progress);
+                    if progress.is_empty() {
                         return;
                     }
                 }

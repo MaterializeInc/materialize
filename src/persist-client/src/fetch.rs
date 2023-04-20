@@ -25,7 +25,7 @@ use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Blob, SeqNo};
+use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
@@ -344,10 +344,6 @@ where
     pub(crate) key: PartialBatchKey,
     pub(crate) stats: Option<Arc<PartStats>>,
     pub(crate) encoded_size_bytes: usize,
-    /// The `SeqNo` from which this part originated; we track this value as
-    /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
-    /// read still depends on it.
-    pub(crate) leased_seqno: Option<SeqNo>,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -363,8 +359,8 @@ where
     /// SerdeLeasedBatchPart. If `self` has a `leased_seqno`, failing to take
     /// the returned `SerdeLeasedBatchPart` back into a `LeasedBatchPart` will
     /// leak `SeqNo`s and prevent persist GC.
-    pub fn into_exchangeable_part(mut self) -> SerdeLeasedBatchPart {
-        let r = SerdeLeasedBatchPart {
+    pub fn into_exchangeable_part(self) -> SerdeLeasedBatchPart {
+        SerdeLeasedBatchPart {
             shard_id: self.shard_id,
             metadata: self.metadata.clone(),
             lower: self.desc.lower().iter().map(T::encode).collect(),
@@ -372,30 +368,8 @@ where
             since: self.desc.since().iter().map(T::encode).collect(),
             key: self.key.clone(),
             encoded_size_bytes: self.encoded_size_bytes,
-            leased_seqno: self.leased_seqno,
             reader_id: self.reader_id.clone(),
-        };
-        // If `x` has a lease, we've effectively transferred it to `r`.
-        let _ = self.leased_seqno.take();
-        r
-    }
-
-    /// Because sources get dropped without notice, we need to permit another
-    /// operator to safely expire leases.
-    ///
-    /// The part's `reader_id` is intentionally inaccessible, and should
-    /// be obtained from the issuing [`ReadHandle`], or one of its derived
-    /// structures, e.g. [`crate::read::Subscribe`].
-    ///
-    /// # Panics
-    /// - If `reader_id` is different than the [`LeasedReaderId`] from
-    ///   the part issuer.
-    pub(crate) fn return_lease(&mut self, reader_id: &LeasedReaderId) -> Option<SeqNo> {
-        assert!(
-            &self.reader_id == reader_id,
-            "only issuing reader can authorize lease expiration"
-        );
-        self.leased_seqno.take()
+        }
     }
 
     /// The encoded size of this part in bytes
@@ -595,7 +569,6 @@ pub struct SerdeLeasedBatchPart {
     since: Vec<[u8; 8]>,
     key: PartialBatchKey,
     encoded_size_bytes: usize,
-    leased_seqno: Option<SeqNo>,
     reader_id: LeasedReaderId,
 }
 
@@ -625,7 +598,6 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
             // the fetch operator. This is unfortunately non-obvious, so perhaps
             // better would be to lift stats off LeasedBatchPart.
             stats: None,
-            leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,
         }
     }
