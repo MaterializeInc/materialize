@@ -510,7 +510,8 @@ mz_active_peeks_per_worker                   log   <null>
 mz_arrangement_batches_raw                   log   <null>
 mz_arrangement_records_raw                   log   <null>
 mz_arrangement_sharing_raw                   log   <null>
-mz_compute_delays_histogram_raw              log   <null>
+mz_
+compute_delays_histogram_raw              log   <null>
 mz_compute_dependencies_per_worker           log   <null>
 mz_compute_exports_per_worker                log   <null>
 mz_compute_frontiers_per_worker              log   <null>
@@ -614,7 +615,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-78
+79
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
