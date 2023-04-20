@@ -98,7 +98,7 @@ mod tests {
     use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, UsedIndexes};
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
-    use mz_transform::{EmptyIndexOracle, Optimizer, Transform, TransformArgs};
+    use mz_transform::{Optimizer, Transform, TransformArgs};
     use proc_macro2::TokenTree;
 
     use super::explain::Explainable;
@@ -229,12 +229,7 @@ mod tests {
     ) -> Result<String, Error> {
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
-            get_transform(t)?.transform(
-                &mut rel,
-                TransformArgs {
-                    indexes: &EmptyIndexOracle,
-                },
-            )?;
+            get_transform(t)?.transform(&mut rel, TransformArgs::default())?;
         }
 
         let format_type = get_format_type(args);
@@ -242,12 +237,7 @@ mod tests {
         let out = match test_type {
             TestType::Opt => FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                 for transform in transforms.iter() {
-                    transform.transform(
-                        &mut rel,
-                        TransformArgs {
-                            indexes: &EmptyIndexOracle,
-                        },
-                    )?;
+                    transform.transform(&mut rel, TransformArgs::default())?;
                 }
                 Ok(convert_rel_to_string(&rel, cat, &format_type))
             })?,
@@ -265,12 +255,7 @@ mod tests {
                 FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                     for transform in transforms {
                         let prev = rel.clone();
-                        transform.transform(
-                            &mut rel,
-                            TransformArgs {
-                                indexes: &EmptyIndexOracle,
-                            },
-                        )?;
+                        transform.transform(&mut rel, TransformArgs::default())?;
 
                         if rel != prev {
                             if no_change.len() > 0 {

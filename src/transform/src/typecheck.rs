@@ -12,10 +12,9 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use itertools::Itertools;
-use mz_compute_client::types::dataflows::BuildDesc;
 use mz_expr::{
     non_nullable_columns, AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId,
-    MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RECURSION_LIMIT,
+    MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::{
@@ -767,9 +766,30 @@ impl crate::Transform for Typecheck {
     fn transform(
         &self,
         relation: &mut mz_expr::MirRelationExpr,
-        _args: crate::TransformArgs,
+        args: crate::TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let ctx = self.ctx.borrow();
+        let mut ctx = self.ctx.borrow_mut();
+
+        let expected = args
+            .global_id
+            .map_or_else(|| None, |id| ctx.get(&Id::Global(*id)));
+
+        if let Some(id) = args.global_id {
+            if self.disallow_new_globals
+                && expected.is_none()
+                && args.global_id.is_some()
+                && !id.is_transient()
+            {
+                type_error!(
+                    "FOUND NEW NON-TRANSIENT TOP LEVEL QUERY BOUND TO {id}:\n{}",
+                    relation.pretty()
+                );
+            }
+        }
+
+        let got = self.typecheck(relation, &ctx);
+
+        let humanizer = mz_repr::explain::DummyHumanizer;
 
         if let Err(err) = self.typecheck(relation, &ctx) {
             type_error!(
@@ -778,31 +798,10 @@ impl crate::Transform for Typecheck {
             );
         }
 
-        Ok(())
-    }
-
-    fn transform_query(
-        &self,
-        build_desc: &mut BuildDesc<OptimizedMirRelationExpr>,
-        _args: crate::TransformArgs,
-    ) -> Result<(), crate::TransformError> {
-        let BuildDesc { id, plan } = build_desc;
-        let mut ctx = self.ctx.borrow_mut();
-
-        let expected = ctx.get(&Id::Global(*id));
-
-        if self.disallow_new_globals && expected.is_none() && !id.is_transient() {
-            type_error!(
-                "FOUND NEW NON-TRANSIENT TOP LEVEL QUERY BOUND TO {id}:\n{}",
-                plan.pretty()
-            );
-        }
-
-        let got = self.typecheck(plan, &ctx);
-
-        let humanizer = mz_repr::explain::DummyHumanizer;
         match (got, expected) {
             (Ok(got), Some(expected)) => {
+                let id = args.global_id.unwrap();
+
                 // contravariant: global types can be updated
                 if !is_subtype_of(expected, &got) {
                     let got = columns_pretty(&got, &humanizer);
@@ -810,14 +809,21 @@ impl crate::Transform for Typecheck {
 
                     type_error!(
                         "TYPE ERROR: GLOBAL ID TYPE CHANGED\n     got {got}\nexpected {expected} \nIN KNOWN QUERY BOUND TO {id}:\n{}",
-                        plan.pretty()
+                        relation.pretty()
                     );
                 }
             }
             (Ok(got), None) => {
-                ctx.insert(Id::Global(*id), got);
+                if let Some(id) = args.global_id {
+                    ctx.insert(Id::Global(*id), got);
+                }
             }
             (Err(err), _) => {
+                let binding = match args.global_id {
+                    Some(id) => format!("QUERY BOUND TO {id}"),
+                    None => "TRANSIENT QUERY".to_string(),
+                };
+
                 let (expected, known) = match expected {
                     Some(expected) => (
                         format!("expected type {}", columns_pretty(expected, &humanizer)),
@@ -827,8 +833,8 @@ impl crate::Transform for Typecheck {
                 };
 
                 type_error!(
-                    "TYPE ERROR:\n{err}\n{expected}\nIN {known} QUERY BOUND TO {id}:\n{}",
-                    plan.pretty()
+                    "TYPE ERROR:\n{err}\n{expected}\nIN {known} {binding}:\n{}",
+                    relation.pretty()
                 );
             }
         }

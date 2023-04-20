@@ -21,6 +21,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
 use tracing::warn;
 
+use crate::TransformArgs;
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 
 /// Optimizes the implementation of each dataflow.
@@ -199,7 +200,10 @@ fn optimize_dataflow_relations(
     // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-run all optimizations on the composite views.
-        optimizer.transform_query(object, indexes)?;
+        optimizer.transform(
+            object.plan.as_inner_mut(),
+            TransformArgs::with_id(indexes, &object.id),
+        )?;
     }
 
     mz_repr::explain::trace_plan(dataflow);
