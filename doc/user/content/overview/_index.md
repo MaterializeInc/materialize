@@ -49,41 +49,9 @@ Materialize supports PostgreSQL wire-compatibility by default. PostgreSQL
 wire-compatibility allows Materialize to communicate with PostgreSQL databases
 and tools without third-party integrations.
 
-## How does Materialize work?
-
-Materialize is a SQL streaming engine that manages materialized views. This section defines
-these terms and explains what Materialize does.
-
-### What is a SQL view?
-
-In SQL, a **view** is a pre-defined query and its results. Every time you query
-a view, SQL executes your query and returns your results.
-
-Because executing queries is resource expensive, a **materialized view** stores
-the results in a table. Materialized views are typically executed on a schedule
-and create a snapshot of the data at runtime, which cannot detect changes until
-the next scheduled run.
-
-**Incrementally updated materialized views** can detect changes to your data,
-pass that data to an engine, parse the operation, and update your materialized
-views. Incremental updates do not take the same resource expenses as a full
-query operation and allow you to quickly receive based on the
-most up-to-date information.
-
-### What is a streaming engine?
-
-Incrementally updated materialized views require a stream of data in the
-underlying database. The **stream** is a source of data, like
-Apache Kafka, with a pipeline to a service that consumes that data. 
-
-To maintain materialized views from a stream of data, you need an engine to
-subscribe to the stream, compute, and maintain the materialized view. The
-**dataflow engine** in Materialize keeps your data current with Timely and
-Differential Dataflow technology.
-
 ## What is the Materialized workflow?
 
-The streaming materialized view engine described above allows you to:
+The Materialized engine allows you to:
 
 - Describe queries as **materialized views**, which is a concept implemented in
 **SQL**.
