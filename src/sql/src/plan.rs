@@ -524,8 +524,10 @@ pub struct CreateTablePlan {
 pub struct CreateViewPlan {
     pub name: QualifiedItemName,
     pub view: View,
-    /// The IDs of the objects that this view is replacing, if any.
-    pub replace: Vec<GlobalId>,
+    /// The ID of the object that this view is replacing, if any.
+    pub replace: Option<GlobalId>,
+    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -536,8 +538,10 @@ pub struct CreateViewPlan {
 pub struct CreateMaterializedViewPlan {
     pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
-    /// The IDs of the objects that this view is replacing, if any.
-    pub replace: Vec<GlobalId>,
+    /// The ID of the object that this view is replacing, if any.
+    pub replace: Option<GlobalId>,
+    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -560,7 +564,10 @@ pub struct CreateTypePlan {
 
 #[derive(Debug)]
 pub struct DropObjectsPlan {
-    pub ids: Vec<ObjectId>,
+    /// The IDs of only the objects directly referenced in the `DROP` statement.
+    pub referenced_ids: Vec<ObjectId>,
+    /// All object IDs to drop. Includes `referenced_ids` and all descendants.
+    pub drop_ids: Vec<ObjectId>,
     /// The type of object that was dropped explicitly in the DROP statement. `ids` may contain
     /// objects of different types due to CASCADE.
     pub object_type: ObjectType,

@@ -252,33 +252,35 @@ impl CatalogState {
     /// objects.
     fn object_dependents(
         &self,
-        object_ids: Vec<ObjectId>,
+        object_ids: &Vec<ObjectId>,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
         for object_id in object_ids {
             match object_id {
                 ObjectId::Cluster(id) => {
-                    dependents.extend_from_slice(&self.cluster_dependents(id, seen));
+                    dependents.extend_from_slice(&self.cluster_dependents(*id, seen));
                 }
                 ObjectId::ClusterReplica((cluster_id, replica_id)) => dependents.extend_from_slice(
-                    &self.cluster_replica_dependents(cluster_id, replica_id, seen),
+                    &self.cluster_replica_dependents(*cluster_id, *replica_id, seen),
                 ),
                 ObjectId::Database(id) => {
-                    dependents.extend_from_slice(&self.database_dependents(id, seen))
+                    dependents.extend_from_slice(&self.database_dependents(*id, seen))
                 }
                 ObjectId::Schema((database_spec, schema_id)) => {
                     dependents.extend_from_slice(&self.schema_dependents(
-                        database_spec,
-                        schema_id,
+                        *database_spec,
+                        *schema_id,
                         seen,
                     ));
                 }
                 id @ ObjectId::Role(_) => {
                     seen.insert(id.clone());
-                    dependents.push(id);
+                    dependents.push(id.clone());
                 }
-                ObjectId::Item(id) => dependents.extend_from_slice(&self.item_dependents(id, seen)),
+                ObjectId::Item(id) => {
+                    dependents.extend_from_slice(&self.item_dependents(*id, seen))
+                }
             }
         }
         dependents
@@ -4468,7 +4470,7 @@ impl Catalog {
             .cloned()
             .map(ObjectId::Item)
             .collect();
-        self.object_dependents(temp_ids)
+        self.object_dependents(&temp_ids)
             .into_iter()
             .map(Op::DropObject)
             .collect()
@@ -4481,7 +4483,7 @@ impl Catalog {
         Ok(())
     }
 
-    pub(crate) fn object_dependents(&self, object_ids: Vec<ObjectId>) -> Vec<ObjectId> {
+    pub(crate) fn object_dependents(&self, object_ids: &Vec<ObjectId>) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.object_dependents(object_ids, &mut seen)
     }
@@ -7420,7 +7422,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
-    fn object_dependents(&self, ids: Vec<ObjectId>) -> Vec<ObjectId> {
+    fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.object_dependents(ids, &mut seen)
     }
