@@ -1,0 +1,58 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# -------------------------------
+# repeat row (=> this panics!)
+# -------------------------------
+
+statement ok
+CREATE TABLE t_base (data int, diff bigint);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+statement ok
+INSERT INTO t_base VALUES (1, 9223372036854775807);
+
+statement ok
+CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
+  SELECT data FROM t_base, repeat_row(diff);
+
+# see also: https://github.com/MaterializeInc/materialize/issues/17758
+# query error
+# SELECT SUM(data)
+# FROM mv_using_dataflow_rendering;
+# resulting in:
+# thread 'tokio-runtime-worker' panicked at 'cluster-u1-replica-1-0 crashed; aborting because propagate_crashes is enabled', src/orchestrator-process/src/lib.rs:560:29
+# note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+# 2023-04-18T09:50:00.705649Z  WARN mz_storage_client::controller::rehydration: storage cluster produced error, reconnecting: status: Unknown, message: "error reading a body from connection: broken pipe", details: [], metadata: MetadataMap { headers: {} }
+
+query T multiline
+EXPLAIN SELECT SUM(data)
+FROM mv_using_dataflow_rendering;
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (null)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0)]
+        Get materialize.public.mv_using_dataflow_rendering
+
+EOF
