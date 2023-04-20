@@ -133,7 +133,7 @@
 //! ```
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::pin::pin;
 use std::rc::Rc;
 
@@ -150,7 +150,7 @@ use tracing::trace;
 use mz_expr::MirScalarExpr;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection};
@@ -169,7 +169,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
     context: ConnectionContext,
-    resume_upper: Antichain<MzOffset>,
+    export_resume_uppers: BTreeMap<GlobalId, Antichain<MzOffset>>,
     table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
@@ -197,9 +197,25 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let is_snapshot_leader = config.responsible_for("snapshot_leader");
 
-    // A filtered table info containing only the tables that this worker should read
-    let mut reader_table_info = table_info.clone();
-    reader_table_info.retain(|oid, _| config.responsible_for(oid));
+    // Determine which exports need to be snapshot, i.e. their offsets are 0.
+    let mut exports_to_snapshot: BTreeSet<_> = export_resume_uppers
+        .into_iter()
+        .filter_map(|(id, upper)| {
+            if upper.into_option() == Some(MzOffset::minimum()) {
+                // export_resume_uppers includes the remap collection, which source exports does
+                // not, which is fine, hence the map.
+                config.source_exports.get(&id).map(|e| e.output_index)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // A filtered table info containing only the tables that this worker should snapshot. We filter
+    // this out in the worker itself because we have multiple dependencies on
+    // `exports_to_snapshot`'s state and need to linearize them.
+    let mut reader_snapshot_table_info = table_info.clone();
+
     let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
             let id = config.id;
@@ -207,12 +223,33 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let [data_cap, rewind_cap, snapshot_cap]: &mut [_; 3] = caps.try_into().unwrap();
             let data_cap = data_cap.as_mut().unwrap();
-            trace!(%id, "timely-{worker_id} initializing table reader {}", resume_upper.pretty());
+            trace!(
+                %id,
+                "timely-{worker_id} initializing table reader with {} and {} tables to snapshot",
+                config.resume_upper.pretty(),
+                reader_snapshot_table_info.len()
+            );
 
-            // We have already snapshotted, so the replication dataflow will take over
-            if resume_upper.into_option() != Some(MzOffset::from(0)) {
+            // Nothing needs to be snapshot.
+            if exports_to_snapshot.is_empty() {
                 return Ok(());
             }
+
+            // Determine which tables this worker's responsible for that need to be snapshot.
+            reader_snapshot_table_info.retain(|oid, (output_index, _, _)| {
+                mz_ore::soft_assert!(
+                    *output_index != 0,
+                    "primary collection should not be represented in table info"
+                );
+                exports_to_snapshot.remove(output_index) && config.responsible_for(oid)
+            });
+
+            // Some export to snapshot did not have table info present.
+            mz_ore::soft_assert!(
+                exports_to_snapshot.is_empty(),
+                "will not snapshot {:?} because missing from table_info",
+                exports_to_snapshot
+            );
 
             let connection_config = connection
                 .connection
@@ -247,7 +284,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }
 
             // We have established a snapshot LSN so we can broadcast the rewind requests
-            for &oid in reader_table_info.keys() {
+            for &oid in reader_snapshot_table_info.keys() {
                 trace!(%id, "timely-{worker_id} producing rewind request for {oid}");
                 let req = RewindRequest { oid, snapshot_lsn };
                 rewinds_handle.give(rewind_cap.as_ref().unwrap(), req).await;
@@ -262,7 +299,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             .await?;
             let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
-            for (&oid, (_, expected_desc, _)) in reader_table_info.iter() {
+            for (&oid, (_, expected_desc, _)) in reader_snapshot_table_info.iter() {
                 let desc = match verify_schema(oid, expected_desc, &upstream_info) {
                     Ok(()) => expected_desc,
                     Err(err) => {

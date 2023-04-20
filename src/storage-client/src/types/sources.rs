@@ -459,6 +459,20 @@ impl differential_dataflow::difference::Semigroup for MzOffset {
     }
 }
 
+impl Lattice for MzOffset {
+    fn join(&self, other: &Self) -> Self {
+        MzOffset {
+            offset: self.offset.join(&other.offset),
+        }
+    }
+
+    fn meet(&self, other: &Self) -> Self {
+        MzOffset {
+            offset: self.offset.meet(&other.offset),
+        }
+    }
+}
+
 impl mz_persist_types::Codec64 for MzOffset {
     fn codec_name() -> String {
         "MzOffset".to_string()

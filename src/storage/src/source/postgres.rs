@@ -85,6 +85,7 @@ use std::convert::Infallible;
 use std::rc::Rc;
 use std::time::Duration;
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Collection;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::error::ErrorExt;
@@ -98,7 +99,7 @@ use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection, Sour
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::{Client, SimpleQueryMessage, SimpleQueryRow};
@@ -129,12 +130,44 @@ impl SourceRender for PostgresSourceConnection {
         Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
-        // TODO: make snapshot::render take all resume uppers, but only send main resume upper to replication::render
-        let resume_upper = Antichain::from_iter(
-            config.source_resume_upper[&config.id]
-                .iter()
-                .map(MzOffset::decode_row),
-        );
+        // Get the uppers of all exports.
+        let mut export_resume_uppers: BTreeMap<_, _> = config
+            .source_resume_upper
+            .iter()
+            .map(|(id, upper)| {
+                (
+                    *id,
+                    Antichain::from_iter(upper.iter().map(MzOffset::decode_row)),
+                )
+            })
+            .collect();
+
+        // The primary source's upper is not meaningful shard, so ensure it's removed from
+        // consideration.
+        //
+        // TODO: close this upper because it can never do anything.
+        export_resume_uppers.remove(&config.id);
+
+        // The resume_upper is the point at which we will resume replication.
+        let mut resume_upper = Antichain::new();
+
+        // In the future, we will add subsources to export_resume_uppers with the minimum frontier,
+        // which will signal that it is a new collection that needs to be snapshot; this means we do
+        // not want to factor those values in to determining the resume upper.
+        for upper in export_resume_uppers
+            .values()
+            .filter(|u| u.elements() != [MzOffset::minimum()])
+        {
+            // The resume upper is the minimum of all collections' uppers (except those we noted
+            // above)
+            resume_upper.meet_assign(upper);
+        }
+
+        // If we filtered out all of the uppers, this must be a source whose uppers must all be
+        // minimal, i.e. a new source.
+        if resume_upper.is_empty() {
+            resume_upper = Antichain::from_elem(MzOffset::minimum());
+        }
 
         tracing::warn!("PG {:?} resumer_upper {:?}", config.id, resume_upper);
 
@@ -159,7 +192,7 @@ impl SourceRender for PostgresSourceConnection {
             config.clone(),
             self.clone(),
             context.clone(),
-            resume_upper.clone(),
+            export_resume_uppers,
             table_info.clone(),
         );
 
