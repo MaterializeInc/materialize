@@ -3734,7 +3734,7 @@ impl Coordinator {
             })
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(revokee, grantor)));
-        // The revoked privileges don't exists so we can return early.
+        // The revoked privileges don't exist so we can return early.
         if existing_privilege
             .acl_mode
             .intersection(acl_mode)
