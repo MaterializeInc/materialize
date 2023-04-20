@@ -1325,19 +1325,22 @@ pub(crate) fn load_generator_ast_to_generator(
     Ok((load_generator, available_subsources))
 }
 
-fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
-    let (before_idx, before_ty) = value_desc
-        .get_by_name(&"before".into())
-        .ok_or_else(|| sql_err!("'before' column missing from debezium input"))?;
+fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize), PlanError> {
+    let before = value_desc.get_by_name(&"before".into());
     let (after_idx, after_ty) = value_desc
         .get_by_name(&"after".into())
         .ok_or_else(|| sql_err!("'after' column missing from debezium input"))?;
-    if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
-        sql_bail!("'before' column must be of type record");
-    }
-    if before_ty != after_ty {
-        sql_bail!("'before' type differs from 'after' column");
-    }
+    let before_idx = if let Some((before_idx, before_ty)) = before {
+        if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
+            sql_bail!("'before' column must be of type record");
+        }
+        if before_ty != after_ty {
+            sql_bail!("'before' type differs from 'after' column");
+        }
+        Some(before_idx)
+    } else {
+        None
+    };
     Ok((before_idx, after_idx))
 }
 
