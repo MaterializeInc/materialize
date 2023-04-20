@@ -11,28 +11,11 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.common import SAMPLE_KAFKA_SCHEMA
 
 
 def schemas() -> str:
-    return dedent(
-        """
-       $ set keyschema={
-           "type": "record",
-           "name": "Key",
-           "fields": [
-               {"name": "key1", "type": "string"}
-           ]
-         }
-
-       $ set schema={
-           "type" : "record",
-           "name" : "test",
-           "fields" : [
-               {"name":"f1", "type":"string"}
-           ]
-         }
-       """
-    )
+    return dedent(SAMPLE_KAFKA_SCHEMA)
 
 
 class SinkUpsert(Check):
