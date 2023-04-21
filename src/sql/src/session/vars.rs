@@ -375,12 +375,12 @@ pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-static DEFAULT_MAX_CREDITS_PER_HOUR: Lazy<Numeric> = Lazy::new(|| 1024.into());
-pub static MAX_CREDITS_PER_HOUR: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
+static DEFAULT_MAX_CREDIT_CONSUMPTION_RATE: Lazy<Numeric> = Lazy::new(|| 1024.into());
+pub static MAX_CREDIT_CONSUMPTION_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
     ServerVar {
-    name: UncasedStr::new("max_credits_per_hour"),
-    value: &DEFAULT_MAX_CREDITS_PER_HOUR,
-    description: "The maximum credit usage in a region at any point in time. Credits are charged based on the number of replicas and their size (Materialize).",
+    name: UncasedStr::new("max_credit_consumption_rate"),
+    value: &DEFAULT_MAX_CREDIT_CONSUMPTION_RATE,
+    description: "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize).",
     internal: false,
     safe: true,
 }
@@ -1444,7 +1444,7 @@ impl Default for SystemVars {
             .with_var(&MAX_MATERIALIZED_VIEWS)
             .with_var(&MAX_CLUSTERS)
             .with_var(&MAX_REPLICAS_PER_CLUSTER)
-            .with_var(&MAX_CREDITS_PER_HOUR)
+            .with_var(&MAX_CREDIT_CONSUMPTION_RATE)
             .with_var(&MAX_DATABASES)
             .with_var(&MAX_SCHEMAS_PER_DATABASE)
             .with_var(&MAX_OBJECTS_PER_SCHEMA)
@@ -1646,9 +1646,9 @@ impl SystemVars {
         *self.expect_value(&MAX_REPLICAS_PER_CLUSTER)
     }
 
-    /// Returns the value of the `max_credits_per_hour` configuration parameter.
-    pub fn max_credits_per_hour(&self) -> Numeric {
-        *self.expect_value(&MAX_CREDITS_PER_HOUR)
+    /// Returns the value of the `max_credit_consumption_rate` configuration parameter.
+    pub fn max_credit_consumption_rate(&self) -> Numeric {
+        *self.expect_value(&MAX_CREDIT_CONSUMPTION_RATE)
     }
 
     /// Returns the value of the `max_databases` configuration parameter.

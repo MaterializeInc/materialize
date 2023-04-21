@@ -362,9 +362,9 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_replicas_per_cluster = 100
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_credits_per_hour = 3
+ALTER SYSTEM SET max_credit_consumption_rate = 3
 
-> SHOW max_credits_per_hour
+> SHOW max_credit_consumption_rate
 3
 
 # Size 1 has 1 credit and size 2-1 has 2 credits
@@ -372,21 +372,21 @@ ALTER SYSTEM SET max_credits_per_hour = 3
 > CREATE CLUSTER c1 REPLICAS (r1 (size '1'), r2 (size '2-1'))
 
 ! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
-contains:creating cluster replica would violate max_credits_per_hour limit (desired: 4, limit: 3, current: 3)
+contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 4, limit: 3, current: 3)
 
 ! CREATE SOURCE lg2 FROM LOAD GENERATOR COUNTER WITH (SIZE = '8-8');
-contains:creating cluster replica would violate max_credits_per_hour limit (desired: 11, limit: 3, current: 3)
+contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 11, limit: 3, current: 3)
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_credits_per_hour = 4.0
+ALTER SYSTEM SET max_credit_consumption_rate = 4.0
 
-> SHOW max_credits_per_hour
+> SHOW max_credit_consumption_rate
 4.0
 
 > CREATE CLUSTER REPLICA c1.r3 SIZE '1'
 
 ! CREATE CLUSTER REPLICA c1.r4 SIZE '2-1'
-contains:creating cluster replica would violate max_credits_per_hour limit (desired: 6, limit: 4.0, current: 4)
+contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 6, limit: 4.0, current: 4)
 
 > DROP CLUSTER REPLICA c1.r2
 

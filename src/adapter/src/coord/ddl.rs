@@ -29,9 +29,10 @@ use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
-    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CREDITS_PER_HOUR,
-    MAX_DATABASES, MAX_MATERIALIZED_VIEWS, MAX_OBJECTS_PER_SCHEMA, MAX_REPLICAS_PER_CLUSTER,
-    MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
+    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
+    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_MATERIALIZED_VIEWS, MAX_OBJECTS_PER_SCHEMA,
+    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
+    MAX_SOURCES, MAX_TABLES,
 };
 use mz_storage_client::controller::{
     CreateExportToken, ExportDescription, ReadPolicy, StorageError,
@@ -826,7 +827,7 @@ impl Coordinator {
         let mut new_materialized_views = 0;
         let mut new_clusters = 0;
         let mut new_replicas_per_cluster = BTreeMap::new();
-        let mut new_credits_per_hour = Numeric::zero();
+        let mut new_credit_consumption_rate = Numeric::zero();
         let mut new_databases = 0;
         let mut new_schemas_per_database = BTreeMap::new();
         let mut new_objects_per_schema = BTreeMap::new();
@@ -868,7 +869,7 @@ impl Coordinator {
                             .0
                             .get(&location.size)
                             .expect("location size is validated against the cluster replica sizes");
-                        new_credits_per_hour += replica_allocation.credits_per_hour
+                        new_credit_consumption_rate += replica_allocation.credits_per_hour
                     }
                 }
                 Op::CreateItem { name, item, .. } => {
@@ -927,7 +928,7 @@ impl Coordinator {
                                     .0
                                     .get(&location.size)
                                     .expect("location size is validated against the cluster replica sizes");
-                                new_credits_per_hour -= replica_allocation.credits_per_hour
+                                new_credit_consumption_rate -= replica_allocation.credits_per_hour
                             }
                         }
                         ObjectId::Database(_) => {
@@ -1086,7 +1087,7 @@ impl Coordinator {
                 MAX_REPLICAS_PER_CLUSTER.name(),
             )?;
         }
-        let current_credits = self
+        let current_credit_consumption_rate = self
             .catalog()
             .user_cluster_replicas()
             .filter_map(|replica| match &replica.config.location {
@@ -1103,11 +1104,11 @@ impl Coordinator {
             })
             .sum();
         self.validate_resource_limit_numeric(
-            current_credits,
-            new_credits_per_hour,
-            SystemVars::max_credits_per_hour,
+            current_credit_consumption_rate,
+            new_credit_consumption_rate,
+            SystemVars::max_credit_consumption_rate,
             "cluster replica",
-            MAX_CREDITS_PER_HOUR.name(),
+            MAX_CREDIT_CONSUMPTION_RATE.name(),
         )?;
         self.validate_resource_limit(
             self.catalog().databases().count(),

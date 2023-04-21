@@ -80,7 +80,7 @@ pub struct ReplicaAllocation {
     pub scale: u16,
     /// The number of worker threads in the replica.
     pub workers: usize,
-    /// The number of credits per hour.
+    /// The number of credits per hour that the replica consumes.
     pub credits_per_hour: Numeric,
 }
 
