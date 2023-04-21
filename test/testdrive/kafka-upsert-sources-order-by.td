@@ -25,6 +25,7 @@ $ kafka-create-topic topic=textbytes
 > SHOW CREATE SOURCE texttext
 materialize.public.texttext "CREATE SOURCE \"materialize\".\"public\".\"texttext\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-textbytes-${testdrive.seed}') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE OFFSET AS \"o\", TIMESTAMP AS \"ts\" ENVELOPE UPSERT( ORDER BY (\"ts\", \"o\")) EXPOSE PROGRESS AS \"materialize\".\"public\".\"texttext_progress\" WITH (SIZE = '1')"
 
+# Ingesting values, later offset will override earlier values for the same timestamp
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=185
 fish:fish_185
 bird:bird_185
@@ -38,19 +39,21 @@ fish         fish_185      "1970-01-01 00:00:00.185"
 bird         bird_185      "1970-01-01 00:00:00.185"
 fruit        new_fruit_185 "1970-01-01 00:00:00.185"
 
+# Values will higher timestamp, should remove bird and update the rest
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=278
 fish:fish_278
 mammal:mammal_278
+fruit:fruit_278
 bird:
 
 > select key, text, ts from texttext
 key           text            ts
 ------------------------------------------------
-fruit         new_fruit_185   "1970-01-01 00:00:00.185"
+fruit         fruit_278       "1970-01-01 00:00:00.278"
 fish          fish_278        "1970-01-01 00:00:00.278"
 mammal        mammal_278      "1970-01-01 00:00:00.278"
 
-# ingesting again with same timestamp, will override previous value
+# ingesting again with same timestamp, will remove mammal and update fish
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=278
 mammal:
 fish:new_fish_278
@@ -58,17 +61,19 @@ fish:new_fish_278
 > select key, text, ts from texttext
 key           text            ts
 ------------------------------------------------
-fruit         new_fruit_185   "1970-01-01 00:00:00.185"
+fruit         fruit_278       "1970-01-01 00:00:00.278"
 fish          new_fish_278    "1970-01-01 00:00:00.278"
 
+# ingesting with lower timestamp, only bird will be added, fish and fruit will remain unchanged
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=191
 fish:fish_191
 bird:bird_191
+fruit:
 
 > select key, text, ts from texttext
 key           text      ts
 ------------------------------------------------
-fruit         new_fruit_185  "1970-01-01 00:00:00.185"
+fruit         fruit_278      "1970-01-01 00:00:00.278"
 fish          new_fish_278   "1970-01-01 00:00:00.278"
 bird          bird_191       "1970-01-01 00:00:00.191"
 

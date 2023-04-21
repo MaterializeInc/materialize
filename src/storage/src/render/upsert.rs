@@ -324,10 +324,7 @@ where
                                     command_state.take();
                                 }
                             }
-                            (None, None) => {
-                                // Trying to remove a key which does not exist in state
-                                // TODO(mouli): Should this panic! instead? What if the tombstones are not in order?
-                            }
+                            (None, None) => {} // No-op, trying to remove a key which does not exist in state
                         }
                     }
 
