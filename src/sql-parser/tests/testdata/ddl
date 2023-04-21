@@ -1431,6 +1431,31 @@ error: Expected CONNECTION, found BROKER
 CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE large)
                                 ^
 
+# Upsert order by statements, DESC is not allowed
+parse-statement
+CREATE SOURCE upsert1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, OFFSET ENVELOPE UPSERT ( ORDER BY (TIMESTAMP DESC, OFFSET)) WITH (SIZE large)
+----
+error: Expected right parenthesis, found DESC
+CREATE SOURCE upsert1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, OFFSET ENVELOPE UPSERT ( ORDER BY (TIMESTAMP DESC, OFFSET)) WITH (SIZE large)
+                                                                                                                                                                  ^
+
+# Upsert order by statements, need parentheses around ORDER BY expressions
+parse-statement
+CREATE SOURCE upsert1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, OFFSET ENVELOPE UPSERT ( ORDER BY TIMESTAMP, OFFSET) WITH (SIZE large)
+----
+error: Expected left parenthesis, found TIMESTAMP
+CREATE SOURCE upsert1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, OFFSET ENVELOPE UPSERT ( ORDER BY TIMESTAMP, OFFSET) WITH (SIZE large)
+                                                                                                                                                       ^
+
+# ASC order by is ignored since it's the default
+parse-statement
+CREATE SOURCE upsert1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, OFFSET as o ENVELOPE UPSERT ( ORDER BY (TIMESTAMP ASC, o)) WITH (SIZE large)
+----
+CREATE SOURCE upsert1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, OFFSET AS o ENVELOPE UPSERT( ORDER BY (timestamp, o)) WITH (SIZE = large)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("upsert1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [SourceIncludeMetadata { ty: Timestamp, alias: None }, SourceIncludeMetadata { ty: Offset, alias: Some(Ident("o")) }], format: KeyValue { key: Text, value: Text }, envelope: Some(Upsert { order_by: [Ident("timestamp"), Ident("o")] }), if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Ident(Ident("large"))) }], referenced_subsources: None, progress_subsource: None })
+
+
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL HOST 'ssh-bastion', PORT 1234, USER 'blah'
 ----
