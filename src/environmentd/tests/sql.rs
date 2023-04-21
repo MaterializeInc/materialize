@@ -1302,7 +1302,7 @@ fn test_utilization_hold() {
     // `mz_introspection` tests indexes, `default` tests tables.
     // The bool determines whether we are testing indexes.
     const CLUSTERS_TO_TRY: &[(&str, bool)] = &[("mz_introspection", true), ("default", false)];
-    const QUERIES_TO_TRY: &[str] = &[
+    const QUERIES_TO_TRY: &[&str] = &[
         "SELECT * FROM mz_internal.mz_cluster_replica_utilization",
         "SELECT * FROM mz_internal.mz_cluster_replica_statuses",
     ];
