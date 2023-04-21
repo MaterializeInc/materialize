@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! This module implements the client's functions for interacting with the Frontegg passwords API.
+
 use mz_frontegg_auth::AppPassword as AuthAppPassword;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -33,9 +35,9 @@ const CREATE_APP_PASSWORDS_PATH: [&str; 6] = [
     "v1",
 ];
 
+/// A structure that represents an app-password _metadata_.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct AppPassword {
     description: String,
     created_at: String,

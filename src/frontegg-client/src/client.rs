@@ -7,6 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! # Frontegg API client
+//!
+//! The [Client] module provides functions to interact with the Frontegg API. This client
+//! implements authentication, token management, and basic requests against the API.
+//!
+//! The [Client] requires an [mz_frontegg_auth::AppPassword] as a parameter.
+//! The app password is used to manage an access token.
+//! _Manage_ means issuing a new access token or refreshing when half of its lifetime has passed.
+//!
 use mz_frontegg_auth::AppPassword;
 use reqwest::{Method, RequestBuilder};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! This module implements the client's functions for interacting with the Frontegg users API.
+
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +19,7 @@ use super::Client;
 const USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v3"];
 const CREATE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v2"];
 
+/// Representation of all the mandatory fields for a user creation request.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserCreationRequest {
@@ -26,6 +29,7 @@ pub struct UserCreationRequest {
     role_ids: Vec<String>,
 }
 
+/// A structure that represents a user in Frontegg.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct User {
@@ -52,6 +56,7 @@ struct Role {
     level: i32,
 }
 
+/// Representation of a succesfully response from a user creation.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserCreationResponse {
@@ -65,7 +70,7 @@ pub struct UserCreationResponse {
 }
 
 impl Client {
-    // Lists all existing users.
+    /// Lists all existing users.
     pub async fn list_users(&self) -> Result<Vec<User>, ErrorExtended> {
         let mut users = vec![];
         let mut page = 0;
