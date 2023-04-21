@@ -3050,16 +3050,19 @@ fn plan_using_constraint(
         }
     }
 
-    if let Some(alias_name) = alias {
-        let new_item = PartialItemName {
-            database: None,
-            schema: None,
-            item: alias_name.clone().to_string(),
-        };
+    let alias_item_name = alias.map(|alias| PartialItemName {
+        database: None,
+        schema: None,
+        item: alias.clone().to_string(),
+    });
 
+    if let Some(alias_item_name) = &alias_item_name {
         for partial_item_name in both_scope.table_names() {
-            if partial_item_name.matches(&new_item) {
-                sql_bail!("table name \"{}\" specified more than once", new_item)
+            if partial_item_name.matches(alias_item_name) {
+                sql_bail!(
+                    "table name \"{}\" specified more than once",
+                    alias_item_name
+                )
             }
         }
     }
@@ -3135,19 +3138,13 @@ fn plan_using_constraint(
         // only table-qualified references for each specified join column.
         // Unlike regular table aliases, a `join_using_alias` should not hide the
         // names of the joined relations.
-        if let Some(alias_name) = alias {
-            let new_item = PartialItemName {
-                database: None,
-                schema: None,
-                item: alias_name.clone().to_string(),
-            };
-
+        if alias_item_name.is_some() {
             let new_item_col = both_scope.items.len() + new_items.len();
             join_cols.push(new_item_col);
             hidden_cols.push(new_item_col);
 
             new_items.push(ScopeItem::from_name(
-                Some(new_item),
+                alias_item_name.clone(),
                 column_name.clone().to_string(),
             ));
 
