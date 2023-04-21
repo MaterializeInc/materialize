@@ -10,10 +10,9 @@
 use itertools::Itertools;
 
 use mz_rocksdb::RocksDBInstance;
-use mz_storage_client::types::sources::SourceData;
 
 use crate::render::upsert::types::UpsertState;
-use crate::render::upsert::UpsertKey;
+use crate::render::upsert::{UpsertKey, UpsertValue};
 
 /// The maximum batch size we will write to rocksdb.
 ///
@@ -25,14 +24,14 @@ pub const BATCH_SIZE: usize = 1024;
 /// A `UpsertState` implementation backed by RocksDB.
 /// This is currently untested, and simply compiles.
 pub struct RocksDB {
-    rocksdb: RocksDBInstance<UpsertKey, SourceData>,
+    rocksdb: RocksDBInstance<UpsertKey, UpsertValue>,
 }
 
 #[async_trait::async_trait(?Send)]
 impl UpsertState for RocksDB {
     async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, Option<SourceData>)>,
+        P: IntoIterator<Item = (UpsertKey, Option<UpsertValue>)>,
     {
         let mut puts = puts.into_iter().peekable();
 
@@ -51,7 +50,7 @@ impl UpsertState for RocksDB {
     async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut Option<SourceData>>,
+        R: IntoIterator<Item = &'r mut Option<UpsertValue>>,
     {
         let mut gets = gets.into_iter().peekable();
         if gets.peek().is_some() {

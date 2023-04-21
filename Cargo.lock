@@ -4574,11 +4574,12 @@ name = "mz-rocksdb"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "itertools",
  "mz-ore",
- "mz-persist-types",
  "prometheus",
  "rocksdb",
+ "serde",
  "tempfile",
  "thiserror",
  "tokio",

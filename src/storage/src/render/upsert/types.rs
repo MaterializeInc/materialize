@@ -14,9 +14,8 @@ use itertools::Itertools;
 
 use mz_ore::cast::CastLossy;
 use mz_ore::collections::HashMap;
-use mz_storage_client::types::sources::SourceData;
 
-use super::UpsertKey;
+use super::{UpsertKey, UpsertValue};
 use crate::source::metrics::UpsertSharedMetrics;
 
 /// A trait that defines the fundamental primitives required by a state-backing of
@@ -29,7 +28,7 @@ pub trait UpsertState {
     /// Returns the size of the `puts`.
     async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, Option<SourceData>)>;
+        P: IntoIterator<Item = (UpsertKey, Option<UpsertValue>)>;
 
     /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
     ///
@@ -39,12 +38,12 @@ pub trait UpsertState {
     async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut Option<SourceData>>;
+        R: IntoIterator<Item = &'r mut Option<UpsertValue>>;
 }
 
 /// A `HashMap` with an extra scratch vector used to
 pub struct InMemoryHashMap {
-    state: HashMap<UpsertKey, SourceData>,
+    state: HashMap<UpsertKey, UpsertValue>,
 }
 
 impl Default for InMemoryHashMap {
@@ -59,7 +58,7 @@ impl Default for InMemoryHashMap {
 impl UpsertState for InMemoryHashMap {
     async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, Option<SourceData>)>,
+        P: IntoIterator<Item = (UpsertKey, Option<UpsertValue>)>,
     {
         let mut size = 0;
         for (key, value) in puts {
@@ -79,7 +78,7 @@ impl UpsertState for InMemoryHashMap {
     async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut Option<SourceData>>,
+        R: IntoIterator<Item = &'r mut Option<UpsertValue>>,
     {
         let mut size = 0;
         for (key, result_out) in gets.into_iter().zip_eq(results_out) {
@@ -109,7 +108,7 @@ where
 {
     async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, Option<SourceData>)>,
+        P: IntoIterator<Item = (UpsertKey, Option<UpsertValue>)>,
     {
         let now = Instant::now();
         let size = self.inner.multi_put(puts).await?;
@@ -125,7 +124,7 @@ where
     async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut Option<SourceData>>,
+        R: IntoIterator<Item = &'r mut Option<UpsertValue>>,
     {
         let now = Instant::now();
         let size = self.inner.multi_get(gets, results_out).await?;

@@ -90,11 +90,11 @@ use itertools::Itertools;
 use rocksdb::{
     DBCompressionType, Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB,
 };
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metrics::DeleteOnDropHistogram;
-use mz_persist_types::Codec;
 
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
@@ -109,8 +109,8 @@ pub enum Error {
     RocksDBThreadGoneAway,
 
     /// Error decoding a value previously written.
-    #[error("failed to decode value: {0}")]
-    DecodeError(String),
+    #[error("failed to decode value")]
+    DecodeError(#[from] bincode::Error),
 
     /// A tokio thread used by the implementation panicked.
     #[error("tokio thread panicked")]
@@ -230,7 +230,7 @@ pub struct RocksDBInstance<K, V> {
 impl<K, V> RocksDBInstance<K, V>
 where
     K: AsRef<[u8]> + Send + Sync + 'static,
-    V: Codec + Send + Sync + 'static,
+    V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     /// Start a new RocksDB instance at the path.
     pub async fn new(
@@ -376,7 +376,7 @@ fn rocksdb_core_loop<K, V>(
     metrics: RocksDBMetrics,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
-    V: Codec + Send + Sync + 'static,
+    V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     let db: DB = DB::open(&options.as_rocksdb_options(), &instance_path).unwrap();
     let wo = options.as_rocksdb_write_options();
@@ -409,14 +409,16 @@ fn rocksdb_core_loop<K, V>(
                             .multi_get_batch_size
                             .observe(f64::cast_lossy(batch_size));
                         for previous_value in gets {
-                            let previous_value =
-                                match previous_value.map(|v| V::decode(&v)).transpose() {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        let _ = response_sender.send(Err(Error::DecodeError(e)));
-                                        return;
-                                    }
-                                };
+                            let previous_value = match previous_value
+                                .map(|v| bincode::deserialize(&v))
+                                .transpose()
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    let _ = response_sender.send(Err(Error::DecodeError(e)));
+                                    return;
+                                }
+                            };
                             results_scratch.push(previous_value);
                         }
 
@@ -434,13 +436,23 @@ fn rocksdb_core_loop<K, V>(
             } => {
                 let batch_size = batch.len();
                 let mut writes = rocksdb::WriteBatch::default();
+                let mut encode_buf = Vec::new();
 
                 // TODO(guswynn): sort by key before writing.
                 for (key, value) in batch.drain(..) {
                     match value {
                         Some(update) => {
-                            let mut encode_buf = Vec::<u8>::new();
-                            update.encode(&mut encode_buf);
+                            encode_buf.clear();
+                            match bincode::serialize_into::<&mut Vec<u8>, _>(
+                                &mut encode_buf,
+                                &update,
+                            ) {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    let _ = response_sender.send(Err(Error::DecodeError(e)));
+                                    return;
+                                }
+                            };
                             writes.put(&key, encode_buf.as_slice());
                         }
                         None => writes.delete(&key),
