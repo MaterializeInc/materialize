@@ -1331,12 +1331,15 @@ impl Coordinator {
             custom_logical_compaction_window: None,
         };
         let oid = self.catalog_mut().allocate_oid()?;
+        let on = self.catalog().get_entry(&index.on);
+        // Indexes have the same owner as their parent relation.
+        let owner_id = *on.owner_id();
         let op = catalog::Op::CreateItem {
             id,
             oid,
             name: name.clone(),
             item: CatalogItem::Index(index),
-            owner_id: *session.role_id(),
+            owner_id,
         };
         match self
             .catalog_transact_with(Some(session), vec![op], |txn| {
@@ -3867,7 +3870,39 @@ impl Coordinator {
             new_owner,
         }: AlterOwnerPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog_transact(Some(session), vec![Op::UpdateOwner { id, new_owner }])
+        let entry = if let ObjectId::Item(global_id) = &id {
+            Some(self.catalog().get_entry(global_id))
+        } else {
+            None
+        };
+
+        // Cannot directly change the owner of an index.
+        if let Some(entry) = &entry {
+            if entry.is_index() {
+                let name = self
+                    .catalog()
+                    .resolve_full_name(entry.name(), Some(session.conn_id()))
+                    .to_string();
+                session.add_notice(AdapterNotice::AlterIndexOwner { name });
+                return Ok(ExecuteResponse::AlteredObject(object_type));
+            }
+        }
+
+        let mut ops = vec![Op::UpdateOwner { id, new_owner }];
+        // Alter owner cascades down to dependent indexes.
+        if let Some(entry) = entry {
+            let dependent_index_ops = entry
+                .used_by()
+                .into_iter()
+                .filter(|id| self.catalog().get_entry(id).is_index())
+                .map(|id| Op::UpdateOwner {
+                    id: ObjectId::Item(*id),
+                    new_owner,
+                });
+            ops.extend(dependent_index_ops);
+        }
+
+        self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::AlteredObject(object_type))
     }

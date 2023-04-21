@@ -2453,9 +2453,14 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Secret(_))
     }
 
-    /// Reports whether this catalog entry is a introspection source.
+    /// Reports whether this catalog entry is an introspection source.
     pub fn is_introspection_source(&self) -> bool {
         matches!(self.item(), CatalogItem::Log(_))
+    }
+
+    /// Reports whether this catalog entry is an index.
+    pub fn is_index(&self) -> bool {
+        matches!(self.item(), CatalogItem::Index(_))
     }
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
