@@ -109,7 +109,7 @@ There are a number of options here, including machine learning models, but simpl
 
 Note that it is expected that the common case will be that stats do not need trimming. This is more a safety measure.
 
-## Filtering Parts
+## Filtering parts
 [filtering parts]: #filtering-parts
 
 Thanks to our part statistics, we know the range of possible values any particular column may have.
@@ -144,9 +144,39 @@ To evaluate an MFP for a particular part in the persist source, we:
 - Evaluate the MFP using the machinery above, returning a `ResultSpec` that captures the possible outputs of the filter.
 - If the filter might return `true` or an error, we keep the part; otherwise, we filter it out.
 
-## JSON columns
+## Filtering JSONB
 
-TODO - justify, describe both halves of the implementation
+The above is enough for normal temporal filters.
+However, we'd also like to be able to push down queries against nested structures, like JSON.
+To be able to tell whether a query like `select * from x where (json_field -> 'ts')::numeric < mz_now()` matches our part,
+we'll need to know the range of possible numeric values in our `'ts'` column.
+(Or whether there could be any non-numeric values that might make the cast fail.)
+
+```rust
+use std::collections::BTreeMap;
+
+pub struct ResultSpec<'a> {
+    // For map datums, constraints on individual fields in the map.
+    fields: BTreeMap<Datum<'a>, ResultSpec<'a>>,
+    // ...and other fields as above: `nullable`, `fallible`, `values`.
+}
+```
+
+This is straightforward to populate from the JSON stats mentioned above.
+
+Finally, in our interpreter, we'll need to fetch any field-specific info from the map when we encounter a field-access function like `JsonbGetString`.
+Since there are a small number of these functions, and they tend to be called with constants on the right-hand side,
+matching on these functions appears to be fairly straightforward.
+
+This composes well with the more general approach to propagating range information described in the previous section.
+In the `json_field` example above, assuming `ts` is always numeric in our shard, our interpreter will:
+- Match on the innermost-nested expression, the field lookup, and extract the nested stats for our field.
+- Apply the cast. Since the cast is monotonic, we'll preserve our range information.
+- `<` will compare two ranges, the one computed in the previous step and the known range for `mz_now`,
+  and determine the possible booleans for the overall expression.
+
+As mentioned, due to stats trimming, we may not have statistics for any particular field.
+To be conservative, we'll assume that that field might have any possible value.
 
 # Rollout
 
