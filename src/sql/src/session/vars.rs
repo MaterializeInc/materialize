@@ -376,12 +376,14 @@ pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
 };
 
 static DEFAULT_MAX_CREDITS_PER_HOUR: Lazy<Numeric> = Lazy::new(|| 1024.into());
-pub static MAX_CREDITS_PER_HOUR: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
+pub static MAX_CREDITS_PER_HOUR: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
+    ServerVar {
     name: UncasedStr::new("max_credits_per_hour"),
     value: &DEFAULT_MAX_CREDITS_PER_HOUR,
-    description: "The maximum number of credits per hour in the region (Materialize).",
+    description: "The maximum credit usage in a region at any point in time. Credits are charged based on the number of replicas and their size (Materialize).",
     internal: false,
     safe: true,
+}
 });
 
 pub const MAX_DATABASES: ServerVar<u32> = ServerVar {
