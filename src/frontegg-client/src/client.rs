@@ -56,7 +56,7 @@ struct RefreshRequest<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Auth {
+struct Auth {
     token: String,
     /// Refresh at indicates the time at which the token should be refreshed.
     /// It equals the expiring time / 2
@@ -151,7 +151,7 @@ impl Client {
 
     /// Authenticates with the server, if not already authenticated,
     /// and returns the authentication token.
-    pub async fn auth(&self) -> Result<String, ErrorExtended> {
+    async fn auth(&self) -> Result<String, ErrorExtended> {
         let mut auth = self.auth.lock().await;
         let mut req;
 
