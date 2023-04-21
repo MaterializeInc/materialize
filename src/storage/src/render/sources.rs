@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use timely::dataflow::operators::{self, Exchange, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
@@ -475,11 +476,13 @@ fn upsert_commands<G: Scope>(
 ) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, UpsertOrder), Diff> {
     // Converting from source indices to metadata indices for optional order by
     let key_value_arity = upsert_envelope.source_arity - metadata_arity;
+    // Using smallvec with max size 2 as currently there can only be max two columns
+    // (timestamp and offset) to order things by.
     let metadata_indices = upsert_envelope
         .order_by_indices
         .iter()
         .map(|row_pos| row_pos - key_value_arity)
-        .collect();
+        .collect::<SmallVec<[usize; 2]>>();
 
     let mut row_buf = Row::default();
     input.map(move |result| {
@@ -488,7 +491,9 @@ fn upsert_commands<G: Scope>(
         let order = if upsert_envelope.order_by_indices.is_empty() {
             result.position.into()
         } else {
-            // Getting the ordering information from metadata
+            // Getting the ordering information from metadata.
+            // Also, it's guaranteed at this point that the metadata will also contain offset as one of the columns,
+            // the value of which will be same as result.position above.
             crate::render::upsert::get_order(&Ok(metadata.clone()), &metadata_indices)
         };
 

@@ -139,19 +139,20 @@ impl From<MzOffset> for UpsertOrder {
     }
 }
 
-/// Gets the ordering information extracting out the value from the row
-/// based on the given index, and the default fallback value.
-/// Using smallvec with max size 2 as currently there can only be max two columns
-/// (timestamp and offset) to order things by
+/// Gets the ordering information extracting out the values from the row
+/// based on the given indices.
+/// The `value` can be either the entire source row or a metadata row.
 pub(crate) fn get_order(
-    row_or_error: &Result<Row, UpsertError>,
-    order_by_indices: &SmallVec<[usize; 2]>,
+    value: &Result<Row, UpsertError>,
+    order_by_indices: &[usize],
 ) -> UpsertOrder {
-    let order = match row_or_error {
+    let order = match value {
         Ok(row) if !order_by_indices.is_empty() => {
             let order_col = order_by_indices
                 .iter()
                 .map(|idx| {
+                    // Row's iterator is not ExactSizeIterator and the nth() call is slightly expensive
+                    // TODO(mouli): optimize this
                     let datum = row
                         .iter()
                         .nth(*idx)
@@ -159,8 +160,8 @@ pub(crate) fn get_order(
 
                     match datum {
                         // Currently only timestamp and u64 types are supported
-                        Datum::Timestamp(ts) => ts.timestamp_nanos().try_into().expect("Unexpected i64 overflow to i128"),
-                        Datum::UInt64(num) => num.try_into().expect("Unexpected u64 overflow to i128"),
+                        Datum::Timestamp(ts) => ts.timestamp_nanos().into(),
+                        Datum::UInt64(num) => num.into(),
                         datum => panic!(
                             "Only timestamp or offset is supported for order by, instead found {:?} at index {:?}",
                             datum, idx
