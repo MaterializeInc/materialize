@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_frontegg_auth::AppPassword;
+use mz_frontegg_auth::AppPassword as AuthAppPassword;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -16,7 +16,14 @@ use crate::error::ErrorExtended;
 
 use super::Client;
 
-const APP_PASSWORDS_PATH: [&str; 5] = ["identity", "resources", "users", "api-tokens", "v1"];
+const APP_PASSWORDS_PATH: [&str; 6] = [
+    "frontegg",
+    "identity",
+    "resources",
+    "users",
+    "api-tokens",
+    "v1",
+];
 const CREATE_APP_PASSWORDS_PATH: [&str; 6] = [
     "frontegg",
     "identity",
@@ -29,7 +36,7 @@ const CREATE_APP_PASSWORDS_PATH: [&str; 6] = [
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-pub struct FronteggAppPassword {
+pub struct AppPassword {
     description: String,
     created_at: String,
 }
@@ -41,9 +48,9 @@ struct AppPasswordCreateRequest {
 
 impl Client {
     /// Lists all existing app passwords.
-    pub async fn list_app_passwords(&self) -> Result<Vec<FronteggAppPassword>, ErrorExtended> {
+    pub async fn list_app_passwords(&self) -> Result<Vec<AppPassword>, ErrorExtended> {
         let req = self.build_request(Method::GET, APP_PASSWORDS_PATH);
-        let passwords: Vec<FronteggAppPassword> = self.send_request(req).await?;
+        let passwords: Vec<AppPassword> = self.send_request(req).await?;
         Ok(passwords)
     }
 
@@ -51,7 +58,7 @@ impl Client {
     pub async fn create_app_password(
         &self,
         description: String,
-    ) -> Result<AppPassword, ErrorExtended> {
+    ) -> Result<AuthAppPassword, ErrorExtended> {
         let req = self.build_request(Method::POST, CREATE_APP_PASSWORDS_PATH);
         let req = req.json(&AppPasswordCreateRequest { description });
 
@@ -64,7 +71,7 @@ impl Client {
             pub secret_key: Uuid,
         }
         let password: AppPassword = self.send_request(req).await?;
-        Ok(mz_frontegg_auth::AppPassword {
+        Ok(AuthAppPassword {
             client_id: password.client_id,
             secret_key: password.secret_key,
         })

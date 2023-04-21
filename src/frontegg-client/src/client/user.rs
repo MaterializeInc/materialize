@@ -14,7 +14,7 @@ use crate::{error::ErrorExtended, parse::Paginated};
 
 use super::Client;
 
-const USERS_PATH: [&str; 4] = ["identity", "resources", "users", "v3"];
+const USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v3"];
 const CREATE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v2"];
 
 #[derive(Serialize)]
