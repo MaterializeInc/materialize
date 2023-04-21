@@ -10,9 +10,10 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::ClientContext;
+use tracing::warn;
 
 use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::collections::CollectionExt;
@@ -36,6 +37,95 @@ pub async fn build_sink_connection(
     }
 }
 
+struct TopicConfigs {
+    partition_count: i32,
+    replication_factor: i32,
+}
+
+async fn discover_topic_configs<C: ClientContext>(
+    client: &AdminClient<C>,
+    topic: &str,
+) -> Result<TopicConfigs, anyhow::Error> {
+    let mut partition_count = -1;
+    let mut replication_factor = -1;
+
+    let metadata = client
+        .inner()
+        .fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)
+        .with_context(|| {
+            format!(
+                "error fetching metadata when creating new topic {} for sink",
+                topic
+            )
+        })?;
+
+    if metadata.brokers().len() == 0 {
+        Err(anyhow!("zero brokers discovered in metadata request"))?;
+    }
+
+    let broker = metadata.brokers()[0].id();
+    let configs = client
+        .describe_configs(
+            &[ResourceSpecifier::Broker(broker)],
+            &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "error fetching configuration from broker {} when creating new topic {} for sink",
+                broker, topic
+            )
+        })?;
+
+    if configs.len() != 1 {
+        Err(anyhow!(
+                "error creating topic {} for sink: broker {} returned {} config results, but one was expected",
+                topic,
+                broker,
+                configs.len()
+            ))?;
+    }
+
+    let config = configs.into_element().map_err(|e| {
+        anyhow!(
+            "error reading broker configuration when creating topic {} for sink: {}",
+            topic,
+            e
+        )
+    })?;
+
+    if config.entries.is_empty() {
+        bail!("read empty custer configuration; do we have DescribeConfigs permissions?")
+    }
+
+    for entry in config.entries {
+        if entry.name == "num.partitions" && partition_count == -1 {
+            if let Some(s) = entry.value {
+                partition_count = s.parse::<i32>().with_context(|| {
+                    format!(
+                        "default partition count {} cannot be parsed into an integer",
+                        s
+                    )
+                })?;
+            }
+        } else if entry.name == "default.replication.factor" && replication_factor == -1 {
+            if let Some(s) = entry.value {
+                replication_factor = s.parse::<i32>().with_context(|| {
+                    format!(
+                        "default replication factor {} cannot be parsed into an integer",
+                        s
+                    )
+                })?;
+            }
+        }
+    }
+
+    Ok(TopicConfigs {
+        partition_count,
+        replication_factor,
+    })
+}
+
 async fn ensure_kafka_topic<C>(
     client: &AdminClient<C>,
     topic: &str,
@@ -49,83 +139,23 @@ where
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen
-    // behind the scenes, but this is unsupported and will result in errors on pre-2.4 Kafka
+    // behind the scenes, but this is unsupported and will result in errors on pre-2.4 Kafka.
     if partition_count == -1 || replication_factor == -1 {
-        let metadata = client
-            .inner()
-            .fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)
-            .with_context(|| {
-                format!(
-                    "error fetching metadata when creating new topic {} for sink",
-                    topic
-                )
-            })?;
-
-        if metadata.brokers().len() == 0 {
-            Err(anyhow!("zero brokers discovered in metadata request"))?;
-        }
-
-        let broker = metadata.brokers()[0].id();
-        let configs = client
-            .describe_configs(
-                &[ResourceSpecifier::Broker(broker)],
-                &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "error fetching configuration from broker {} when creating new topic {} for sink",
-                    broker,
-                    topic
-                )
-        })?;
-
-        if configs.len() != 1 {
-            Err(anyhow!(
-                "error creating topic {} for sink: broker {} returned {} config results, but one was expected",
-                topic,
-                broker,
-                configs.len()
-            ))?;
-        }
-
-        let config = configs.into_element().map_err(|e| {
-            anyhow!(
-                "error reading broker configuration when creating topic {} for sink: {}",
-                topic,
-                e
-            )
-        })?;
-
-        for entry in config.entries {
-            if entry.name == "num.partitions" && partition_count == -1 {
-                if let Some(s) = entry.value {
-                    partition_count = s.parse::<i32>().with_context(|| {
-                        format!(
-                            "default partition count {} cannot be parsed into an integer",
-                            s
-                        )
-                    })?;
+        match discover_topic_configs(client, topic).await {
+            Ok(configs) => {
+                if partition_count == -1 {
+                    partition_count = configs.partition_count;
                 }
-            } else if entry.name == "default.replication.factor" && replication_factor == -1 {
-                if let Some(s) = entry.value {
-                    replication_factor = s.parse::<i32>().with_context(|| {
-                        format!(
-                            "default replication factor {} cannot be parsed into an integer",
-                            s
-                        )
-                    })?;
+                if replication_factor == -1 {
+                    replication_factor = configs.replication_factor;
                 }
             }
-        }
-
-        if partition_count == -1 {
-            Err(anyhow!("default was requested for partition_count, but num.partitions was not found in broker config"))?;
-        }
-
-        if replication_factor == -1 {
-            Err(anyhow!("default was requested for replication_factor, but default.replication.factor was not found in broker config"))?;
-        }
+            Err(e) => {
+                // Since recent versions of Kafka can handle an explicit -1 config, this
+                // request will probably still succeed. Logging anyways for visibility.
+                warn!("Failed to discover default values for topic configs: {e}");
+            }
+        };
     }
 
     let mut kafka_topic = NewTopic::new(
