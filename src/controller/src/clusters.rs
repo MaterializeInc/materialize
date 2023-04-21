@@ -40,6 +40,7 @@ use mz_repr::GlobalId;
 use crate::Controller;
 
 pub use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
+use mz_repr::adt::numeric::Numeric;
 
 /// Identifies a cluster.
 pub type ClusterId = ComputeInstanceId;
@@ -79,6 +80,8 @@ pub struct ReplicaAllocation {
     pub scale: u16,
     /// The number of worker threads in the replica.
     pub workers: usize,
+    /// The number of credits per hour that the replica consumes.
+    pub credits_per_hour: Numeric,
 }
 
 /// Configures the location of a cluster replica.

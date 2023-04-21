@@ -380,7 +380,7 @@ contains: unknown catalog item 'foo'
 contains: unknown catalog item 'foo'
 
 # Error in mzcompose: AWS PrivateLink connections are not supported
-# Error in cloudtest/K8s: AWS PrivateLink Connection resource limit of 0 cannot be exceeded
+# Error in cloudtest/K8s: creating AWS PrivateLink Connection would violate max_aws_privatelink_connections limit
 ! CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')

@@ -24,12 +24,13 @@ _variable&lowbar;name_ | The name of the session or system variable to display.
 
 Materialize reserves system variables for region-wide configuration. Although it's possible to `SHOW` system variables, you must [contact us](https://materialize.com/contact/) to change their value (e.g. increasing the maximum number of AWS PrivateLink connections in your region).
 
-Name                                        | Default value                                                         | Description   |
---------------------------------------------|-----------------------------------------------------------------------|---------------|
+Name                                        | Default value                                                         | Description                                                                                                                              |
+--------------------------------------------|-----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
 allowed_cluster_replica_sizes               | `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`  | The allowed sizes when creating a new cluster replica.
 enable_rbac_checks                          | `false`                                                               | Boolean flag indicating whether to apply RBAC checks before executing statements. Setting this variable requires _superuser_ privileges.
 max_aws_privatelink_connections             | `0`                                                                   | The maximum number of AWS PrivateLink connections in the region, across all schemas.
 max_clusters                                | `10`                                                                  | The maximum number of clusters in the region.
+max_credit_consumption_rate                 | `1024`                                                                | The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use.
 max_databases                               | `1000`                                                                | The maximum number of databases in the region.
 max_objects_per_schema                      | `1000`                                                                | The maximum number of objects in a schema.
 max_replicas_per_cluster                    | `5`                                                                   | The maximum number of replicas of a single cluster.

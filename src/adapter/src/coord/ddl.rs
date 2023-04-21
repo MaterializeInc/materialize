@@ -21,13 +21,19 @@ use tracing::{event, warn};
 
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLocation};
 use mz_ore::error::ErrorExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
-use mz_sql::session::vars::{self, SystemVars, Var};
+use mz_sql::session::vars::{
+    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
+    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_MATERIALIZED_VIEWS, MAX_OBJECTS_PER_SCHEMA,
+    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
+    MAX_SOURCES, MAX_TABLES,
+};
 use mz_storage_client::controller::{
     CreateExportToken, ExportDescription, ReadPolicy, StorageError,
 };
@@ -821,6 +827,7 @@ impl Coordinator {
         let mut new_materialized_views = 0;
         let mut new_clusters = 0;
         let mut new_replicas_per_cluster = BTreeMap::new();
+        let mut new_credit_consumption_rate = Numeric::zero();
         let mut new_databases = 0;
         let mut new_schemas_per_database = BTreeMap::new();
         let mut new_objects_per_schema = BTreeMap::new();
@@ -851,8 +858,19 @@ impl Coordinator {
                         new_clusters += 1;
                     }
                 }
-                Op::CreateClusterReplica { cluster_id, .. } => {
+                Op::CreateClusterReplica {
+                    cluster_id, config, ..
+                } => {
                     *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
+                    if let ReplicaLocation::Managed(location) = &config.location {
+                        let replica_allocation = self
+                            .catalog()
+                            .cluster_replica_sizes()
+                            .0
+                            .get(&location.size)
+                            .expect("location size is validated against the cluster replica sizes");
+                        new_credit_consumption_rate += replica_allocation.credits_per_hour
+                    }
                 }
                 Op::CreateItem { name, item, .. } => {
                     *new_objects_per_schema
@@ -899,8 +917,19 @@ impl Coordinator {
                         ObjectId::Cluster(_) => {
                             new_clusters -= 1;
                         }
-                        ObjectId::ClusterReplica((cluster_id, _)) => {
+                        ObjectId::ClusterReplica((cluster_id, replica_id)) => {
                             *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                            let cluster =
+                                self.catalog().get_cluster_replica(*cluster_id, *replica_id);
+                            if let ReplicaLocation::Managed(location) = &cluster.config.location {
+                                let replica_allocation = self
+                                    .catalog()
+                                    .cluster_replica_sizes()
+                                    .0
+                                    .get(&location.size)
+                                    .expect("location size is validated against the cluster replica sizes");
+                                new_credit_consumption_rate -= replica_allocation.credits_per_hour
+                            }
                         }
                         ObjectId::Database(_) => {
                             new_databases -= 1;
@@ -990,12 +1019,14 @@ impl Coordinator {
             new_aws_privatelink_connections,
             SystemVars::max_aws_privatelink_connections,
             "AWS PrivateLink Connection",
+            MAX_AWS_PRIVATELINK_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
             self.catalog().user_tables().count(),
             new_tables,
             SystemVars::max_tables,
-            "Table",
+            "table",
+            MAX_TABLES.name(),
         )?;
         // Only sources that ingest data from an external system count
         // towards resource limits.
@@ -1009,19 +1040,22 @@ impl Coordinator {
             current_sources,
             new_sources,
             SystemVars::max_sources,
-            "Source",
+            "source",
+            MAX_SOURCES.name(),
         )?;
         self.validate_resource_limit(
             self.catalog().user_sinks().count(),
             new_sinks,
             SystemVars::max_sinks,
-            "Sink",
+            "sink",
+            MAX_SINKS.name(),
         )?;
         self.validate_resource_limit(
             self.catalog().user_materialized_views().count(),
             new_materialized_views,
             SystemVars::max_materialized_views,
-            "Materialized view",
+            "materialized view",
+            MAX_MATERIALIZED_VIEWS.name(),
         )?;
         self.validate_resource_limit(
             // Linked compute clusters don't count against the limit, since
@@ -1035,7 +1069,8 @@ impl Coordinator {
                 .count(),
             new_clusters,
             SystemVars::max_clusters,
-            "Cluster",
+            "cluster",
+            MAX_CLUSTERS.name(),
         )?;
         for (cluster_id, new_replicas) in new_replicas_per_cluster {
             // It's possible that the cluster hasn't been created yet.
@@ -1048,21 +1083,47 @@ impl Coordinator {
                 current_amount,
                 new_replicas,
                 SystemVars::max_replicas_per_cluster,
-                "Replicas per cluster",
+                "cluster replica",
+                MAX_REPLICAS_PER_CLUSTER.name(),
             )?;
         }
+        let current_credit_consumption_rate = self
+            .catalog()
+            .user_cluster_replicas()
+            .filter_map(|replica| match &replica.config.location {
+                ReplicaLocation::Managed(location) => Some(&location.size),
+                ReplicaLocation::Unmanaged(_) => None,
+            })
+            .map(|size| {
+                self.catalog()
+                    .cluster_replica_sizes()
+                    .0
+                    .get(size)
+                    .expect("location size is validated against the cluster replica sizes")
+                    .credits_per_hour
+            })
+            .sum();
+        self.validate_resource_limit_numeric(
+            current_credit_consumption_rate,
+            new_credit_consumption_rate,
+            SystemVars::max_credit_consumption_rate,
+            "cluster replica",
+            MAX_CREDIT_CONSUMPTION_RATE.name(),
+        )?;
         self.validate_resource_limit(
             self.catalog().databases().count(),
             new_databases,
             SystemVars::max_databases,
-            "Database",
+            "database",
+            MAX_DATABASES.name(),
         )?;
         for (database_id, new_schemas) in new_schemas_per_database {
             self.validate_resource_limit(
                 self.catalog().get_database(database_id).schemas_by_id.len(),
                 new_schemas,
                 SystemVars::max_schemas_per_database,
-                "Schemas per database",
+                "schema",
+                MAX_SCHEMAS_PER_DATABASE.name(),
             )?;
         }
         for ((database_spec, schema_spec), new_objects) in new_objects_per_schema {
@@ -1073,20 +1134,23 @@ impl Coordinator {
                     .len(),
                 new_objects,
                 SystemVars::max_objects_per_schema,
-                "Objects per schema",
+                "object",
+                MAX_OBJECTS_PER_SCHEMA.name(),
             )?;
         }
         self.validate_resource_limit(
             self.catalog().user_secrets().count(),
             new_secrets,
             SystemVars::max_secrets,
-            "Secret",
+            "secret",
+            MAX_SECRETS.name(),
         )?;
         self.validate_resource_limit(
             self.catalog().user_roles().count(),
             new_roles,
             SystemVars::max_roles,
-            "Role",
+            "role",
+            MAX_ROLES.name(),
         )?;
         Ok(())
     }
@@ -1095,34 +1159,79 @@ impl Coordinator {
     fn validate_resource_limit<F>(
         &self,
         current_amount: usize,
-        new_instances: i32,
+        new_amount: i32,
         resource_limit: F,
         resource_type: &str,
+        limit_name: &str,
     ) -> Result<(), AdapterError>
     where
         F: Fn(&SystemVars) -> u32,
     {
-        let limit = resource_limit(self.catalog().system_config());
-        let exceeds_limit = match (u32::try_from(current_amount), u32::try_from(new_instances)) {
-            // 0 new instances are always ok.
-            (_, Ok(new_instances)) if new_instances == 0 => false,
-            // negative instances are always ok.
-            (_, Err(_)) => false,
-            // more than u32 for the current amount is too much.
-            (Err(_), _) => true,
-            (Ok(current_amount), Ok(new_instances)) => {
-                match current_amount.checked_add(new_instances) {
-                    Some(new_amount) => new_amount > limit,
-                    None => true,
-                }
-            }
+        if new_amount <= 0 {
+            return Ok(());
+        }
+
+        let limit: i64 = resource_limit(self.catalog().system_config()).into();
+        let new_instances: i64 = new_amount.into();
+        let current_amount: Option<i64> = current_amount.try_into().ok();
+        let desired =
+            current_amount.and_then(|current_amount| current_amount.checked_add(new_instances));
+
+        let exceeds_limit = if let Some(desired) = desired {
+            desired > limit
+        } else {
+            true
         };
+
+        let desired = desired
+            .map(|desired| desired.to_string())
+            .unwrap_or_else(|| format!("more than {}", i64::MAX));
+        let current = current_amount
+            .map(|current| current.to_string())
+            .unwrap_or_else(|| format!("more than {}", i64::MAX));
         if exceeds_limit {
             Err(AdapterError::ResourceExhaustion {
                 resource_type: resource_type.to_string(),
-                limit,
-                current_amount,
-                new_instances,
+                limit_name: limit_name.to_string(),
+                desired,
+                limit: limit.to_string(),
+                current,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Validate a specific type of float resource limit and return an error if that limit is exceeded.
+    ///
+    /// This is very similar to [`Self::validate_resource_limit`] but for numerics.
+    fn validate_resource_limit_numeric<F>(
+        &self,
+        current_amount: Numeric,
+        new_amount: Numeric,
+        resource_limit: F,
+        resource_type: &str,
+        limit_name: &str,
+    ) -> Result<(), AdapterError>
+    where
+        F: Fn(&SystemVars) -> Numeric,
+    {
+        if new_amount <= Numeric::zero() {
+            return Ok(());
+        }
+
+        let limit = resource_limit(self.catalog().system_config());
+        // Floats will overflow to infinity instead of panicking, which has the correct comparison
+        // semantics.
+        // NaN should be impossible here since both values are positive.
+        let desired = current_amount + new_amount;
+        if desired > limit {
+            Err(AdapterError::ResourceExhaustion {
+                resource_type: resource_type.to_string(),
+                limit_name: limit_name.to_string(),
+                desired: desired.to_string(),
+                limit: limit.to_string(),
+                current: current_amount.to_string(),
             })
         } else {
             Ok(())
