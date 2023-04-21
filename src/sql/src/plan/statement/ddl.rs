@@ -93,7 +93,7 @@ use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, DatabaseId, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, ResolvedObjectName, ResolvedRoleName, SchemaId, SchemaSpecifier,
+    ResolvedItemName, ResolvedObjectName, ResolvedRoleName, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -3430,7 +3430,7 @@ fn plan_drop_schema(
     if_exists: bool,
     name: UnresolvedSchemaName,
     cascade: bool,
-) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaId)>, PlanError> {
+) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
     Ok(match resolve_schema(scx, name.clone(), if_exists)? {
         Some((database_spec, schema_spec)) => {
             if let ResolvedDatabaseSpecifier::Ambient = database_spec {
@@ -3438,12 +3438,9 @@ fn plan_drop_schema(
                     "cannot drop schema {name} because it is required by the database system",
                 );
             }
-            let schema_id = match schema_spec {
-                SchemaSpecifier::Temporary => {
-                    sql_bail!("cannot drop schema {name} because it is a temporary schema",)
-                }
-                SchemaSpecifier::Id(id) => id,
-            };
+            if let SchemaSpecifier::Temporary = schema_spec {
+                sql_bail!("cannot drop schema {name} because it is a temporary schema",)
+            }
             let schema = scx.get_schema(&database_spec, &schema_spec);
             if !cascade && schema.has_items() {
                 let full_schema_name = FullSchemaName {
@@ -3460,7 +3457,7 @@ fn plan_drop_schema(
                     full_schema_name
                 );
             }
-            Some((database_spec, schema_id))
+            Some((database_spec, schema_spec))
         }
         None => None,
     })
@@ -3852,14 +3849,11 @@ fn plan_alter_schema_owner(
                     "cannot alter schema {name} because it is required by the database system",
                 );
             }
-            let schema_id = match schema_spec {
-                SchemaSpecifier::Temporary => {
-                    sql_bail!("cannot alter schema {name} because it is a temporary schema",)
-                }
-                SchemaSpecifier::Id(id) => id,
-            };
+            if let SchemaSpecifier::Temporary = schema_spec {
+                sql_bail!("cannot alter schema {name} because it is a temporary schema",)
+            }
             Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::Schema((database_spec, schema_id)),
+                id: ObjectId::Schema((database_spec, schema_spec)),
                 object_type: ObjectType::Schema,
                 new_owner,
             }))

@@ -300,6 +300,13 @@ pub enum SchemaSpecifier {
 
 impl SchemaSpecifier {
     const TEMPORARY_SCHEMA_ID: u64 = 0;
+
+    pub fn is_system(&self) -> bool {
+        match self {
+            SchemaSpecifier::Temporary => false,
+            SchemaSpecifier::Id(id) => id.is_system(),
+        }
+    }
 }
 
 impl fmt::Display for SchemaSpecifier {
@@ -432,16 +439,6 @@ pub enum ResolvedSchemaName {
 }
 
 impl ResolvedSchemaName {
-    /// Panics if this is `Self::Error`.
-    pub fn database_spec(&self) -> &ResolvedDatabaseSpecifier {
-        match self {
-            ResolvedSchemaName::Schema { database_spec, .. } => database_spec,
-            ResolvedSchemaName::Error => {
-                unreachable!("should have been handled by name resolution")
-            }
-        }
-    }
-
     /// Panics if this is `Self::Error`.
     pub fn schema_spec(&self) -> &SchemaSpecifier {
         match self {
@@ -782,7 +779,7 @@ pub enum ObjectId {
     Cluster(ClusterId),
     ClusterReplica((ClusterId, ReplicaId)),
     Database(DatabaseId),
-    Schema((ResolvedDatabaseSpecifier, SchemaId)),
+    Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
     Item(GlobalId),
 }
@@ -806,7 +803,7 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_database_id called on {self:?}"),
         }
     }
-    pub fn unwrap_schema_id(self) -> (ResolvedDatabaseSpecifier, SchemaId) {
+    pub fn unwrap_schema_id(self) -> (ResolvedDatabaseSpecifier, SchemaSpecifier) {
         match self {
             ObjectId::Schema(id) => id,
             _ => panic!("ObjectId::unwrap_schema_id called on {self:?}"),
@@ -836,10 +833,14 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
                 Ok(ObjectId::ClusterReplica((name.cluster_id, name.replica_id)))
             }
             ResolvedObjectName::Database(name) => Ok(ObjectId::Database(*name.database_id())),
-            ResolvedObjectName::Schema(name) => Ok(ObjectId::Schema((
-                *name.database_spec(),
-                name.schema_spec().into(),
-            ))),
+            ResolvedObjectName::Schema(name) => match name {
+                ResolvedSchemaName::Schema {
+                    database_spec,
+                    schema_spec,
+                    ..
+                } => Ok(ObjectId::Schema((database_spec, schema_spec))),
+                ResolvedSchemaName::Error => Err(anyhow!("error in name resolution")),
+            },
             ResolvedObjectName::Role(name) => Ok(ObjectId::Role(name.id)),
             ResolvedObjectName::Item(name) => match name {
                 ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id)),
