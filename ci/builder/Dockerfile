@@ -159,6 +159,7 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.12.2" --locked cargo-deny \
     && cargo install --root /usr/local --version ="0.9.18" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.44" --locked cargo-nextest \
+    && cargo install --root /usr/local --version "=0.5.18" --locked cargo-llvm-cov \
     && `: Until https://github.com/est31/cargo-udeps/pull/147 is released in cargo-udeps` \
     && cargo install --root /usr/local --git https://github.com/est31/cargo-udeps --rev=b84d478ef3efd7264dba8c15c31a50c6399dc5bb --locked cargo-udeps --features=vendored-openssl \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache \

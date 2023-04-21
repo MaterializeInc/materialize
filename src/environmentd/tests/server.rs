@@ -610,6 +610,7 @@ fn test_storage_usage_updates_between_restarts() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18896
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(10);

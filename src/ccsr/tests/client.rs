@@ -92,6 +92,7 @@ pub static SCHEMA_REGISTRY_URL: Lazy<reqwest::Url> =
     });
 
 #[tokio::test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18900
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 async fn test_client() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;

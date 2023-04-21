@@ -150,7 +150,6 @@ steps:
           composition: cargo-test
     agents:
       queue: builder-linux-x86_64
-    coverage: skip
 
   - id: miri-test
     label: Miri test

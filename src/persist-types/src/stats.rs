@@ -917,6 +917,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18901
     #[cfg_attr(miri, ignore)] // too slow
     fn test_truncate_string_proptest() {
         fn testcase(x: &str) {

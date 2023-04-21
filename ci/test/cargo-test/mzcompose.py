@@ -7,9 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import multiprocessing
 import os
 
-from materialize import spawn
+from materialize import ROOT, spawn, ui
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Cockroach,
@@ -47,25 +48,76 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
     )
     cockroach_url = f"postgres://root@localhost:{c.default_port('cockroach')}"
-    spawn.runv(
-        [
+
+    env = dict(
+        os.environ,
+        ZOOKEEPER_ADDR=f"localhost:{c.default_port('zookeeper')}",
+        KAFKA_ADDRS="localhost:30123",
+        SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
+        POSTGRES_URL=postgres_url,
+        COCKROACH_URL=cockroach_url,
+        MZ_SOFT_ASSERTIONS="1",
+        MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete",
+        MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
+    )
+
+    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+
+    if coverage:
+        # TODO(def-): For coverage inside of clusterd called from unit tests need
+        # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
+        # aggregate the data.
+        (ROOT / "coverage").mkdir(exist_ok=True)
+        env["CARGO_LLVM_COV_SETUP"] = "no"
+        # There is no pure build command in cargo-llvm-cov, so run with
+        # --version as a workaround.
+        spawn.runv(
+            [
+                "cargo",
+                "llvm-cov",
+                "run",
+                "--bin",
+                "clusterd",
+                "--no-report",
+                "--",
+                "--version",
+            ],
+            env=env,
+        )
+
+        cmd = [
             "cargo",
-            "build",
-            "--bin",
-            "clusterd",
+            "llvm-cov",
+            "nextest",
+            "--no-clean",
+            "--workspace",
+            "--lcov",
+            "--output-path",
+            "coverage/cargotest.lcov",
+            # This can cause intermittent coverage problems, but
+            # single-threaded is too slow:
+            # https://github.com/rust-lang/rust/issues/91092
+            f"--test-threads={multiprocessing.cpu_count()}",
+            "--profile=coverage",
+            "--no-fail-fast",
         ]
-    )
-    spawn.runv(
-        ["cargo", "nextest", "run", "--profile=ci", *args.args],
-        env=dict(
-            os.environ,
-            ZOOKEEPER_ADDR=f"localhost:{c.default_port('zookeeper')}",
-            KAFKA_ADDRS="localhost:30123",
-            SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
-            POSTGRES_URL=postgres_url,
-            COCKROACH_URL=cockroach_url,
-            MZ_SOFT_ASSERTIONS="1",
-            MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete",
-            MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
-        ),
-    )
+        try:
+            spawn.runv(cmd + args.args, env=env)
+        finally:
+            spawn.runv(["xz", "-0", "coverage/cargotest.lcov"])
+            spawn.runv(
+                ["buildkite-agent", "artifact", "upload", "coverage/cargotest.lcov.xz"]
+            )
+    else:
+        spawn.runv(
+            [
+                "cargo",
+                "build",
+                "--bin",
+                "clusterd",
+            ],
+            env=env,
+        )
+
+        cmd = ["cargo", "nextest", "run", "--profile=ci"]
+        spawn.runv(cmd + args.args, env=env)
