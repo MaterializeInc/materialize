@@ -872,14 +872,30 @@ INSERT INTO array_t2 VALUES (
 );
 
 query T
+SELECT pg_typeof(a::string[]::int[]::text[]::float8[]) FROM array_t2;
+----
+double precision[]
+
+query T
+SELECT pg_typeof(a::string[]) FROM array_t2;
+----
+text[]
+
+query T
+SELECT pg_typeof(a::string[]::int[]) FROM array_t2;
+----
+integer[]
+
+query error Evaluation error: invalid input syntax for type integer: invalid digit found in string: "t1"
+SELECT b::int[] FROM array_t2;
+
+query error CAST does not support casting from integer\[\] to date\[\]
+SELECT a::date[] FROM array_t2;
+
+query T
 SELECT a::string[]::int[]::text[]::float8[] FROM array_t2;
 ----
 {1,2,3,4,5}
-
-query T
-SELECT b::text[] FROM array_t2;
-----
-{{t1,t2,t3}}
 
 query T
 SELECT b::text[] FROM array_t2;
