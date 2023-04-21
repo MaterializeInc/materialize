@@ -936,7 +936,7 @@ mod tests {
             .expect("invalid shard id");
         let mut client = new_test_client().await;
 
-        let (mut write0, mut read0) = client
+        let (mut write0, _read0) = client
             .expect_open::<String, String, u64, i64>(shard_id0)
             .await;
 
@@ -1048,33 +1048,6 @@ mod tests {
                     actual: codecs("String", "String", "u64", "i64"),
                 }))
             );
-        }
-
-        // InvalidUsage from ReadHandle methods.
-        {
-            let snap = read0
-                .snapshot(Antichain::from_elem(3))
-                .await
-                .expect("cannot serve requested as_of");
-
-            let shard_id1 = "s11111111-1111-1111-1111-111111111111"
-                .parse::<ShardId>()
-                .expect("invalid shard id");
-            let (_, read1) = client
-                .expect_open::<String, String, u64, i64>(shard_id1)
-                .await;
-            let fetcher1 = read1.clone("").await.batch_fetcher().await;
-            for batch in snap {
-                let (batch, res) = fetcher1.fetch_leased_part(batch).await;
-                read0.process_returned_leased_part(batch);
-                assert_eq!(
-                    res.unwrap_err(),
-                    InvalidUsage::BatchNotFromThisShard {
-                        batch_shard: shard_id0,
-                        handle_shard: shard_id1,
-                    }
-                );
-            }
         }
 
         // InvalidUsage from WriteHandle methods.

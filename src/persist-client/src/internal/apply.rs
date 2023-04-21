@@ -203,7 +203,7 @@ where
     pub fn snapshot(
         &self,
         as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<HollowBatch<T>>, Upper<T>>, Since<T>> {
+    ) -> Result<Result<(Vec<HollowBatch<T>>, SeqNo), Upper<T>>, Since<T>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state.snapshot(as_of)
@@ -217,7 +217,7 @@ where
             })
     }
 
-    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<(HollowBatch<T>, SeqNo)> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state.next_listen_batch(frontier)
