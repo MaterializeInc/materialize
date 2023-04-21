@@ -126,7 +126,7 @@ def workflow_default(c: Composition) -> None:
 
     c.run("testdrive", "smoketest.td")
 
-    # Deny the DescribeConfigs cluster priviilege to user no_describe_configs
+    # Deny the DescribeConfigs cluster privilege to user no_describe_configs
     c.exec(
         "kafka",
         "kafka-acls",
