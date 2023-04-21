@@ -448,7 +448,7 @@ impl AstDisplay for Envelope {
                 f.write_str("UPSERT");
 
                 if !order_by.is_empty() {
-                    f.write_str("(");
+                    f.write_str(" (");
                     f.write_str(" ORDER BY ");
 
                     f.write_str("(");

@@ -23,7 +23,7 @@ $ kafka-create-topic topic=textbytes
   WITH (SIZE = '1')
 
 > SHOW CREATE SOURCE texttext
-materialize.public.texttext "CREATE SOURCE \"materialize\".\"public\".\"texttext\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-textbytes-${testdrive.seed}') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE OFFSET AS \"o\", TIMESTAMP AS \"ts\" ENVELOPE UPSERT( ORDER BY (\"ts\", \"o\")) EXPOSE PROGRESS AS \"materialize\".\"public\".\"texttext_progress\" WITH (SIZE = '1')"
+materialize.public.texttext "CREATE SOURCE \"materialize\".\"public\".\"texttext\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-textbytes-${testdrive.seed}') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE OFFSET AS \"o\", TIMESTAMP AS \"ts\" ENVELOPE UPSERT ( ORDER BY (\"ts\", \"o\")) EXPOSE PROGRESS AS \"materialize\".\"public\".\"texttext_progress\" WITH (SIZE = '1')"
 
 # Ingesting values, later offset will override earlier values for the same timestamp
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=185
