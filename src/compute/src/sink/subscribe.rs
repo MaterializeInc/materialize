@@ -223,6 +223,7 @@ impl SubscribeProtocol {
             return;
         }
 
+        // The compute protocol requires us to only send out consolidated batches.
         consolidate_updates(rows);
         consolidate_updates(errors);
 

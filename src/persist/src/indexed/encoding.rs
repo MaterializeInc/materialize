@@ -14,11 +14,11 @@
 // structs.
 
 use std::fmt::{self, Debug};
-use std::io::Cursor;
 use std::marker::PhantomData;
 
 use bytes::BufMut;
 use differential_dataflow::trace::Description;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec64;
 use prost::Message;
@@ -223,8 +223,8 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     }
 
     /// Decodes a BlobTraceBatchPart from the Parquet format.
-    pub fn decode<'a>(buf: &'a [u8]) -> Result<Self, Error> {
-        decode_trace_parquet(&mut Cursor::new(&buf))
+    pub fn decode(buf: &SegmentedBytes) -> Result<Self, Error> {
+        decode_trace_parquet(&mut buf.clone().reader())
     }
 }
 

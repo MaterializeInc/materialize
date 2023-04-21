@@ -209,6 +209,8 @@ pub fn user_privilege_hack(
         | Plan::RotateKeys(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
+        | Plan::GrantPrivilege(_)
+        | Plan::RevokePrivilege(_)
         | Plan::CopyRows(_) => {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::Privilege {

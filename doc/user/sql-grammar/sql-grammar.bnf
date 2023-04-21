@@ -96,7 +96,7 @@ create_sink_kafka ::=
     ('WITH' with_options)?
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
   ('IN CLUSTER' cluster_name)?
   'FROM' 'KAFKA' 'CONNECTION' connection_name
   '(' 'TOPIC' topic ( ( ',' connection_option )? ) ')'
@@ -229,7 +229,6 @@ sink_format_spec ::=
   'AVRO USING' csr_connection |
   'JSON'
 compression ::= 'COMPRESSION' ('NONE' | 'GZIP')
-key_constraint ::= ('PRIMARY KEY' '(' (col_name) ( ( ',' col_name ) )* ')' 'NOT ENFORCED')
 func_at_time_zone ::=
     'SELECT' ( 'TIMESTAMP' | 'TIMESTAMPTZ' ) ('timestamp' | 'timestamptz') 'AT TIME ZONE' 'zone::type'
 func_cast ::=

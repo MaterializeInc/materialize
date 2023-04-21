@@ -747,7 +747,7 @@ impl StateVersions {
             self.metrics
                 .codecs
                 .state
-                .decode(|| UntypedState::decode(&self.cfg.build_version, &buf))
+                .decode(|| UntypedState::decode(&self.cfg.build_version, buf))
         })
     }
 

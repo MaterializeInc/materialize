@@ -16,6 +16,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use fail::fail_point;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -75,7 +76,7 @@ impl FileBlob {
 
 #[async_trait]
 impl Blob for FileBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
         let mut file = match File::open(file_path).await {
             Ok(file) => file,
@@ -84,7 +85,7 @@ impl Blob for FileBlob {
         };
         let mut buf = Vec::new();
         file.read_to_end(&mut buf).await?;
-        Ok(Some(buf))
+        Ok(Some(SegmentedBytes::from(buf)))
     }
 
     async fn list_keys_and_metadata(

@@ -27,6 +27,7 @@ use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
+use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::strconv;
@@ -37,8 +38,9 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    GrantPrivilegeStatement, GrantRoleStatement, RevokePrivilegeStatement, RevokeRoleStatement,
-    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    GrantPrivilegeStatement, GrantRoleStatement, Privilege, RevokePrivilegeStatement,
+    RevokeRoleStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -91,7 +93,7 @@ use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, DatabaseId, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, SchemaId, SchemaSpecifier,
+    ResolvedItemName, ResolvedObjectName, ResolvedRoleName, SchemaId, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -109,9 +111,10 @@ use crate::plan::{
     CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, FullItemName, GrantRolePlan, HirScalarExpr, Index, Ingestion,
-    MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokeRolePlan, RotateKeysPlan,
-    Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, View,
+    DropObjectsPlan, FullItemName, GrantPrivilegePlan, GrantRolePlan, HirScalarExpr, Index,
+    Ingestion, MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokePrivilegePlan,
+    RevokeRolePlan, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
+    View,
 };
 use crate::session::user::SYSTEM_USER;
 
@@ -1322,19 +1325,22 @@ pub(crate) fn load_generator_ast_to_generator(
     Ok((load_generator, available_subsources))
 }
 
-fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(usize, usize), PlanError> {
-    let (before_idx, before_ty) = value_desc
-        .get_by_name(&"before".into())
-        .ok_or_else(|| sql_err!("'before' column missing from debezium input"))?;
+fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize), PlanError> {
+    let before = value_desc.get_by_name(&"before".into());
     let (after_idx, after_ty) = value_desc
         .get_by_name(&"after".into())
         .ok_or_else(|| sql_err!("'after' column missing from debezium input"))?;
-    if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
-        sql_bail!("'before' column must be of type record");
-    }
-    if before_ty != after_ty {
-        sql_bail!("'before' type differs from 'after' column");
-    }
+    let before_idx = if let Some((before_idx, before_ty)) = before {
+        if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
+            sql_bail!("'before' column must be of type record");
+        }
+        if before_ty != after_ty {
+            sql_bail!("'before' type differs from 'after' column");
+        }
+        Some(before_idx)
+    } else {
+        None
+    };
     Ok((before_idx, after_idx))
 }
 
@@ -1729,17 +1735,22 @@ pub fn plan_create_view(
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
+            Some(id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let drop_ids = replace
+        .map(|id| {
             scx.catalog
                 .item_dependents(id)
                 .into_iter()
                 .map(|id| id.unwrap_item_id())
                 .collect()
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
+        })
+        .unwrap_or_default();
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -1757,6 +1768,7 @@ pub fn plan_create_view(
         name,
         view,
         replace,
+        drop_ids,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
@@ -1817,7 +1829,7 @@ pub fn plan_create_materialized_view(
         sql_bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
-    let mut replace = Vec::new();
+    let mut replace = None;
     let mut if_not_exists = false;
     match stmt.if_exists {
         IfExistsBehavior::Replace => {
@@ -1838,17 +1850,21 @@ pub fn plan_create_materialized_view(
                         scx.catalog.resolve_full_name(item.name())
                     );
                 }
-                replace.extend(
-                    scx.catalog
-                        .item_dependents(id)
-                        .into_iter()
-                        .map(|id| id.unwrap_item_id()),
-                );
+                replace = Some(id);
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
         IfExistsBehavior::Error => (),
     }
+    let drop_ids = replace
+        .map(|id| {
+            scx.catalog
+                .item_dependents(id)
+                .into_iter()
+                .map(|id| id.unwrap_item_id())
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -1871,6 +1887,7 @@ pub fn plan_create_materialized_view(
             cluster_id,
         },
         replace,
+        drop_ids,
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
@@ -3373,7 +3390,7 @@ pub fn plan_drop_objects(
 ) -> Result<Plan, PlanError> {
     assert_ne!(object_type, ObjectType::Func, "rejected in parser");
 
-    let mut ids = Vec::new();
+    let mut referenced_ids = Vec::new();
     for name in names {
         let id = match name {
             UnresolvedObjectName::Cluster(name) => {
@@ -3396,12 +3413,16 @@ pub fn plan_drop_objects(
             }
         };
         if let Some(id) = id {
-            ids.push(id);
+            referenced_ids.push(id);
         }
     }
-    let ids = scx.catalog.object_dependents(ids);
+    let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
-    Ok(Plan::DropObjects(DropObjectsPlan { ids, object_type }))
+    Ok(Plan::DropObjects(DropObjectsPlan {
+        referenced_ids,
+        drop_ids,
+        object_type,
+    }))
 }
 
 fn plan_drop_schema(
@@ -4315,10 +4336,22 @@ pub fn describe_grant_privilege(
 }
 
 pub fn plan_grant_privilege(
-    _: &StatementContext,
-    _: GrantPrivilegeStatement<Aug>,
+    scx: &StatementContext,
+    GrantPrivilegeStatement {
+        privileges,
+        object_type,
+        name,
+        role,
+    }: GrantPrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    bail_unsupported!("GRANT PRIVILEGE");
+    let (acl_mode, object_id, grantee, grantor) =
+        plan_update_privilege(scx, privileges, object_type, name, role)?;
+    Ok(Plan::GrantPrivilege(GrantPrivilegePlan {
+        acl_mode,
+        object_id,
+        grantee,
+        grantor,
+    }))
 }
 
 pub fn describe_revoke_privilege(
@@ -4329,10 +4362,110 @@ pub fn describe_revoke_privilege(
 }
 
 pub fn plan_revoke_privilege(
-    _: &StatementContext,
-    _: RevokePrivilegeStatement<Aug>,
+    scx: &StatementContext,
+    RevokePrivilegeStatement {
+        privileges,
+        object_type,
+        name,
+        role,
+    }: RevokePrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    bail_unsupported!("REVOKE PRIVILEGE");
+    let (acl_mode, object_id, revokee, grantor) =
+        plan_update_privilege(scx, privileges, object_type, name, role)?;
+    Ok(Plan::RevokePrivilege(RevokePrivilegePlan {
+        acl_mode,
+        object_id,
+        revokee,
+        grantor,
+    }))
+}
+
+fn plan_update_privilege(
+    scx: &StatementContext,
+    privileges: Vec<Privilege>,
+    object_type: ObjectType,
+    name: ResolvedObjectName,
+    role: ResolvedRoleName,
+) -> Result<(AclMode, ObjectId, RoleId, RoleId), PlanError> {
+    let mut acl_mode = AclMode::empty();
+    // PostgreSQL doesn't care about duplicate privileges, so we don't either.
+    for privilege in privileges {
+        acl_mode |= privilege_to_acl_mode(privilege);
+    }
+    let object_id = name
+        .try_into()
+        .expect("name resolution should handle invalid objects");
+    if let ObjectId::Item(id) = &object_id {
+        let item = scx.get_item(id);
+        let item_type: ObjectType = item.item_type().into();
+        if (item_type == ObjectType::View
+            || item_type == ObjectType::MaterializedView
+            || item_type == ObjectType::Source)
+            && object_type == ObjectType::Table
+        {
+            // This is an expected mis-match to match PostgreSQL semantics.
+        } else if item_type != object_type {
+            let object_name = scx.catalog.resolve_full_name(item.name()).to_string();
+            return Err(PlanError::InvalidObjectType {
+                expected_type: object_type,
+                actual_type: item_type,
+                object_name,
+            });
+        }
+    }
+
+    let actual_object_type = scx.get_object_type(&object_id);
+    let all_object_privileges = scx.catalog.all_object_privileges(actual_object_type);
+    let invalid_acl_mode = acl_mode.difference(all_object_privileges);
+    if !invalid_acl_mode.is_empty() {
+        let invalid_privileges = acl_mode_to_privileges(invalid_acl_mode);
+        return Err(PlanError::InvalidPrivilegeTypes {
+            privilege_types: invalid_privileges,
+            object_type: actual_object_type,
+        });
+    }
+
+    // In PostgreSQL, the grantor must always be either the object owner or some role that has been
+    // been explicitly granted grant options. In Materialize, we haven't implemented grant options
+    // so the grantor is always the object owner.
+    //
+    // For more details see:
+    // https://github.com/postgres/postgres/blob/78d5952dd0e66afc4447eec07f770991fa406cce/src/backend/utils/adt/acl.c#L5154-L5246
+    let grantor = scx
+        .catalog
+        .get_owner_id(&object_id)
+        .expect("cannot revoke privileges on objects without owners");
+
+    Ok((acl_mode, object_id, role.id, grantor))
+}
+
+fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
+    match privilege {
+        Privilege::SELECT => AclMode::SELECT,
+        Privilege::INSERT => AclMode::INSERT,
+        Privilege::UPDATE => AclMode::UPDATE,
+        Privilege::DELETE => AclMode::DELETE,
+        Privilege::USAGE => AclMode::USAGE,
+        Privilege::CREATE => AclMode::CREATE,
+    }
+}
+
+fn acl_mode_to_privileges(acl_mode: AclMode) -> Vec<Privilege> {
+    let mut privileges = Vec::new();
+    const ALL_PRIVILEGES: [Privilege; 6] = [
+        Privilege::SELECT,
+        Privilege::INSERT,
+        Privilege::UPDATE,
+        Privilege::DELETE,
+        Privilege::USAGE,
+        Privilege::CREATE,
+    ];
+    for privilege in ALL_PRIVILEGES {
+        if acl_mode.contains(privilege_to_acl_mode(privilege.clone())) {
+            privileges.push(privilege);
+        }
+    }
+    privileges
 }
 
 fn resolve_cluster<'a>(

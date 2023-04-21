@@ -63,12 +63,14 @@ yansi = { version = "0.5.1", optional = true }
 [dev-dependencies]
 anyhow = { version = "1.0.66" }
 scopeguard = "1.1.0"
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.2"
 
 [features]
 default = ["workspace-hack"]
 async = ["async-trait", "futures", "openssl", "tokio-openssl", "tokio"]
+bytes_ = ["bytes", "smallvec", "smallvec/const_generics"]
 network = ["async", "bytes", "hyper", "smallvec", "tonic"]
 tracing_ = [
   "anyhow",

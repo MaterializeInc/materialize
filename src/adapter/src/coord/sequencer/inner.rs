@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
@@ -38,7 +39,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
@@ -56,10 +57,11 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantRolePlan, IndexOption,
-    InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan, QueryWhen,
-    ReadThenWritePlan, ResetVariablePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
+    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan, GrantRolePlan,
+    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
+    QueryWhen, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
+    SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::Var;
@@ -74,7 +76,7 @@ use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 
 use crate::catalog::{
     self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
-    StorageSinkConnectionState, LINKED_CLUSTER_REPLICA_NAME,
+    StorageSinkConnectionState, UpdatePrivilegeVariant, LINKED_CLUSTER_REPLICA_NAME,
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
@@ -1085,7 +1087,7 @@ impl Coordinator {
                 session,
                 plan.name.clone(),
                 plan.view.clone(),
-                plan.replace,
+                plan.drop_ids,
                 depends_on,
             )
             .await?;
@@ -1164,7 +1166,8 @@ impl Coordinator {
                     column_names,
                     cluster_id,
                 },
-            replace,
+            replace: _,
+            drop_ids,
             if_not_exists,
             ambiguous_columns,
         } = plan;
@@ -1219,7 +1222,7 @@ impl Coordinator {
 
         let mut ops = Vec::new();
         ops.extend(
-            replace
+            drop_ids
                 .into_iter()
                 .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
         );
@@ -1328,12 +1331,15 @@ impl Coordinator {
             custom_logical_compaction_window: None,
         };
         let oid = self.catalog_mut().allocate_oid()?;
+        let on = self.catalog().get_entry(&index.on);
+        // Indexes have the same owner as their parent relation.
+        let owner_id = *on.owner_id();
         let op = catalog::Op::CreateItem {
             id,
             oid,
             name: name.clone(),
             item: CatalogItem::Index(index),
-            owner_id: *session.role_id(),
+            owner_id,
         };
         match self
             .catalog_transact_with(Some(session), vec![op], |txn| {
@@ -1402,7 +1408,7 @@ impl Coordinator {
         let mut dropped_active_cluster = false;
 
         let mut dropped_roles: BTreeMap<_, _> = plan
-            .ids
+            .drop_ids
             .iter()
             .filter_map(|id| match id {
                 ObjectId::Role(role_id) => Some(role_id),
@@ -1435,7 +1441,7 @@ impl Coordinator {
             }
         }
 
-        for id in &plan.ids {
+        for id in &plan.drop_ids {
             match id {
                 ObjectId::Database(id) => {
                     let name = self.catalog().get_database(id).name();
@@ -1472,7 +1478,7 @@ impl Coordinator {
             }
         }
 
-        ops.extend(plan.ids.into_iter().map(catalog::Op::DropObject));
+        ops.extend(plan.drop_ids.into_iter().map(catalog::Op::DropObject));
         self.catalog_transact(Some(session), ops).await?;
 
         fail::fail_point!("after_sequencer_drop_replica");
@@ -1495,7 +1501,7 @@ impl Coordinator {
         dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
         fn privilege_check(
-            privileges: &Vec<MzAclItem>,
+            privileges: &BTreeMap<RoleId, Vec<MzAclItem>>,
             dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
             object_type: ObjectType,
@@ -1503,24 +1509,26 @@ impl Coordinator {
             catalog: &Catalog,
         ) {
             let object_type = object_type.to_string().to_lowercase();
-            for privilege in privileges {
-                if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
-                    let grantor_name = catalog.get_role(&privilege.grantor).name();
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!(
+            for (_, privileges) in privileges {
+                for privilege in privileges {
+                    if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
+                        let grantor_name = catalog.get_role(&privilege.grantor).name();
+                        dependent_objects
+                            .entry(role_name.to_string())
+                            .or_default()
+                            .push(format!(
                             "privileges on {object_type} {object_name} granted by {grantor_name}",
                         ));
-                }
-                if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
-                    let grantee_name = catalog.get_role(&privilege.grantee).name();
-                    dependent_objects
-                        .entry(role_name.to_string())
-                        .or_default()
-                        .push(format!(
+                    }
+                    if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
+                        let grantee_name = catalog.get_role(&privilege.grantee).name();
+                        dependent_objects
+                            .entry(role_name.to_string())
+                            .or_default()
+                            .push(format!(
                             "privileges granted on {object_type} {object_name} to {grantee_name}"
                         ));
+                    }
                 }
             }
         }
@@ -3665,6 +3673,110 @@ impl Coordinator {
         session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
     }
 
+    pub(super) async fn sequence_grant_privilege(
+        &mut self,
+        session: &mut Session,
+        GrantPrivilegePlan {
+            acl_mode,
+            object_id,
+            grantee,
+            grantor,
+        }: GrantPrivilegePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.sequence_update_privilege(
+            session,
+            acl_mode,
+            object_id,
+            grantee,
+            grantor,
+            UpdatePrivilegeVariant::Grant,
+        )
+        .await
+    }
+
+    pub(super) async fn sequence_revoke_privilege(
+        &mut self,
+        session: &mut Session,
+        RevokePrivilegePlan {
+            acl_mode,
+            object_id,
+            revokee,
+            grantor,
+        }: RevokePrivilegePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.sequence_update_privilege(
+            session,
+            acl_mode,
+            object_id,
+            revokee,
+            grantor,
+            UpdatePrivilegeVariant::Revoke,
+        )
+        .await
+    }
+
+    async fn sequence_update_privilege(
+        &mut self,
+        session: &mut Session,
+        acl_mode: AclMode,
+        object_id: ObjectId,
+        grantee: RoleId,
+        grantor: RoleId,
+        variant: UpdatePrivilegeVariant,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.catalog()
+            .ensure_not_reserved_object(&object_id, session.conn_id())?;
+
+        let privileges = self
+            .catalog()
+            .get_privileges(&object_id, session.conn_id())
+            .expect("cannot grant privileges on objects without privileges");
+        let existing_privilege = privileges
+            .get(&grantee)
+            .and_then(|privileges| {
+                privileges
+                    .into_iter()
+                    .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+            })
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
+
+        match variant {
+            UpdatePrivilegeVariant::Grant => {
+                if existing_privilege.acl_mode.contains(acl_mode) {
+                    // The granted privileges already exists so we can return early.
+                    return Ok(ExecuteResponse::GrantedPrivilege);
+                }
+            }
+            UpdatePrivilegeVariant::Revoke => {
+                if existing_privilege
+                    .acl_mode
+                    .intersection(acl_mode)
+                    .is_empty()
+                {
+                    // The revoked privileges don't exist so we can return early.
+                    return Ok(ExecuteResponse::RevokedPrivilege);
+                }
+            }
+        }
+
+        let op = catalog::Op::UpdatePrivilege {
+            object_id,
+            privilege: MzAclItem {
+                grantee,
+                grantor,
+                acl_mode,
+            },
+            variant,
+        };
+        self.catalog_transact(Some(session), vec![op])
+            .await
+            .map(|_| match variant {
+                UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
+                UpdatePrivilegeVariant::Revoke => ExecuteResponse::RevokedPrivilege,
+            })
+    }
+
     pub(super) async fn sequence_grant_role(
         &mut self,
         session: &mut Session,
@@ -3758,7 +3870,39 @@ impl Coordinator {
             new_owner,
         }: AlterOwnerPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog_transact(Some(session), vec![Op::UpdateOwner { id, new_owner }])
+        let entry = if let ObjectId::Item(global_id) = &id {
+            Some(self.catalog().get_entry(global_id))
+        } else {
+            None
+        };
+
+        // Cannot directly change the owner of an index.
+        if let Some(entry) = &entry {
+            if entry.is_index() {
+                let name = self
+                    .catalog()
+                    .resolve_full_name(entry.name(), Some(session.conn_id()))
+                    .to_string();
+                session.add_notice(AdapterNotice::AlterIndexOwner { name });
+                return Ok(ExecuteResponse::AlteredObject(object_type));
+            }
+        }
+
+        let mut ops = vec![Op::UpdateOwner { id, new_owner }];
+        // Alter owner cascades down to dependent indexes.
+        if let Some(entry) = entry {
+            let dependent_index_ops = entry
+                .used_by()
+                .into_iter()
+                .filter(|id| self.catalog().get_entry(id).is_index())
+                .map(|id| Op::UpdateOwner {
+                    id: ObjectId::Item(*id),
+                    new_owner,
+                });
+            ops.extend(dependent_index_ops);
+        }
+
+        self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::AlteredObject(object_type))
     }

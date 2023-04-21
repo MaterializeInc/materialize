@@ -15,6 +15,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -177,7 +178,7 @@ impl MaelstromBlob {
 
 #[async_trait]
 impl Blob for MaelstromBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let value = match self
             .handle
             .lin_kv_read(Value::from(format!("blob/{}", key)))
@@ -190,9 +191,9 @@ impl Blob for MaelstromBlob {
         let value = value
             .as_str()
             .ok_or_else(|| anyhow!("invalid blob at {}: {:?}", key, value))?;
-        let value = serde_json::from_str(value)
+        let value: Vec<u8> = serde_json::from_str(value)
             .map_err(|err| anyhow!("invalid blob at {}: {}", key, err))?;
-        Ok(Some(value))
+        Ok(Some(SegmentedBytes::from(value)))
     }
 
     async fn list_keys_and_metadata(
@@ -233,7 +234,7 @@ impl Blob for MaelstromBlob {
 #[derive(Debug)]
 pub struct CachingBlob {
     blob: Arc<dyn Blob + Send + Sync>,
-    cache: Mutex<BTreeMap<String, Vec<u8>>>,
+    cache: Mutex<BTreeMap<String, SegmentedBytes>>,
 }
 
 impl CachingBlob {
@@ -247,7 +248,7 @@ impl CachingBlob {
 
 #[async_trait]
 impl Blob for CachingBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         // Fetch the cached value if there is one.
         let cache = self.cache.lock().await;
         if let Some(value) = cache.get(key) {

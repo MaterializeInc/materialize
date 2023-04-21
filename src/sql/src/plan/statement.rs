@@ -695,6 +695,17 @@ impl<'a> StatementContext<'a> {
         Ok(data_type)
     }
 
+    pub fn get_object_type(&self, id: &ObjectId) -> ObjectType {
+        match id {
+            ObjectId::Cluster(_) => ObjectType::Cluster,
+            ObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
+            ObjectId::Database(_) => ObjectType::Database,
+            ObjectId::Schema(_) => ObjectType::Schema,
+            ObjectId::Role(_) => ObjectType::Role,
+            ObjectId::Item(item_id) => self.get_item(item_id).item_type().into(),
+        }
+    }
+
     pub fn unsafe_mode(&self) -> bool {
         self.catalog.config().unsafe_mode
     }

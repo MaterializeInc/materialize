@@ -44,6 +44,7 @@ use mz_controller::clusters::ClusterId;
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
@@ -141,6 +142,8 @@ pub enum Plan {
     RotateKeys(RotateKeysPlan),
     GrantRole(GrantRolePlan),
     RevokeRole(RevokeRolePlan),
+    GrantPrivilege(GrantPrivilegePlan),
+    RevokePrivilege(RevokePrivilegePlan),
 }
 
 impl Plan {
@@ -196,13 +199,13 @@ impl Plan {
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::Explain => vec![PlanKind::Explain],
             StatementKind::Fetch => vec![PlanKind::Fetch],
-            StatementKind::GrantPrivilege => vec![],
+            StatementKind::GrantPrivilege => vec![PlanKind::GrantPrivilege],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
             StatementKind::Insert => vec![PlanKind::Insert],
             StatementKind::Prepare => vec![PlanKind::Prepare],
             StatementKind::Raise => vec![PlanKind::Raise],
             StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
-            StatementKind::RevokePrivilege => vec![],
+            StatementKind::RevokePrivilege => vec![PlanKind::RevokePrivilege],
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
             StatementKind::Select => vec![PlanKind::Peek],
@@ -333,6 +336,8 @@ impl Plan {
             Plan::RotateKeys(_) => "rotate keys",
             Plan::GrantRole(_) => "grant role",
             Plan::RevokeRole(_) => "revoke role",
+            Plan::GrantPrivilege(_) => "grant privilege",
+            Plan::RevokePrivilege(_) => "revoke privilege",
         }
     }
 }
@@ -519,8 +524,10 @@ pub struct CreateTablePlan {
 pub struct CreateViewPlan {
     pub name: QualifiedItemName,
     pub view: View,
-    /// The IDs of the objects that this view is replacing, if any.
-    pub replace: Vec<GlobalId>,
+    /// The ID of the object that this view is replacing, if any.
+    pub replace: Option<GlobalId>,
+    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -531,8 +538,10 @@ pub struct CreateViewPlan {
 pub struct CreateMaterializedViewPlan {
     pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
-    /// The IDs of the objects that this view is replacing, if any.
-    pub replace: Vec<GlobalId>,
+    /// The ID of the object that this view is replacing, if any.
+    pub replace: Option<GlobalId>,
+    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -555,7 +564,10 @@ pub struct CreateTypePlan {
 
 #[derive(Debug)]
 pub struct DropObjectsPlan {
-    pub ids: Vec<ObjectId>,
+    /// The IDs of only the objects directly referenced in the `DROP` statement.
+    pub referenced_ids: Vec<ObjectId>,
+    /// All object IDs to drop. Includes `referenced_ids` and all descendants.
+    pub drop_ids: Vec<ObjectId>,
     /// The type of object that was dropped explicitly in the DROP statement. `ids` may contain
     /// objects of different types due to CASCADE.
     pub object_type: ObjectType,
@@ -811,6 +823,30 @@ pub struct RevokeRolePlan {
     pub member_ids: Vec<RoleId>,
     /// The role that revoked the membership.
     pub grantor_id: RoleId,
+}
+
+#[derive(Debug)]
+pub struct GrantPrivilegePlan {
+    /// /// The privileges being granted on an object.
+    pub acl_mode: AclMode,
+    /// The ID of the object.
+    pub object_id: ObjectId,
+    /// The role that will granted the privileges.
+    pub grantee: RoleId,
+    /// The role that is granting the privileges.
+    pub grantor: RoleId,
+}
+
+#[derive(Debug)]
+pub struct RevokePrivilegePlan {
+    /// The privileges being revoked.
+    pub acl_mode: AclMode,
+    /// The ID of the object.
+    pub object_id: ObjectId,
+    /// The role that will have privileges revoked.
+    pub revokee: RoleId,
+    /// The role that will revoke the privileges.
+    pub grantor: RoleId,
 }
 
 #[derive(Clone, Debug)]

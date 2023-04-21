@@ -317,6 +317,8 @@ pub enum ExecuteResponse {
         /// How long to wait for results to arrive.
         timeout: ExecuteTimeout,
     },
+    /// The requested privilege was granted.
+    GrantedPrivilege,
     /// The requested role was granted.
     GrantedRole,
     /// The specified number of rows were inserted into the requested table.
@@ -325,6 +327,8 @@ pub enum ExecuteResponse {
     Prepare,
     /// A user-requested warning was raised.
     Raised,
+    /// The requested privilege was revoked.
+    RevokedPrivilege,
     /// The requested role was revoked.
     RevokedRole,
     /// Rows will be delivered via the specified future.
@@ -389,6 +393,7 @@ impl ExecuteResponse {
             DroppedObject(o) => Some(format!("DROP {o}")),
             EmptyQuery => None,
             Fetch { .. } => None,
+            GrantedPrivilege => Some("GRANT".into()),
             GrantedRole => Some("GRANT ROLE".into()),
             Inserted(n) => {
                 // "On successful completion, an INSERT command returns a
@@ -402,6 +407,7 @@ impl ExecuteResponse {
             }
             Prepare => Some("PREPARE".into()),
             Raised => Some("RAISE".into()),
+            RevokedPrivilege => Some("REVOKE".into()),
             RevokedRole => Some("REVOKE ROLE".into()),
             SendingRows { .. } => None,
             SetVariable { reset: true, .. } => Some("RESET".into()),
@@ -461,11 +467,13 @@ impl ExecuteResponse {
             }
             Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
             PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
+            GrantPrivilege => vec![GrantedPrivilege],
             GrantRole => vec![GrantedRole],
             CopyRows => vec![Inserted],
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
+            RevokePrivilege => vec![RevokedPrivilege],
             RevokeRole => vec![RevokedRole],
             PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],
             PlanKind::Subscribe => vec![Subscribing, CopyTo],

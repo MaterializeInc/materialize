@@ -24,10 +24,13 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, PrivilegeMap, TypeCategory,
+};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -88,19 +91,7 @@ impl CatalogState {
         database: &Database,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let mut row = Row::default();
-        row.packer()
-            .push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: database.privileges.len(),
-                }],
-                database
-                    .privileges
-                    .iter()
-                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
-            )
-            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        let row = self.pack_privilege_array_row(database.privileges());
         let privileges = row.unpack_first();
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DATABASES),
@@ -128,19 +119,7 @@ impl CatalogState {
                 &self.database_by_id[id].schemas_by_id[schema_id],
             ),
         };
-        let mut row = Row::default();
-        row.packer()
-            .push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: schema.privileges.len(),
-                }],
-                schema
-                    .privileges
-                    .iter()
-                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
-            )
-            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        let row = self.pack_privilege_array_row(schema.privileges());
         let privileges = row.unpack_first();
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SCHEMAS),
@@ -205,19 +184,7 @@ impl CatalogState {
     pub(super) fn pack_cluster_update(&self, name: &str, diff: Diff) -> BuiltinTableUpdate {
         let id = self.clusters_by_name[name];
         let cluster = &self.clusters_by_id[&id];
-        let mut row = Row::default();
-        row.packer()
-            .push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: cluster.privileges.len(),
-                }],
-                cluster
-                    .privileges
-                    .iter()
-                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
-            )
-            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        let row = self.pack_privilege_array_row(cluster.privileges());
         let privileges = row.unpack_first();
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
@@ -331,20 +298,7 @@ impl CatalogState {
             .id;
         let name = &entry.name().item;
         let owner_id = entry.owner_id();
-        let mut privileges_row = Row::default();
-        privileges_row
-            .packer()
-            .push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: entry.privileges.len(),
-                }],
-                entry
-                    .privileges
-                    .iter()
-                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
-            )
-            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        let privileges_row = self.pack_privilege_array_row(entry.privileges());
         let privileges = privileges_row.unpack_first();
         let mut updates = match entry.item() {
             CatalogItem::Log(_) => self.pack_source_update(
@@ -1279,5 +1233,22 @@ impl CatalogState {
             ]),
             diff,
         }
+    }
+
+    fn pack_privilege_array_row(&self, privileges: &PrivilegeMap) -> Row {
+        let mut row = Row::default();
+        let flat_privileges = MzAclItem::flatten(privileges);
+        row.packer()
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: flat_privileges.len(),
+                }],
+                flat_privileges
+                    .into_iter()
+                    .map(|mz_acl_item| Datum::MzAclItem(mz_acl_item.clone())),
+            )
+            .expect("privileges is 1 dimensional, and its length is used for the array length");
+        row
     }
 }

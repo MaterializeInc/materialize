@@ -12,6 +12,8 @@
 use std::cmp;
 use std::fmt::{Debug, Formatter};
 use std::ops::Range;
+use std::sync::atomic::{self, AtomicU64};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
@@ -27,8 +29,11 @@ use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::{ByteStream, SdkError};
 use aws_sdk_s3::Client as S3Client;
 use aws_types::region::Region;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
+use futures_util::future::join_all;
 use futures_util::FutureExt;
+use futures_util::TryFutureExt;
+use mz_ore::bytes::SegmentedBytes;
 use tokio::runtime::Handle as AsyncHandle;
 use tracing::{debug, debug_span, trace, trace_span, Instrument};
 use uuid::Uuid;
@@ -313,7 +318,7 @@ impl S3Blob {
 
 #[async_trait]
 impl Blob for S3Blob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
@@ -348,7 +353,15 @@ impl Blob for S3Blob {
         // the headers before the full data body has completed. This gives us
         // the number of parts. We can then proceed to fetch the body of the
         // first request concurrently with the rest of the parts of the object.
+
+        // For each header and body that we fetch, we track the fastest, and
+        // any large deviations from it.
+        let min_body_elapsed = Arc::new(MinElapsed::default());
+        let min_header_elapsed = Arc::new(MinElapsed::default());
         self.metrics.get_part.inc();
+
+        // Fetch our first header, this tells us how many more are left.
+        let header_start = Instant::now();
         let object = self
             .client
             .get_object()
@@ -357,179 +370,128 @@ impl Blob for S3Blob {
             .part_number(1)
             .send()
             .await;
+        let elapsed = header_start.elapsed();
+        min_header_elapsed.observe(elapsed, "s3 download first part header");
+
         let first_part = match object {
             Ok(object) => object,
             Err(SdkError::ServiceError(err)) if err.err().is_no_such_key() => return Ok(None),
             Err(err) => return Err(ExternalError::from(anyhow!("s3 get meta err: {}", err))),
         };
-        let num_parts = if first_part.parts_count() == 0 {
-            // For a non-multipart upload, parts_count will be 0. The rest of
-            // the code works perfectly well if we just pretend this was a
-            // multipart upload of 1 part.
-            1
-        } else {
-            first_part.parts_count()
-        };
-        trace!(
-            "s3 download first header took {:?} ({} parts)",
-            start_overall.elapsed(),
-            num_parts
-        );
-        if num_parts < 1 {
-            return Err(anyhow!("unexpected number of s3 object parts: {}", num_parts).into());
-        }
 
+        // Get the remaining number of parts
+        let num_parts = match first_part.parts_count() {
+            // For a non-multipart upload, parts_count will be 0. The rest of  the code works
+            // perfectly well if we just pretend this was a multipart upload of 1 part.
+            0 => 1,
+            // For any positive value greater than 0, just return it.
+            parts @ 1.. => parts,
+            // A negative value is invalid.
+            bad => {
+                assert!(bad < 0);
+                return Err(anyhow!("unexpected number of s3 object parts: {}", bad).into());
+            }
+        };
+
+        trace!(
+            "s3 download first header took {:?} ({num_parts} parts)",
+            start_overall.elapsed(),
+        );
+
+        // Get handle to our runtime so we can concurrently fetch the remaining parts.
         let async_runtime = AsyncHandle::try_current().map_err(anyhow::Error::msg)?;
 
-        // Continue to fetch the first part's body while we fetch the other
-        // parts.
-        let start_part_body = Instant::now();
-        let mut part_bodies = Vec::new();
-        let first_body_len = usize::try_from(first_part.content_length)
-            .map_err(|err| anyhow!("unexpected s3 content_length: {}", err))?;
-        let mut total_body_len = first_body_len;
-        part_bodies.push(
-            // TODO: Add the key and part number once this can be annotated with
-            // metadata.
-            async_runtime.spawn_named(
-                || "persist_s3blob_get_body",
-                first_part
-                    .body
-                    .collect()
-                    .map(move |res| (start_part_body.elapsed(), first_body_len, res)),
-            ),
-        );
+        // Fetch the first part's body while we fetch the other parts.
+        let min_body_elapsed_ = Arc::clone(&min_body_elapsed);
+        let first_body_fut = async move {
+            let body_start = Instant::now();
+            let result = first_part
+                .body
+                .collect()
+                .map_err(|err| Error::from(format!("s3 get first body err: {}", err)))
+                .await;
+            let elapsed = body_start.elapsed();
+            min_body_elapsed_.observe(elapsed, "s3 download first part body");
+
+            result
+        };
+
+        let mut body_handles = Vec::new();
+        // TODO: Add the key and part number once this can be annotated with metadata.
+        body_handles.push(async_runtime.spawn_named(|| "persist_s3blob_get_body", first_body_fut));
 
         if num_parts > 1 {
-            // Fetch the headers of the rest of the parts. (Starting at part 2
-            // because we already did part 1.)
-            let start_headers = Instant::now();
-            let mut part_futs = Vec::new();
+            // Fetch the headers of the rest of the parts. (Starting at part 2 because we already
+            // did part 1.)
             for part_num in 2..=num_parts {
+                let header_future = self
+                    .client
+                    .get_object()
+                    .bucket(&self.bucket)
+                    .key(&path)
+                    .part_number(part_num)
+                    .send();
+
+                // Clone a handle to our MinElapsed trackers so we can give one to
+                // each download task.
+                let min_header_elapsed_ = Arc::clone(&min_header_elapsed);
+                let min_body_elapsed_ = Arc::clone(&min_body_elapsed);
+
+                let request_future = async move {
+                    // Request our headers.
+                    let header_start = Instant::now();
+                    let object = header_future
+                        .await
+                        .map_err(|err| ExternalError::from(anyhow!("s3 get meta err: {}", err)))?;
+                    let header_elapsed = header_start.elapsed();
+                    min_header_elapsed_.observe(header_elapsed, "s3 download part header");
+
+                    // Request the body.
+                    let body_start = Instant::now();
+                    let body = object
+                        .body
+                        .collect()
+                        .await
+                        .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
+                    let body_elapsed = body_start.elapsed();
+                    min_body_elapsed_.observe(body_elapsed, "s3 download part body");
+
+                    Ok(body)
+                };
+
                 // TODO: Add the key and part number once this can be annotated
                 // with metadata.
-                let part_fut = async_runtime.spawn_named(|| "persist_s3blob_get_header", {
+                //
+                // Spawn all of these futures on the runtime so they run concurrently.
+                let request_handle = async_runtime.spawn_named(|| "persist_s3blob_get_header", {
                     self.metrics.get_part.inc();
-                    self.client
-                        .get_object()
-                        .bucket(&self.bucket)
-                        .key(&path)
-                        .part_number(part_num)
-                        .send()
-                        .map(move |res| (start_headers.elapsed(), res))
+                    request_future
                 });
-                part_futs.push(part_fut);
+
+                body_handles.push(request_handle);
             }
-
-            // As each part header comes back, first off a task to fetch the
-            // body.
-            //
-            // TODO: Doing this in part order isn't optimal. Perhaps better
-            // would be do it as each header finishes. Once we do the below TODO
-            // about not copying everything into one Vec, then we won't need to
-            // compute the total_body_len and this can just chain the two
-            // futures together.
-            let mut min_header_elapsed = MinElapsed::default();
-            for part_fut in part_futs {
-                let (this_header_elapsed, part_res) = part_fut
-                    .await
-                    .map_err(|err| ExternalError::from(anyhow!("s3 spawn err: {}", err)))?;
-                let part_res = part_res
-                    .map_err(|err| ExternalError::from(anyhow!("s3 get meta err: {}", err)))?;
-                let this_body_len = usize::try_from(part_res.content_length)
-                    .map_err(|err| anyhow!("unexpected s3 content_length: {}", err))?;
-                total_body_len += this_body_len;
-
-                let min_header_elapsed = min_header_elapsed.observe(this_header_elapsed);
-                if this_header_elapsed >= min_header_elapsed * 8 {
-                    debug!(
-                        "s3 download part header took {:?} more than 8x the min {:?}",
-                        this_header_elapsed, min_header_elapsed
-                    );
-                } else {
-                    trace!("s3 download part header took {:?}", this_header_elapsed);
-                }
-
-                let start_part_body = Instant::now();
-                part_bodies.push(
-                    // TODO: Add the key and part number once this can be
-                    // annotated with metadata.
-                    async_runtime.spawn_named(
-                        || "persist_s3blob_get_body",
-                        part_res
-                            .body
-                            .collect()
-                            .map(move |res| (start_part_body.elapsed(), this_body_len, res)),
-                    ),
-                );
-            }
-            trace!(
-                "s3 download part headers took {:?} ({} parts)",
-                start_headers.elapsed(),
-                num_parts
-            );
         }
 
-        let start_bodies = Instant::now();
-        let mut min_body_elapsed = MinElapsed::default();
-        let mut val = vec![0u8; total_body_len];
-        let mut val_offset = 0;
-        let mut body_copy_elapsed = Duration::ZERO;
-        for part_body in part_bodies {
-            let (this_body_elapsed, this_body_len, part_body_res) = part_body
-                .await
-                .map_err(|err| Error::from(format!("s3 spawn err: {}", err)))?;
-            let mut part_body_res =
-                part_body_res.map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
+        // Await on all of our parts requests.
+        let part_bodies = join_all(body_handles).await;
+        let mut segments = vec![];
+        for result in part_bodies {
+            let part_body = result
+                // Tokio failure, we failed to spawn a task.
+                .map_err(|err| Error::from(format!("s3 spawn err: {}", err)))?
+                // Download failure, we failed to fetch the body from S3.
+                .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
 
-            let min_body_elapsed = min_body_elapsed.observe(this_body_elapsed);
-            if this_body_elapsed >= min_body_elapsed * 8 {
-                debug!(
-                    "s3 download part body took {:?} more than 8x the min {:?}",
-                    this_body_elapsed, min_body_elapsed
-                );
-            } else {
-                trace!("s3 download part body took {:?}", this_body_elapsed);
-            }
-
-            // TODO: It'd be lovely if we could push these copies into the
-            // part_bodies futures so these last copies weren't all done
-            // serially. Alternatively, we could change the return type of
-            // `Blob::get` to something that can represent a chain of buffers.
-            //
-            // For example: A 6GiB blob takes ~6s to download and ~3s to collect
-            // into this single Vec.
-            let start_body_copy = Instant::now();
-            if part_body_res.remaining() != this_body_len {
-                return Err(anyhow!(
-                    "s3 expected body length {} got: {}",
-                    this_body_len,
-                    part_body_res.remaining()
-                )
-                .into());
-            }
-            let part_range = val_offset..val_offset + this_body_len;
-            val_offset = part_range.end;
-            part_body_res.copy_to_slice(&mut val[part_range]);
-            body_copy_elapsed += start_body_copy.elapsed();
+            // Collect all of our segments.
+            segments.extend(part_body.into_segments());
         }
-        trace!(
-            "s3 download part bodies took {:?} ({} parts)",
-            start_bodies.elapsed(),
-            num_parts
-        );
-        trace!(
-            "s3 copy part bodies took {:?} ({} parts)",
-            body_copy_elapsed,
-            num_parts
-        );
 
         debug!(
             "s3 GetObject took {:?} ({} parts)",
             start_overall.elapsed(),
             num_parts
         );
-        Ok(Some(val))
+        Ok(Some(SegmentedBytes::from(segments)))
     }
 
     async fn list_keys_and_metadata(
@@ -729,7 +691,7 @@ impl S3Blob {
         // this. That would cancel outstanding requests for us if any of them
         // fails. However, it might not play well with using retries for tail
         // latencies. Investigate.
-        let mut min_part_elapsed = MinElapsed::default();
+        let min_part_elapsed = MinElapsed::default();
         let mut parts = Vec::with_capacity(parts_len);
         for (part_num, part_fut) in part_futs.into_iter() {
             let (this_part_elapsed, part_res) = part_fut
@@ -746,16 +708,7 @@ impl S3Blob {
                     .part_number(part_num as i32)
                     .build(),
             );
-
-            let min_part_elapsed = min_part_elapsed.observe(this_part_elapsed);
-            if this_part_elapsed >= min_part_elapsed * 8 {
-                debug!(
-                    "s3 upload_part took {:?} more than 8x the min {:?}",
-                    this_part_elapsed, min_part_elapsed
-                );
-            } else {
-                trace!("s3 upload_part took {:?}", this_part_elapsed);
-            }
+            min_part_elapsed.observe(this_part_elapsed, "s3 upload_part took");
         }
         trace!(
             "s3 upload_parts overall took {:?} ({} parts)",
@@ -920,17 +873,38 @@ impl Iterator for MultipartChunkIter {
 }
 
 /// A helper for tracking the minimum of a set of Durations.
-#[derive(Debug, Default)]
-struct MinElapsed(Option<Duration>);
+#[derive(Debug)]
+struct MinElapsed {
+    min: AtomicU64,
+    alert_factor: u64,
+}
+
+impl Default for MinElapsed {
+    fn default() -> Self {
+        MinElapsed {
+            min: AtomicU64::new(u64::MAX),
+            alert_factor: 8,
+        }
+    }
+}
 
 impl MinElapsed {
-    /// Records a new Duration and returns the minimum seen so far.
-    fn observe(&mut self, x: Duration) -> Duration {
-        let min = self.0.get_or_insert(x);
-        if x < *min {
-            *min = x;
+    fn observe(&self, x: Duration, msg: &'static str) {
+        let nanos = x.as_nanos();
+        let nanos = u64::try_from(nanos).unwrap_or(u64::MAX);
+
+        // Possibly set a new minimum.
+        let prev_min = self.min.fetch_min(nanos, atomic::Ordering::SeqCst);
+
+        // Trace if our provided duration was much larger than our minimum.
+        let new_min = std::cmp::min(prev_min, nanos);
+        if nanos > new_min.saturating_mul(self.alert_factor) {
+            let min_duration = Duration::from_nanos(new_min);
+            let factor = self.alert_factor;
+            debug!("{msg} took {x:?} more than {factor}x the min {min_duration:?}");
+        } else {
+            trace!("{msg} took {x:?}");
         }
-        *min
     }
 }
 
@@ -989,7 +963,10 @@ mod tests {
         {
             let blob = S3Blob::open(config_multipart).await?;
             blob.set_multi_part("multipart", "foobar".into()).await?;
-            assert_eq!(blob.get("multipart").await?, Some("foobar".into()));
+            assert_eq!(
+                blob.get("multipart").await?,
+                Some(b"foobar".to_vec().into())
+            );
         }
 
         Ok(())

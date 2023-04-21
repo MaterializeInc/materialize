@@ -125,8 +125,8 @@ class KafkaScenario(Scenario):
 
     END_MARKER = dedent(
         """
-        $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}}
-        "ZZZ" {{"f1": "END MARKER"}}
+        $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${value-schema} key-schema=${key-schema}
+        "ZZZ" {"f1": "END MARKER"}
         """
     )
 

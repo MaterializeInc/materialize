@@ -30,6 +30,7 @@ use mz_build_info::BuildInfo;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
@@ -259,7 +260,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
     /// earlier in the list than the roots. This is particularly userful for the order to drop
     /// objects.
-    fn object_dependents(&self, ids: Vec<ObjectId>) -> Vec<ObjectId>;
+    fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId>;
 
     /// Returns all the IDs of all objects that depend on `id`, including `id` themselves.
     ///
@@ -267,6 +268,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// earlier in the list than `id`. This is particularly userful for the order to drop
     /// objects.
     fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId>;
+
+    /// Returns all possible privileges associated with an object type.
+    fn all_object_privileges(&self, object_type: ObjectType) -> AclMode;
 }
 
 /// Configuration associated with a catalog.
@@ -307,6 +311,9 @@ impl CatalogConfig {
     }
 }
 
+/// Key is the role that granted the privilege, value is the privilege itself.
+pub type PrivilegeMap = BTreeMap<RoleId, Vec<MzAclItem>>;
+
 /// A database in a [`SessionCatalog`].
 pub trait CatalogDatabase {
     /// Returns a fully-specified name of the database.
@@ -324,6 +331,9 @@ pub trait CatalogDatabase {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the database.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// A schema in a [`SessionCatalog`].
@@ -346,6 +356,9 @@ pub trait CatalogSchema {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the schema.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 // TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
@@ -498,6 +511,9 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the cluster.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// A cluster replica in a [`SessionCatalog`]
@@ -583,6 +599,9 @@ pub trait CatalogItem {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns the privileges associated with the item.
+    fn privileges(&self) -> &PrivilegeMap;
 }
 
 /// The type of a [`CatalogItem`].

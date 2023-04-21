@@ -29,7 +29,7 @@ use mz_repr::strconv;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::ast::{ObjectType, Privilege, UnresolvedItemName};
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
@@ -88,6 +88,15 @@ pub enum PlanError {
     InvalidCharLength(InvalidCharLengthError),
     InvalidId(GlobalId),
     InvalidObject(Box<ResolvedItemName>),
+    InvalidObjectType {
+        expected_type: ObjectType,
+        actual_type: ObjectType,
+        object_name: String,
+    },
+    InvalidPrivilegeTypes {
+        privilege_types: Vec<Privilege>,
+        object_type: ObjectType,
+    },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
@@ -344,6 +353,10 @@ impl fmt::Display for PlanError {
             Self::Unstructured(e) => write!(f, "{}", e),
             Self::InvalidId(id) => write!(f, "invalid id {}", id),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
+            Self::InvalidObjectType{expected_type, actual_type, object_name} => write!(f, "{actual_type} {object_name} is not a {expected_type}"),
+            Self::InvalidPrivilegeTypes{privilege_types, object_type} => {
+                write!(f, "invalid privilege types {} for {}", privilege_types.into_iter().join(", "), object_type)
+            },
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")

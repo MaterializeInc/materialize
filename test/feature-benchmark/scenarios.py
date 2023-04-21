@@ -1171,7 +1171,7 @@ class ConnectionLatency(Coordinator):
     def benchmark(self) -> MeasurementSource:
         connections = "\n".join(
             """
-$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 SELECT 1;
 """
             for i in range(0, self.n())
@@ -1225,8 +1225,8 @@ class StartupLoaded(Scenario):
             + """
 $ kafka-create-topic topic=startup-time
 
-$ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
-{{"f2": 1}}
+$ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
+{"f2": 1}
 """
         )
 

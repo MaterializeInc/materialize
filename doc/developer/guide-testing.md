@@ -28,6 +28,9 @@ The long-running tests will simulate actual production runs of Materialize on
 gigabytes to terabytes of data over several hours to days, and will therefore
 report their results asynchronously (perhaps nightly or weekly).
 
+For how to run tests on your PR with a code coverage report see
+[Code Coverage for Pull Requests](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/code-coverage.md).
+
 Details about each of the test suites follow.
 
 ## Unit/integration tests

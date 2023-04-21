@@ -434,6 +434,7 @@ impl ErrorResponse {
             AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::WARNING,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
             AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::WARNING,
+            AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -596,6 +597,7 @@ impl Severity {
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
             AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
+            AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
         }
     }
 }
