@@ -15,6 +15,8 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use mz_ore::now::NowFn;
 use mz_sql::session::user::ExternalUserMetadata;
 use serde::{Deserialize, Serialize};
+use tokio::time;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::{ApiTokenResponse, AppPassword, Client, Error};
@@ -123,7 +125,16 @@ impl Authentication {
             return Err(Error::UnauthorizedTenant);
         }
         if let Some(expected_email) = expected_email {
-            if msg.claims.email != expected_email {
+            // To match Frontegg, email addresses are compared case
+            // insensitively.
+            //
+            // NOTE(benesch): we could save some allocations by using
+            // `unicase::eq` here, but the `unicase` crate has had some critical
+            // correctness bugs that make it scary to use in such
+            // security-sensitive code.
+            //
+            // See: https://github.com/seanmonstar/unicase/pull/39
+            if msg.claims.email.to_lowercase() != expected_email.to_lowercase() {
                 return Err(Error::WrongEmail);
             }
         }
@@ -145,81 +156,72 @@ impl Authentication {
         })
     }
 
-    /// Continuously validates and refreshes an access token.
+    /// Continuously refreshes and revalidates a [`ValidatedApiTokenResponse`].
     ///
-    /// Validates the provided access token once, as `validate_access_token`
-    /// does. If it is valid, returns a future that will attempt to refresh
-    /// the access token before it expires, resolving iff the token expires
-    /// or fails to refresh.
+    /// The returned future will attempt to refresh the access token before it
+    /// expires, resolving iff the token expires or fails to refresh.
     ///
-    /// The claims contained in the provided access token and all updated
-    /// claims will be processed by `claims_processor`.
-    pub fn continuously_validate_access_token(
+    /// Whenever the access token is successfully refreshed and revalidated,
+    /// `claims_processor` will be invoked with the new validated claims.
+    pub fn continuously_revalidate_api_token_response(
         &self,
-        mut token: ApiTokenResponse,
-        expected_email: String,
-        mut claims_processor: impl FnMut(ValidatedClaims),
-    ) -> Result<impl Future<Output = ()>, Error> {
-        // Do an initial full validity check of the token.
-        let mut claims = self.validate_access_token(&token.access_token, Some(&expected_email))?;
-        claims_processor(claims.clone());
+        mut response: ValidatedApiTokenResponse,
+        mut claims_processor: impl FnMut(&ValidatedClaims),
+    ) -> impl Future<Output = ()> {
         let frontegg = self.clone();
 
         // This future resolves once the token expiry time has been reached. It will
         // repeatedly attempt to refresh the token before it expires.
-        let expire_future = async move {
+        async move {
             let refresh_url = format!("{}{}", frontegg.admin_api_token_url, REFRESH_SUFFIX);
             loop {
-                let expire_in = claims.exp - frontegg.now.as_secs();
+                let expire_in = response.claims.exp - frontegg.now.as_secs();
                 let check_in = u64::try_from(expire_in - frontegg.refresh_before_secs).unwrap_or(0);
-                tokio::time::sleep(Duration::from_secs(check_in)).await;
+                time::sleep(Duration::from_secs(check_in)).await;
 
                 let refresh_request = async {
                     loop {
-                        let resp = async {
-                            let token = frontegg
+                        let res = async {
+                            let res = frontegg
                                 .client
-                                .refresh_token(&refresh_url, &token.refresh_token)
+                                .refresh_token(&refresh_url, &response.refresh_token)
                                 .await?;
-                            let claims = frontegg.validate_access_token(
-                                &token.access_token,
-                                Some(&expected_email),
-                            )?;
-                            Ok::<_, anyhow::Error>((token, claims))
+                            frontegg.validate_api_token_response(res, Some(&response.claims.email))
                         };
-                        match resp.await {
-                            Ok((token, claims)) => {
-                                return (token, claims);
-                            }
-                            Err(_) => {
-                                // Some error occurred, retry again later. 5 seconds chosen arbitrarily.
-                                tokio::time::sleep(Duration::from_secs(5)).await;
+                        match res.await {
+                            Ok(res) => return res,
+                            Err(e) => {
+                                // Log at info level, not warn or error level,
+                                // because the error could be a result of a
+                                // user's permissions being intentionally
+                                // revoked.
+                                //
+                                // TODO: report Frontegg errors at `error!`
+                                // level or via a Prometheus metric so that
+                                // we can alert on them.
+                                info!(
+                                    "failed to refresh token for {}: {:#}",
+                                    response.claims.email, e
+                                );
+                                // Retry again later. 5 seconds chosen arbitrarily.
+                                time::sleep(Duration::from_secs(5)).await;
                             }
                         }
                     }
                 };
-                let expire_in = u64::try_from(claims.exp - frontegg.now.as_secs()).unwrap_or(0);
-                let expire_in = tokio::time::sleep(Duration::from_secs(expire_in));
+                let expire_in =
+                    u64::try_from(response.claims.exp - frontegg.now.as_secs()).unwrap_or(0);
+                let expire_in = time::sleep(Duration::from_secs(expire_in));
 
                 tokio::select! {
-                    _ = expire_in => return (),
-                    (refresh_token, refresh_claims) = refresh_request => {
-                        token = refresh_token;
-                        claims = refresh_claims;
-                        claims_processor(claims.clone());
+                    _ = expire_in => return,
+                    res = refresh_request => {
+                        response = res;
+                        claims_processor(&response.claims);
                     },
                 };
             }
-        };
-        Ok(expire_future)
-    }
-
-    pub fn tenant_id(&self) -> Uuid {
-        self.tenant_id
-    }
-
-    pub fn admin_role(&self) -> &str {
-        &self.admin_role
+        }
     }
 }
 
