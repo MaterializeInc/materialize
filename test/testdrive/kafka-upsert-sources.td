@@ -260,6 +260,9 @@ mammal1:
 ! select * from nullkey
 contains: record with NULL key in UPSERT source
 
+! select * from nullkey
+contains: to retract this error, produce a record upstream with a NULL key and NULL value
+
 # Ingest a null value for our null key, to retract it.
 $ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=:
 :

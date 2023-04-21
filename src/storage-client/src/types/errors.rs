@@ -235,6 +235,11 @@ impl Display for UpsertNullKeyError {
             write!(f, " in partition {}", partition_id)?;
         }
 
+        write!(
+            f,
+            "; to retract this error, produce a record upstream with a NULL key and NULL value",
+        )?;
+
         Ok(())
     }
 }
