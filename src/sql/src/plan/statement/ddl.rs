@@ -918,7 +918,7 @@ pub fn plan_create_source(
             }
 
             let order_by = if !order_by.is_empty() {
-                scx.require_unsafe_mode("ENVELOPE UPSERT ORDER BY")?;
+                scx.require_unsafe_mode("ENVELOPE UPSERT (ORDER BY ...)")?;
 
                 let mut offset_included = false;
 
