@@ -25,6 +25,9 @@
       flip(x int) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip)
   SELECT * FROM flip
 
+# In case the environment has other replicas
+> SET cluster_replica = r1
+
 # Ensure the dataflow was successfully installed.
 > SELECT count(*)
   FROM mz_internal.mz_dataflows
