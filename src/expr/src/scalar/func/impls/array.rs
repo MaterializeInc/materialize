@@ -171,7 +171,9 @@ impl LazyUnaryFunc for CastArrayToArray {
             .collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
 
         Ok(temp_storage.make_datum(|packer| {
-            packer.push_array(&dims, casted_datums).expect("failed to construct array");
+            packer
+                .push_array(&dims, casted_datums)
+                .expect("failed to construct array");
         }))
     }
 
