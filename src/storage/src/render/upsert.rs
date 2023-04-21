@@ -32,7 +32,6 @@ use timely::progress::{Antichain, Timestamp};
 use crate::source::types::UpsertMetrics;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
-use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 
 use self::types::{InMemoryHashMap, StatsState, UpsertState};
@@ -213,14 +212,7 @@ where
         // Rehydrate the upsert state (and bump some stats), even if the snapshot is empty.
         let snapshot = snapshot.into_iter().map(|((key, value), diff)| {
             assert_eq!(diff, 1, "invalid upsert state");
-            (
-                key,
-                // Temporarily drop into a `SourceData` to obtain a `Codec`
-                // impl. This will allocate on errors, which should be rare.
-                Some(SourceData(
-                    value.map_err(|e| DataflowError::from(EnvelopeError::Upsert(e))),
-                )),
-            )
+            (key, Some(value))
         });
 
         let now = Instant::now();
@@ -293,13 +285,6 @@ where
                             .expect("key missing from commands_state");
                         match value {
                             Some(value) => {
-                                // Temporarily drop into a `SourceData` to obtain a `Codec`
-                                // impl. This will allocate on errors, which should be rare.
-                                let value =
-                                    SourceData(value.map_err(|e| {
-                                        DataflowError::from(EnvelopeError::Upsert(e))
-                                    }));
-
                                 if let Some(old_value) = command_state.replace(value.clone()) {
                                     output_updates.push((old_value, ts.clone(), -1));
                                 }
@@ -332,5 +317,8 @@ where
         }
     });
 
-    output.as_collection().map(|result| result.0)
+    output.as_collection().map(|result| match result {
+        Ok(ok) => Ok(ok),
+        Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
+    })
 }
