@@ -116,6 +116,7 @@ impl NormalizeLets {
         // After this, all non-`LetRec` nodes contain no further `Let` or `LetRec` nodes,
         // placing all `LetRec` nodes around the root, if not always in a single AST node.
         let_motion::promote_let_rec(relation);
+        let_motion::assert_no_lets(relation);
 
         inlining::inline_lets(relation, self.inline_mfp)?;
 
@@ -430,6 +431,12 @@ mod let_motion {
         }
         peeled
     }
+
+    pub(crate) fn assert_no_lets(expr: &MirRelationExpr) {
+        expr.visit_pre(|expr| {
+            assert!(!matches!(expr, MirRelationExpr::Let { .. }));
+        });
+    }
 }
 
 mod inlining {
@@ -437,6 +444,30 @@ mod inlining {
     use std::collections::BTreeMap;
 
     use mz_expr::{Id, LocalId, MirRelationExpr};
+
+    pub(super) fn inline_lets(
+        expr: &mut MirRelationExpr,
+        inline_mfp: bool,
+    ) -> Result<(), crate::TransformError> {
+        let mut worklist = vec![&mut *expr];
+        while let Some(expr) = worklist.pop() {
+            inline_lets_core(expr, inline_mfp)?;
+            // We descend only into `LetRec` nodes, because `promote_let_rec` ensured that all
+            // `LetRec` nodes are clustered near the root. This means that we can get to all the
+            // `LetRec` nodes by just descending into `LetRec` nodes, as there can't be any other
+            // nodes between them.
+            if let MirRelationExpr::LetRec {
+                ids: _,
+                values,
+                body,
+            } = expr
+            {
+                worklist.extend(values);
+                worklist.push(body);
+            }
+        }
+        Ok(())
+    }
 
     /// Considers inlining actions to perform for a sequence of bindings and a
     /// following body.
@@ -470,7 +501,7 @@ mod inlining {
     /// not be exactly those bindings that were inlineable, as we may not always
     /// be able to apply inlining due to ordering (we cannot inline a binding
     /// into one that is not strictly later).
-    pub(super) fn inline_lets(
+    pub(super) fn inline_lets_core(
         expr: &mut MirRelationExpr,
         inline_mfp: bool,
     ) -> Result<(), crate::TransformError> {
