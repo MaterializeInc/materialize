@@ -10,185 +10,68 @@ menu:
     weight: 5
 ---
 
-Materialize is a **streaming database** powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and
-[Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow),
-purpose-built for low-latency applications. It lets you ask complex questions
-about your data using **SQL**, and incrementally maintains the results of these SQL queries as the underlying data changes.
+Materialize is a **streaming database** purpose-built for low-latency
+applications. You can use it to process data at speeds and scales not possible
+in traditional databases, but without the cost, complexity, or development time
+of most streaming engines.
 
-## What does Materialize do?
+If you need to speed up queries that run frequently, or trigger actions as
+soon as events happen, Materialize is a good fit. Rather than recalculate
+results from scratch, or serve stale cached results, Materialize continually
+ingests data and keeps results up-to-date as new data arrives.
 
-You might be wondering: why not just use your database's built-in functionality
-to perform these same computations? Your database often acts as if it's never
-been asked that question before, which means it can take a _long_ time to come
-up with an answer, each and every time you pose the query.
+## Key features
 
-Materialize instead keeps the results of the queries and incrementally updates
-them as new data comes in. So, rather than recalculating the answer each time
-it's asked, Materialize continually updates the answer and gives you the
-answer's current state.
+Materialize combines the accessibility of SQL databases with a streaming engine
+that is horizontally scalable, highly available, and strongly consistent.
 
-Importantly, Materialize supports incrementally updating a much broader set of
-views than is common in traditional databases (e.g. views over multi-way joins
-with complex aggregations), and can do incremental updates in the presence of
-arbitrary inserts, updates, and deletes in the input streams.
+### Incremental updates
 
-## Why should I use Materialize?
+In traditional databases, materialized views help you avoid re-running heavy
+queries, typically by caching queries to serve results faster. But you have
+to make a compromise between the freshness of the results, the cost of
+refreshing the view, and the complexity of the SQL statements you can use.
 
-If you perform any OLAP queries over relational data and want to reduce the time
-it takes to refresh answers to common queries, Materialize can make that happen.
+In Materialize, you don't have to make such compromises. Materialize supports
+incrementally updated materialized views that are **always fresh**, even when
+using complex SQL statements, like multi-way joins with aggregations. How?
+Its engine is built on [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow)
+and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow)
+— data processing frameworks backed by many years of research and optimized for
+this exact purpose.
 
-For a sense of scale, it can take queries that most teams would run once-per-day
-and instead provide sub-second or single-digit second answers.
+### Standard SQL support
 
-## Materialize's design objective
+Materialize follows the SQL standard (SQL-92) implementation, so you interact
+with it like any relational database: using SQL. You can build complex
+analytical workloads using **[any type of join](/sql/join/)**(including
+non-windowed joins and joins on arbitrary conditions), but you can also
+leverage exciting new SQL patterns enabled by streaming like
+[**Change Data Capture (CDC)**](/integrations/#databases),
+[**temporal filters**](/sql/patterns/temporal-filters/), and [**subscriptions**](/sql/subscribe/).
 
-Materialize lets teams very quickly get answers to questions they routinely
-ask.
+### PostgreSQL wire-compatibility
 
-It's useful to think of these questions as the kind of queries you might use to
-power business intelligence dashboards. You might have a ton of data that comes
-in all day, and each team in your org wants to answer some questions using that
-data.
+Every database needs a protocol to standardize communication with the outside
+world. Materialize uses the [PostgreSQL wire protocol](https://datastation.multiprocess.io/blog/2022-02-08-the-world-of-postgresql-wire-compatibility.html),
+which allows it to integrate out-of-the-box with most SQL clients and other
+tools in the data ecosystem that support PostgreSQL — like [dbt](/integrations/dbt/).
 
-Traditionally, to get answers, some batch processing system performs a query
-over all of the data every night. This approach makes intuitive sense: the
-working set is often larger than any machine's memory and you need to process
-all of it. These kind of computations are therefore relatively expensive, so
-it's not feasible to execute them on the fly. Instead, you want to compute the
-answer once and then cache it until you derive a new answer.
+Don't see the a tool that you’d like to use with Materialize listed under
+[Tools and integrations](/integrations/)? Let us know by submitting a
+[feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)!
 
-This once-a-day update cycle works, but it's inopportune to continually
-recompute an answer that you once knew. It's also slow and doesn't allow teams
-to nimbly make decisions.
+### Strong consistency guarantees
 
-In contrast to the traditional approach, Materialize lets teams continually
-update the answers to their queries as new data comes in. This means that you
-no longer need to rely on day-old data to inform your decisions. You can now
-simply look at a real-time answer.
-
-## Understanding the jargon
-
-"A streaming SQL materialized view engine" is difficult to wade through, so
- let's take the terms piece-by-piece.
-
-### SQL & views
-
-One way to consider the answer to one of the aforementioned analytical queries
-is as a "view" of your data. There is some defined query that you want to
-execute, that results in giving you an answer that contains some subsets and
-computations of your data.
-
-In the language of **SQL**, a **view** is a pre-defined query and its results;
-every time you query a view, the underlying query is executed and you get the
-results back.
-
-However, continually re-executing queries is expensive, so another
-implementation of views instead stores the view's results as a physical table,
-i.e. it caches them. Because this involves storing the results, they're
-referred to as **materialized views**.
-
-Materialized views are often maintained with some periodicity and don't reflect
-the underlying data with total fidelity. This essentially makes them snapshots
-of the results, meaning any updates that have happened since the snapshot was
-generated will not be reflected in the materialized view. It's easy to liken
-this to the batch processing strategy discussed above; you occasionally perform
-some expensive computation and cache the results.
-
-However, it's also possible that if you were to describe the changes that
-happened in the underlying database that you would be able to reflect those
-changes in materialized views without needing to periodically recompute the
-answer to the query in total. Instead, each successful operation could be
-passed to an engine that could then parse the operation and, if necessary,
-update the materialized view. This is known as an **incrementally updated
-materialized view**.
-
-### Streaming
-
-If we understand the implementation of incrementally updated materialized views
-as "the need to see a stream of updates that are occurring to the underlying
-database", it could be modeled simply as "change data capture" (CDC). Using
-CDC, whenever a change occurs to the underlying database, a structure
-describing the change is propagated to some destination.
-
-One such destination you can use for CDC is a **stream** like Apache Kafka. As
-your database changes, you can describe those changes in a published feed, and
-services that care about those changes can subscribe to it.
-
-### Engine
-
-To maintain materialized views using a stream of data, you need an engine to
-subscribe to the CDC streams, and then perform the computations for and
-maintenance of the materialized view.
-
-One approach to this is using a dataflow **engine**, which is a set of
-computations that work over streams of data; they take a stream as their input,
-transform it, and output their own stream. If you think of dataflows in similar
-terms as functional programming, you can see that they can complete arbitrarily
-complex tasks.
-
-By modeling a SQL query as a dataflow, you can take in a CDC stream, apply a set
-of transformations to it, and then observe the results as final operator's
-output set.
-
-### Putting it all together
-
-To put all of this together, Materialize lets you:
-
-- Describe queries you want to know the answer to as **materialized views**,
-  which is a concept implemented in **SQL**.
-- Use CDC **streams** to feed our dataflow **engine** to create and maintain the
-  answers to those queries.
-
-Ultimately, this lets you refresh answers to your queries very quickly because
-Materialize continually updates their answers as new data streams in.
-
-## How does Materialize work?
-
-While we've covered the high-level details above, this section gives some of the
-more specific details about Materialize itself.
-
-Materialize ingests streams of data from external systems like Kafka and
-PostgreSQL that you declare as "sources". These sources monitor changes in the
-upstream data and automatically pull new records into Materialize. You can
-interact with this data in Materialize as if it were in a SQL table.
-
-Using these sources, you can define "views". Views represent those queries to
-which you continually want an up-to-date answer. Your view definitions are
-transformed by our query engine to create [Differential dataflows](https://github.com/frankmcsherry/differential-dataflow).
-
-A dataflow is a set of connected operators that each both consume and produce
-streams of data, creating a network of computation that can respond to streams
-of input data from sources. Differential dataflows are special, though, in that
-they can easily perform incremental updates at each step of the dataflow.
-
-As data streams in from your sources, your dataflows determine which data is
-relevant and update their result sets only if they need to, for example, when
-there are new rows or the values used in dataflow computations have changed.
-
-When you query one of your views, Materialize can simply return the dataflow's
-result set, which should always be faster than computing the answer from
-scratch.
-
-## Materialize vs. other methodologies
-
-### Batch processing
-
-Batch processing relies on performing large, expensive computations
-infrequently. This means that you can never achieve real-time results, and it
-often does not build upon its prior computations.
-
-In contrast, Materialize continually updates queries as data comes in, which
-means it performs small, efficient computations constantly. This enables
-real-time results and builds upon all of your prior computations.
-
-### Materialized views in relational databases
-
-To maintain materialized views, most RDBMSes occasionally re-run the view's
-underlying query. This results in a potential impact to the database's
-performance while updating the view, as well as data that is only infrequently
-up-to-date.
+By default, Materialize provides the highest level of transaction isolation:
+[**strict serializability**](https://jepsen.io/consistency/models/strict-serializable).
+This means that it presents as if it were a single process, despite spanning a
+large number of threads, processes, and machines. Strict serializability avoids
+common pitfalls like eventual consistency and dual writes, which affect the
+correctness of your results. You can [adjust the transaction isolation level](/overview/isolation-level/)
+depending on your consistency and performance requirements.
 
 ## Learn more
 
 - [Key concepts](/overview/key-concepts)
-- [Get started](/get-started)
+- [Get started with Materialize](/get-started/)
