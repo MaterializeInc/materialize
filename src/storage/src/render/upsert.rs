@@ -130,11 +130,7 @@ pub(crate) struct UpsertOrder(Option<SmallVec<[i128; 2]>>);
 impl From<MzOffset> for UpsertOrder {
     fn from(val: MzOffset) -> Self {
         let mut order = SmallVec::new();
-        order.push(
-            val.offset
-                .try_into()
-                .expect("Unexpected u64 overflow to i128"),
-        );
+        order.push(val.offset.into());
         UpsertOrder(Some(order))
     }
 }
@@ -148,7 +144,7 @@ pub(crate) fn get_order(
 ) -> UpsertOrder {
     let order = match value {
         Ok(row) if !order_by_indices.is_empty() => {
-            let order_col = order_by_indices
+            let order_val = order_by_indices
                 .iter()
                 .map(|idx| {
                     // Row's iterator is not ExactSizeIterator and the nth() call is slightly expensive
@@ -169,7 +165,7 @@ pub(crate) fn get_order(
                     }
                 })
                 .collect();
-            Some(order_col)
+            Some(order_val)
         }
         _ => None,
     };
