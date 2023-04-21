@@ -288,6 +288,37 @@ of steps.
 # Rollout
 [rollout]: #rollout
 
+### Migration to this new framework
+
+We need to write a migration from our JSON types today, to this new migration framework that uses
+protobufs. I propose we do that in the following steps:
+
+1. Define all of our existing Stash objects in `objects.proto`, also snapshot this initial version
+as `objects_v15.proto`. The current Stash version is 14.
+2. Move all of the existing Stash objects from [`storage.rs`](https://github.com/MaterializeInc/materialize/blob/23d7cad1211b4d1d1de3a26652937f9f2c4df61c/src/adapter/src/catalog/storage.rs)
+into a new `legacy_json_objects.rs`, these will only continue to exist to facilitate the migration
+to the new protobufs, leave an extensive doc comment explaining as much.
+3. Introduce the migration flow as described in part 2, re-write the [existing migrations](https://github.com/MaterializeInc/materialize/blob/a8aa3be77ddf152faf4e98596d2d3fff94b1f9b6/src/adapter/src/catalog/storage.rs#L437-L739)
+in this flow, using the types from `legacy_json_objects.rs`.
+4. Bump the `STASH_VERSION` to 15, write a `v14_to_v15(...)` migration that migrates us from the
+types in `legacy_json_objects.rs` to the protos we snapshotted in `objects_v15.proto`. Introduce
+the "initialization" step as described in part 3, so new users will immediately have
+`STASH_VERSION: 15` which will contain the protobufs.
+
+
+> Note: There are two alternative approachs I thought of, but don't think are great:
+> 1. Before running any of the existing Stash migrations, switch everything to protobufs and
+     re-write the existing migrations using protos. I don't like this approach because we'd then
+     have two version fields for the Stash, i.e. "version number" and "is proto". And we'd need
+     to generate multiple `object_v11.proto`, `object_v12.proto`, etc. files that would be
+     identical.
+> 2. Write a single `legacy_to_v15(...)` migration code path, that handles upgrading from all of
+     the existing versions of the Stash to v15. This wouldn't be too bad, but it does break the
+     invariant we wanted to uphold of only every upgrading one version at a time. With this
+     approach we could theoretically upgrade from say v11 to v15.
+
+### Other
+
 At our current scale, I don't believe the benefit to partially rolling out a new format for the
 Stash outweighs the complexity of concurrently maintaining two separate implementations. To
 get similar testing coverage that a partial rollout would, we can validate that the new Stash
