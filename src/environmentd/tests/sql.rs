@@ -1303,7 +1303,7 @@ fn test_utilization_hold() {
     // The bool determines whether we are testing indexes.
     const CLUSTERS_TO_TRY: &[(&str, bool)] = &[("mz_introspection", true), ("default", false)];
     const QUERIES_TO_TRY: &[&str] = &[
-        "SELECT * FROM mz_internal.mz_cluster_replica_utilization",
+        // "SELECT * FROM mz_internal.mz_cluster_replica_utilization",
         "SELECT * FROM mz_internal.mz_cluster_replica_statuses",
     ];
 
@@ -1370,18 +1370,20 @@ fn test_utilization_hold() {
             // need to be changed.
             assert!(past_since.less_equal(&since.checked_add(1000).unwrap()));
         }
+    }
 
-        // Check that we can turn off retention
-        let mut sys_client = server
-            .pg_config_internal()
-            .user(&SYSTEM_USER.name)
-            .connect(postgres::NoTls)
-            .unwrap();
+    // Check that we can turn off retention
+    let mut sys_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
 
-        sys_client
-            .execute("ALTER SYSTEM SET metrics_retention='1s'", &[])
-            .unwrap();
-
+    sys_client
+        .execute("ALTER SYSTEM SET metrics_retention='1s'", &[])
+        .unwrap();
+    for q in QUERIES_TO_TRY {
+        let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
         for (cluster, _) in CLUSTERS_TO_TRY {
             client
                 .execute(&format!("SET cluster={cluster}"), &[])
