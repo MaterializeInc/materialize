@@ -750,6 +750,21 @@ SELECT * FROM t1 JOIN t2 USING (f1, f2) AS x;
 f1  f2
 3   4
 
+query II colnames
+SELECT * FROM (SELECT x.f2 AS f3 FROM t1 JOIN t2 USING (f2) AS x) t5 JOIN t3 USING (f3) AS x;
+----
+f3  f1
+4   3
+
+query error table name "x" specified more than once
+SELECT * FROM t1 JOIN t2 USING (f1) AS x JOIN t3 USING (f1) AS x;
+
+query IIII colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x JOIN t3 USING (f1) AS y;
+----
+f1  f2  f2  f3
+3   4   4   4
+
 query error column "t1.f1" does not exist
 SELECT * FROM (t1 JOIN t2 USING (f1)) AS x WHERE t1.f1 = 1;
 
@@ -779,6 +794,31 @@ SELECT ROW(x.*) FROM t1 JOIN t2 USING (f1) AS x;
 ----
 row
 ("(3)")
+
+statement ok
+CREATE VIEW v1 AS SELECT x.* FROM t1 JOIN t2 USING (f1) AS x WHERE x.f1 = 3;
+
+query T colnames
+SELECT * FROM v1;
+----
+f1
+3
+
+# Ensure the output from `SHOW CREATE VIEW` contains a correctly-formed `AS` part
+
+mode standard
+
+query TT
+SHOW CREATE VIEW v1;
+----
+materialize.public.v1
+CREATE VIEW "materialize"."public"."v1" AS SELECT "x".* FROM "materialize"."public"."t1" JOIN "materialize"."public"."t2" USING ("f1") AS "x" WHERE "x"."f1" = 3
+
+mode cockroach
+
+statement ok
+DROP VIEW v1;
+
 
 # Left
 
