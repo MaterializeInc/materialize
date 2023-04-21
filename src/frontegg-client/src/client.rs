@@ -56,7 +56,7 @@ struct RefreshRequest<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct Auth {
+pub(crate) struct Auth {
     token: String,
     /// Refresh at indicates the time at which the token should be refreshed.
     /// It equals the expiring time / 2
@@ -72,10 +72,10 @@ struct Auth {
 ///
 /// [`Arc`]: std::sync::Arc
 pub struct Client {
-    pub inner: reqwest::Client,
-    pub app_password: AppPassword,
-    pub endpoint: Url,
-    pub auth: Mutex<Option<Auth>>,
+    pub(crate) inner: reqwest::Client,
+    pub(crate) app_password: AppPassword,
+    pub(crate) endpoint: Url,
+    pub(crate) auth: Mutex<Option<Auth>>,
 }
 
 impl Client {
