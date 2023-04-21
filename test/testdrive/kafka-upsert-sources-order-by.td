@@ -86,7 +86,7 @@ contains:Could not find key in included metadata
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, PARTITION as p
   ENVELOPE UPSERT (ORDER BY (p)) WITH (SIZE = '1')
-contains:Only TIMESTAMP and OFFSET are supported as order by columns
+contains:Only `TIMESTAMP` and `OFFSET` (from `INCLUDE TIMESTAMP` and `INCLUDE OFFSET`) are supported as `ORDER BY` columns
 
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP as ts, OFFSET
