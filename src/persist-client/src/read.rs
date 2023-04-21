@@ -921,10 +921,12 @@ where
                     );
                     let retry = tokio::select! {
                         retry = retry.sleep().instrument(trace_span!("listen::sleep")) => {
+                            self.metrics.watch.listen_woken_via_sleep.inc();
                             debug!("listen {} got woken via sleep", self.machine.shard_id());
                             Some(retry)
                         },
                         _ = watch.wait_for_seqno_ge(seqno.next()).instrument(trace_span!("listen::wait_for_seqno_ge")) => {
+                            self.metrics.watch.listen_woken_via_watch.inc();
                             debug!("listen {} got woken via watch", self.machine.shard_id());
                             None
                         },
@@ -1359,7 +1361,7 @@ mod tests {
             consensus,
             metrics,
             Arc::new(CpuHeavyRuntime::new()),
-            Arc::new(StateCache::default()),
+            Arc::new(StateCache::new_no_metrics()),
         )
         .expect("client construction failed")
         .expect_open::<String, String, u64, i64>(ShardId::new())

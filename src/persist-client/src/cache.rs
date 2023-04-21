@@ -68,14 +68,14 @@ impl Drop for RttLatencyTask {
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
     pub fn new(cfg: PersistConfig, registry: &MetricsRegistry) -> Self {
-        let metrics = Metrics::new(&cfg, registry);
+        let metrics = Arc::new(Metrics::new(&cfg, registry));
         PersistClientCache {
             cfg,
-            metrics: Arc::new(metrics),
+            metrics: Arc::clone(&metrics),
             blob_by_uri: Mutex::new(BTreeMap::new()),
             consensus_by_uri: Mutex::new(BTreeMap::new()),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
-            state_cache: Arc::new(StateCache::default()),
+            state_cache: Arc::new(StateCache::new(metrics)),
         }
     }
 
@@ -300,8 +300,9 @@ where
 /// command for the same shard are executing concurrently, only one can win
 /// anyway, the other will retry. With the mutex, we even get to avoid the retry
 /// if the racing commands are on the same process.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StateCache {
+    metrics: Arc<Metrics>,
     states: Mutex<BTreeMap<ShardId, Arc<OnceCell<Weak<dyn DynState>>>>>,
 }
 
@@ -312,6 +313,22 @@ enum StateCacheInit {
 }
 
 impl StateCache {
+    /// Returns a new StateCache.
+    pub fn new(metrics: Arc<Metrics>) -> Self {
+        StateCache {
+            metrics,
+            states: Default::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_no_metrics() -> Self {
+        Self::new(Arc::new(Metrics::new(
+            &PersistConfig::new_for_tests(),
+            &MetricsRegistry::new(),
+        )))
+    }
+
     pub(crate) async fn get<K, V, T, D, F, InitFn>(
         &self,
         shard_id: ShardId,
@@ -353,7 +370,7 @@ impl StateCache {
                             let init_res = init_fn().await;
                             let state = Arc::new(LockingTypedState {
                                 shard_id,
-                                notifier: StateWatchNotifier::default(),
+                                notifier: StateWatchNotifier::new(Arc::clone(&self.metrics)),
                                 state: RwLock::new(init_res?),
                             });
                             let ret = Arc::downgrade(&state);
@@ -626,7 +643,7 @@ mod tests {
         }
 
         let s1 = ShardId::new();
-        let states = Arc::new(StateCache::default());
+        let states = Arc::new(StateCache::new_no_metrics());
 
         // The cache starts empty.
         assert_eq!(states.states.lock().await.len(), 0);
@@ -746,7 +763,7 @@ mod tests {
 
         const COUNT: usize = 1000;
         let id = ShardId::new();
-        let cache = Arc::new(StateCache::default());
+        let cache = Arc::new(StateCache::new_no_metrics());
 
         let mut futures = (0..COUNT)
             .map(|_| {

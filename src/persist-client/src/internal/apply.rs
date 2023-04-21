@@ -109,7 +109,7 @@ where
 
     /// Returns a new [StateWatch] for changes to this Applier's State.
     pub fn watch(&self) -> StateWatch<K, V, T, D> {
-        StateWatch::new(Arc::clone(&self.state), &self.metrics)
+        StateWatch::new(Arc::clone(&self.state), Arc::clone(&self.metrics))
     }
 
     /// Fetches the latest state from Consensus and passes its `upper` to the provided closure.

@@ -20,17 +20,16 @@ use crate::internal::metrics::Metrics;
 
 #[derive(Debug)]
 pub struct StateWatchNotifier {
+    metrics: Arc<Metrics>,
     tx: broadcast::Sender<SeqNo>,
 }
 
-impl Default for StateWatchNotifier {
-    fn default() -> Self {
-        let (tx, _rx) = broadcast::channel(1);
-        StateWatchNotifier { tx }
-    }
-}
-
 impl StateWatchNotifier {
+    pub(crate) fn new(metrics: Arc<Metrics>) -> Self {
+        let (tx, _rx) = broadcast::channel(1);
+        StateWatchNotifier { metrics, tx }
+    }
+
     /// Wake up any watchers of this state.
     ///
     /// This must be called while under the same lock that modified the state to
@@ -44,9 +43,13 @@ impl StateWatchNotifier {
     pub(crate) fn notify(&self, seqno: SeqNo) {
         match self.tx.send(seqno) {
             // Someone got woken up.
-            Ok(_) => {}
+            Ok(_) => {
+                self.metrics.watch.notify_sent.inc();
+            }
             // No one is listening, that's also fine.
-            Err(_) => {}
+            Err(_) => {
+                self.metrics.watch.notify_noop.inc();
+            }
         }
     }
 }
@@ -65,13 +68,14 @@ impl StateWatchNotifier {
 ///   self.
 #[derive(Debug)]
 pub struct StateWatch<K, V, T, D> {
+    metrics: Arc<Metrics>,
     state: Arc<LockingTypedState<K, V, T, D>>,
     seqno_high_water: SeqNo,
     rx: broadcast::Receiver<SeqNo>,
 }
 
 impl<K, V, T, D> StateWatch<K, V, T, D> {
-    pub(crate) fn new(state: Arc<LockingTypedState<K, V, T, D>>, metrics: &Metrics) -> Self {
+    pub(crate) fn new(state: Arc<LockingTypedState<K, V, T, D>>, metrics: Arc<Metrics>) -> Self {
         // Important! We have to subscribe to the broadcast channel _before_ we
         // grab the current seqno. Otherwise, we could race with a write to
         // state and miss a notification. Tokio guarantees that "the returned
@@ -81,6 +85,7 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
         let rx = state.notifier().tx.subscribe();
         let seqno_high_water = state.read_lock(&metrics.locks.watch, |x| x.seqno);
         StateWatch {
+            metrics,
             state,
             seqno_high_water,
             rx,
@@ -91,6 +96,7 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
     ///
     /// This method is cancel-safe.
     pub async fn wait_for_seqno_ge(&mut self, requested: SeqNo) {
+        self.metrics.watch.notify_wait_started.inc();
         debug!("wait_for_seqno_ge {} {}", self.state.shard_id(), requested);
         loop {
             if self.seqno_high_water >= requested {
@@ -98,6 +104,7 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
             }
             match self.rx.recv().await {
                 Ok(x) => {
+                    self.metrics.watch.notify_recv.inc();
                     assert!(x >= self.seqno_high_water);
                     self.seqno_high_water = x;
                 }
@@ -105,6 +112,7 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
                     unreachable!("we're holding on to a reference to the sender")
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
+                    self.metrics.watch.notify_lagged.inc();
                     // This is just a hint that our buffer (of size 1) filled
                     // up, which is totally fine. The broadcast channel
                     // guarantees that the most recent N (again, =1 here) are
@@ -114,6 +122,7 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
                 }
             }
         }
+        self.metrics.watch.notify_wait_finished.inc();
         debug!(
             "wait_for_seqno_ge {} {} returning",
             self.state.shard_id(),
@@ -147,8 +156,11 @@ mod tests {
     #[tokio::test]
     async fn state_watch() {
         mz_ore::test::init_logging();
-        let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
-        let cache = StateCache::default();
+        let metrics = Arc::new(Metrics::new(
+            &PersistConfig::new_for_tests(),
+            &MetricsRegistry::new(),
+        ));
+        let cache = StateCache::new(Arc::clone(&metrics));
         let shard_id = ShardId::new();
         let state = cache
             .get::<(), (), u64, i64, _, _>(shard_id, || async {
@@ -164,7 +176,7 @@ mod tests {
         assert_eq!(state.read_lock(&metrics.locks.watch, |x| x.seqno), SeqNo(0));
 
         // A watch for 0 resolves immediately.
-        let mut w0 = StateWatch::new(Arc::clone(&state), &metrics);
+        let mut w0 = StateWatch::new(Arc::clone(&state), Arc::clone(&metrics));
         let () = w0.wait_for_seqno_ge(SeqNo(0)).await;
 
         // A watch for 1 does not yet resolve.
@@ -181,7 +193,7 @@ mod tests {
         let () = w0.wait_for_seqno_ge(SeqNo(0)).await;
 
         // We can create a new watch and it also behaves.
-        let mut w1 = StateWatch::new(Arc::clone(&state), &metrics);
+        let mut w1 = StateWatch::new(Arc::clone(&state), Arc::clone(&metrics));
         let () = w1.wait_for_seqno_ge(SeqNo(0)).await;
         let () = w1.wait_for_seqno_ge(SeqNo(1)).await;
         assert_eq!(w1.wait_for_seqno_ge(SeqNo(2)).now_or_never(), None);
@@ -194,7 +206,7 @@ mod tests {
             &PersistConfig::new_for_tests(),
             &MetricsRegistry::new(),
         ));
-        let cache = StateCache::default();
+        let cache = StateCache::new(Arc::clone(&metrics));
         let shard_id = ShardId::new();
         let state = cache
             .get::<(), (), u64, i64, _, _>(shard_id, || async {
@@ -217,7 +229,7 @@ mod tests {
                 let state = Arc::clone(&state);
                 let metrics = Arc::clone(&metrics);
                 mz_ore::task::spawn(|| "watch", async move {
-                    let mut watch = StateWatch::new(Arc::clone(&state), &metrics);
+                    let mut watch = StateWatch::new(Arc::clone(&state), Arc::clone(&metrics));
                     // We stared at 0, so N writes means N+1 seqnos.
                     let wait_seqno = SeqNo(u64::cast_from(idx % NUM_WRITES + 1));
                     let () = watch.wait_for_seqno_ge(wait_seqno).await;

@@ -954,7 +954,7 @@ mod tests {
                 (k.to_owned(), v.to_owned(), t.to_owned(), d.to_owned(), None)
             }
 
-            client.shared_states = Arc::new(StateCache::default());
+            client.shared_states = Arc::new(StateCache::new_no_metrics());
             assert_eq!(
                 client
                     .open::<Vec<u8>, String, u64, i64>(
