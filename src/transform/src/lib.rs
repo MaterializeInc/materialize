@@ -505,7 +505,11 @@ impl Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
-            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals().strict_join_equivalences()),
+            Box::new(
+                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
         ];
         Self {
             name: "logical",
@@ -522,7 +526,11 @@ impl Optimizer {
     pub fn physical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals().strict_join_equivalences()),
+            Box::new(
+                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
             // Considerations for the relationship between JoinImplementation and other transforms:
             // - there should be a run of LiteralConstraints before JoinImplementation lifts away
             //   the Filters from the Gets;
@@ -597,7 +605,8 @@ impl Optimizer {
         ctx: &crate::typecheck::SharedContext,
         allow_new_globals: bool,
     ) -> Self {
-        let mut typechecker = crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences();
+        let mut typechecker =
+            crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences();
 
         if !allow_new_globals {
             typechecker = typechecker.disallow_new_globals();
@@ -629,7 +638,11 @@ impl Optimizer {
                     Box::new(crate::fold_constants::FoldConstants { limit: Some(10000) }),
                 ],
             }),
-            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals().strict_join_equivalences()),
+            Box::new(
+                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
         ];
         Self {
             name: "logical_cleanup",
