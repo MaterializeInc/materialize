@@ -1225,8 +1225,8 @@ class StartupLoaded(Scenario):
             + """
 $ kafka-create-topic topic=startup-time
 
-$ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
-{{"f2": 1}}
+$ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
+{"f2": 1}
 """
         )
 
