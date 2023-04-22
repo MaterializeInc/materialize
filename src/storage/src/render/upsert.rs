@@ -11,9 +11,10 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::hash::{Hash, Hasher};
+use std::num::Wrapping;
 use std::rc::Rc;
 
-use differential_dataflow::consolidation;
+use bincode::Options;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
@@ -146,18 +147,74 @@ where
     builder.build(move |caps| async move {
         let mut output_cap = caps.into_element();
 
-        let mut snapshot = vec![];
-
         // In the first phase we will collect all the updates from our output that are not beyond
         // resume_upper. This will be the seed state for the command processing below.
+        //
+        // We use a XOR trick in order to accumulate the snapshot without having to store the full
+        // unconsolidated history in memory. For all (value, diff) updates of a key we track:
+        // - diff_sum = SUM(diff)
+        // - checksum_sum = SUM(checksum(bincode(value)) * diff)
+        // - len_sum = SUM(len(bincode(value)) * diff)
+        // - value_xor = XOR(bincode(value))
+        //
+        // ## Correctness
+        //
+        // The method is correct because a well formed upsert snapshot will have for each key:
+        // - Zero or one updates of the form (cur_value, +1)
+        // - Zero or more pairs of updates of the form (prev_value, +1), (prev_value, -1)
+        //
+        // We are interested in extracting the cur_value of each key and discard all prev_values
+        // that might be included in the stream. Since the history of prev_values always comes in
+        // pairs, computing the XOR of those is always going to cancel their effects out. Also,
+        // since XOR is commutative this property is true independent of the order. The same is
+        // true for the summations of the length and checksum since the sum will contain the
+        // unrelated values zero times.
+        //
+        // Therefore the accumulators will end up precisely in one of two states:
+        // 1. diff == 0, checksum == 0, value == [0..] => the key is not present
+        // 2. diff == 1, checksum == checksum(cur_value) value == cur_value => the key is present
+        //
+        // ## Robustness
+        //
+        // In the absense of bugs, accumulating the diff and checksum is not required since we know
+        // that a well formed snapshot always satisfies XOR(bincode(values)) == bincode(cur_value).
+        // However bugs may happen and so storing 16 more bytes per key to have a very high
+        // guarantee that we're not decoding garbage is more than worth it.
+        #[allow(clippy::disallowed_types)]
+        let mut snapshot = std::collections::HashMap::<
+            UpsertKey,
+            (Vec<u8>, Wrapping<i64>, Wrapping<i64>, Wrapping<i64>),
+        >::new();
+        let mut buf = vec![];
+        let enc_opts = bincode::DefaultOptions::new().allow_trailing_bytes();
         while let Some(event) = previous.next_mut().await {
             match event {
                 AsyncEvent::Data(_cap, data) => {
-                    snapshot.extend(
-                        data.drain(..)
-                            .filter(|(_row, ts, _diff)| !resume_upper.less_equal(ts))
-                            .map(|(row, _ts, diff)| (row, diff)),
-                    );
+                    for ((key, value), ts, diff) in data.drain(..) {
+                        #[allow(clippy::as_conversions)]
+                        if !resume_upper.less_equal(&ts) {
+                            buf.clear();
+                            enc_opts.serialize_into(&mut buf, &value).unwrap();
+                            let len = i64::try_from(buf.len()).unwrap();
+
+                            let entry = snapshot.entry(key).or_default();
+                            let (value_xor, len_sum, checksum_sum, diff_sum) = entry;
+
+                            *diff_sum += diff;
+                            *len_sum += len.wrapping_mul(diff);
+                            *checksum_sum += (seahash::hash(&buf) as i64).wrapping_mul(diff);
+
+                            // XOR of even diffs cancel out, so we only do it if diff is odd
+                            if diff.abs() % 2 == 1 {
+                                if value_xor.len() < buf.len() {
+                                    value_xor.resize(buf.len(), 0);
+                                }
+                                for (acc, val) in value_xor.iter_mut().zip(buf.drain(..)) {
+                                    *acc ^= val;
+                                }
+                            }
+                        }
+                    }
                 }
                 AsyncEvent::Progress(upper) => {
                     if PartialOrder::less_equal(&resume_upper, &upper) {
@@ -166,13 +223,12 @@ where
                 }
             }
         }
+        drop(buf);
         drop(previous_token);
         while let Some(_event) = previous.next().await {
             // Exchaust the previous input. It is expected to immediately reach the empty
             // antichain since we have dropped its token.
         }
-
-        consolidation::consolidate(&mut snapshot);
 
         // The main key->value used to store previous values.
         let mut state = HashMap::new();
@@ -182,9 +238,26 @@ where
         #[allow(clippy::disallowed_types)]
         let mut commands_state = std::collections::HashMap::new();
 
-        for ((key, value), diff) in snapshot {
-            assert_eq!(diff, 1, "invalid upsert state");
-            state.insert(key, value);
+        for (key, (value, len, checksum, diff)) in snapshot {
+            #[allow(clippy::as_conversions)]
+            match diff.0 {
+                1 => {
+                    let len = usize::try_from(len.0).expect("invalid upsert state");
+                    let value = &value[..len];
+                    assert_eq!(
+                        checksum.0,
+                        seahash::hash(value) as i64,
+                        "invalid upsert state"
+                    );
+                    state.insert(key, enc_opts.deserialize(value).unwrap());
+                }
+                0 => {
+                    assert_eq!(len.0, 0, "invalid upsert state");
+                    assert_eq!(checksum.0, 0, "invalid upsert state");
+                    assert!(value.iter().all(|&x| x == 0), "invalid upsert state");
+                }
+                _ => panic!("invalid upsert state"),
+            }
         }
 
         // Now can can resume consuming the collection

@@ -1007,7 +1007,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "chrono"
 version = "0.4.24"
-source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#5bc022ca811a81d0dd79e3254214ae05a74898b6"
+source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#84bbea51313b0c705fcf0ba82196234fe940050f"
 dependencies = [
  "iana-time-zone",
  "num-integer",
@@ -4851,6 +4851,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum",
+ "bincode",
  "bytesize",
  "chrono",
  "clap",
@@ -4900,6 +4901,7 @@ dependencies = [
  "rdkafka",
  "regex",
  "rocksdb",
+ "seahash",
  "serde",
  "serde_json",
  "sha2",
@@ -6558,6 +6560,12 @@ name = "scratch"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96311ef4a16462c757bb6a39152c40f58f31cd2602a40fceb937e2bc34e6cbab"
+
+[[package]]
+name = "seahash"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "sec1"
