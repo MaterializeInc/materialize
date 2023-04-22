@@ -78,6 +78,24 @@ static U128_SPLITTER_AGG: Lazy<NumericAgg> = Lazy::new(|| {
     cx.parse("340282366920938463463374607431768211456").unwrap()
 });
 
+/// Module to simplify serde'ing a `Numeric` through its string representation.
+pub mod str_serde {
+    use std::str::FromStr;
+
+    use serde::Deserialize;
+
+    use super::Numeric;
+
+    /// Deserializing a [`Numeric`] value from its `String` representation.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Numeric, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let buf = String::deserialize(deserializer)?;
+        Numeric::from_str(&buf).map_err(serde::de::Error::custom)
+    }
+}
+
 /// The `max_scale` of a [`ScalarType::Numeric`].
 ///
 /// This newtype wrapper ensures that the scale is within the valid range.
