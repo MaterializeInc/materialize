@@ -15,6 +15,7 @@ anyhow = "1.0.66"
 async-stream = "0.3.3"
 async-trait = "0.1.68"
 bytesize = "1.1.0"
+bincode = "1"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 clap = { version = "3.2.24", features = ["derive", "env"] }
 crossbeam-channel = "0.5.8"
@@ -60,6 +61,7 @@ rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.7.0" }
 rocksdb = { version = "0.21.0", default-features = false, features = ["snappy"] }
+seahash = "4"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
 sha2 = "0.10.6"

@@ -102,12 +102,15 @@ async fn basic() -> Result<(), anyhow::Error> {
     )
     .await?;
 
-    let mut ret = vec![None; 1];
+    let mut ret = vec![Default::default(); 1];
     instance
         .multi_get(vec!["one".to_string()], ret.iter_mut())
         .await?;
 
-    assert_eq!(ret.split_off(0), vec![None]);
+    assert_eq!(
+        ret.into_iter().map(|v| v.value).collect::<Vec<_>>(),
+        vec![None]
+    );
 
     instance
         .multi_put(vec![
@@ -117,12 +120,15 @@ async fn basic() -> Result<(), anyhow::Error> {
         ])
         .await?;
 
-    let mut ret = vec![None; 2];
+    let mut ret = vec![Default::default(); 2];
     instance
         .multi_get(vec!["one".to_string(), "two".to_string()], ret.iter_mut())
         .await?;
 
-    assert_eq!(ret.split_off(0), vec![Some("onev".to_string()), None]);
+    assert_eq!(
+        ret.into_iter().map(|v| v.value).collect::<Vec<_>>(),
+        vec![Some("onev".to_string()), None]
+    );
 
     instance
         .multi_put(vec![
@@ -132,13 +138,13 @@ async fn basic() -> Result<(), anyhow::Error> {
         ])
         .await?;
 
-    let mut ret = vec![None; 2];
+    let mut ret = vec![Default::default(); 2];
     instance
         .multi_get(vec!["one".to_string(), "two".to_string()], ret.iter_mut())
         .await?;
 
     assert_eq!(
-        ret.split_off(0),
+        ret.into_iter().map(|v| v.value).collect::<Vec<_>>(),
         vec![Some("onev".to_string()), Some("twov2".to_string())]
     );
 

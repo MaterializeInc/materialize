@@ -4946,6 +4946,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum",
+ "bincode",
  "bytesize",
  "chrono",
  "clap",
@@ -4998,6 +4999,7 @@ dependencies = [
  "rdkafka",
  "regex",
  "rocksdb",
+ "seahash",
  "serde",
  "serde_json",
  "sha2",
@@ -6647,6 +6649,12 @@ name = "scratch"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96311ef4a16462c757bb6a39152c40f58f31cd2602a40fceb937e2bc34e6cbab"
+
+[[package]]
+name = "seahash"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "sec1"
