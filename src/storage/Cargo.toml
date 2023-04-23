@@ -16,7 +16,7 @@ async-stream = "0.3.3"
 async-trait = "0.1.59"
 bytesize = "1.1.0"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-clap = { version = "3.2.20", features = ["derive", "env"] }
+clap = { version = "4.2.4", features = ["derive", "env"] }
 crossbeam-channel = "0.5.8"
 csv-core = { version = "0.1.10" }
 dec = "0.4.8"
@@ -78,7 +78,7 @@ tonic-build = "0.8.2"
 [dev-dependencies]
 async-trait = "0.1.59"
 axum = { version = "0.6.7" }
-clap = { version = "3.2.20", features = ["derive", "env"] }
+clap = { version = "4.2.4", features = ["derive", "env"] }
 datadriven = { version = "0.6.0", features = ["async"] }
 humantime = "2.1.0"
 rocksdb = { version = "0.20.1", default-features = false, features = ["snappy"] }
