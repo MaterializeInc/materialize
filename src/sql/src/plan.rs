@@ -114,7 +114,6 @@ pub enum Plan {
     AbortTransaction(AbortTransactionPlan),
     Peek(PeekPlan),
     Subscribe(SubscribePlan),
-    SendRows(SendRowsPlan),
     CopyFrom(CopyFromPlan),
     CopyRows(CopyRowsPlan),
     Explain(ExplainPlan),
@@ -213,14 +212,13 @@ impl Plan {
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
                 PlanKind::Peek,
-                PlanKind::SendRows,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
                 PlanKind::ShowAllVariables,
             ],
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
             StatementKind::Subscribe => vec![PlanKind::Subscribe],
-            StatementKind::Update => vec![PlanKind::ReadThenWrite, PlanKind::SendRows],
+            StatementKind::Update => vec![PlanKind::ReadThenWrite],
         }
     }
 
@@ -272,7 +270,6 @@ impl Plan {
             Plan::AbortTransaction(_) => "abort",
             Plan::Peek(_) => "select",
             Plan::Subscribe(_) => "subscribe",
-            Plan::SendRows(_) => "send rows",
             Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
             Plan::Explain(_) => "explain",
