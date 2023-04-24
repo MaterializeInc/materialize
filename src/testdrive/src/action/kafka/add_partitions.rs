@@ -27,6 +27,7 @@ pub async fn run_add_partitions(
 ) -> Result<ControlFlow, anyhow::Error> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let total_partitions = cmd.args.opt_parse("total-partitions")?.unwrap_or(1);
+    let allow_changing_unmanaged_topic = cmd.args.opt_bool("allow-changing-unmanaged-topic")?.unwrap_or(false);
     cmd.args.done()?;
 
     let topic_name = format!("{}-{}", topic_prefix, state.seed);
@@ -46,10 +47,12 @@ pub async fn run_add_partitions(
             }
         }
         None => {
-            bail!(
+            if !allow_changing_unmanaged_topic {
+                bail!(
                 "topic {} not created by kafka-create-topic",
                 topic_name.quoted(),
-            )
+                )
+            }
         }
     }
 
