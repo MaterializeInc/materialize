@@ -72,11 +72,9 @@ class MultiplePartitions(Check):
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
                 
-                # delete entries
+                # delete some A-key entries
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=50
                 {"key1": "A${kafka-ingest.iteration}"}
-
-
                 """,
                 """
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
@@ -103,11 +101,15 @@ class MultiplePartitions(Check):
                 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 running
                
-                > SELECT COUNT(*) FROM multiple_partitions_source;
-                1050
+                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
+                A 950
+                B 40
+                C 60
                
-                > SELECT COUNT(*) FROM mv_multiple_partitions;
-                1050
-           """
+                > SELECT LEFT(f1, 1), COUNT(*) FROM mv_multiple_partitions GROUP BY LEFT(f1, 1);
+                A 950
+                B 40
+                C 60
+                """
             )
         )
