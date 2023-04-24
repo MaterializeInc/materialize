@@ -37,5 +37,6 @@ stdenv.mkDerivation rec {
 
   shellHook = ''
     export LD_LIBRARY_PATH=${pkgs.stdenv.cc.cc.lib}/lib:$LD_LIBRARY_PATH
+    export LIBCLANG_PATH="${llvmPackages_14.libclang.lib}/lib";
   '';
 }
