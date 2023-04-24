@@ -518,6 +518,7 @@ class Composition:
         capture: bool = False,
         capture_stderr: bool = False,
         stdin: Optional[str] = None,
+        check: bool = True,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -545,6 +546,7 @@ class Composition:
             capture=capture,
             capture_stderr=capture_stderr,
             stdin=stdin,
+            check=check,
         )
 
     def pull_if_variable(self, services: List[str]) -> None:

@@ -97,12 +97,16 @@ DISRUPTIONS = [
         name="drain",
         disruption=lambda c, id: c.exec(
             # Execute the 'drain' command on a different node from the one that we are draining
+            #
+            # Draining may sometimes time out, but we continue with the restart in case this happens,
+            # as a real life CRDB upgrade procedure will most likely also ignore such a timeout.
             f"cockroach{(id % 2) + 1}",
             "cockroach",
             "node",
             "drain",
             str(id + 1),
             "--insecure",
+            check=False,
         ),
     ),
 ]
