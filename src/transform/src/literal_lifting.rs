@@ -497,7 +497,16 @@ impl LiteralLifting {
                             }
 
                             let literals = input_literals.into_iter().flatten().collect::<Vec<_>>();
-                            *relation = relation.take_dangerous().map(literals).project(projection)
+
+                            // Bubble up literals if the projection is the
+                            // identity.
+                            if projection.iter().enumerate().all(|(col, &pos)| col == pos) {
+                                return Ok(literals);
+                            }
+
+                            // Otherwise add map(literals) + project(projection)
+                            // and bubble up an empty literals vector.
+                            *relation = relation.take_dangerous().map(literals).project(projection);
                         }
                     }
                     Ok(Vec::new())
