@@ -2408,7 +2408,7 @@ impl<'a> ScalarType {
 
     /// Returns various interesting datums for a ScalarType (max, min, 0 values,
     /// etc.).
-    pub fn interesting_datums(&self) -> impl Iterator<Item = Datum> {
+    pub fn interesting_datums(&self) -> impl Iterator<Item = Datum<'static>> {
         // TODO: Is there a better way than packing everything into Lazys and
         // Rows? `&[Datum::X(x)]` doesn't seem to work because some Datum
         // variants need to call non-const functions to construct themselves.
