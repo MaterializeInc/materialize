@@ -34,6 +34,7 @@ from materialize.checks.kafka_formats import *  # noqa: F401 F403
 from materialize.checks.large_tables import *  # noqa: F401 F403
 from materialize.checks.like import *  # noqa: F401 F403
 from materialize.checks.materialized_views import *  # noqa: F401 F403
+from materialize.checks.multiple_partitions import *  # noqa: F401 F403
 from materialize.checks.nested_types import *  # noqa: F401 F403
 from materialize.checks.null_value import *  # noqa: F401 F403
 from materialize.checks.numeric_types import *  # noqa: F401 F403
