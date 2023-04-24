@@ -79,7 +79,7 @@ class MultiplePartitions(Check):
                 A 100
                 B 60
 
-                $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=3 allow-changing-unmanaged-topic=true
+                $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=3
 
                 # ingest some more B-key entries
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
@@ -100,7 +100,7 @@ class MultiplePartitions(Check):
                 B 60
                 C 60
 
-                $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=4 allow-changing-unmanaged-topic=true
+                $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=4
 
                 # ingest some more C-key entries
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
