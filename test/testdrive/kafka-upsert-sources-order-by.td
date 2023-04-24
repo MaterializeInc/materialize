@@ -20,10 +20,9 @@ $ kafka-create-topic topic=textbytes
   VALUE FORMAT TEXT
   INCLUDE OFFSET as o, TIMESTAMP as ts
   ENVELOPE UPSERT ( ORDER BY ( ts ASC, o ))
-  WITH (SIZE = '1')
 
 > SHOW CREATE SOURCE texttext
-materialize.public.texttext "CREATE SOURCE \"materialize\".\"public\".\"texttext\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-textbytes-${testdrive.seed}') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE OFFSET AS \"o\", TIMESTAMP AS \"ts\" ENVELOPE UPSERT ( ORDER BY (\"ts\", \"o\")) EXPOSE PROGRESS AS \"materialize\".\"public\".\"texttext_progress\" WITH (SIZE = '1')"
+materialize.public.texttext "CREATE SOURCE \"materialize\".\"public\".\"texttext\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-textbytes-${testdrive.seed}') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE OFFSET AS \"o\", TIMESTAMP AS \"ts\" ENVELOPE UPSERT ( ORDER BY (\"ts\", \"o\")) EXPOSE PROGRESS AS \"materialize\".\"public\".\"texttext_progress\""
 
 # Ingesting values, later offset will override earlier values for the same timestamp
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=185
@@ -80,39 +79,46 @@ bird          bird_191       "1970-01-01 00:00:00.191"
 # Invalid source definitions
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP
-  ENVELOPE UPSERT (ORDER BY ( KEY )) WITH (SIZE = '1')
-contains:Could not find key in included metadata
+  ENVELOPE UPSERT (ORDER BY ( KEY ))
+contains:Only `TIMESTAMP` and `OFFSET` (from `INCLUDE TIMESTAMP` and `INCLUDE OFFSET`) are supported as `ORDER BY` columns
 
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, PARTITION as p
-  ENVELOPE UPSERT (ORDER BY (p)) WITH (SIZE = '1')
+  ENVELOPE UPSERT (ORDER BY (p))
 contains:Only `TIMESTAMP` and `OFFSET` (from `INCLUDE TIMESTAMP` and `INCLUDE OFFSET`) are supported as `ORDER BY` columns
 
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP as ts, OFFSET
-  ENVELOPE UPSERT (ORDER BY (ts)) WITH (SIZE = '1')
+  ENVELOPE UPSERT (ORDER BY (ts))
 contains:OFFSET must be explicitly specified as an order by column
 
 # no parentheses around ORDER BY
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, PARTITION as p
-  ENVELOPE UPSERT ORDER BY p WITH (SIZE = '1')
+  ENVELOPE UPSERT ORDER BY p
 contains:Expected end of statement
 
 # no parentheses around ts in ORDER BY
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP as ts
-  ENVELOPE UPSERT ( ORDER BY ts ) WITH (SIZE = '1')
+  ENVELOPE UPSERT ( ORDER BY ts )
 contains:Expected left parenthesis
 
 # DESC ordering not allowed
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP as ts
-  ENVELOPE UPSERT ( ORDER BY (ts DESC)) WITH (SIZE = '1')
+  ENVELOPE UPSERT ( ORDER BY (ts DESC))
 contains:Expected right parenthesis
 
 # ENVELOPE NONE does not support ORDER BY
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, PARTITION as p
-  ENVELOPE NONE (ORDER BY p) WITH (SIZE = '1')
+  ENVELOPE NONE (ORDER BY p)
+contains:Expected end of statement
+
+# ENVELOPE DEBEZIUM does not support ORDER BY
+! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION kafka_conn
+  INCLUDE TIMESTAMP, OFFSET
+  ENVELOPE DEBEZIUM (ORDER BY TIMESTAMP, OFFSET)
 contains:Expected end of statement

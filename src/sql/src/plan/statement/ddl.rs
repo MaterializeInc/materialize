@@ -941,10 +941,9 @@ pub fn plan_create_source(
                                 offset_included = true;
                                 Ok(pos)
                             }
-                            Some(_) => sql_bail!(
+                            _ => sql_bail!(
                                 "Only `TIMESTAMP` and `OFFSET` (from `INCLUDE TIMESTAMP` and `INCLUDE OFFSET`) are supported as `ORDER BY` columns"
                             ),
-                            None => sql_bail!("Could not find {} in included metadata", order_col),
                         }
                     })
                     .collect::<Result<Vec<_>, PlanError>>()?;
