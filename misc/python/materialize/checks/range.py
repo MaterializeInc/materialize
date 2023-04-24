@@ -11,11 +11,11 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.common import SAMPLE_KAFKA_SCHEMA
+from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 
 
 def schema() -> str:
-    return dedent(SAMPLE_KAFKA_SCHEMA)
+    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 class Range(Check):

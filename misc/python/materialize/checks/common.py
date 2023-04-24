@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-SAMPLE_KAFKA_SCHEMA = """
+KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD = """
        $ set keyschema={
            "type": "record",
            "name": "Key",

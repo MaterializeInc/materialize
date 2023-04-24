@@ -14,7 +14,7 @@ from pg8000.converters import literal  # type: ignore
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.common import SAMPLE_KAFKA_SCHEMA
+from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.util import MzVersion
 
 
@@ -34,7 +34,7 @@ def sq(ident: str) -> Any:
 
 
 def schemas() -> str:
-    return dedent(SAMPLE_KAFKA_SCHEMA)
+    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 def cluster() -> str:
