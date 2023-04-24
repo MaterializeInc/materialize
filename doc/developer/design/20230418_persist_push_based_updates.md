@@ -4,7 +4,7 @@
 # Summary
 [summary]: #summary
 
-Replacing Persist's polling-based discovery of new state with pub-sub updates.
+Complementing Persist's polling-based discovery of new state with pub-sub updates.
 
 # Motivation
 [motivation]: #motivation
@@ -53,42 +53,34 @@ and it does not need to be tightly bound to the coordination logic elsewhere in 
 Below is a strawman proposal for this interface:
 
 ```rust
-pub struct ProtoPushDiff {
-  pub shard_id: String,
-  pub seqno: u64,
-  pub diff: Bytes,
+#[async_trait]
+pub trait PersistPubSubClient {
+  type Sender: PubSubSender;
+
+  /// Receive handles with which to send requests and receive diffs.
+  async fn connect(
+    addr: String,
+  ) -> Result<(Arc<dyn PubSubSender>, Box<dyn PubSubReceiver>), anyhow::Error>;
 }
 
-trait PersistPubSubClient {
-  type Push: PersistPush;
-  type Sub: PersistSub;
-
-  /// Receive handles with which to push and subscribe to diffs.
-  async fn connect(addr: &str) -> (Self::Push, Self::Sub);
-}
-
-trait PersistPush {
+#[async_trait]
+pub trait PubSubSender: std::fmt::Debug + Send + Sync {
   /// Push a diff to subscribers.
-  async fn push(&self, diff: ProtoPushDiff) -> Result<(), Error>;
-}
+  async fn push(&self, shard_id: &ShardId, diff: &VersionedData) -> Result<(), Error>;
 
-trait PersistSub {
-  type S: Stream<ProtoPushDiff>;
- 
   /// Informs the server which shards this subscribed should receive diffs for.
   /// May be called at any time to update the set of subscribed shards.
   async fn subscribe(&self, shards: Vec<ShardId>) -> Result<(), Error>;
- 
-  /// Returns a Stream of diffs to the subscribed shards.
-  async fn stream(&mut self) -> S;
 }
+
+pub trait PubSubReceiver: Stream<Item = ProtoPubSubMessage> {}
 ```
 
-## Publishing Updates
+## Publishing & Applying Updates
 
-When any handle to a persist shard successfully compares-and-sets a new state, it will publish the change to `PersistPush`.
-
-## Applying Received Updates
+When any handle to a persist shard successfully compares-and-sets a new state, it will publish the diff to `PubSubSender`.
+Publishing the diff is not required for correctness in case the process crashes, hits a network partition, or otherwise
+chooses not to publish it (e.g. feature flag).
 
 When a process receives a diff, it needs to apply it to the local copy of state and notify any readers that new data /
 progress may be visible. The mechanisms to do this have largely been built:
@@ -114,24 +106,24 @@ allows each end to push updates back and forth, with `environmentd` broadcasting
 
 ```protobuf
 message ProtoPushDiff {
-    string shard_id = 1;
-    uint64 seqno = 2;
-    bytes diff = 3;
+  string shard_id = 1;
+  uint64 seqno = 2;
+  bytes diff = 3;
 }
 
-message ProtoPushSubscribe {
+message ProtoSubscribe {
   repeated string shards = 1;
 }
 
-message ProtoPushMessage {
+message ProtoPubSubMessage {
   oneof message {
     ProtoPushDiff push_diff = 1;
-    ProtoPushSubscribe subscribe = 2;
+    ProtoSubscribe subscribe = 2;
   }
 }
 
-service ProtoPersist {
-    rpc Push (stream ProtoPushMessage) returns (stream ProtoPushMessage);
+service ProtoPersistPubSub {
+  rpc PubSub (stream ProtoPubSubMessage) returns (stream ProtoPubSubMessage);
 }
 ```
 
@@ -151,7 +143,7 @@ to a reader in another `clusterd` receiving that update to be in the 1-10ms rang
 [rollout]: #rollout
 
 We will roll out this change in phases behind a feature flag. The change is seen purely as an optimization opportunity,
-and should be safe to shut off at any time. We will aim ensure that any errors handled due to Persist PubSub cannot
+and should be safe to shut off at any time. We will aim to ensure that any errors handled due to Persist PubSub cannot
 crash or halt the process.
 
 We anticipate message volume to be on the order of 1-1.5 per second per shard, with each message in the 100 bytes-1KiB
@@ -171,8 +163,8 @@ the change and understand its impact.
 
 We will introduce several metrics to understand the behavior of the change:
 
-* # of updates pushed
-* # of updates received that apply cleanly & uncleanly
+* Number of updates pushed
+* Number of updates received that apply cleanly & uncleanly
 * How frequently `Listen`s need to fallback to polling
 * End-to-end latency of appending data to observing it
 * Timings of `environmentd`'s broadcasting / load
