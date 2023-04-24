@@ -43,23 +43,23 @@ class MultiplePartitions(Check):
             schemas()
             + dedent(
                 """
-                $ kafka-create-topic topic=movies-topic
+                $ kafka-create-topic topic=multiple-partitions-topic
 
-                $ kafka-ingest format=avro key-format=avro topic=movies-topic key-schema=${keyschema} schema=${schema} repeat=1000
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
                 > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
-                > CREATE SOURCE movies_source
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-movies-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL MS 500)
+                > CREATE SOURCE multiple_partitions_source
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL MS 500)
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW mv_movies AS SELECT * FROM movies_source;
+                > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source;
                 
-                $ kafka-add-partitions topic=movies-topic total-partitions=4
+                $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=4
                 """
             )
         )
@@ -69,11 +69,11 @@ class MultiplePartitions(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
-                $ kafka-ingest format=avro key-format=avro topic=movies-topic key-schema=${keyschema} schema=${schema} repeat=40
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
                 """,
                 """
-                $ kafka-ingest format=avro key-format=avro topic=movies-topic key-schema=${keyschema} schema=${schema} repeat=60
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
                 """,
             ]
@@ -83,20 +83,20 @@ class MultiplePartitions(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT * FROM movies_source_progress;
+                > SELECT * FROM multiple_partitions_source_progress;
                 (3,) 0
                 [0,0] 1025
                 [1,1] 25
                 [2,2] 25
                 [3,3] 25
                 
-                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'movies_source';
+                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 running
                 
-                # > SELECT COUNT(*) FROM movies_source;
+                # > SELECT COUNT(*) FROM multiple_partitions_source;
                 # 1100
                 
-                # > SELECT COUNT(*) FROM mv_movies;
+                # > SELECT COUNT(*) FROM mv_multiple_partitions;
                 # 1100
            """
             )
