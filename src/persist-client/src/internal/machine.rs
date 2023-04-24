@@ -10,17 +10,20 @@
 //! Implementation of the persist state machine.
 
 use std::fmt::Debug;
+use std::future::Future;
 use std::ops::{ControlFlow, ControlFlow::Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures::stream::{FuturesUnordered, StreamExt};
+use futures::FutureExt;
 use mz_ore::task::spawn;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace_span, warn, Instrument};
 
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
@@ -40,10 +43,12 @@ use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMet
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     CompareAndAppendBreak, CriticalReaderState, HollowBatch, HollowRollup, IdempotencyToken,
-    LeasedReaderState, NoOpStateTransition, Since, StateCollections, Upper, WriterState,
+    LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections, Upper,
+    WriterState,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
+use crate::internal::watch::StateWatch;
 use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
@@ -666,14 +671,102 @@ where
         &mut self,
         as_of: &Antichain<T>,
     ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
+        let start = Instant::now();
+        let seqno = match self.applier.snapshot(as_of) {
+            Ok(x) => return Ok(x),
+            Err(SnapshotErr::AsOfNotYetAvailable(seqno, _upper)) => seqno,
+            Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
+                return Err(Since(since))
+            }
+        };
+
+        // Our state might just be out of date. Fetch the newest state
+        // immediately and try again.
+        //
+        // TODO: Once we have state pubsub, we probably want to remove this
+        // optimization and jump straight to watch+sleep.
+        self.applier.fetch_and_update_state(Some(seqno)).await;
+        let (mut seqno, mut upper) = match self.applier.snapshot(as_of) {
+            Ok(x) => return Ok(x),
+            Err(SnapshotErr::AsOfNotYetAvailable(seqno, Upper(upper))) => (seqno, upper),
+            Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
+                return Err(Since(since))
+            }
+        };
+
+        // The latest state still couldn't serve this as_of: watch+sleep in a
+        // loop until it's ready.
+        let mut watch = self.applier.watch();
+        let watch = &mut watch;
+        let sleeps = self
+            .applier
+            .metrics
+            .retries
+            .snapshot
+            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+
+        enum Wake<'a, K, V, T, D> {
+            Watch(&'a mut StateWatch<K, V, T, D>),
+            Sleep(MetricsRetryStream),
+        }
+        let mut wakes = FuturesUnordered::<
+            std::pin::Pin<Box<dyn Future<Output = Wake<K, V, T, D>> + Send + Sync>>,
+        >::new();
+        wakes.push(Box::pin(
+            watch
+                .wait_for_seqno_ge(seqno.next())
+                .map(Wake::Watch)
+                .instrument(trace_span!("snapshot::watch")),
+        ));
+        wakes.push(Box::pin(
+            sleeps
+                .sleep()
+                .map(Wake::Sleep)
+                .instrument(trace_span!("snapshot::sleep")),
+        ));
+
         // To reduce log spam, we log "not yet available" only once at info if
         // it passes a certain threshold. Then, if it did one info log, we log
         // again at info when it resolves.
         let mut logged_at_info = false;
-        let mut retry: Option<MetricsRetryStream> = None;
         loop {
-            let upper = match self.applier.snapshot(as_of) {
-                Ok(Ok(x)) => {
+            // Use a duration based threshold here instead of the usual
+            // INFO_MIN_ATTEMPTS because here we're waiting on an
+            // external thing to arrive.
+            if !logged_at_info && start.elapsed() >= Duration::from_millis(1024) {
+                logged_at_info = true;
+                info!(
+                    "snapshot {} as of {:?} not yet available for {} upper {:?}",
+                    self.shard_id(),
+                    as_of.elements(),
+                    seqno,
+                    upper.elements(),
+                );
+            } else {
+                debug!(
+                    "snapshot {} as of {:?} not yet available for {} upper {:?}",
+                    self.shard_id(),
+                    as_of.elements(),
+                    seqno,
+                    upper.elements(),
+                );
+            }
+
+            assert_eq!(wakes.len(), 2);
+            let wake = wakes.next().await.expect("wakes should be non-empty");
+            // Note that we don't need to fetch in the Watch case, because the
+            // Watch wakeup is a signal that the shared state has already been
+            // updated.
+            match &wake {
+                Wake::Watch(_) => self.applier.metrics.watch.snapshot_woken_via_watch.inc(),
+                Wake::Sleep(_) => {
+                    self.applier.metrics.watch.snapshot_woken_via_sleep.inc();
+                    self.applier.fetch_and_update_state(Some(seqno)).await;
+                }
+            }
+
+            (seqno, upper) = match self.applier.snapshot(as_of) {
+                Ok(x) => {
                     if logged_at_info {
                         info!(
                             "snapshot {} as of {:?} now available",
@@ -683,47 +776,36 @@ where
                     }
                     return Ok(x);
                 }
-                Ok(Err(Upper(upper))) => {
+                Err(SnapshotErr::AsOfNotYetAvailable(seqno, Upper(upper))) => {
                     // The upper isn't ready yet, fall through and try again.
-                    upper
+                    (seqno, upper)
                 }
-                Err(Since(since)) => return Err(Since(since)),
+                Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
+                    return Err(Since(since))
+                }
             };
-            // Only sleep after the first fetch, because the first time through
-            // maybe our state was just out of date.
-            retry = Some(match retry.take() {
-                None => self
-                    .applier
-                    .metrics
-                    .retries
-                    .snapshot
-                    .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
-                Some(retry) => {
-                    // Use a duration based threshold here instead of the usual
-                    // INFO_MIN_ATTEMPTS because here we're waiting on an
-                    // external thing to arrive.
-                    if !logged_at_info && retry.next_sleep() >= Duration::from_millis(1024) {
-                        logged_at_info = true;
-                        info!(
-                            "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
-                            self.shard_id(),
-                            as_of.elements(),
-                            upper.elements(),
-                            retry.next_sleep()
-                        );
-                    } else {
-                        debug!(
-                            "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
-                            self.shard_id(),
-                            as_of.elements(),
-                            upper.elements(),
-                            retry.next_sleep()
-                        );
-                    }
-                    retry.sleep().await
+
+            match wake {
+                Wake::Watch(watch) => wakes.push(Box::pin(
+                    watch
+                        .wait_for_seqno_ge(seqno.next())
+                        .map(Wake::Watch)
+                        .instrument(trace_span!("snapshot::watch")),
+                )),
+                Wake::Sleep(sleeps) => {
+                    debug!(
+                        "snapshot {} sleeping for {:?}",
+                        self.shard_id(),
+                        sleeps.next_sleep()
+                    );
+                    wakes.push(Box::pin(
+                        sleeps
+                            .sleep()
+                            .map(Wake::Sleep)
+                            .instrument(trace_span!("snapshot::sleep")),
+                    ));
                 }
-            });
-            self.applier.fetch_and_update_state(None).await;
+            }
         }
     }
 

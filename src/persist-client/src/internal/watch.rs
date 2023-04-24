@@ -95,7 +95,7 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
     /// Blocks until the State has a SeqNo >= the requested one.
     ///
     /// This method is cancel-safe.
-    pub async fn wait_for_seqno_ge(&mut self, requested: SeqNo) {
+    pub async fn wait_for_seqno_ge(&mut self, requested: SeqNo) -> &mut Self {
         self.metrics.watch.notify_wait_started.inc();
         debug!("wait_for_seqno_ge {} {}", self.state.shard_id(), requested);
         loop {
@@ -128,6 +128,7 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
             self.state.shard_id(),
             requested
         );
+        self
     }
 }
 
@@ -177,10 +178,10 @@ mod tests {
 
         // A watch for 0 resolves immediately.
         let mut w0 = StateWatch::new(Arc::clone(&state), Arc::clone(&metrics));
-        let () = w0.wait_for_seqno_ge(SeqNo(0)).await;
+        let _ = w0.wait_for_seqno_ge(SeqNo(0)).await;
 
         // A watch for 1 does not yet resolve.
-        let w0s1 = w0.wait_for_seqno_ge(SeqNo(1)).shared();
+        let w0s1 = w0.wait_for_seqno_ge(SeqNo(1)).map(|_| ()).shared();
         assert_eq!(w0s1.clone().now_or_never(), None);
 
         // After mutating state, the watch for 1 does resolve.
@@ -190,13 +191,13 @@ mod tests {
         let () = w0s1.await;
 
         // A watch for an old seqno immediately resolves.
-        let () = w0.wait_for_seqno_ge(SeqNo(0)).await;
+        let _ = w0.wait_for_seqno_ge(SeqNo(0)).await;
 
         // We can create a new watch and it also behaves.
         let mut w1 = StateWatch::new(Arc::clone(&state), Arc::clone(&metrics));
-        let () = w1.wait_for_seqno_ge(SeqNo(0)).await;
-        let () = w1.wait_for_seqno_ge(SeqNo(1)).await;
-        assert_eq!(w1.wait_for_seqno_ge(SeqNo(2)).now_or_never(), None);
+        let _ = w1.wait_for_seqno_ge(SeqNo(0)).await;
+        let _ = w1.wait_for_seqno_ge(SeqNo(1)).await;
+        assert!(w1.wait_for_seqno_ge(SeqNo(2)).now_or_never().is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -232,7 +233,7 @@ mod tests {
                     let mut watch = StateWatch::new(Arc::clone(&state), Arc::clone(&metrics));
                     // We stared at 0, so N writes means N+1 seqnos.
                     let wait_seqno = SeqNo(u64::cast_from(idx % NUM_WRITES + 1));
-                    let () = watch.wait_for_seqno_ge(wait_seqno).await;
+                    let _ = watch.wait_for_seqno_ge(wait_seqno).await;
                     let observed_seqno =
                         state.read_lock(&metrics.locks.applier_read_noncacheable, |x| x.seqno);
                     tracing::info!("{} vs {}", wait_seqno, observed_seqno);

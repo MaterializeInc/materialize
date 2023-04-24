@@ -1482,6 +1482,8 @@ pub struct LockMetrics {
 pub struct WatchMetrics {
     pub(crate) listen_woken_via_watch: IntCounter,
     pub(crate) listen_woken_via_sleep: IntCounter,
+    pub(crate) snapshot_woken_via_watch: IntCounter,
+    pub(crate) snapshot_woken_via_sleep: IntCounter,
     pub(crate) notify_sent: IntCounter,
     pub(crate) notify_noop: IntCounter,
     pub(crate) notify_recv: IntCounter,
@@ -1495,11 +1497,19 @@ impl WatchMetrics {
         WatchMetrics {
             listen_woken_via_watch: registry.register(metric!(
                 name: "mz_persist_listen_woken_via_watch",
-                help: "count of listen next batches discovered via watch notify",
+                help: "count of listen next batches wakes via watch notify",
             )),
             listen_woken_via_sleep: registry.register(metric!(
                 name: "mz_persist_listen_woken_via_sleep",
-                help: "count of listen next batches discovered via sleep",
+                help: "count of listen next batches wakes via sleep",
+            )),
+            snapshot_woken_via_watch: registry.register(metric!(
+                name: "mz_persist_snapshot_woken_via_watch",
+                help: "count of snapshot wakes via watch notify",
+            )),
+            snapshot_woken_via_sleep: registry.register(metric!(
+                name: "mz_persist_snapshot_woken_via_sleep",
+                help: "count of snapshot wakes via sleep",
             )),
             notify_sent: registry.register(metric!(
                 name: "mz_persist_watch_notify_sent",

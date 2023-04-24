@@ -30,7 +30,7 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    ExpiryMetrics, HollowBatch, Since, StateCollections, TypedState, Upper,
+    ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState, Upper,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
@@ -206,10 +206,7 @@ where
             })
     }
 
-    pub fn snapshot(
-        &self,
-        as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<HollowBatch<T>>, Upper<T>>, Since<T>> {
+    pub fn snapshot(&self, as_of: &Antichain<T>) -> Result<Vec<HollowBatch<T>>, SnapshotErr<T>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state.snapshot(as_of)
