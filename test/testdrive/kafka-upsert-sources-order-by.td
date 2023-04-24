@@ -90,7 +90,7 @@ contains:Only `TIMESTAMP` and `OFFSET` (from `INCLUDE TIMESTAMP` and `INCLUDE OF
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP as ts, OFFSET
   ENVELOPE UPSERT (ORDER BY (ts))
-contains:OFFSET must be explicitly specified as an order by column
+contains:OFFSET (from `INCLUDE OFFSET`) must be explicitly specified as an order by column
 
 # no parentheses around ORDER BY
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')

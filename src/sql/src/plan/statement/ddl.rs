@@ -952,7 +952,7 @@ pub fn plan_create_source(
                 // But if ORDER BY is used, there needs to be an `INCLUDE OFFSET` and
                 // it should be one of the columns in the ORDER BY clause.
                 if !offset_included {
-                    sql_bail!("OFFSET must be explicitly specified as an order by column");
+                    sql_bail!("OFFSET (from `INCLUDE OFFSET`) must be explicitly specified as an order by column");
                 }
 
                 Some(UpsertOrderBy {
