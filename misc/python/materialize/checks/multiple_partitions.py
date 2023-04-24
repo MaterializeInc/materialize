@@ -70,11 +70,11 @@ class MultiplePartitions(Check):
             for s in [
                 """
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
-                {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
+                {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
                 """,
                 """
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
-                {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
+                {"key1": "C${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
                 """,
             ]
         ]
@@ -96,12 +96,12 @@ class MultiplePartitions(Check):
                 
                 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 running
-                
-                # > SELECT COUNT(*) FROM multiple_partitions_source;
-                # 1100
-                
-                # > SELECT COUNT(*) FROM mv_multiple_partitions;
-                # 1100
+               
+                > SELECT COUNT(*) FROM multiple_partitions_source;
+                1100
+               
+                > SELECT COUNT(*) FROM mv_multiple_partitions;
+                1100
            """
             )
         )
