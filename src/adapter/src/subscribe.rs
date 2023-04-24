@@ -91,12 +91,7 @@ impl ActiveSubscribe {
                 updates,
             }) => {
                 match updates {
-                    Ok(mut rows) => {
-                        // Sort results by time. We use stable sort here because it will produce deterministic
-                        // results since the cursor will always produce rows in the same order.
-                        // TODO: Is sorting necessary?
-                        rows.sort_by_key(|(time, _, _)| *time);
-
+                    Ok(rows) => {
                         let rows = rows
                             .into_iter()
                             .map(|(time, row, diff)| {
