@@ -44,6 +44,14 @@ The following options are valid within the `WITH` clause.
 | `SNAPSHOT`  | `boolean`  | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot). |
 | `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress).                                              |
 
+### `ENVELOPE UPSERT` options
+
+`ENVELOPE UPSERT` takes a list of columns that make up the key. See [`ENVELOPE UPSERT`].
+
+### `WITHIN TIMESTAMP ORDER BY` options
+
+`WITHIN TIMESTAMP ORDER BY` takes a `SELECT`-like `ORDER BY` clause to sort subscribe data within a timestamp. See [`WITHIN TIMESTAMP ORDER BY`].
+
 ## Details
 
 ### Output
@@ -287,6 +295,40 @@ After all the rows from the [`SNAPSHOT`](#snapshot) have been transmitted, the u
 If your row has a unique column key, it is possible to map the update to its corresponding origin row; if the key is unknown, you can use the output of `hash(columns_values)` instead.
 
 In the example above, `Column 1` acts as the column key that uniquely identifies the origin row the update refers to; in case this was unknown, hashing the values from `Column 1` to `Column N` would identify the origin row.
+
+### Alternate output formats
+
+{{< alpha />}}
+
+### `ENVELOPE UPSERT`
+
+Within a timestamp, treat the series of updates subscribe would normally return as a series of upserts.
+This works best when we can semantically think of returned data as having keys and values: an upsert is a changed value for a specific key.
+You can specify what columns make up the key with the `KEY` option.
+
+```sql
+SUBSCRIBE (SELECT key, value FROM key_value) WITH (PROGRESS) ENVELOPE UPSERT (KEY (key))
+```
+
+```nofmt
+| mz_timestamp | mz_progressed | mz_state | key | value
+| ------------ | ------------- | -------- | --- | ---- |
+| 1            | false         | upsert   | k1  | v1   |
+| 1            | false         | upsert   | k2  | v2   |
+..
+| 2            | false         | delete   | k1  | NULL |
+..
+| 3            | false         | upsert   | k1  | v3   |
+| 3            | false         | upsert   | k2  | v3   |
+```
+
+
+The `mz_diff` column is not returned with this output format.
+
+### `WITHIN TIMESTAMP ORDER BY`
+
+Within a timestamp, sort the updates based on the `ORDER BY` clause, similar to `SELECT`'s semantics. One important difference is that you can also sort by a `mz_diff` column. One use case is to sort the updates by a list of key columns followed by `mz_diff`. This makes handling the series of updates a little easier: if there is an update to a
+
 
 ### Dropping the `counter` load generator source
 
