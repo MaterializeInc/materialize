@@ -82,7 +82,7 @@ timestamp were deletions. `mz_state` is either `"delete"` or
 the values can all be `NULL` this column is the only way to
 distinguish a deletion from an upsert. See the [update
 table](#update-table) for more examples. If PROGRESS is set we also
-return `mz_progressed` as usual after `mz_state` and each progress
+return `mz_progressed` as usual before `mz_state` and each progress
 message nulls out all the key and value columns.
 
 Using `ENVELOPE UPSERT` when there is more than one live value per key
@@ -140,7 +140,7 @@ table](#update-table) for some example of confusing cases like rows 4
 and 5.
 
 If PROGRESS is set, the key, `before_v*` and `after_v*` are all set to
-`NULL` an addition `mz_progressed` column is inserted after
+`NULL` an addition `mz_progressed` column is inserted before
 `mz_state`.
 
 Today only one output modifier can be used at a time. `ENVELOPE
