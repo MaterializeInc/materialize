@@ -58,10 +58,9 @@ class MultiplePartitions(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source;
+                $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=2
 
-                # TODO: move add partitions down
-                $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=4
+                > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source;
                 """
             )
         )
@@ -72,18 +71,18 @@ class MultiplePartitions(Check):
             for s in [
                 """
                 # ingest B-key entries
-                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
-                
+
                 # Make sure that source is up and complete
                 > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
                 A 100
-                B 40
+                B 60
 
-                # TODO: move add partitions here
+                $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=3 allow-changing-unmanaged-topic=true
 
                 # ingest some more B-key entries
-                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
 
                 # delete some A-key entries
@@ -98,13 +97,13 @@ class MultiplePartitions(Check):
                 # Make sure that source is up and complete
                 > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
                 A 50
-                B 40
+                B 60
                 C 60
 
-                # TODO: move add partitions here
+                $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=4 allow-changing-unmanaged-topic=true
 
                 # ingest some more C-key entries
-                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
                 {"key1": "C${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
 
                 # delete some A-key entries
@@ -124,22 +123,22 @@ class MultiplePartitions(Check):
                 [1,1]
                 [2,2]
                 [3,3]
-                
+
                 # alias is needed to avoid error due to reserved keyword
                 > SELECT SUM(p.offset) FROM multiple_partitions_source_progress p;
-                400
-                
+                420
+
                 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 running
-               
+
                 > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
                 A 50
-                B 40
+                B 60
                 C 60
-               
+
                 > SELECT LEFT(f1, 1), COUNT(*) FROM mv_multiple_partitions GROUP BY LEFT(f1, 1);
                 A 50
-                B 40
+                B 60
                 C 60
                 """
             )
