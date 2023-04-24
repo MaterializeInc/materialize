@@ -51,6 +51,7 @@ steps:
           - { value: checks-upgrade-entire-mz-four-versions }
           - { value: checks-upgrade-clusterd-compute-first }
           - { value: checks-upgrade-clusterd-compute-last }
+          - { value: checks-upgrade-matrix }
           - { value: cloudtest-upgrade }
           - { value: persist-maelstrom-single-node }
           - { value: persist-maelstrom-multi-node }
@@ -481,6 +482,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeClusterdComputeLast]
+
+  - id: checks-upgrade-matrix
+    label: "Random upgrades over the entire matrix"
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upgrade-matrix
+          args: ["--seed=$BUILDKITE_JOB_ID"]
 
   - id: cloudtest-upgrade
     label: "Platform checks upgrade in Cloudtest/K8s"
