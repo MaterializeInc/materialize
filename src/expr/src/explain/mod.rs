@@ -9,11 +9,11 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
-use itertools::Itertools;
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::time::Duration;
+
+use itertools::Itertools;
 
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
@@ -22,12 +22,10 @@ use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
-use mz_repr::stats::PersistSourceDataStats;
-use mz_repr::{Datum, RowArena};
 
+use crate::interpret::{Interpreter, Pushdownable, Trace};
 use crate::{
-    visit::Visit, Id, LocalId, MapFilterProject, MfpPlan, MfpPushdown, MirRelationExpr,
-    MirScalarExpr, RowSetFinishing,
+    visit::Visit, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
 mod json;
@@ -59,17 +57,25 @@ pub struct ExplainSinglePlan<'a, T> {
 #[allow(missing_debug_implementations)]
 pub struct PushdownInfo {
     /// Pushdown-able columns in the source.
-    pub cols: Vec<usize>,
+    pub trace: Vec<Pushdownable>,
 }
 
 impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo {
     fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        if !self.cols.is_empty() {
+        if !self.trace.is_empty() {
             writeln!(
                 f,
-                "{}pushdown=(#{})",
+                "{}pushdown=({})",
                 ctx.as_mut(),
-                self.cols.iter().join(", #")
+                self.trace
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(id, p)| match p {
+                        Pushdownable::No => None,
+                        Pushdownable::Maybe => Some(format!("#{id}?")),
+                        Pushdownable::Yes => Some(format!("#{id}")),
+                    })
+                    .join(", ")
             )?;
         }
         Ok(())
@@ -90,40 +96,9 @@ impl<'a> ExplainSource<'a> {
         context: &ExplainContext<'a>,
     ) -> ExplainSource<'a> {
         let pushdown_info = if context.config.mfp_pushdown {
-            // Placeholder! Runs through the pushdown process with a mocked stats impl to
-            // figure out which columns have pushdown-able predicates.
-            #[derive(Debug)]
-            struct Tracker(RefCell<Vec<bool>>);
-
-            impl PersistSourceDataStats for Tracker {
-                fn col_min<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> Option<Datum<'a>> {
-                    self.0.borrow_mut()[idx] = true;
-                    None
-                }
-
-                fn col_max<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> Option<Datum<'a>> {
-                    self.0.borrow_mut()[idx] = true;
-                    None
-                }
-            }
-            if let Ok(plan) = MfpPlan::create_from((*op).clone()) {
-                let mfp_pushdown = MfpPushdown::new(&plan);
-                let tracker = Tracker(RefCell::new(vec![false; op.input_arity]));
-                let _ = mfp_pushdown.should_fetch(&tracker);
-                let mut cols: Vec<_> = tracker
-                    .0
-                    .into_inner()
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(_, referenced)| *referenced)
-                    .map(|(id, _)| id)
-                    .collect();
-
-                cols.sort();
-                Some(PushdownInfo { cols })
-            } else {
-                None
-            }
+            Some(PushdownInfo {
+                trace: Trace.eval_mfp(op),
+            })
         } else {
             None
         };
