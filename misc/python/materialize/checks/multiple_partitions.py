@@ -59,6 +59,10 @@ class MultiplePartitions(Check):
 
                 > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source;
                 
+                # Make sure that source is up
+                > SELECT COUNT(*) FROM multiple_partitions_source;
+                1000
+                
                 $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=4
                 """
             )
