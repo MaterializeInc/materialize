@@ -156,7 +156,6 @@ pub fn user_privilege_hack(
         Plan::Subscribe(_)
         | Plan::Peek(_)
         | Plan::CopyFrom(_)
-        | Plan::SendRows(_)
         | Plan::Explain(_)
         | Plan::ShowAllVariables
         | Plan::ShowVariable(_)

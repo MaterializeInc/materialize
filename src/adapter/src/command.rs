@@ -462,7 +462,7 @@ impl ExecuteResponse {
             DiscardAll => vec![DiscardedAll],
             DropObjects => vec![DroppedObject],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
-            Explain | Peek | SendRows | ShowAllVariables | ShowCreate | ShowVariable => {
+            Explain | Peek | ShowAllVariables | ShowCreate | ShowVariable => {
                 vec![CopyTo, SendingRows]
             }
             Execute | ReadThenWrite => vec![Deleted, Inserted, SendingRows, Updated],
