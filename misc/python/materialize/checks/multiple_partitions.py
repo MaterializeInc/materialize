@@ -71,6 +71,12 @@ class MultiplePartitions(Check):
                 """
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
+                
+                # delete entries
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=50
+                {"key1": "A${kafka-ingest.iteration}"}
+
+
                 """,
                 """
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
@@ -92,16 +98,16 @@ class MultiplePartitions(Check):
                 
                 # alias is needed to avoid error due to reserved keyword
                 > SELECT SUM(p.offset) FROM multiple_partitions_source_progress p;
-                1100
+                1150
                 
                 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 running
                
                 > SELECT COUNT(*) FROM multiple_partitions_source;
-                1100
+                1050
                
                 > SELECT COUNT(*) FROM mv_multiple_partitions;
-                1100
+                1050
            """
             )
         )
