@@ -69,7 +69,8 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
+    Plan, PlanContext, PlanError, SourceSinkClusterConfig as PlanStorageClusterConfig,
+    StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -1367,7 +1368,9 @@ impl CatalogState {
 
     pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
         if !self.config.unsafe_mode {
-            Err(AdapterError::Unsupported(feature_name))
+            Err(AdapterError::PlanError(PlanError::RequiresUnsafe {
+                feature: feature_name.to_string(),
+            }))
         } else {
             Ok(())
         }

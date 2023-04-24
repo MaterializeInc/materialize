@@ -50,6 +50,9 @@ pub enum PlanError {
         feature: String,
         documentation_link: String,
     },
+    RequiresUnsafe {
+        feature: String,
+    },
     UnknownColumn {
         table: Option<PartialItemName>,
         column: ColumnName,
@@ -190,6 +193,9 @@ impl PlanError {
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidProtobufSchema { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidOptionValue { err, .. } => err.detail(),
+            Self::RequiresUnsafe { .. } => {
+                Some("The requested feature is used only for internal development and testing of Materialize.".into())
+            }
             _ => None,
         }
     }
@@ -275,6 +281,10 @@ impl fmt::Display for PlanError {
             }
             Self::NeverSupported { feature, documentation_link: documentation_path } => {
                 write!(f, "{feature} is not supported, for more information consult the documentation at https://materialize.com/docs/{documentation_path}",)?;
+                Ok(())
+            }
+            Self::RequiresUnsafe { feature} => {
+                write!(f, "{feature} is not supported",)?;
                 Ok(())
             }
             Self::UnknownColumn { table, column } => write!(
