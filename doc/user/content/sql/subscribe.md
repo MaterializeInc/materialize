@@ -300,35 +300,66 @@ In the example above, `Column 1` acts as the column key that uniquely identifies
 
 {{< alpha />}}
 
-### `ENVELOPE UPSERT`
+#### `ENVELOPE UPSERT`
 
-Within a timestamp, treat the series of updates subscribe would normally return as a series of upserts.
-This works best when we can semantically think of returned data as having keys and values: an upsert is a changed value for a specific key.
-You can specify what columns make up the key with the `KEY` option.
+Takes a list of columns to interpret as a key (given by the `KEY` option) and within each distinct timestamp interprets the updates as a series of upserts. The output columns are reordered as `(mz_timestamp, mz_state, k1, k2, .., v1, v2, ..)`. There is no `mz_diff` column. The values `v1, v2, ..` are set the last value if there's an update or an insert and are all set to `NULL` if the only updates to the key in that timestamp were deletions. `mz_state` is either "delete" or "upsert" to distinguish the two cases; when there are no values or the values can all be NULL this column is the only way to distinguish a deletion from an upsert. If `PROGRESS` is set we also return the `mz_progressed` column as usual before `mz_state` and each progress message nulls out all the key and value columns.
 
-```sql
-SUBSCRIBE (SELECT key, value FROM key_value) WITH (PROGRESS) ENVELOPE UPSERT (KEY (key))
-```
+Using `ENVELOPE UPSERT` when there is more than one live value per key can be confusing. The upserts generated have no way to express which value was deleted for a given key.
+
+Example:
 
 ```nofmt
-| mz_timestamp | mz_progressed | mz_state | key | value
-| ------------ | ------------- | -------- | --- | ---- |
-| 1            | false         | upsert   | k1  | v1   |
-| 1            | false         | upsert   | k2  | v2   |
-..
-| 2            | false         | delete   | k1  | NULL |
-..
-| 3            | false         | upsert   | k1  | v3   |
-| 3            | false         | upsert   | k2  | v3   |
+> CREATE TABLE kv_store(key int, value int, UNIQUE(key))
+> INSERT INTO kv_store VALUES (1, 2), (2, 4)
+> SUBSCRIBE kv_store ENVELOPE UPSERT (KEY (key))
+mz_timestamp | mz_state | key  | value
+-------------|----------|------|--------
+100          | upsert   | 1    | 2
+100          | upsert   | 2    | 4
+
+...
+-- at time 200, update key=1's value to 10
+...
+
+200          | upsert   | 1    | 10
+
+
+...
+-- at time 300, add a new row with key=3, value=6
+...
+
+300          | upsert   | 3    | 6
+
+...
+-- at time 400, delete all rows
+...
+
+400          | delete   | 1    | NULL
+400          | delete   | 2    | NULL
+400          | delete   | 3    | NULL
 ```
 
+#### `WITHIN TIMESTAMP ORDER BY`
 
-The `mz_diff` column is not returned with this output format.
+`WITHIN TIMESTAMP ORDER BY` takes a `ORDER BY` expression and sorts the returned data within each distinct timestamp.
+This `ORDER BY` can take any column in the underlying object or query in addition to the `mz_diff` column.
+A common use case of recovering upserts to key-value data would be sort by all the keys and `mz_diff`.
+Since `SUBSCRIBE` guarantees that there won't be multiple updates for the same row (the batch is already consolidated), this will produce data that looks like `(k, v1, -1), (k, v2, +1)` which are easier to handle.
+If `PROGRESS` is set, progress messages are unaffected.
 
-### `WITHIN TIMESTAMP ORDER BY`
-
-Within a timestamp, sort the updates based on the `ORDER BY` clause, similar to `SELECT`'s semantics. One important difference is that you can also sort by a `mz_diff` column. One use case is to sort the updates by a list of key columns followed by `mz_diff`. This makes handling the series of updates a little easier: if there is an update to a
-
+Example:
+```nofmt
+> CREATE TABLE table(c1 int, c2 int, c3 text)
+> SUBSCRIBE table WITHIN TIMESTAMP ORDER BY c1, c2 DESC NULLS LAST, mz_diff
+mz_timestamp | mz_diff | c1            | c2   | c3
+-------------|---------|---------------|------|-----
+100          | +1      | 1             | 20   | foo
+100          | -1      | 1             | 2    | bar
+100          | +1      | 1             | 2    | boo
+100          | +1      | 1             | 0    | data
+100          | -1      | 2             | 0    | old
+100          | +1      | 2             | 0    | new
+```
 
 ### Dropping the `counter` load generator source
 
