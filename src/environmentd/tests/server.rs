@@ -193,7 +193,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 
     // Sources work with an explicit size.
@@ -205,7 +205,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("ALTER SOURCE lg RESET (SIZE)");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 
     client
@@ -219,7 +219,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 
     // Sinks work with an explicit size.
@@ -229,7 +229,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("ALTER SINK snk RESET (SIZE)");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 }
 

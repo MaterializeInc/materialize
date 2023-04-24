@@ -235,6 +235,11 @@ impl AdapterError {
                     ),
                 }
             )),
+            AdapterError::SourceOrSinkSizeRequired { .. } => Some(
+                "Either specify the cluster that will maintain this object via IN CLUSTER or \
+                specify size via SIZE option."
+                    .into(),
+            ),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -384,7 +389,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "unknown source size {size}")
             }
             AdapterError::SourceOrSinkSizeRequired { .. } => {
-                write!(f, "size option is required")
+                write!(f, "must specify either cluster or size option")
             }
             AdapterError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")
