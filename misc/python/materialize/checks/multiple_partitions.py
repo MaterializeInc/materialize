@@ -45,7 +45,8 @@ class MultiplePartitions(Check):
                 """
                 $ kafka-create-topic topic=multiple-partitions-topic
 
-                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=1000
+                # ingest A-key entries
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=100
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
@@ -58,11 +59,8 @@ class MultiplePartitions(Check):
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source;
-                
-                # Make sure that source is up
-                > SELECT COUNT(*) FROM multiple_partitions_source;
-                1000
-                
+
+                # TODO: move add partitions down
                 $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=4
                 """
             )
@@ -73,16 +71,45 @@ class MultiplePartitions(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
+                # ingest B-key entries
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
                 
+                # Make sure that source is up and complete
+                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
+                A 100
+                B 40
+
+                # TODO: move add partitions here
+
+                # ingest some more B-key entries
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=40
+                {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
+
                 # delete some A-key entries
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=50
                 {"key1": "A${kafka-ingest.iteration}"}
                 """,
                 """
+                # ingest C-key entries
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
                 {"key1": "C${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
+
+                # Make sure that source is up and complete
+                > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
+                A 50
+                B 40
+                C 60
+
+                # TODO: move add partitions here
+
+                # ingest some more C-key entries
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
+                {"key1": "C${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
+
+                # delete some A-key entries
+                $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=50
+                {"key1": "A${kafka-ingest.iteration}"}
                 """,
             ]
         ]
@@ -100,18 +127,18 @@ class MultiplePartitions(Check):
                 
                 # alias is needed to avoid error due to reserved keyword
                 > SELECT SUM(p.offset) FROM multiple_partitions_source_progress p;
-                1150
+                400
                 
                 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 running
                
                 > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
-                A 950
+                A 50
                 B 40
                 C 60
                
                 > SELECT LEFT(f1, 1), COUNT(*) FROM mv_multiple_partitions GROUP BY LEFT(f1, 1);
-                A 950
+                A 50
                 B 40
                 C 60
                 """
