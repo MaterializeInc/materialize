@@ -650,7 +650,7 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
 /// LaunchDarkly. Can be turned off as an emergency measure to still
 /// be able to alter parameters while LD is broken.
 pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("launchdarkly_kill_switch"),
+    name: UncasedStr::new("enable_launchdarkly"),
     value: &true,
     description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
     internal: true,
