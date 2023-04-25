@@ -162,7 +162,7 @@ def workflow_default(c: Composition) -> None:
         c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
 
         def sys(command: str):
-            c.testdrive("\n".join(['$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr', '$ postgres-execute connection=mz_system', command]))
+            c.testdrive("\n".join(['$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}', '$ postgres-execute connection=mz_system', command]))
         # Assert that we can turn off synchronization
         sys("> ALTER SYSTEM SET launchdarkly_kill_switch=on")
         sys("> ALTER SYSTEM SET max_result_size=1234")
