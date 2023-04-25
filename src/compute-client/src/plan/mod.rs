@@ -25,8 +25,11 @@ use mz_expr::{
     MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::soft_panic_or_log;
+use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
+use mz_repr::explain::text::text_string_at;
 
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
@@ -381,6 +384,25 @@ impl<T> Plan<T> {
             .chain(second)
             .chain(rest.into_iter().flatten())
             .chain(last)
+    }
+}
+
+impl Plan {
+    /// Pretty-print this [Plan] to a string.
+    pub fn pretty(&self) -> String {
+        let config = ExplainConfig::default();
+        self.explain(&config, None)
+    }
+
+    /// Pretty-print this [Plan] to a string using a custom
+    /// [ExplainConfig] and an optionally provided [ExprHumanizer].
+    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
+        text_string_at(self, || PlanRenderingContext {
+            indent: Indent::default(),
+            humanizer: humanizer.unwrap_or(&DummyHumanizer),
+            annotations: BTreeMap::default(),
+            config,
+        })
     }
 }
 
