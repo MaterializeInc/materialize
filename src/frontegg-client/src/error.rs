@@ -9,18 +9,23 @@
 
 //! This module defines custom error types and structs related to Frontegg API.
 //!
-//! [ApiError] is an error struct that represents an error returned by the Frontegg API. It contains
-//! information about the HTTP status code and a vector of error messages.
+//! [`ApiError`] is an error struct that represents an error returned by the
+//! Frontegg API. It contains information about the HTTP status code and a
+//! vector of error messages.
 //!
-//! [ErrorExtended] is a custom error type that extends the [mz_frontegg_auth::Error] enum.
+//! [`Error`] is a custom error type that extends the
+//! [`mz_frontegg_auth::Error`] enum.
 //!
 //! It contains three variants:
-//! [ErrorExtended::AuthError]: represents an authentication error from the [`mz-frontegg-auth`] crate.
-//! [ErrorExtended::Transport]: represents a transport error from the `reqwest` crate during a network request.
-//! [ErrorExtended::Api]: represents an Frontegg API error from a request.
+//! * [`ErrorExtended::AuthError`]: represents an authentication error from the
+//!   [`mz-frontegg-auth`] crate.
+//! * [`ErrorExtended::Transport`]: represents a transport error from the
+//!   `reqwest` crate during a network request.
+//! * [`ErrorExtended::Api`]: represents an Frontegg API error from a request.
+
+use std::fmt;
 
 use reqwest::StatusCode;
-use std::fmt;
 use thiserror::Error;
 
 /// An error returned by the Frontegg API.
@@ -45,12 +50,13 @@ impl fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-/// A custom error type that extends the `Error` enum in the `mz-frontegg-auth` crate.
+/// A custom error type that extends the `Error` enum in the `mz-frontegg-auth`
+/// crate.
 #[derive(Error, Debug)]
-pub enum ErrorExtended {
-    /// An authentication error from the `mz-frontegg-auth` crate.
+pub enum Error {
+    /// An authentication error from the [`mz_frontegg_auth`] crate.
     #[error(transparent)]
-    AuthError(#[from] mz_frontegg_auth::Error),
+    Auth(#[from] mz_frontegg_auth::Error),
     /// A transport error from the `reqwest` crate during a network request.
     #[error("frontegg error: transport: {0}")]
     Transport(#[from] reqwest::Error),

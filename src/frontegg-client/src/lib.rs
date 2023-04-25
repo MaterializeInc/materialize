@@ -122,7 +122,9 @@
 //!
 //! [rust-orb-billing]: https://github.com/MaterializeInc/rust-orb-billing
 //! [rust-frontegg]: https://github.com/MaterializeInc/rust-frontegg
+
+pub(crate) mod parse;
+
 pub mod client;
 pub mod config;
 pub mod error;
-pub(crate) mod parse;

@@ -9,14 +9,14 @@
 
 //! This module implements the client's functions for interacting with the Frontegg passwords API.
 
-use mz_frontegg_auth::AppPassword as AuthAppPassword;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::error::ErrorExtended;
+use mz_frontegg_auth::AppPassword as AuthAppPassword;
 
-use super::Client;
+use crate::client::Client;
+use crate::error::Error;
 
 const APP_PASSWORDS_PATH: [&str; 6] = [
     "frontegg",
@@ -38,19 +38,22 @@ const CREATE_APP_PASSWORDS_PATH: [&str; 6] = [
 /// A structure that represents an app-password _metadata_.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(missing_docs)] // TODO: add docs to all fields
 pub struct AppPassword {
-    description: String,
-    created_at: String,
+    pub description: String,
+    pub created_at: String,
 }
 
+/// Describes a request to create a new app password.
 #[derive(Serialize)]
-struct AppPasswordCreateRequest {
-    description: String,
+pub struct CreateAppPasswordRequest<'a> {
+    /// The description of the app password.
+    pub description: &'a str,
 }
 
 impl Client {
     /// Lists all existing app passwords.
-    pub async fn list_app_passwords(&self) -> Result<Vec<AppPassword>, ErrorExtended> {
+    pub async fn list_app_passwords(&self) -> Result<Vec<AppPassword>, Error> {
         let req = self.build_request(Method::GET, APP_PASSWORDS_PATH);
         let passwords: Vec<AppPassword> = self.send_request(req).await?;
         Ok(passwords)
@@ -59,19 +62,21 @@ impl Client {
     /// Creates a new app password with the provided description.
     pub async fn create_app_password(
         &self,
-        description: String,
-    ) -> Result<AuthAppPassword, ErrorExtended> {
+        app_password: CreateAppPasswordRequest<'_>,
+    ) -> Result<AuthAppPassword, Error> {
         let req = self.build_request(Method::POST, CREATE_APP_PASSWORDS_PATH);
-        let req = req.json(&AppPasswordCreateRequest { description });
+        let req = req.json(&app_password);
 
-        // Temp AppPassword structure implementing Deserialization to avoid having any impact in `frontegg-auth`.
+        // Temp AppPassword structure implementing Deserialization to avoid
+        // having any impact in `frontegg-auth`.
         #[derive(Debug, Deserialize)]
-        pub struct AppPassword {
+        struct AppPassword {
             /// The client ID embedded in the app password.
-            pub client_id: Uuid,
+            client_id: Uuid,
             /// The secret key embedded in the app password.
-            pub secret_key: Uuid,
+            secret_key: Uuid,
         }
+
         let password: AppPassword = self.send_request(req).await?;
         Ok(AuthAppPassword {
             client_id: password.client_id,

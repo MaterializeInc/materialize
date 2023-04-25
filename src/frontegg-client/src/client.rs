@@ -9,24 +9,31 @@
 
 //! # Frontegg API client
 //!
-//! The [Client] module provides functions to interact with the Frontegg API. This client
-//! implements authentication, token management, and basic requests against the API.
+//! The `client` module provides an API client with typed methods for
+//! interacting with the Frontegg API. This client implements authentication,
+//! token management, and basic requests against the API.
 //!
-//! The [Client] requires an [mz_frontegg_auth::AppPassword] as a parameter.
-//! The app password is used to manage an access token.
-//! _Manage_ means issuing a new access token or refreshing when half of its lifetime has passed.
+//! The [`Client`] requires an [`AppPassword`] as a parameter. The
+//! app password is used to manage an access token. _Manage_ means issuing a new
+//! access token or refreshing when half of its lifetime has passed.
 //!
-use mz_frontegg_auth::AppPassword;
-use reqwest::{Method, RequestBuilder};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+//! [`AppPassword`]: mz_frontegg_auth::AppPassword
+
 use std::time::{Duration, SystemTime};
+
+use reqwest::{Method, RequestBuilder};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
 
-use crate::{
-    config::{ClientBuilder, ClientConfig},
-    error::{ApiError, ErrorExtended},
-};
+use mz_frontegg_auth::AppPassword;
+
+use crate::config::{ClientBuilder, ClientConfig};
+use crate::error::{ApiError, Error};
+
+pub mod app_password;
+pub mod user;
 
 const AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "api-token"];
 const REFRESH_AUTH_PATH: [&str; 7] = [
@@ -38,9 +45,6 @@ const REFRESH_AUTH_PATH: [&str; 7] = [
     "token",
     "refresh",
 ];
-
-pub mod app_password;
-pub mod user;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,8 +71,7 @@ struct RefreshRequest<'a> {
 #[derive(Debug, Clone)]
 pub(crate) struct Auth {
     token: String,
-    /// Refresh at indicates the time at which the token should be refreshed.
-    /// It equals the expiring time / 2
+    /// The time after which the token must be refreshed.
     refresh_at: SystemTime,
     refresh_token: String,
 }
@@ -114,7 +117,7 @@ impl Client {
     }
 
     /// Sends a requests and adds the authorization bearer token.
-    async fn send_request<T>(&self, req: RequestBuilder) -> Result<T, ErrorExtended>
+    async fn send_request<T>(&self, req: RequestBuilder) -> Result<T, Error>
     where
         T: DeserializeOwned,
     {
@@ -123,7 +126,7 @@ impl Client {
         self.send_unauthenticated_request(req).await
     }
 
-    async fn send_unauthenticated_request<T>(&self, req: RequestBuilder) -> Result<T, ErrorExtended>
+    async fn send_unauthenticated_request<T>(&self, req: RequestBuilder) -> Result<T, Error>
     where
         T: DeserializeOwned,
     {
@@ -145,12 +148,12 @@ impl Client {
                 Ok(e) => {
                     let mut messages = e.errors;
                     messages.extend(e.message);
-                    Err(ErrorExtended::Api(ApiError {
+                    Err(Error::Api(ApiError {
                         status_code,
                         messages,
                     }))
                 }
-                Err(_) => Err(ErrorExtended::Api(ApiError {
+                Err(_) => Err(Error::Api(ApiError {
                     status_code,
                     messages: vec!["unable to decode error details".into()],
                 })),
@@ -160,7 +163,7 @@ impl Client {
 
     /// Authenticates with the server, if not already authenticated,
     /// and returns the authentication token.
-    async fn auth(&self) -> Result<String, ErrorExtended> {
+    async fn auth(&self) -> Result<String, Error> {
         let mut auth = self.auth.lock().await;
         let mut req;
 
@@ -177,7 +180,7 @@ impl Client {
                     req = req.json(&refresh_request);
                 }
             }
-            _ => {
+            None => {
                 // No auth available in the client, request a new one.
                 req = self.build_request(Method::POST, AUTH_PATH);
                 let authentication_request = AuthenticationRequest {
@@ -188,7 +191,7 @@ impl Client {
             }
         }
 
-        // Do the request
+        // Do the request.
         let res: AuthenticationResponse = self.send_unauthenticated_request(req).await?;
         *auth = Some(Auth {
             token: res.access_token.clone(),
