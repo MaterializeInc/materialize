@@ -13,14 +13,14 @@
 //! Frontegg API. It contains information about the HTTP status code and a
 //! vector of error messages.
 //!
-//! [`Error`] is a custom error type that extends the
+//! [`Error`](`enum@Error`) is a custom error type that extends the
 //! [`mz_frontegg_auth::Error`] enum.
 //!
 //! It contains three variants:
 //! * [`Error::Auth`]: represents an authentication error from the
 //!   [`mz-frontegg-auth`] crate.
-//! * [`Error::Transport`]: represents a transport error from the
-//!   `reqwest` crate during a network request.
+//! * [`Error::Transport`]: represents a transport error from the `reqwest`
+//!   crate during a network request.
 //! * [`Error::Api`]: represents an Frontegg API error from a request.
 
 use std::fmt;
