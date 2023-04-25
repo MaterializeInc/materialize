@@ -69,6 +69,12 @@ impl crate::Transform for NonNullRequirements {
 
 impl NonNullRequirements {
     /// Push non-null requirements toward sources.
+    ///
+    /// The action computes and pushes `columns` in a top-down manner and
+    /// simplifies the associated tree. The `columns` value denotes a set of
+    /// output columns that entail the associated `relation` will evaluate to
+    /// the constant empty collection if any column is null. This information is
+    /// used to simplify and prune sub-trees in the `Constant` and `Map` cases.
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
@@ -117,10 +123,10 @@ impl NonNullRequirements {
                     gets,
                 ),
                 MirRelationExpr::Map { input, scalars } => {
-                    let arity = input.arity();
+                    let input_arity = input.arity();
                     if columns
                         .iter()
-                        .any(|c| *c >= arity && scalars[*c - arity].is_literal_null())
+                        .any(|c| *c >= input_arity && scalars[*c - input_arity].is_literal_null())
                     {
                         // A null value was introduced in a marked column;
                         // the entire expression can be zeroed out.
@@ -131,9 +137,9 @@ impl NonNullRequirements {
                         // non-null requirements and include them too. We go in reverse order
                         // to ensure we squeegee down all requirements even for references to
                         // other columns produced in this operator.
-                        for column in (arity..(arity + scalars.len())).rev() {
+                        for column in (input_arity..(input_arity + scalars.len())).rev() {
                             if columns.contains(&column) {
-                                scalars[column - arity].non_null_requirements(&mut columns);
+                                scalars[column - input_arity].non_null_requirements(&mut columns);
                             }
                             columns.remove(&column);
                         }
@@ -146,8 +152,8 @@ impl NonNullRequirements {
                     // greater than or equal to the arity refer to columns created
                     // by the FlatMap. The latter group of columns cannot be
                     // propagated down.
-                    let arity = input.arity();
-                    columns.retain(|c| *c < arity);
+                    let input_arity = input.arity();
+                    columns.retain(|c| *c < input_arity);
 
                     if func.empty_on_null_input() {
                         // we can safely disregard rows where any of the exprs
