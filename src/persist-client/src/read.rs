@@ -896,7 +896,7 @@ where
         frontier: &Antichain<T>,
         watch: &mut StateWatch<K, V, T, D>,
     ) -> HollowBatch<T> {
-        let seqno = match self.machine.next_listen_batch(frontier) {
+        let mut seqno = match self.machine.next_listen_batch(frontier) {
             Ok(b) => return b,
             Err(seqno) => seqno,
         };
@@ -910,7 +910,7 @@ where
             .applier
             .fetch_and_update_state(Some(seqno))
             .await;
-        let seqno = match self.machine.next_listen_batch(frontier) {
+        seqno = match self.machine.next_listen_batch(frontier) {
             Ok(b) => return b,
             Err(seqno) => seqno,
         };
@@ -962,7 +962,7 @@ where
                 }
             }
 
-            let seqno = match self.machine.next_listen_batch(frontier) {
+            seqno = match self.machine.next_listen_batch(frontier) {
                 Ok(b) => return b,
                 Err(seqno) => seqno,
             };
