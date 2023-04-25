@@ -10,6 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use mz_sql::session::vars::{Value, Var, VarInput, LAUNCHDARKLY_KILL_SWITCH};
 use tokio::time;
 
 mod backend;
@@ -53,7 +54,10 @@ pub async fn system_parameter_sync(
     loop {
         interval.tick().await;
         backend.pull(&mut params).await;
-        if frontend.pull(&mut params) {
+        let launchdarkly_killed =
+            <bool as Value>::parse(VarInput::Flat(&params.get(LAUNCHDARKLY_KILL_SWITCH.name())))
+                .unwrap();
+        if !launchdarkly_killed && frontend.pull(&mut params) {
             backend.push(&mut params).await;
         }
     }

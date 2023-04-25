@@ -646,6 +646,17 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Boolean flag indicating whether to completely disable syncing from
+/// LaunchDarkly.  Used as an emergency measure to still be able to
+/// alter parameters while LD is broken.
+pub static LAUNCHDARKLY_KILL_SWITCH: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("launchdarkly_kill_switch"),
+    value: &false,
+    description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be paused (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled.
 static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_with_mutually_recursive"),
@@ -1475,6 +1486,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
+            .with_var(&LAUNCHDARKLY_KILL_SWITCH)
     }
 }
 
@@ -1609,6 +1621,12 @@ impl SystemVars {
     /// Returns the `config_has_synced_once` configuration parameter.
     pub fn config_has_synced_once(&self) -> bool {
         *self.expect_value(&CONFIG_HAS_SYNCED_ONCE)
+    }
+
+    /// Returns the value of the `launchdarkly_kill_switch`
+    /// configuration parameter.
+    pub fn launchdarkly_kill_switch(&self) -> bool {
+        *self.expect_value(&LAUNCHDARKLY_KILL_SWITCH)
     }
 
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.

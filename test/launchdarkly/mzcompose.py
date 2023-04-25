@@ -161,6 +161,16 @@ def workflow_default(c: Composition) -> None:
         # Assert that max_result_size is 4 GiB - 1 byte.
         c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
 
+        # Assert that we can turn off synchronization
+        c.testdrive("> ALTER SYSTEM SET launchdarkly_kill_switch=on")
+        c.testdrive("> ALTER SYSTEM SET max_result_size=1234")
+        # The new value should not be replaced, even after 15 seconds
+        sleep(15)
+        c.testdrive("\n".join(["> SHOW max_result_size", "1234"]))
+        # The value should be reset after we turn the kill switch back off
+        c.testdrive("> ALTER SYSTEM SET launchdarkly_kill_switch=on")
+        c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
+        
         # Remove custom targeting.
         ld_client.update_targeting(
             LD_FEATURE_FLAG_KEY,
@@ -180,7 +190,6 @@ def workflow_default(c: Composition) -> None:
         # Assert that max_result_size is 1 GiB (the default when targeting is
         # turned off).
         c.testdrive("\n".join(["> SHOW max_result_size", "1073741824"]))
-
         c.stop("materialized")
     except launchdarkly_api.ApiException as e:
         raise UIError(
