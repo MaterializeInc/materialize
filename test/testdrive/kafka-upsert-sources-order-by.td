@@ -38,7 +38,7 @@ fish         fish_185      "1970-01-01 00:00:00.185"
 bird         bird_185      "1970-01-01 00:00:00.185"
 fruit        new_fruit_185 "1970-01-01 00:00:00.185"
 
-# Values will higher timestamp, should remove bird and update the rest
+# Values with higher timestamp, should remove bird and update the rest
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=278
 fish:fish_278
 mammal:mammal_278
