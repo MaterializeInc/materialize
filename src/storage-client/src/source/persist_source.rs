@@ -14,12 +14,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use mz_persist_client::operators::shard_source::shard_source;
-use mz_persist_client::stats::PartStats;
-use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::Data;
-use mz_persist_types::stats::{ColumnStats, DynStats};
-use mz_repr::stats::PersistSourceDataStats;
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
@@ -28,21 +22,27 @@ use timely::dataflow::operators::{Capability, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
+use tracing::error;
 
-use mz_expr::{MfpPlan, MfpPushdown};
+use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
+use mz_persist_client::operators::shard_source::shard_source;
+pub use mz_persist_client::operators::shard_source::FlowControl;
+use mz_persist_client::stats::PartStats;
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::Data;
+use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
+use mz_repr::adt::numeric::Numeric;
+use mz_repr::stats::PersistSourceDataStats;
 use mz_repr::{
     Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp,
 };
-use tracing::error;
+use mz_timely_util::buffer::ConsolidateBuffer;
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
 use crate::types::sources::{RelationDescHack, SourceData};
-
-pub use mz_persist_client::operators::shard_source::FlowControl;
-use mz_timely_util::buffer::ConsolidateBuffer;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -129,8 +129,19 @@ where
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let name = source_id.to_string();
-    let mfp_pushdown = map_filter_project.as_ref().map(|x| MfpPushdown::new(*x));
-    let desc = RelationDescHack::new(&metadata.relation_desc);
+    let desc = metadata.relation_desc.clone();
+    let fake_desc = RelationDescHack::new(&metadata.relation_desc);
+    let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
+    let time_range = if let Some(lower) = as_of.as_ref().and_then(|a| a.as_option().copied()) {
+        // If we have a lower bound, we can provide a bound on mz_now to our filter pushdown.
+        // The range is inclusive, so it's safe to use the maximum timestamp as the upper bound when
+        // `until ` is the empty antichain.
+        // TODO: continually narrow this as the frontier progresses.
+        let upper = until.as_option().copied().unwrap_or(Timestamp::MAX);
+        ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper))
+    } else {
+        ResultSpec::anything()
+    };
     let (fetched, token) = shard_source(
         &mut scope.clone(),
         &name,
@@ -143,9 +154,46 @@ where
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
         move |stats| {
-            mfp_pushdown.as_ref().map_or(true, |x| {
-                x.should_fetch(&PersistSourceDataStatsImpl { desc: &desc, stats })
-            })
+            if let Some(plan) = &filter_plan {
+                let arena = RowArena::new();
+                let mut ranges = ColumnSpecs::new(desc.typ().clone(), &arena);
+                // TODO: even better if we can use the lower bound of the part itself!
+                ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range.clone());
+                let stats = PersistSourceDataStatsImpl {
+                    desc: &fake_desc,
+                    stats,
+                };
+                let total_count = stats.len();
+                for (id, _) in desc.iter().enumerate() {
+                    let min = stats.col_min(id, &arena);
+                    let max = stats.col_max(id, &arena);
+                    let nulls = stats.col_null_count(id);
+                    let json_spec = stats.col_json(id, &arena);
+
+                    let value_range = match (total_count, min, max, nulls) {
+                        (Some(total_count), _, _, Some(nulls)) if total_count == nulls => {
+                            ResultSpec::nothing()
+                        }
+                        (_, Some(min), Some(max), _) => ResultSpec::value_between(min, max),
+                        _ => ResultSpec::value_all(),
+                    };
+
+                    let value_range = match json_spec {
+                        Some(json) => value_range.intersect(json),
+                        None => value_range,
+                    };
+
+                    let null_range = match nulls {
+                        Some(0) => ResultSpec::nothing(),
+                        _ => ResultSpec::null(),
+                    };
+                    ranges.push_column(id, value_range.union(null_range));
+                }
+                let result = ranges.mfp_plan_filter(plan).range;
+                result.may_contain(Datum::True) || result.may_fail()
+            } else {
+                true
+            }
         },
     );
     let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
@@ -335,6 +383,63 @@ fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> 
                 std::any::type_name::<T>(),
                 stats.type_name()
             );
+            None
+        }
+    }
+}
+
+impl PersistSourceDataStatsImpl<'_> {
+    fn col_json<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> Option<ResultSpec<'a>> {
+        let name = self.desc.0.get_name(idx);
+        let stats = self
+            .stats
+            .key
+            .col::<Vec<u8>>(name.as_str())
+            .or_else(|_| {
+                self.stats
+                    .key
+                    .col::<Option<Vec<u8>>>(name.as_str())
+                    .map(|option| option.map(|s| &s.some))
+            })
+            .ok()??;
+        fn json_spec(stats: &JsonStats) -> ResultSpec {
+            match stats {
+                JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
+                JsonStats::Bools(bools) => {
+                    ResultSpec::value_between(bools.lower.into(), bools.upper.into())
+                }
+                JsonStats::Strings(strings) => ResultSpec::value_between(
+                    strings.lower.as_str().into(),
+                    strings.upper.as_str().into(),
+                ),
+                JsonStats::Numerics(floats) => {
+                    fn float_to_datum(float: f64) -> Datum<'static> {
+                        let numeric: Numeric = float.into();
+                        numeric.into()
+                    }
+                    ResultSpec::value_between(
+                        float_to_datum(floats.lower.floor()),
+                        float_to_datum(floats.upper.ceil()),
+                    )
+                }
+                JsonStats::Maps(maps) => {
+                    ResultSpec::map_spec(
+                        maps.into_iter()
+                            .map(|(k, v)| {
+                                // NB: we can't prove that a field is always present based on the stats
+                                // we keep, so we assume that accessing any field might return null.
+                                (k.as_str().into(), json_spec(v).union(ResultSpec::null()))
+                            })
+                            .collect(),
+                    )
+                }
+                JsonStats::Lists | JsonStats::None | JsonStats::Mixed => ResultSpec::anything(),
+            }
+        }
+
+        if let BytesStats::Json(json_stats) = stats {
+            Some(json_spec(json_stats))
+        } else {
             None
         }
     }
