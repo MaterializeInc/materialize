@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from pg8000.exceptions import InterfaceError
 
-from materialize import ROOT, mzbuild
+from materialize import ROOT, mzbuild, ui
 from materialize.cloudtest.k8s import K8sResource
 from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
 from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
@@ -49,7 +49,7 @@ class Application:
             resource.create()
 
     def acquire_images(self) -> None:
-        coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+        coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
         repo = mzbuild.Repository(
             ROOT, release_mode=self.release_mode, coverage=coverage
         )

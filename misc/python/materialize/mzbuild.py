@@ -701,8 +701,6 @@ class Repository:
         release_mode: bool = True,
         coverage: bool = False,
     ):
-        if os.getenv("CI_COVERAGE_ENABLED", False):
-            coverage = True
         self.rd = RepositoryDetails(root, arch, release_mode, coverage)
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
@@ -771,7 +769,7 @@ class Repository:
         parser.add_argument(
             "--coverage",
             help="whether to enable code coverage compilation flags",
-            default=bool(os.getenv("CI_COVERAGE_ENABLED", False)),
+            default=ui.env_is_truthy("CI_COVERAGE_ENABLED"),
             action="store_true",
         )
         parser.add_argument(
