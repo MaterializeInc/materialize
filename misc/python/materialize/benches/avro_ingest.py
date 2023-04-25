@@ -22,7 +22,7 @@ import requests
 from docker.models.containers import Container
 from pg8000.dbapi import ProgrammingError
 
-from materialize import ROOT, mzbuild
+from materialize import ROOT, mzbuild, ui
 
 
 def wait_for_confluent(host: str) -> None:
@@ -91,7 +91,7 @@ def main() -> None:
     args = parser.parse_args()
 
     os.chdir(ROOT)
-    coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     repo = mzbuild.Repository(ROOT, coverage=coverage)
 
     wait_for_confluent(args.confluent_host)

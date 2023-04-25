@@ -771,7 +771,7 @@ class Repository:
         parser.add_argument(
             "--coverage",
             help="whether to enable code coverage compilation flags",
-            default=bool(os.getenv("CI_COVERAGE_ENABLED", False)),
+            default=ui.env_is_truthy("CI_COVERAGE_ENABLED"),
             action="store_true",
         )
         parser.add_argument(
