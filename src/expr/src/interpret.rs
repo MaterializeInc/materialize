@@ -966,57 +966,7 @@ mod tests {
             // that the expression is well-typed.
             let maybe_panic = panic::catch_unwind(|| {
                 let arena = RowArena::new();
-                struct Typecheck(RelationType);
-                impl Interpreter for Typecheck {
-                    type Summary = ColumnType;
-
-                    fn eval_column(&self, id: usize) -> Self::Summary {
-                        self.0.column_types[id].clone()
-                    }
-
-                    fn eval_literal(
-                        &self,
-                        _result: &Result<Row, EvalError>,
-                        col_type: &ColumnType,
-                    ) -> Self::Summary {
-                        col_type.clone()
-                    }
-
-                    fn eval_unmaterializable(&self, func: &UnmaterializableFunc) -> Self::Summary {
-                        func.output_type()
-                    }
-
-                    fn eval_unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-                        func.output_type(expr)
-                    }
-
-                    fn eval_binary(
-                        &self,
-                        func: &BinaryFunc,
-                        left: Self::Summary,
-                        right: Self::Summary,
-                    ) -> Self::Summary {
-                        func.output_type(left, right)
-                    }
-
-                    fn eval_variadic(
-                        &self,
-                        func: &VariadicFunc,
-                        exprs: Vec<Self::Summary>,
-                    ) -> Self::Summary {
-                        func.output_type(exprs)
-                    }
-
-                    fn eval_if(
-                        &self,
-                        _cond: Self::Summary,
-                        then: Self::Summary,
-                        els: Self::Summary,
-                    ) -> Self::Summary {
-                        then.union(&els).expect("well-typed expression")
-                    }
-                }
-                let _ = Typecheck(relation.clone()).eval_expr(&expr);
+                let _ = expr.typ(&relation.column_types);
                 expr.eval(&datums, &arena).map(|_| ())
             });
 
