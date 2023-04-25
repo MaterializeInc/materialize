@@ -148,7 +148,6 @@ pub struct State {
     _tempfile: Option<tempfile::TempDir>,
     default_timeout: Duration,
     timeout: Duration,
-
     max_tries: usize,
     initial_backoff: Duration,
     backoff_factor: f64,
