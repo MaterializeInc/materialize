@@ -646,6 +646,17 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Boolean flag indicating whether to enable syncing from
+/// LaunchDarkly. Can be turned off as an emergency measure to still
+/// be able to alter parameters while LD is broken.
+pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_launchdarkly"),
+    value: &true,
+    description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled.
 static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_with_mutually_recursive"),
@@ -1475,6 +1486,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
+            .with_var(&ENABLE_LAUNCHDARKLY)
     }
 }
 
