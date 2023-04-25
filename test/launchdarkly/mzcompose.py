@@ -161,7 +161,7 @@ def workflow_default(c: Composition) -> None:
         # Assert that max_result_size is 4 GiB - 1 byte.
         c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
 
-        def sys(command: str):
+        def sys(command: str) -> None:
             c.testdrive(
                 "\n".join(
                     [
