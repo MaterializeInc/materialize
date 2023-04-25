@@ -701,8 +701,6 @@ class Repository:
         release_mode: bool = True,
         coverage: bool = False,
     ):
-        if os.getenv("CI_COVERAGE_ENABLED", False):
-            coverage = True
         self.rd = RepositoryDetails(root, arch, release_mode, coverage)
         self.images: Dict[str, Image] = {}
         self.compositions: Dict[str, Path] = {}
