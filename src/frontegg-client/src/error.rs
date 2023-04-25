@@ -17,11 +17,11 @@
 //! [`mz_frontegg_auth::Error`] enum.
 //!
 //! It contains three variants:
-//! * [`ErrorExtended::AuthError`]: represents an authentication error from the
+//! * [`Error::Auth`]: represents an authentication error from the
 //!   [`mz-frontegg-auth`] crate.
-//! * [`ErrorExtended::Transport`]: represents a transport error from the
+//! * [`Error::Transport`]: represents a transport error from the
 //!   `reqwest` crate during a network request.
-//! * [`ErrorExtended::Api`]: represents an Frontegg API error from a request.
+//! * [`Error::Api`]: represents an Frontegg API error from a request.
 
 use std::fmt;
 
