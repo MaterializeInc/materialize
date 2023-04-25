@@ -1623,12 +1623,6 @@ impl SystemVars {
         *self.expect_value(&CONFIG_HAS_SYNCED_ONCE)
     }
 
-    /// Returns the value of the `launchdarkly_kill_switch`
-    /// configuration parameter.
-    pub fn launchdarkly_kill_switch(&self) -> bool {
-        *self.expect_value(&LAUNCHDARKLY_KILL_SWITCH)
-    }
-
     /// Returns the value of the `max_aws_privatelink_connections` configuration parameter.
     pub fn max_aws_privatelink_connections(&self) -> u32 {
         *self.expect_value(&MAX_AWS_PRIVATELINK_CONNECTIONS)

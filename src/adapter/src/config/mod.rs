@@ -56,7 +56,7 @@ pub async fn system_parameter_sync(
         backend.pull(&mut params).await;
         let launchdarkly_killed =
             <bool as Value>::parse(VarInput::Flat(&params.get(LAUNCHDARKLY_KILL_SWITCH.name())))
-                .unwrap();
+                .expect("This is known to be a bool");
         if !launchdarkly_killed && frontend.pull(&mut params) {
             backend.push(&mut params).await;
         }
