@@ -162,7 +162,16 @@ def workflow_default(c: Composition) -> None:
         c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
 
         def sys(command: str):
-            c.testdrive("\n".join(['$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}', '$ postgres-execute connection=mz_system', command]))
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
+                        "$ postgres-execute connection=mz_system",
+                        command,
+                    ]
+                )
+            )
+
         # Assert that we can turn off synchronization
         sys("ALTER SYSTEM SET enable_launchdarkly=off")
         sys("ALTER SYSTEM SET max_result_size=1234")
@@ -172,7 +181,7 @@ def workflow_default(c: Composition) -> None:
         # The value should be reset after we turn the kill switch back off
         sys("ALTER SYSTEM SET enable_launchdarkly=on")
         c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
-        
+
         # Remove custom targeting.
         ld_client.update_targeting(
             LD_FEATURE_FLAG_KEY,
