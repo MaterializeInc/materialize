@@ -145,19 +145,19 @@ contains: column reference "c" is ambiguous
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT (KEY (a, b))
 > FETCH 1 c
-<TIMESTAMP> 1 2
+<TIMESTAMP> upsert 1 2
 
 > FETCH 1 c
-<TIMESTAMP> 2 1
+<TIMESTAMP> upsert 2 1
 > COMMIT
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT (KEY (b, a))
 > FETCH 1 c
-<TIMESTAMP> 1 2
+<TIMESTAMP> upsert 1 2
 
 > FETCH 1 c
-<TIMESTAMP> 2 1
+<TIMESTAMP> upsert 2 1
 > COMMIT
 
 > CREATE TABLE t1(key int, value int, UNIQUE (key))
@@ -166,20 +166,20 @@ contains: column reference "c" is ambiguous
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t1) ENVELOPE UPSERT (KEY (key))
 > FETCH 2 c
-<TIMESTAMP> 1 2
-<TIMESTAMP> 2 3
+<TIMESTAMP> upsert 1 2
+<TIMESTAMP> upsert 2 3
 
 $ postgres-execute connection=mz_system
 UPDATE t1 SET value = 4 WHERE key = 1
 
 > FETCH 1 c
-<TIMESTAMP> 1 4
+<TIMESTAMP> upsert 1 4
 
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1
 
 > FETCH ALL c
-<TIMESTAMP> 1 <null>
+<TIMESTAMP> delete 1 <null>
 
 > COMMIT
 
@@ -189,20 +189,20 @@ DELETE FROM t1 WHERE key = 1
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t2) ENVELOPE UPSERT (KEY (key))
 > FETCH 2 c
-<TIMESTAMP> 1 2
-<TIMESTAMP> 2 3
+<TIMESTAMP> upsert 1 2
+<TIMESTAMP> upsert 2 3
 
 $ postgres-execute connection=mz_system
 UPDATE t2 SET value = 4 WHERE key = 1
 
 > FETCH 1 c
-<TIMESTAMP> 1 4
+<TIMESTAMP> upsert 1 4
 
 $ postgres-execute connection=mz_system
 DELETE FROM t2 WHERE key = 1
 
 > FETCH ALL c
-<TIMESTAMP> 1 <null>
+<TIMESTAMP> delete 1 <null>
 
 > COMMIT
 
@@ -210,10 +210,10 @@ DELETE FROM t2 WHERE key = 1
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t2) WITH (PROGRESS, SNAPSHOT) ENVELOPE UPSERT (KEY (key))
 > FETCH 1 c
-<TIMESTAMP> true <null> <null>
+<TIMESTAMP> true <null> <null> <null>
 
 > FETCH ALL c
-<TIMESTAMP> false 2 3
-<TIMESTAMP> true <null> <null>
+<TIMESTAMP> false upsert 2 3
+<TIMESTAMP> true <null> <null> <null>
 
 > COMMIT

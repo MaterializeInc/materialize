@@ -57,6 +57,9 @@ pub struct ActiveSubscribe {
     pub output: SubscribeOutput,
 }
 
+static UPSERT: Datum = Datum::String("upsert");
+static DELETE: Datum = Datum::String("delete");
+
 impl ActiveSubscribe {
     pub(crate) fn initialize(&self) {
         // Always emit progress message indicating snapshot timestamp.
@@ -73,10 +76,9 @@ impl ActiveSubscribe {
             packer.push(Datum::from(numeric::Numeric::from(*upper)));
             packer.push(Datum::True);
 
-            // Fill in the diff column
-            if !matches!(self.output, SubscribeOutput::EnvelopeUpsert { .. }) {
-                packer.push(Datum::Null);
-            }
+            // Fill in the mz_diff or mz_state column
+            packer.push(Datum::Null);
+
             // Fill all table columns with NULL.
             for _ in 0..self.arity {
                 packer.push(Datum::Null);
@@ -197,7 +199,7 @@ impl ActiveSubscribe {
                                         for _ in 0..self.arity - key_indices.len() {
                                             packer.push(Datum::Null);
                                         }
-                                        new_rows.push((start.0, row_buf.clone(), 1));
+                                        new_rows.push((start.0, row_buf.clone(), -1));
                                     }
                                 }
                                 rows = new_rows;
@@ -221,7 +223,13 @@ impl ActiveSubscribe {
                                     packer.push(Datum::False);
                                 }
 
-                                if !matches!(self.output, SubscribeOutput::EnvelopeUpsert { .. }) {
+                                if matches!(self.output, SubscribeOutput::EnvelopeUpsert { .. }) {
+                                    packer.push(if diff < 0 {
+                                        DELETE
+                                    } else {
+                                        UPSERT
+                                    });
+                                } else {
                                     packer.push(Datum::Int64(diff));
                                 }
 

@@ -413,6 +413,7 @@ pub fn describe_subscribe(
     }
 
     if let SubscribeOutput::EnvelopeUpsert { key_columns } = stmt.output {
+        desc = desc.with_column("mz_state", ScalarType::String.nullable(true));
         let key_columns = key_columns
             .into_iter()
             .map(normalize::column_name)
