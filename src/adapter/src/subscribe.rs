@@ -224,11 +224,7 @@ impl ActiveSubscribe {
                                 }
 
                                 if matches!(self.output, SubscribeOutput::EnvelopeUpsert { .. }) {
-                                    packer.push(if diff < 0 {
-                                        DELETE
-                                    } else {
-                                        UPSERT
-                                    });
+                                    packer.push(if diff < 0 { DELETE } else { UPSERT });
                                 } else {
                                     packer.push(Datum::Int64(diff));
                                 }
