@@ -646,13 +646,13 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-/// Boolean flag indicating whether to completely disable syncing from
-/// LaunchDarkly.  Used as an emergency measure to still be able to
-/// alter parameters while LD is broken.
-pub static LAUNCHDARKLY_KILL_SWITCH: ServerVar<bool> = ServerVar {
+/// Boolean flag indicating whether to enable syncing from
+/// LaunchDarkly. Can be turned off as an emergency measure to still
+/// be able to alter parameters while LD is broken.
+pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("launchdarkly_kill_switch"),
-    value: &false,
-    description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be paused (Materialize).",
+    value: &true,
+    description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
     internal: true,
     safe: true,
 };
@@ -1486,7 +1486,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
-            .with_var(&LAUNCHDARKLY_KILL_SWITCH)
+            .with_var(&ENABLE_LAUNCHDARKLY)
     }
 }
 
