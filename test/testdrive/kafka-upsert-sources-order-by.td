@@ -24,7 +24,7 @@ $ kafka-create-topic topic=textbytes
 > SHOW CREATE SOURCE texttext
 materialize.public.texttext "CREATE SOURCE \"materialize\".\"public\".\"texttext\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-textbytes-${testdrive.seed}') KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE OFFSET AS \"o\", TIMESTAMP AS \"ts\" ENVELOPE UPSERT ( ORDER BY (\"ts\", \"o\")) EXPOSE PROGRESS AS \"materialize\".\"public\".\"texttext_progress\""
 
-# Ingesting values, later offset will override earlier values for the same timestamp
+# Ingesting values, later offset will override earlier values for the same timestamp.
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=185
 fish:fish_185
 bird:bird_185
@@ -38,7 +38,7 @@ fish         fish_185      "1970-01-01 00:00:00.185"
 bird         bird_185      "1970-01-01 00:00:00.185"
 fruit        new_fruit_185 "1970-01-01 00:00:00.185"
 
-# Values with higher timestamp, should remove bird and update the rest
+# Values with higher timestamp, should remove bird and update the rest.
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=278
 fish:fish_278
 mammal:mammal_278
@@ -52,7 +52,9 @@ fruit         fruit_278       "1970-01-01 00:00:00.278"
 fish          fish_278        "1970-01-01 00:00:00.278"
 mammal        mammal_278      "1970-01-01 00:00:00.278"
 
-# ingesting again with same timestamp, will remove mammal and update fish
+# Ingesting again with same timestamp, will remove mammal and update fish.
+# Since we have offset as an order by column explicitly, we can always tie-break using
+# the offset value when timestamps are equal.
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=278
 mammal:
 fish:new_fish_278
@@ -63,7 +65,7 @@ key           text            ts
 fruit         fruit_278       "1970-01-01 00:00:00.278"
 fish          new_fish_278    "1970-01-01 00:00:00.278"
 
-# ingesting with lower timestamp, only bird will be added, fish and fruit will remain unchanged
+# Ingesting with lower timestamp, only bird will be added, fish and fruit will remain unchanged.
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=: timestamp=191
 fish:fish_191
 bird:bird_191
@@ -92,13 +94,13 @@ contains:Only `TIMESTAMP` and `OFFSET` (from `INCLUDE TIMESTAMP` and `INCLUDE OF
   ENVELOPE UPSERT (ORDER BY (ts))
 contains:OFFSET (from `INCLUDE OFFSET`) must be explicitly specified as an order by column
 
-# no parentheses around ORDER BY
+# No parentheses around ORDER BY
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP, PARTITION as p
   ENVELOPE UPSERT ORDER BY p
 contains:Expected end of statement
 
-# no parentheses around ts in ORDER BY
+# No parentheses around ts in ORDER BY
 ! CREATE SOURCE bad_def FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE TIMESTAMP as ts
   ENVELOPE UPSERT ( ORDER BY ts )

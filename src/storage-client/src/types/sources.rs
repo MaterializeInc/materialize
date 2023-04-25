@@ -875,17 +875,16 @@ pub enum UnplannedSourceEnvelope {
     Debezium(DebeziumEnvelope),
     Upsert {
         style: UpsertStyle,
-        // Optional order by information
         order_by: Option<UpsertOrderBy>,
     },
     CdcV2,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct UpsertOrderBy {
-    // indices of the order by fields in the metadata row
+    /// The indices of the order by fields in the metadata row
     pub metadata_indices: Vec<usize>,
-    // total number of columns in the metadata
-    // will be used to convert position in metadata to absolute source col position
+    /// The total number of columns in the metadata. This will be
+    /// used to convert position in metadata to absolute source column position
     pub metadata_arity: usize,
 }
 
@@ -923,7 +922,7 @@ pub struct UpsertEnvelope {
     /// to deduplicate data in `upsert_core`
     pub key_indices: Vec<usize>,
     /// Optional indices of the columns in the full value row
-    /// to be used for order by
+    /// to be used for `ORDER BY`
     pub order_by_indices: Vec<usize>,
 }
 
@@ -1251,7 +1250,7 @@ impl UnplannedSourceEnvelope {
             } => {
                 let source_arity = source_arity.expect("into_source_envelope to be passed correct parameters for UnplannedSourceEnvelope::Upsert");
 
-                // getting absolute position of order by in source columns
+                // Getting absolute position of ORDER BY columns in the full row source
                 let order_by_indices = match upsert_order_by {
                     Some(order_by) => order_by
                         .metadata_indices
