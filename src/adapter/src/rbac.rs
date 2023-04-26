@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Formatter;
 use std::{fmt, iter};
 
@@ -25,6 +25,7 @@ use mz_sql::plan::{
     AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, CreateMaterializedViewPlan, CreateSinkPlan,
     CreateSourcePlan, CreateViewPlan, GrantPrivilegePlan, MutationKind, Plan, RevokePrivilegePlan,
 };
+use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
 
@@ -53,11 +54,19 @@ pub enum UnauthorizedError {
     #[error("must be a member of {}", role_name.to_string().quoted())]
     AlterOwnerMembership { role_name: String },
     /// The action requires one or more privileges.
-    #[error("permission denied to {action}")]
+    #[error("permission denied for {object_type} {object_name}")]
     Privilege {
-        action: String,
-        reason: Option<String>,
+        object_type: ObjectType,
+        object_name: String,
     },
+    // TODO(jkosh44) When we implement parameter privileges, this can be replaced with a regular
+    // privilege error.
+    /// The action can only be performed by the mz_system role.
+    #[error("permission denied to {action}")]
+    MzSystem { action: String },
+    /// The action cannot be performed by the mz_introspection role.
+    #[error("permission denied to {action}")]
+    MzIntrospection { action: String },
 }
 
 impl UnauthorizedError {
@@ -70,11 +79,16 @@ impl UnauthorizedError {
                 "You must have the {} attribute to {}",
                 attribute, action
             )),
-            UnauthorizedError::Privilege { action, reason } => reason
-                .as_ref()
-                .map(|reason| format!("{} to {}", reason, action)),
+            UnauthorizedError::MzSystem { .. } => {
+                Some(format!("You must be the '{}' role", SYSTEM_USER.name))
+            }
+            UnauthorizedError::MzIntrospection { .. } => Some(format!(
+                "The '{}' role has very limited privileges",
+                INTROSPECTION_USER.name
+            )),
             UnauthorizedError::Ownership { .. }
-            | UnauthorizedError::AlterOwnerMembership { .. } => None,
+            | UnauthorizedError::AlterOwnerMembership { .. }
+            | UnauthorizedError::Privilege { .. } => None,
         }
     }
 }
@@ -173,7 +187,10 @@ pub fn check_plan(
         .collect();
     ownership_err(unheld_ownership, catalog)?;
 
-    let _required_privileges = generate_required_privileges(catalog, plan, depends_on, *role_id);
+    let required_privileges = generate_required_privileges(catalog, plan, depends_on, *role_id);
+    let mut role_memberships = BTreeMap::new();
+    role_memberships.insert(*role_id, role_membership);
+    check_object_privileges(catalog, required_privileges, role_memberships)?;
 
     Ok(())
 }
@@ -442,35 +459,34 @@ fn ownership_err(
     }
 }
 
+/// Generates the privileges required to execute a given plan.
+///
 /// The result of this function is a set of tuples of the form
 /// (What object the privilege is on, What privilege is required, Who must possess the privilege).
-///
-/// We use a [`BTreeSet`] because we may generate duplicate privileges while traversing through the
-/// plan and used objects.
 fn generate_required_privileges(
     catalog: &impl SessionCatalog,
     plan: &Plan,
     depends_on: &Vec<GlobalId>,
     role_id: RoleId,
-) -> BTreeSet<(ObjectId, AclMode, RoleId)> {
+) -> Vec<(ObjectId, AclMode, RoleId)> {
     match plan {
         Plan::CreateConnection(plan) => {
-            let mut privileges = BTreeSet::from([(
+            let mut privileges = vec![(
                 plan.name.qualifiers.clone().into(),
                 AclMode::CREATE,
                 role_id,
-            )]);
+            )];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
         Plan::CreateSchema(plan) => match plan.database_spec {
-            ResolvedDatabaseSpecifier::Ambient => BTreeSet::new(),
+            ResolvedDatabaseSpecifier::Ambient => Vec::new(),
             ResolvedDatabaseSpecifier::Id(database_id) => {
-                BTreeSet::from([(database_id.into(), AclMode::CREATE, role_id)])
+                vec![(database_id.into(), AclMode::CREATE, role_id)]
             }
         },
         Plan::CreateClusterReplica(plan) => {
-            BTreeSet::from([(plan.cluster_id.into(), AclMode::CREATE, role_id)])
+            vec![(plan.cluster_id.into(), AclMode::CREATE, role_id)]
         }
         Plan::CreateSource(plan) => {
             generate_required_source_privileges(catalog, plan, depends_on, role_id)
@@ -494,73 +510,77 @@ fn generate_required_privileges(
                 .into_iter()
             })
             .collect(),
-        Plan::CreateSecret(plan) => BTreeSet::from([(
+        Plan::CreateSecret(plan) => vec![(
             plan.name.qualifiers.clone().into(),
             AclMode::CREATE,
             role_id,
-        )]),
+        )],
         Plan::CreateSink(plan) => {
-            let mut privileges = BTreeSet::from([(
-                plan.name.qualifiers.clone().into(),
-                AclMode::CREATE,
+            let schema_id: ObjectId = plan.name.qualifiers.clone().into();
+            let mut privileges = vec![(schema_id.clone(), AclMode::CREATE, role_id)];
+            privileges.extend_from_slice(&generate_read_privileges_inner(
+                catalog,
+                iter::once(plan.sink.from),
                 role_id,
-            )]);
+                &mut BTreeSet::from([(schema_id, role_id)]),
+            ));
             if let Some(id) = plan.cluster_config.cluster_id() {
-                privileges.insert((id.into(), AclMode::CREATE, role_id));
+                privileges.push((id.into(), AclMode::CREATE, role_id));
             }
-            privileges.extend(
-                generate_read_privileges(catalog, iter::once(plan.sink.from), role_id).into_iter(),
-            );
             privileges
         }
         Plan::CreateTable(plan) => {
-            let mut privileges = BTreeSet::from([(
+            let mut privileges = vec![(
                 plan.name.qualifiers.clone().into(),
                 AclMode::CREATE,
                 role_id,
-            )]);
+            )];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
         Plan::CreateView(plan) => {
-            let mut privileges = BTreeSet::from([(
+            let mut privileges = vec![(
                 plan.name.qualifiers.clone().into(),
                 AclMode::CREATE,
                 role_id,
-            )]);
+            )];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
         Plan::CreateMaterializedView(plan) => {
-            let mut privileges = BTreeSet::from([
-                (plan.name.qualifiers.clone().into(), AclMode::USAGE, role_id),
+            let mut privileges = vec![
+                (
+                    plan.name.qualifiers.clone().into(),
+                    AclMode::CREATE,
+                    role_id,
+                ),
                 (
                     plan.materialized_view.cluster_id.into(),
                     AclMode::CREATE,
                     role_id,
                 ),
-            ]);
+            ];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
         Plan::CreateIndex(plan) => {
-            let mut privileges = BTreeSet::from([
+            let mut privileges = vec![
                 (
                     plan.name.qualifiers.clone().into(),
                     AclMode::CREATE,
                     role_id,
                 ),
                 (plan.index.cluster_id.into(), AclMode::CREATE, role_id),
-            ]);
+            ];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
         Plan::CreateType(plan) => {
-            let mut privileges = BTreeSet::from([(
+            let mut privileges = vec![(
                 plan.name.qualifiers.clone().into(),
                 AclMode::CREATE,
                 role_id,
-            )]);
+            )];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
@@ -590,19 +610,21 @@ fn generate_required_privileges(
             .collect(),
         Plan::ShowCreate(plan) => {
             let item = catalog.get_item(&plan.id);
-            BTreeSet::from([(
+            vec![(
                 item.name().qualifiers.clone().into(),
                 AclMode::USAGE,
                 role_id,
-            )])
+            )]
         }
 
         Plan::Peek(plan) => {
             let mut privileges =
                 generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
+            // source hasn't been fully optimized yet, so it might actually be a constant,
+            // but we mistakenly think that it's not.
             if plan.source.as_const().is_none() {
                 if let Ok(cluster) = catalog.resolve_cluster(None) {
-                    privileges.insert((cluster.id().into(), AclMode::USAGE, role_id));
+                    privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
                 }
             }
             privileges
@@ -611,32 +633,56 @@ fn generate_required_privileges(
             let mut privileges =
                 generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
             if let Ok(cluster) = catalog.resolve_cluster(None) {
-                privileges.insert((cluster.id().into(), AclMode::USAGE, role_id));
+                privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
             }
             privileges
         }
         Plan::Explain(_) => generate_read_privileges(catalog, depends_on.iter().cloned(), role_id),
-        Plan::Insert(plan) => {
-            let item = catalog.get_item(&plan.id);
-            BTreeSet::from([
-                (
-                    item.name().qualifiers.clone().into(),
-                    AclMode::USAGE,
-                    role_id,
-                ),
-                (plan.id.into(), AclMode::INSERT, role_id),
-            ])
-        }
         Plan::CopyFrom(plan) => {
             let item = catalog.get_item(&plan.id);
-            BTreeSet::from([
+            vec![
                 (
                     item.name().qualifiers.clone().into(),
                     AclMode::USAGE,
                     role_id,
                 ),
                 (plan.id.into(), AclMode::INSERT, role_id),
-            ])
+            ]
+        }
+        Plan::Insert(plan) => {
+            let update_schema_id: ObjectId =
+                catalog.get_item(&plan.id).name().qualifiers.clone().into();
+            let mut privileges = vec![
+                (update_schema_id.clone(), AclMode::USAGE, role_id),
+                (plan.id.into(), AclMode::INSERT, role_id),
+            ];
+            // plan.values has not been optimized yet, so it might be constant even if
+            // `plan.values.as_const().is_none()` is true.
+            privileges.extend_from_slice(&generate_read_privileges_inner(
+                catalog,
+                plan.values.depends_on().into_iter(),
+                role_id,
+                &mut BTreeSet::from([(update_schema_id, role_id)]),
+            ));
+            // Collect any USAGE privileges from the returning clause.
+            let seen = privileges
+                .iter()
+                .filter_map(|(id, _, _)| match id {
+                    ObjectId::Item(id) => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            privileges.extend(generate_item_usage_privileges_inner(
+                catalog, depends_on, role_id, seen,
+            ));
+            // values hasn't been fully optimized yet, so it might actually be a constant,
+            // but we mistakenly think that it's not.
+            if plan.values.as_const().is_none() {
+                if let Ok(cluster) = catalog.resolve_cluster(None) {
+                    privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
+                }
+            }
+            privileges
         }
         Plan::ReadThenWrite(plan) => {
             let acl_mode = match plan.kind {
@@ -644,14 +690,36 @@ fn generate_required_privileges(
                 MutationKind::Update => AclMode::UPDATE,
                 MutationKind::Delete => AclMode::DELETE,
             };
-            let mut privileges = BTreeSet::from([(plan.id.into(), acl_mode, role_id)]);
-            privileges.extend(
-                generate_read_privileges(catalog, plan.selection.depends_on().into_iter(), role_id)
-                    .into_iter(),
-            );
+            let update_schema_id: ObjectId =
+                catalog.get_item(&plan.id).name().qualifiers.clone().into();
+            let mut privileges = vec![
+                (update_schema_id.clone(), AclMode::USAGE, role_id),
+                (plan.id.into(), acl_mode, role_id),
+            ];
+            if plan.contains_user_specified_read {
+                privileges.extend_from_slice(&generate_read_privileges_inner(
+                    catalog,
+                    plan.selection.depends_on().into_iter(),
+                    role_id,
+                    &mut BTreeSet::from([(update_schema_id, role_id)]),
+                ));
+            }
+            // Collect any USAGE privileges from the returning clause.
+            let seen = privileges
+                .iter()
+                .filter_map(|(id, _, _)| match id {
+                    ObjectId::Item(id) => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            privileges.extend(generate_item_usage_privileges_inner(
+                catalog, depends_on, role_id, seen,
+            ));
+            // selection hasn't been fully optimized yet, so it might actually be a constant,
+            // but we mistakenly think that it's not.
             if plan.selection.as_const().is_none() {
                 if let Ok(cluster) = catalog.resolve_cluster(None) {
-                    privileges.insert((cluster.id().into(), AclMode::USAGE, role_id));
+                    privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
                 }
             }
             privileges
@@ -663,52 +731,52 @@ fn generate_required_privileges(
         | Plan::AlterItemRename(AlterItemRenamePlan { id, .. })
         | Plan::AlterSecret(AlterSecretPlan { id, .. }) => {
             let item = catalog.get_item(id);
-            BTreeSet::from([(
+            vec![(
                 item.name().qualifiers.clone().into(),
                 AclMode::CREATE,
                 role_id,
-            )])
+            )]
         }
         Plan::AlterOwner(AlterOwnerPlan { id, .. }) => match id {
             ObjectId::ClusterReplica((cluster_id, _)) => {
-                BTreeSet::from([(cluster_id.into(), AclMode::CREATE, role_id)])
+                vec![(cluster_id.into(), AclMode::CREATE, role_id)]
             }
             ObjectId::Schema((database_spec, _)) => match database_spec {
-                ResolvedDatabaseSpecifier::Ambient => BTreeSet::new(),
+                ResolvedDatabaseSpecifier::Ambient => Vec::new(),
                 ResolvedDatabaseSpecifier::Id(database_id) => {
-                    BTreeSet::from([(database_id.into(), AclMode::CREATE, role_id)])
+                    vec![(database_id.into(), AclMode::CREATE, role_id)]
                 }
             },
             ObjectId::Item(item_id) => {
                 let item = catalog.get_item(item_id);
-                BTreeSet::from([(
+                vec![(
                     item.name().qualifiers.clone().into(),
                     AclMode::CREATE,
                     role_id,
-                )])
+                )]
             }
-            ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => BTreeSet::new(),
+            ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
         },
         Plan::GrantPrivilege(GrantPrivilegePlan { object_id, .. })
         | Plan::RevokePrivilege(RevokePrivilegePlan { object_id, .. }) => match object_id {
             ObjectId::ClusterReplica((cluster_id, _)) => {
-                BTreeSet::from([(cluster_id.into(), AclMode::USAGE, role_id)])
+                vec![(cluster_id.into(), AclMode::USAGE, role_id)]
             }
             ObjectId::Schema((database_spec, _)) => match database_spec {
-                ResolvedDatabaseSpecifier::Ambient => BTreeSet::new(),
+                ResolvedDatabaseSpecifier::Ambient => Vec::new(),
                 ResolvedDatabaseSpecifier::Id(database_id) => {
-                    BTreeSet::from([(database_id.into(), AclMode::USAGE, role_id)])
+                    vec![(database_id.into(), AclMode::USAGE, role_id)]
                 }
             },
             ObjectId::Item(item_id) => {
                 let item = catalog.get_item(item_id);
-                BTreeSet::from([(
+                vec![(
                     item.name().qualifiers.clone().into(),
                     AclMode::USAGE,
                     role_id,
-                )])
+                )]
             }
-            ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => BTreeSet::new(),
+            ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
         },
         Plan::CreateDatabase(_)
         | Plan::CreateRole(_)
@@ -738,7 +806,7 @@ fn generate_required_privileges(
         | Plan::Raise(_)
         | Plan::RotateKeys(_)
         | Plan::GrantRole(_)
-        | Plan::RevokeRole(_) => BTreeSet::new(),
+        | Plan::RevokeRole(_) => Vec::new(),
     }
 }
 
@@ -747,14 +815,14 @@ fn generate_required_source_privileges(
     plan: &CreateSourcePlan,
     depends_on: &Vec<GlobalId>,
     role_id: RoleId,
-) -> BTreeSet<(ObjectId, AclMode, RoleId)> {
-    let mut privileges = BTreeSet::from([(
+) -> Vec<(ObjectId, AclMode, RoleId)> {
+    let mut privileges = vec![(
         plan.name.qualifiers.clone().into(),
         AclMode::CREATE,
         role_id,
-    )]);
+    )];
     if let Some(id) = plan.cluster_config.cluster_id() {
-        privileges.insert((id.into(), AclMode::CREATE, role_id));
+        privileges.push((id.into(), AclMode::CREATE, role_id));
     }
     privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
     privileges
@@ -771,7 +839,7 @@ fn generate_read_privileges(
     catalog: &impl SessionCatalog,
     ids: impl Iterator<Item = GlobalId>,
     role_id: RoleId,
-) -> BTreeSet<(ObjectId, AclMode, RoleId)> {
+) -> Vec<(ObjectId, AclMode, RoleId)> {
     generate_read_privileges_inner(catalog, ids, role_id, &mut BTreeSet::new())
 }
 
@@ -779,54 +847,40 @@ fn generate_read_privileges_inner(
     catalog: &impl SessionCatalog,
     ids: impl Iterator<Item = GlobalId>,
     role_id: RoleId,
-    seen: &mut BTreeSet<(GlobalId, RoleId)>,
-) -> BTreeSet<(ObjectId, AclMode, RoleId)> {
-    let mut privileges = BTreeSet::new();
+    seen: &mut BTreeSet<(ObjectId, RoleId)>,
+) -> Vec<(ObjectId, AclMode, RoleId)> {
+    let mut privileges = Vec::new();
+    let mut views = Vec::new();
+
     for id in ids {
-        if seen.insert((id, role_id)) {
-            privileges
-                .extend(generate_read_privilege_inner(catalog, id, role_id, seen).into_iter());
+        if seen.insert((id.into(), role_id)) {
+            let item = catalog.get_item(&id);
+            let schema_id: ObjectId = item.name().qualifiers.clone().into();
+            if seen.insert((schema_id.clone(), role_id)) {
+                privileges.push((schema_id, AclMode::USAGE, role_id))
+            }
+            match item.item_type() {
+                CatalogItemType::View | CatalogItemType::MaterializedView => {
+                    privileges.push((id.into(), AclMode::SELECT, role_id));
+                    views.push((item.uses().iter().cloned(), item.owner_id()));
+                }
+                CatalogItemType::Table | CatalogItemType::Source => {
+                    privileges.push((id.into(), AclMode::SELECT, role_id));
+                }
+                CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
+                    privileges.push((id.into(), AclMode::USAGE, role_id));
+                }
+                CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+            }
         }
     }
-    privileges
-}
 
-fn generate_read_privilege_inner(
-    catalog: &impl SessionCatalog,
-    id: GlobalId,
-    role_id: RoleId,
-    seen: &mut BTreeSet<(GlobalId, RoleId)>,
-) -> BTreeSet<(ObjectId, AclMode, RoleId)> {
-    let item = catalog.get_item(&id);
-    // This may result in duplicate privileges, which is partly the reason we use a BTreeSet.
-    let mut privileges = BTreeSet::from([(
-        item.name().qualifiers.clone().into(),
-        AclMode::USAGE,
-        role_id,
-    )]);
-    let item_privileges = match item.item_type() {
-        CatalogItemType::View | CatalogItemType::MaterializedView => {
-            let mut view_privileges = BTreeSet::from([(id.into(), AclMode::SELECT, role_id)]);
-            view_privileges.extend(
-                generate_read_privileges_inner(
-                    catalog,
-                    item.uses().iter().cloned(),
-                    item.owner_id(),
-                    seen,
-                )
-                .into_iter(),
-            );
-            view_privileges
-        }
-        CatalogItemType::Table | CatalogItemType::Source => {
-            BTreeSet::from([(id.into(), AclMode::SELECT, role_id)])
-        }
-        CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
-            BTreeSet::from([(id.into(), AclMode::USAGE, role_id)])
-        }
-        CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => BTreeSet::new(),
-    };
-    privileges.extend(item_privileges.into_iter());
+    for (view_ids, view_owner) in views {
+        privileges.extend_from_slice(&generate_read_privileges_inner(
+            catalog, view_ids, view_owner, seen,
+        ));
+    }
+
     privileges
 }
 
@@ -835,21 +889,63 @@ fn generate_item_usage_privileges<'a>(
     ids: &'a Vec<GlobalId>,
     role_id: RoleId,
 ) -> impl Iterator<Item = (ObjectId, AclMode, RoleId)> + 'a {
-    ids.iter().filter_map(move |id| {
-        let item = catalog.get_item(id);
-        match item.item_type() {
-            CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
-                Some((id.into(), AclMode::USAGE, role_id))
+    generate_item_usage_privileges_inner(catalog, ids, role_id, BTreeSet::new())
+}
+
+fn generate_item_usage_privileges_inner<'a>(
+    catalog: &'a impl SessionCatalog,
+    ids: &'a Vec<GlobalId>,
+    role_id: RoleId,
+    seen: BTreeSet<GlobalId>,
+) -> impl Iterator<Item = (ObjectId, AclMode, RoleId)> + 'a {
+    // Use a `BTreeSet` to remove duplicate IDs.
+    BTreeSet::from_iter(ids.iter())
+        .into_iter()
+        .filter(move |id| !seen.contains(id))
+        .filter_map(move |id| {
+            let item = catalog.get_item(id);
+            match item.item_type() {
+                CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
+                    Some((id.into(), AclMode::USAGE, role_id))
+                }
+                CatalogItemType::Table
+                | CatalogItemType::Source
+                | CatalogItemType::Sink
+                | CatalogItemType::View
+                | CatalogItemType::MaterializedView
+                | CatalogItemType::Index
+                | CatalogItemType::Func => None,
             }
-            CatalogItemType::Table
-            | CatalogItemType::Source
-            | CatalogItemType::Sink
-            | CatalogItemType::View
-            | CatalogItemType::MaterializedView
-            | CatalogItemType::Index
-            | CatalogItemType::Func => None,
+        })
+}
+
+fn check_object_privileges(
+    catalog: &impl SessionCatalog,
+    privileges: Vec<(ObjectId, AclMode, RoleId)>,
+    mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>>,
+) -> Result<(), UnauthorizedError> {
+    for (object_id, acl_mode, role_id) in privileges {
+        let role_membership = role_memberships
+            .entry(role_id)
+            .or_insert_with_key(|role_id| catalog.collect_role_membership(role_id));
+        let object_privileges = catalog
+            .get_privileges(&object_id)
+            .expect("only object types with privileges will generate required privileges");
+        let role_privileges = role_membership
+            .iter()
+            .filter_map(|role_id| object_privileges.get(role_id))
+            .flat_map(|mz_acl_items| mz_acl_items.iter())
+            .map(|mz_acl_item| mz_acl_item.acl_mode)
+            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));
+        if !role_privileges.contains(acl_mode) {
+            return Err(UnauthorizedError::Privilege {
+                object_type: catalog.get_object_type(&object_id),
+                object_name: catalog.get_object_name(&object_id),
+            });
         }
-    })
+    }
+
+    Ok(())
 }
 
 pub(crate) const fn all_object_privileges(object_type: ObjectType) -> AclMode {

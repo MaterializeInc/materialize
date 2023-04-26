@@ -510,14 +510,19 @@ pub fn plan_copy_from_rows(
     Ok(expr.map(map_exprs).project(project_key))
 }
 
-/// Common information used for DELETE and UPDATE plans.
+/// Common information used for DELETE, UPDATE, and INSERT INTO ... SELECT plans.
 pub struct ReadThenWritePlan {
     pub id: GlobalId,
-    /// WHERE filter.
+    /// Read portion of query.
+    ///
+    /// NOTE: Even if the WHERE filter is left off, we still need to perform a read to generate
+    /// retractions.
     pub selection: HirRelationExpr,
     /// Map from column index to SET expression. Empty for DELETE statements.
     pub assignments: BTreeMap<usize, HirScalarExpr>,
     pub finishing: RowSetFinishing,
+    /// Whether the original query contained a WHERE clause.
+    pub contains_where_clause: bool,
 }
 
 pub fn plan_delete_query(
@@ -590,6 +595,7 @@ pub fn plan_mutation_query_inner(
     let scope = plan_table_alias(scope, alias.as_ref())?;
     let desc = item.desc(&qcx.scx.catalog.resolve_full_name(item.name()))?;
     let relation_type = qcx.relation_type(&get);
+    let contains_where_clause = selection.is_some();
 
     if using.is_empty() {
         if let Some(expr) = selection {
@@ -650,6 +656,7 @@ pub fn plan_mutation_query_inner(
         selection: get,
         finishing,
         assignments: sets,
+        contains_where_clause,
     })
 }
 

@@ -634,6 +634,7 @@ impl CatalogState {
                 queue.extend(role.membership().keys());
             }
         }
+        membership.insert(RoleId::Public);
         membership
     }
 
@@ -7452,6 +7453,18 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
+    fn get_privileges(&self, id: &ObjectId) -> Option<&PrivilegeMap> {
+        match id {
+            ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
+            ObjectId::Database(id) => Some(self.get_database(id).privileges()),
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                Some(self.get_schema(database_spec, schema_spec).privileges())
+            }
+            ObjectId::Item(id) => Some(self.get_item(id).privileges()),
+            ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+        }
+    }
+
     fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.object_dependents(ids, self.conn_id, &mut seen)
@@ -7464,6 +7477,37 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn all_object_privileges(&self, object_type: mz_sql_parser::ast::ObjectType) -> AclMode {
         rbac::all_object_privileges(object_type)
+    }
+
+    fn get_object_type(&self, object_id: &ObjectId) -> mz_sql_parser::ast::ObjectType {
+        match object_id {
+            ObjectId::Cluster(_) => mz_sql_parser::ast::ObjectType::Cluster,
+            ObjectId::ClusterReplica(_) => mz_sql_parser::ast::ObjectType::ClusterReplica,
+            ObjectId::Database(_) => mz_sql_parser::ast::ObjectType::Database,
+            ObjectId::Schema(_) => mz_sql_parser::ast::ObjectType::Schema,
+            ObjectId::Role(_) => mz_sql_parser::ast::ObjectType::Role,
+            ObjectId::Item(item_id) => self.get_item(item_id).item_type().into(),
+        }
+    }
+
+    fn get_object_name(&self, object_id: &ObjectId) -> String {
+        match object_id {
+            ObjectId::Cluster(cluster_id) => self.get_cluster(*cluster_id).name().to_string(),
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => self
+                .get_cluster_replica(*cluster_id, *replica_id)
+                .name()
+                .to_string(),
+            ObjectId::Database(database_id) => self.get_database(database_id).name().to_string(),
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                let name = self.get_schema(database_spec, schema_spec).name();
+                self.resolve_full_schema_name(name).to_string()
+            }
+            ObjectId::Role(role_id) => self.get_role(role_id).name().to_string(),
+            ObjectId::Item(id) => {
+                let name = self.get_item(id).name();
+                self.resolve_full_name(name).to_string()
+            }
+        }
     }
 }
 

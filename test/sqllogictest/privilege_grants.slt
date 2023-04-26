@@ -168,13 +168,28 @@ SELECT mz_internal.make_mz_aclitem('u1', 's1', 'asdfa ljefioj')
 
 # Test default privileges
 
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON DATABASE materialize TO materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON CLUSTER default TO materialize;
+----
+COMPLETE 0
+
 ## Create some helper views
 
 statement ok
 CREATE VIEW database_privileges (name, privilege) AS SELECT name, unnest(privileges)::text FROM mz_databases;
 
 statement ok
-CREATE VIEW schema_privileges (name, privilege) AS SELECT name, unnest(privileges)::text FROM mz_schemas;
+CREATE VIEW schema_privileges (name, privilege) AS SELECT name, unnest(privileges)::text, database_id FROM mz_schemas;
 
 statement ok
 CREATE VIEW cluster_privileges (name, privilege) AS SELECT name, unnest(privileges)::text FROM mz_clusters;
@@ -189,9 +204,10 @@ SELECT * FROM database_privileges
 ----
 materialize  =U/mz_system
 materialize  mz_system=UC/mz_system
+materialize  materialize=C/mz_system
 
 query TT
-SELECT * FROM schema_privileges ORDER BY name
+SELECT name, privilege FROM schema_privileges ORDER BY name
 ----
 information_schema  =U/mz_system
 information_schema  mz_system=UC/mz_system
@@ -203,12 +219,14 @@ pg_catalog          =U/mz_system
 pg_catalog          mz_system=UC/mz_system
 public              =U/mz_system
 public              mz_system=UC/mz_system
+public              materialize=C/mz_system
 
 query TT
 SELECT * FROM cluster_privileges ORDER BY name
 ----
 default           =U/mz_system
 default           mz_system=UC/mz_system
+default           materialize=C/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_introspection=UC/mz_system
@@ -310,18 +328,19 @@ SELECT * FROM database_privileges WHERE name = 'd'
 d  materialize=UC/materialize
 
 query TT
-SELECT * FROM schema_privileges WHERE name = 'public' ORDER BY name
+SELECT name, privilege FROM schema_privileges WHERE name = 'public' ORDER BY name
 ----
 public  =U/mz_system
 public  =U/materialize
 public  mz_system=UC/mz_system
+public  materialize=C/mz_system
 public  materialize=UC/materialize
 
 statement ok
 CREATE SCHEMA sch;
 
 query TT
-SELECT * FROM schema_privileges WHERE name = 'sch'
+SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  materialize=UC/materialize
 
@@ -430,7 +449,7 @@ ALTER SCHEMA sch OWNER TO joe
 COMPLETE 0
 
 query TT
-SELECT * FROM schema_privileges WHERE name = 'sch'
+SELECT name, privilege FROM schema_privileges WHERE name = 'sch'
 ----
 sch  joe=UC/joe
 

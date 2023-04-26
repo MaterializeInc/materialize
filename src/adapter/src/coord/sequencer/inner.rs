@@ -62,7 +62,6 @@ use mz_sql::plan::{
     SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
     SubscribePlan, VariableValue, View,
 };
-use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -3084,6 +3083,7 @@ impl Coordinator {
                     assignments: BTreeMap::new(),
                     kind: MutationKind::Insert,
                     returning: plan.returning,
+                    contains_user_specified_read: true,
                 };
 
                 self.sequence_read_then_write(tx, session, read_then_write_plan, depends_on)
@@ -3183,6 +3183,7 @@ impl Coordinator {
             assignments,
             finishing,
             returning,
+            contains_user_specified_read: _,
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.
@@ -3742,9 +3743,8 @@ impl Coordinator {
             ))
         } else {
             Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Privilege {
+                rbac::UnauthorizedError::MzSystem {
                     action: "alter system".into(),
-                    reason: Some(format!("You must be the '{}' role", SYSTEM_USER.name)),
                 },
             ))
         }

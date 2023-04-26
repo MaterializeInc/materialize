@@ -18,6 +18,11 @@ class Owners(Check):
     def _create_objects(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
+            $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            GRANT CREATE ON DATABASE materialize TO {role}
+            GRANT CREATE ON SCHEMA materialize.public TO {role}
+            GRANT CREATE ON CLUSTER default TO {role}
+
             $ postgres-execute connection=postgres://{role}@materialized:6875/materialize
             CREATE DATABASE owner_db{i}
             CREATE SCHEMA owner_schema{i}

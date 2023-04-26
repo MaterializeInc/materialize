@@ -255,6 +255,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the [`RoleId`] of the owner of an object by its ID.
     fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId>;
 
+    /// Returns the [`PrivilegeMap`] of the object.
+    fn get_privileges(&self, id: &ObjectId) -> Option<&PrivilegeMap>;
+
     /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
@@ -271,6 +274,12 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns all possible privileges associated with an object type.
     fn all_object_privileges(&self, object_type: ObjectType) -> AclMode;
+
+    /// Returns the object type of `object_id`.
+    fn get_object_type(&self, object_id: &ObjectId) -> ObjectType;
+
+    /// Returns the name of `object_id`.
+    fn get_object_name(&self, object_id: &ObjectId) -> String;
 }
 
 /// Configuration associated with a catalog.

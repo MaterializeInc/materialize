@@ -223,9 +223,8 @@ pub fn user_privilege_hack(
         | Plan::RevokePrivilege(_)
         | Plan::CopyRows(_) => {
             return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Privilege {
+                rbac::UnauthorizedError::MzIntrospection {
                     action: plan.name().to_string(),
-                    reason: None,
                 },
             ))
         }
@@ -237,8 +236,8 @@ pub fn user_privilege_hack(
         if !catalog.is_system_schema(&full_name.schema) {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::Privilege {
-                    action: format!("interact with object {full_name}"),
-                    reason: None,
+                    object_type: item.item_type().into(),
+                    object_name: full_name.to_string(),
                 },
             ));
         }

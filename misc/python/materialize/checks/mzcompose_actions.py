@@ -88,7 +88,7 @@ class ConfigureMz(MzcomposeAction):
 
         if self.base_version >= MzVersion(0, 45, 0):
             # Since we already test with RBAC enabled, we have to give materialize
-            # user the relevant permissions so the existing tests keep working.
+            # user the relevant attributes so the existing tests keep working.
             input += "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;\n"
 
         if self.base_version >= MzVersion(0, 47, 0):
@@ -96,6 +96,13 @@ class ConfigureMz(MzcomposeAction):
 
         if self.base_version >= MzVersion.parse("0.51.0-dev"):
             input += "ALTER SYSTEM SET enable_ld_rbac_checks TO true;\n"
+
+        if self.base_version >= MzVersion.parse("0.53.0-dev"):
+            # Since we already test with RBAC enabled, we have to give materialize
+            # user the relevant privileges so the existing tests keep working.
+            input += "GRANT CREATE ON DATABASE materialize TO materialize;\n"
+            input += "GRANT CREATE ON SCHEMA materialize.public TO materialize;\n"
+            input += "GRANT CREATE ON CLUSTER default TO materialize;\n"
 
         self.handle = e.testdrive(input=input)
 
