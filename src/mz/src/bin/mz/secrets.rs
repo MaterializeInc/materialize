@@ -19,34 +19,48 @@ use serde::{Deserialize, Serialize};
 use mz::api::{get_provider_region_environment, CloudProviderRegion};
 use mz::configuration::ValidProfile;
 
-#[derive(Debug, Subcommand)]
-pub enum SecretCommand {
-    /// Create a new secret
-    Create {
-        /// The name of the secret to create
-        name: String,
+pub use clap_clippy_hack::*;
 
-        #[clap(flatten)]
-        contents: Contents,
-    },
+// Do not add anything but structs/enums with Clap derives in this module!
+//
+// Clap v3 sometimes triggers this warning with subcommands,
+// and its unclear if it will be fixed in v3, and not just
+// in v4. This can't be overridden at the macro level, and instead must be overridden
+// at the module level.
+//
+// TODO(guswynn): remove this when we are using Clap v4.
+#[allow(clippy::almost_swapped)]
+mod clap_clippy_hack {
+    use super::*;
+    #[derive(Debug, Subcommand)]
+    pub enum SecretCommand {
+        /// Create a new secret
+        Create {
+            /// The name of the secret to create
+            name: String,
 
-    /// Delete a secret
-    Delete {
-        /// The name of the secret to create
-        name: String,
-    },
+            #[clap(flatten)]
+            contents: Contents,
+        },
 
-    // List all secrets
-    List,
+        /// Delete a secret
+        Delete {
+            /// The name of the secret to create
+            name: String,
+        },
 
-    /// Update a secret
-    Update {
-        /// The name of the secret to update
-        name: String,
+        // List all secrets
+        List,
 
-        #[clap(flatten)]
-        contents: Contents,
-    },
+        /// Update a secret
+        Update {
+            /// The name of the secret to update
+            name: String,
+
+            #[clap(flatten)]
+            contents: Contents,
+        },
+    }
 }
 
 impl SecretCommand {
