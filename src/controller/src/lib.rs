@@ -239,6 +239,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     /// Additional context to pass through to cluster instances.
     pub instance_context: StorageInstanceContext,
     /// WIP
+    /// The URL for Persist PubSub.
     persist_pubsub_addr: String,
 }
 
@@ -380,6 +381,7 @@ where
             metrics_tasks: BTreeMap::new(),
             metrics_tx,
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
+            instance_context,
             persist_pubsub_addr: config.persist_pubsub_addr,
         }
     }

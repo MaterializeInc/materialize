@@ -98,10 +98,13 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use mz_ore::task::RuntimeExt;
-use mz_persist_client::rpc::PersistPubSubServer;
+use mz_persist_client::rpc::{
+    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
+};
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
+use tracing::info;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use url::Url;
@@ -417,7 +420,7 @@ pub struct Args {
     /// The PostgreSQL URL for the storage stash.
     #[clap(long, env = "STORAGE_STASH_URL", value_name = "POSTGRES_URL")]
     storage_stash_url: String,
-    /// WIP
+    /// The Persist PubSub service hostname.
     #[clap(long, env = "PERSIST_PUBSUB_HOSTNAME", default_value = "localhost")]
     persist_pubsub_hostname: String,
 
@@ -751,37 +754,45 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
-    let persist_clients = PersistClientCache::new(
-        PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
-        &metrics_registry,
-        // envd doesn't push anywhere, everyone pushes to us
-        None,
-    );
-    let persist_clients = Arc::new(persist_clients);
-    let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
 
     let persist_pubsub_addr = format!(
         "http://{}:{}",
         args.persist_pubsub_hostname,
         args.internal_persist_pubsub_listen_addr.port()
     );
-    eprintln!("persist_push_addr {}", persist_pubsub_addr);
-    let persist_push_server = PersistPubSubServer::new(&persist_clients);
-    let _server = runtime.spawn_named(|| "persist::push::server", async move {
-        let span = tracing::info_span!("persist::push::server");
+    let persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
+    let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
+    let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+
+    let _server = runtime.spawn_named(|| "persist::rpc::server", async move {
+        let span = tracing::info_span!("persist::rpc::server");
         let _guard = span.enter();
-        tracing::info!(
-            "persist push server listening on {}",
+        info!(
+            "listening for Persist PubSub connections on {}",
             args.internal_persist_pubsub_listen_addr
         );
         // Intentionally do not bubble up errors here, we don't want to take
         // down environmentd if there are any issues with the pubsub server.
-        let res = persist_push_server
+        let res = persist_pubsub_server
             .serve(args.internal_persist_pubsub_listen_addr)
             .await;
-        tracing::info!("persist push server exited {:?}", res);
+        info!("Persist Pubsub server exited {:?}", res);
     });
 
+    let persist_clients = {
+        // PersistClientCache may spawn tasks, so run within a tokio runtime context
+        let _tokio_guard = runtime.enter();
+        PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
+            let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                persist_pubsub_client.sender,
+                metrics,
+            ));
+            PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
+        })
+    };
+
+    let persist_clients = Arc::new(persist_clients);
+    let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
@@ -796,6 +807,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
+        scratch_directory: args.orchestrator_process_scratch_directory,
         persist_pubsub_addr,
     };
 
@@ -889,6 +901,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     println!(
         " Internal HTTP address: {}",
         server.internal_http_local_addr()
+    );
+    println!(
+        " Internal Persist PubSub address: {}",
+        args.internal_persist_pubsub_listen_addr
     );
 
     println!(" Root trace ID: {id}");

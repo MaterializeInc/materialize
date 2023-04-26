@@ -23,6 +23,8 @@ message ProtoPersistParameters {
     optional uint64 stats_audit_percent = 9;
     optional bool stats_collection_enabled = 6;
     optional bool stats_filter_enabled = 7;
+    optional bool pubsub_client_enabled = 10;
+    optional bool pubsub_push_diff_enabled = 11;
 }
 
 message ProtoRetryParameters {

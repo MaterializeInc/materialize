@@ -1796,7 +1796,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(WIP)]
     fn next_listen_batch() {
         mz_ore::test::init_logging();
 

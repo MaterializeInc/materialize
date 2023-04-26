@@ -29,6 +29,7 @@ use tracing::{debug, error, info, info_span, trace, Instrument};
 use mz_ore::cast::CastFrom;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistLocation, ShardId};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
@@ -132,7 +133,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let persist = PersistClientCache::new(
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
-        None,
+        |_, _| PubSubClientConnection::noop(),
     )
     .open(location)
     .await?;

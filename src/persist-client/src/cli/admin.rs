@@ -37,6 +37,7 @@ use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
+use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig, ShardId, StateVersions, BUILD_INFO};
 
@@ -435,12 +436,8 @@ async fn make_machine(
         shard_id,
         Arc::clone(&metrics),
         state_versions,
-<<<<<<< HEAD
-        &StateCache::new(metrics),
-=======
-        &StateCache::new(&cfg, metrics, None),
-        None,
->>>>>>> cc72cf33f8 (persist: wip pubsub)
+        Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
+        Arc::new(NoopPubSubSender),
     )
     .await?;
 

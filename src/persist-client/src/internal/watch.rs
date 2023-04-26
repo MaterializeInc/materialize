@@ -161,7 +161,7 @@ mod tests {
             &PersistConfig::new_for_tests(),
             &MetricsRegistry::new(),
         ));
-        let cache = StateCache::new(Arc::clone(&metrics));
+        let cache = StateCache::new_no_metrics();
         let shard_id = ShardId::new();
         let state = cache
             .get::<(), (), u64, i64, _, _>(shard_id, || async {
@@ -207,7 +207,7 @@ mod tests {
             &PersistConfig::new_for_tests(),
             &MetricsRegistry::new(),
         ));
-        let cache = StateCache::new(Arc::clone(&metrics));
+        let cache = StateCache::new_no_metrics();
         let shard_id = ShardId::new();
         let state = cache
             .get::<(), (), u64, i64, _, _>(shard_id, || async {

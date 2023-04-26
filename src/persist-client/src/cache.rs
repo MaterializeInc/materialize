@@ -19,11 +19,10 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures::StreamExt;
 use timely::progress::Timestamp;
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
-use tracing::{info, instrument, warn};
+use tracing::{debug, instrument};
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -32,16 +31,14 @@ use mz_persist::location::{
     CONSENSUS_HEAD_LIVENESS_KEY,
 };
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::ProtoType;
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus};
-use crate::internal::service::proto_pub_sub_message;
+use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus, ShardMetrics};
 use crate::internal::state::TypedState;
 use crate::internal::watch::StateWatchNotifier;
-use crate::rpc::{PubSubReceiver, PubSubSender};
+use crate::rpc::{PubSubClientConnection, PubSubSender, ShardSubscriptionToken};
 use crate::{PersistClient, PersistConfig, PersistLocation, ShardId};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
@@ -60,7 +57,8 @@ pub struct PersistClientCache {
     consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus + Send + Sync>)>>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     pub(crate) state_cache: Arc<StateCache>,
-    pubsub_sender: Option<Arc<dyn PubSubSender>>,
+    pubsub_sender: Arc<dyn PubSubSender>,
+    _pubsub_receiver_task: JoinHandle<()>,
 }
 
 #[derive(Debug)]
@@ -74,18 +72,23 @@ impl Drop for RttLatencyTask {
 
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
-    pub fn new(
-        cfg: PersistConfig,
-        registry: &MetricsRegistry,
-        pubsub: Option<(Arc<dyn PubSubSender>, Box<dyn PubSubReceiver>)>,
-    ) -> Self {
-        let pubsub_sender = match &pubsub {
-            None => None,
-            Some((pubsub_sender, _)) => Some(Arc::clone(pubsub_sender)),
-        };
-
+    pub fn new<F>(cfg: PersistConfig, registry: &MetricsRegistry, pubsub: F) -> Self
+    where
+        F: FnOnce(&PersistConfig, Arc<Metrics>) -> PubSubClientConnection,
+    {
         let metrics = Arc::new(Metrics::new(&cfg, registry));
-        let state_cache = StateCache::new(&cfg, Arc::clone(&metrics), pubsub);
+        let pubsub_client = pubsub(&cfg, Arc::clone(&metrics));
+
+        let state_cache = Arc::new(StateCache::new(
+            &cfg,
+            Arc::clone(&metrics),
+            Arc::clone(&pubsub_client.sender),
+        ));
+        let _pubsub_receiver_task = crate::rpc::subscribe_state_cache_to_pubsub(
+            Arc::clone(&state_cache),
+            pubsub_client.receiver,
+        );
+
         PersistClientCache {
             cfg,
             metrics,
@@ -93,17 +96,19 @@ impl PersistClientCache {
             consensus_by_uri: Mutex::new(BTreeMap::new()),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
             state_cache,
-            pubsub_sender,
+            pubsub_sender: pubsub_client.sender,
+            _pubsub_receiver_task,
         }
     }
 
     /// A test helper that returns a [PersistClientCache] disconnected from
     /// metrics.
+    #[cfg(test)]
     pub fn new_no_metrics() -> Self {
         Self::new(
             PersistConfig::new_for_tests(),
             &MetricsRegistry::new(),
-            None,
+            |_, _| PubSubClientConnection::noop(),
         )
     }
 
@@ -127,7 +132,7 @@ impl PersistClientCache {
             Arc::clone(&self.metrics),
             Arc::clone(&self.cpu_heavy_runtime),
             Arc::clone(&self.state_cache),
-            self.pubsub_sender.clone(),
+            Arc::clone(&self.pubsub_sender),
         )
     }
 
@@ -288,7 +293,7 @@ async fn consensus_rtt_latency_task(
 trait DynState: Debug + Send + Sync {
     fn codecs(&self) -> (String, String, String, String, Option<CodecConcreteType>);
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
-    fn push_diff(&self, diff: VersionedData) -> bool;
+    fn push_diff(&self, diff: VersionedData);
 }
 
 impl<K, V, T, D> DynState for LockingTypedState<K, V, T, D>
@@ -312,7 +317,7 @@ where
         self
     }
 
-    fn push_diff(&self, diff: VersionedData) -> bool {
+    fn push_diff(&self, diff: VersionedData) {
         self.write_lock(&self.metrics.locks.applier_write, |state| {
             let seqno_before = state.seqno;
             state.apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(&diff));
@@ -320,17 +325,17 @@ where
             assert!(seqno_after >= seqno_before);
 
             if seqno_before != seqno_after {
-                info!(
+                debug!(
                     "applied pushed diff {}. seqno {} -> {}.",
                     state.shard_id, seqno_before, state.seqno
                 );
-                true
+                self.shard_metrics.pubsub_push_diff_applied.inc();
             } else {
-                info!(
+                debug!(
                     "failed to apply pushed diff {}. seqno {} vs diff {}",
                     state.shard_id, seqno_before, diff.seqno
                 );
-                false
+                self.shard_metrics.pubsub_push_diff_not_applied.inc();
             }
         })
     }
@@ -346,13 +351,12 @@ where
 /// command for the same shard are executing concurrently, only one can win
 /// anyway, the other will retry. With the mutex, we even get to avoid the retry
 /// if the racing commands are on the same process.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct StateCache {
     cfg: Arc<PersistConfig>,
-    metrics: Arc<Metrics>,
+    pub(crate) metrics: Arc<Metrics>,
     states: Arc<std::sync::Mutex<BTreeMap<ShardId, Arc<OnceCell<Weak<dyn DynState>>>>>>,
-    pubsub_sender: Option<Arc<dyn PubSubSender>>,
-    // pub(crate) pushed_diff_fns: RwLock<BTreeMap<ShardId, PushedDiffFn>>,
+    pubsub_sender: Arc<dyn PubSubSender>,
 }
 
 #[derive(Debug)]
@@ -361,89 +365,41 @@ enum StateCacheInit {
     NeedInit(Arc<OnceCell<Weak<dyn DynState>>>),
 }
 
-struct PubSubSubscriptionToken {
-    shard_id: ShardId,
-    pubsub_sender: Option<Arc<dyn PubSubSender>>,
-}
-
-impl Drop for PubSubSubscriptionToken {
-    fn drop(&mut self) {
-        if let Some(pubsub_sender) = self.pubsub_sender.as_ref() {
-            pubsub_sender.unsubscribe(&self.shard_id);
-        }
-    }
-}
-
 impl StateCache {
     /// Returns a new StateCache.
     pub fn new(
         cfg: &PersistConfig,
         metrics: Arc<Metrics>,
-        pubsub: Option<(Arc<dyn PubSubSender>, Box<dyn PubSubReceiver>)>,
-    ) -> Arc<Self> {
-        let (pubsub_sender, pubsub_receiver) = match pubsub {
-            None => (None, None),
-            Some((pubsub_sender, pubsub_receiver)) => (Some(pubsub_sender), Some(pubsub_receiver)),
-        };
-
-        let state_cache = Arc::new(StateCache {
+        pubsub_sender: Arc<dyn PubSubSender>,
+    ) -> Self {
+        StateCache {
             cfg: Arc::new(cfg.clone()),
             metrics,
             states: Default::default(),
             pubsub_sender,
-            // pushed_diff_fns: Default::default(),
-        });
-
-        let cache = Arc::clone(&state_cache);
-        if let Some(mut pubsub_receiver) = pubsub_receiver {
-            let _ = mz_ore::task::spawn(|| "persist::rpc::push_responses", async move {
-                while let Some(res) = pubsub_receiver.next().await {
-                    match res.message {
-                        Some(proto_pub_sub_message::Message::PushDiff(diff)) => {
-                            let shard_id = diff.shard_id.into_rust().expect("WIP");
-                            let diff = VersionedData {
-                                seqno: diff.seqno.into_rust().expect("WIP"),
-                                data: diff.diff,
-                            };
-                            info!(
-                                "client got diff {} {} {}",
-                                shard_id,
-                                diff.seqno,
-                                diff.data.len()
-                            );
-                            cache.push_diff(&shard_id, diff);
-                        }
-                        ref msg @ None | ref msg @ Some(_) => {
-                            warn!("pubsub client received unexpected message: {:?}", msg);
-                        }
-                    }
-                }
-            });
         }
-
-        state_cache
     }
 
     #[cfg(test)]
-    pub(crate) fn new_no_metrics() -> Arc<Self> {
+    pub(crate) fn new_no_metrics() -> Self {
         Self::new(
             &PersistConfig::new_for_tests(),
             Arc::new(Metrics::new(
                 &PersistConfig::new_for_tests(),
                 &MetricsRegistry::new(),
             )),
+            Arc::new(crate::rpc::NoopPubSubSender),
         )
     }
 
-    pub(crate) fn push_diff(&self, shard_id: &ShardId, diff: VersionedData) {
+    pub(crate) fn apply_diff(&self, shard_id: &ShardId, diff: VersionedData) {
         if let Some(state) = self.get_cached(shard_id) {
-            // WIP: could register callbacks here. if not applied, fallback
             state.push_diff(diff);
         }
     }
 
     pub(crate) async fn get<K, V, T, D, F, InitFn>(
-        self: Arc<Self>,
+        &self,
         shard_id: ShardId,
         mut init_fn: InitFn,
     ) -> Result<Arc<LockingTypedState<K, V, T, D>>, Box<CodecMismatch>>
@@ -481,18 +437,13 @@ impl StateCache {
                     let state = init_once
                         .get_or_try_init::<Box<CodecMismatch>, _, _>(|| async {
                             let init_res = init_fn().await;
-                            let token = PubSubSubscriptionToken {
-                                shard_id: shard_id.clone(),
-                                pubsub_sender: self.pubsub_sender.clone(),
-                            };
-                            let state = Arc::new(LockingTypedState {
+                            let state = Arc::new(LockingTypedState::new(
                                 shard_id,
-                                notifier: StateWatchNotifier::default(),
-                                state: RwLock::new(init_res?),
-                                cfg: Arc::clone(&self.cfg),
-                                metrics: Arc::clone(&self.metrics),
-                                _subscription_token: token,
-                            });
+                                init_res?,
+                                Arc::clone(&self.metrics),
+                                Arc::clone(&self.cfg),
+                                Arc::clone(&self.pubsub_sender).subscribe(&shard_id),
+                            ));
                             let ret = Arc::downgrade(&state);
                             did_init = Some(state);
                             let ret: Weak<dyn DynState> = ret;
@@ -502,9 +453,6 @@ impl StateCache {
                     if let Some(x) = did_init {
                         // We actually did the init work, don't bother casting back
                         // the type erased and weak version.
-                        if let Some(pubsub_sender) = self.pubsub_sender.as_ref() {
-                            pubsub_sender.subscribe(&shard_id);
-                        }
                         return Ok(x);
                     }
                     let Some(state) = state.upgrade() else {
@@ -544,27 +492,27 @@ impl StateCache {
     fn get_cached(&self, shard_id: &ShardId) -> Option<Arc<dyn DynState>> {
         self.states
             .lock()
-            .expect("lock poisoned")
+            .expect("lock")
             .get(shard_id)
             .and_then(|x| x.get())
             .and_then(|x| x.upgrade())
     }
 
     #[cfg(test)]
-    async fn initialized_count(&self) -> usize {
+    fn initialized_count(&self) -> usize {
         self.states
             .lock()
-            .await
+            .expect("lock")
             .values()
             .filter(|x| x.initialized())
             .count()
     }
 
     #[cfg(test)]
-    async fn strong_count(&self) -> usize {
+    fn strong_count(&self) -> usize {
         self.states
             .lock()
-            .await
+            .expect("lock")
             .values()
             .filter(|x| x.get().map_or(false, |x| x.upgrade().is_some()))
             .count()
@@ -580,7 +528,8 @@ pub(crate) struct LockingTypedState<K, V, T, D> {
     notifier: StateWatchNotifier,
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
-    _subscription_token: PubSubSubscriptionToken,
+    shard_metrics: Arc<ShardMetrics>,
+    _subscription_token: Arc<ShardSubscriptionToken>,
 }
 
 impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
@@ -591,6 +540,7 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
             notifier,
             cfg: _cfg,
             metrics: _metrics,
+            shard_metrics: _shard_metrics,
             _subscription_token,
         } = self;
         f.debug_struct("LockingTypedState")
@@ -602,6 +552,24 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
 }
 
 impl<K, V, T, D> LockingTypedState<K, V, T, D> {
+    fn new(
+        shard_id: ShardId,
+        initial_state: TypedState<K, V, T, D>,
+        metrics: Arc<Metrics>,
+        cfg: Arc<PersistConfig>,
+        subscription_token: Arc<ShardSubscriptionToken>,
+    ) -> Self {
+        Self {
+            shard_id,
+            notifier: StateWatchNotifier::new(Arc::clone(&metrics)),
+            state: RwLock::new(initial_state),
+            cfg: Arc::clone(&cfg),
+            shard_metrics: metrics.shards.shard(&shard_id),
+            metrics,
+            _subscription_token: subscription_token,
+        }
+    }
+
     pub(crate) fn shard_id(&self) -> &ShardId {
         &self.shard_id
     }
@@ -684,7 +652,7 @@ mod tests {
         let cache = PersistClientCache::new(
             PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
-            None,
+            |_, _| PubSubClientConnection::noop(),
         );
         assert_eq!(cache.blob_by_uri.lock().await.len(), 0);
         assert_eq!(cache.consensus_by_uri.lock().await.len(), 0);
@@ -773,10 +741,10 @@ mod tests {
         }
 
         let s1 = ShardId::new();
-        let states = StateCache::new_no_metrics();
+        let states = Arc::new(StateCache::new_no_metrics());
 
         // The cache starts empty.
-        assert_eq!(states.states.lock().await.len(), 0);
+        assert_eq!(states.states.lock().expect("lock").len(), 0);
 
         // Panic'ing during init_fn .
         let s = Arc::clone(&states);
@@ -786,7 +754,7 @@ mod tests {
         })
         .await;
         assert!(res.is_err());
-        assert_eq!(states.initialized_count().await, 0);
+        assert_eq!(states.initialized_count(), 0);
 
         // Returning an error from init_fn doesn't initialize an entry in the cache.
         let res = states
@@ -798,7 +766,7 @@ mod tests {
             })
             .await;
         assert!(res.is_err());
-        assert_eq!(states.initialized_count().await, 0);
+        assert_eq!(states.initialized_count(), 0);
 
         // Initialize one shard.
         let did_work = Arc::new(AtomicBool::new(false));
@@ -813,8 +781,8 @@ mod tests {
             .await
             .expect("should successfully initialize");
         assert_eq!(did_work.load(Ordering::SeqCst), true);
-        assert_eq!(states.initialized_count().await, 1);
-        assert_eq!(states.strong_count().await, 1);
+        assert_eq!(states.initialized_count(), 1);
+        assert_eq!(states.strong_count(), 1);
 
         // Trying to initialize it again does no work and returns the same state.
         let did_work = Arc::new(AtomicBool::new(false));
@@ -830,8 +798,8 @@ mod tests {
             .await
             .expect("should successfully initialize");
         assert_eq!(did_work.load(Ordering::SeqCst), false);
-        assert_eq!(states.initialized_count().await, 1);
-        assert_eq!(states.strong_count().await, 1);
+        assert_eq!(states.initialized_count(), 1);
+        assert_eq!(states.strong_count(), 1);
         assert_same(&s1_state1, &s1_state2);
 
         // Trying to initialize with different types doesn't work.
@@ -850,8 +818,8 @@ mod tests {
             format!("{}", res.expect_err("types shouldn't match")),
             "requested codecs (\"String\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"(alloc::string::String, (), u64, i64)\"))) did not match ones in durable storage (\"()\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"((), (), u64, i64)\")))"
         );
-        assert_eq!(states.initialized_count().await, 1);
-        assert_eq!(states.strong_count().await, 1);
+        assert_eq!(states.initialized_count(), 1);
+        assert_eq!(states.strong_count(), 1);
 
         // We can add a shard of a different type.
         let s2 = ShardId::new();
@@ -859,8 +827,8 @@ mod tests {
             .get::<String, (), u64, i64, _, _>(s2, || async { Ok(new_state(s2)) })
             .await
             .expect("should successfully initialize");
-        assert_eq!(states.initialized_count().await, 2);
-        assert_eq!(states.strong_count().await, 2);
+        assert_eq!(states.initialized_count(), 2);
+        assert_eq!(states.strong_count(), 2);
         let s2_state2 = states
             .get::<String, (), u64, i64, _, _>(s2, || async { Ok(new_state(s2)) })
             .await
@@ -870,10 +838,10 @@ mod tests {
         // The cache holds weak references to State so we reclaim memory if the
         // shards stops being used.
         drop(s1_state1);
-        assert_eq!(states.strong_count().await, 2);
+        assert_eq!(states.strong_count(), 2);
         drop(s1_state2);
-        assert_eq!(states.strong_count().await, 1);
-        assert_eq!(states.initialized_count().await, 2);
+        assert_eq!(states.strong_count(), 1);
+        assert_eq!(states.initialized_count(), 2);
         assert!(states.get_cached(&s1).is_none());
 
         // But we can re-init that shard if necessary.
@@ -881,10 +849,10 @@ mod tests {
             .get::<(), (), u64, i64, _, _>(s1, || async { Ok(new_state(s1)) })
             .await
             .expect("should successfully initialize");
-        assert_eq!(states.initialized_count().await, 2);
-        assert_eq!(states.strong_count().await, 2);
+        assert_eq!(states.initialized_count(), 2);
+        assert_eq!(states.strong_count(), 2);
         drop(s1_state1);
-        assert_eq!(states.strong_count().await, 1);
+        assert_eq!(states.strong_count(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]

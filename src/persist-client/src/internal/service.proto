@@ -9,6 +9,8 @@
 
 syntax = "proto3";
 
+import "proto/src/proto.proto";
+
 package mz_persist_client.internal.service;
 
 message ProtoPushDiff {
@@ -18,19 +20,21 @@ message ProtoPushDiff {
 }
 
 message ProtoSubscribe {
-    string shard = 1;
+    string shard_id = 1;
 }
 
 message ProtoUnsubscribe {
-    string shard = 1;
+    string shard_id = 1;
 }
 
 message ProtoPubSubMessage {
+    mz_proto.ProtoDuration timestamp = 1;
     oneof message {
-        ProtoPushDiff push_diff = 1;
-        ProtoSubscribe subscribe = 2;
-        ProtoUnsubscribe unsubscribe = 3;
+        ProtoPushDiff push_diff = 2;
+        ProtoSubscribe subscribe = 3;
+        ProtoUnsubscribe unsubscribe = 4;
     }
+
 }
 
 service ProtoPersistPubSub {

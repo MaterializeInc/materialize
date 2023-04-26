@@ -108,6 +108,7 @@ use mz_ore::tracing::{
 };
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
@@ -296,7 +297,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // Tune down the number of connections to make this all work a little easier
     // with local postgres.
     persist_cfg.consensus_connection_pool_max_size = 1;
-    let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry, None);
+    let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| {
+        PubSubClientConnection::noop()
+    });
     let persist_clients = Arc::new(persist_clients);
     let postgres_factory = StashFactory::new(&metrics_registry);
     let secrets_controller = Arc::clone(&orchestrator);
@@ -345,6 +348,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             now: SYSTEM_TIME.clone(),
             postgres_factory,
             metrics_registry: metrics_registry.clone(),
+            scratch_directory: None,
             persist_pubsub_addr: "http://localhost:6879".to_owned(),
         },
         secrets_controller,

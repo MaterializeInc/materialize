@@ -664,6 +664,24 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
+const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_pubsub_client_enabled"),
+    value: &PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED,
+    description: "Whether to connect to the Persist PubSub service.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_push_diff_enabled`].
+const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_pubsub_push_diff_enabled"),
+    value: &PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
+    description: "Whether to push state diffs to Persist PubSub.",
+    internal: true,
+    safe: true,
+};
+
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
@@ -1556,6 +1574,8 @@ impl Default for SystemVars {
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
+            .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
+            .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&METRICS_RETENTION)
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
@@ -1886,6 +1906,16 @@ impl SystemVars {
     /// Returns the `persist_stats_filter_enabled` configuration parameter.
     pub fn persist_stats_filter_enabled(&self) -> bool {
         *self.expect_value(&PERSIST_STATS_FILTER_ENABLED)
+    }
+
+    /// Returns the `persist_pubsub_client_enabled` configuration parameter.
+    pub fn persist_pubsub_client_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_PUBSUB_CLIENT_ENABLED)
+    }
+
+    /// Returns the `persist_pubsub_push_diff_enabled` configuration parameter.
+    pub fn persist_pubsub_push_diff_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
     }
 
     /// Returns the `metrics_retention` configuration parameter.
@@ -2960,4 +2990,6 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
+        || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
+        || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
 }

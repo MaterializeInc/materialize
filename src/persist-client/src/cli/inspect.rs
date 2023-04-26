@@ -41,6 +41,7 @@ use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
 };
 use crate::internal::state::{ProtoStateDiff, ProtoStateRollup, State};
+use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
 use crate::{Metrics, PersistClient, PersistConfig, ShardId, StateVersions};
 
@@ -606,7 +607,11 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let state_cache = StateCache::new(&cfg, Arc::clone(&metrics), None);
+    let state_cache = Arc::new(StateCache::new(
+        &cfg,
+        Arc::clone(&metrics),
+        Arc::new(NoopPubSubSender),
+    ));
     let usage = StorageUsageClient::open(PersistClient::new(
         cfg,
         blob,
@@ -614,7 +619,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         metrics,
         cpu_heavy_runtime,
         state_cache,
-        None,
+        Arc::new(NoopPubSubSender),
     )?);
 
     if let Some(shard_id) = shard_id {

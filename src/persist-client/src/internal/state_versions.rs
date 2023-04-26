@@ -174,7 +174,6 @@ impl StateVersions {
             })
             .await;
         match cas_res {
-            // WIP push initial diff too?
             CaSResult::Committed => Ok(initial_state),
             CaSResult::ExpectationMismatch => {
                 let recent_live_diffs = self.fetch_recent_live_diffs::<T>(&shard_id).await;

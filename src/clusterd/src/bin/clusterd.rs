@@ -81,7 +81,7 @@ use anyhow::Context;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
-use mz_persist_client::rpc::{PersistPubSub, PersistPubSubClient};
+use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use once_cell::sync::Lazy;
 use tracing::info;
 
@@ -140,7 +140,7 @@ struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
-    /// WIP
+    /// The address for the Persist PubSub service.
     #[clap(
         long,
         env = "PERSIST_PUBSUB_ADDR",
@@ -272,17 +272,21 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
     });
 
-    info!("WIP persist_pubsub_addr {}", args.persist_pubsub_addr);
     let pubsub_caller_id = std::env::var("HOSTNAME")
         .ok()
         .or_else(|| args.tracing.log_prefix.clone())
         .unwrap_or_default();
-    // WIP: try to connect, but pass in None if it fails
-    let pubsub = PersistPubSubClient::connect(args.persist_pubsub_addr, pubsub_caller_id).await?;
     let persist_clients = Arc::new(PersistClientCache::new(
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
-        Some(pubsub),
+        |persist_cfg, metrics| {
+            let cfg = PersistPubSubClientConfig {
+                addr: args.persist_pubsub_addr,
+                caller_id: pubsub_caller_id,
+                persist_cfg: persist_cfg.clone(),
+            };
+            GrpcPubSubClient::connect(cfg, metrics)
+        },
     ));
 
     // Start storage server.
