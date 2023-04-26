@@ -104,12 +104,15 @@ fn variadic_monotonic(func: &VariadicFunc) -> Monotonic {
 }
 
 /// An inclusive range of non-null datum values.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 enum Values<'a> {
     /// This range contains no values.
     Empty,
     /// An inclusive range. Invariant: the first element is always <= the second.
     Within(Datum<'a>, Datum<'a>),
+    /// Constraints on structured fields, useful for recursive structures like maps.
+    /// Fields that are not present in the map default to Values::All.
+    Nested(BTreeMap<Datum<'a>, ResultSpec<'a>>),
     /// This range might contain any value. Since we're overapproximating, this is often used
     /// as a "safe fallback" when we can't determine the right boundaries for a range.
     All,
@@ -117,7 +120,15 @@ enum Values<'a> {
 
 impl<'a> Values<'a> {
     fn just(a: Datum<'a>) -> Values<'a> {
-        Self::Within(a, a)
+        match a {
+            Datum::Map(datum_map) => Values::Nested(
+                datum_map
+                    .iter()
+                    .map(|(key, val)| (key.into(), ResultSpec::value(val)))
+                    .collect(),
+            ),
+            other => Self::Within(other, other),
+        }
     }
 
     fn union(self, other: Values<'a>) -> Values<'a> {
@@ -127,8 +138,20 @@ impl<'a> Values<'a> {
             (Values::Within(a0, a1), Values::Within(b0, b1)) => {
                 Values::Within(a0.min(b0), a1.max(b1))
             }
-            (Values::All, _) => Values::All,
-            (_, Values::All) => Values::All,
+            (Values::Nested(mut a), Values::Nested(mut b)) => {
+                a.retain(|datum, values| {
+                    if let Some(other_values) = b.remove(datum) {
+                        *values = values.clone().union(other_values);
+                    }
+                    *values != ResultSpec::anything()
+                });
+                if a.is_empty() {
+                    Values::All
+                } else {
+                    Values::Nested(a)
+                }
+            }
+            _ => Values::All,
         }
     }
 
@@ -145,8 +168,36 @@ impl<'a> Values<'a> {
                     Values::Empty
                 }
             }
+            (Values::Nested(mut a), Values::Nested(b)) => {
+                for (datum, other_spec) in b {
+                    let spec = a.entry(datum).or_insert_with(ResultSpec::anything);
+                    *spec = spec.clone().intersect(other_spec);
+                }
+                Values::Nested(a)
+            }
             (Values::All, v) => v,
             (v, Values::All) => v,
+            (Values::Nested(_), Values::Within(_, _)) => Values::Empty,
+            (Values::Within(_, _), Values::Nested(_)) => Values::Empty,
+        }
+    }
+
+    fn may_contain(&self, value: Datum<'a>) -> bool {
+        match self {
+            Values::Empty => false,
+            Values::Within(min, max) => *min <= value && value <= *max,
+            Values::All => true,
+            Values::Nested(field_map) => match value {
+                Datum::Map(datum_map) => {
+                    datum_map
+                        .iter()
+                        .all(|(key, val)| match field_map.get(&key.into()) {
+                            None => true,
+                            Some(nested) => nested.may_contain(val),
+                        })
+                }
+                _ => false,
+            },
         }
     }
 }
@@ -163,11 +214,6 @@ pub struct ResultSpec<'a> {
     fallible: bool,
     /// The range of possible (non-null) values that the expression may evaluate to.
     values: Values<'a>,
-    /// If this expression evaluates to a [Datum::Map], additional constraints on specific
-    /// fields within that Map. If a field is not present in the map, it is unconstrained,
-    /// in the sense of [ResultSpec::anything]. For a map to be considered an element of
-    /// the set, it must match _all_ of these field constraints and be present in `values`.
-    map_spec: Option<BTreeMap<Datum<'a>, ResultSpec<'a>>>,
 }
 
 impl<'a> ResultSpec<'a> {
@@ -177,7 +223,6 @@ impl<'a> ResultSpec<'a> {
             nullable: false,
             fallible: false,
             values: Values::Empty,
-            map_spec: None,
         }
     }
 
@@ -187,7 +232,6 @@ impl<'a> ResultSpec<'a> {
             nullable: true,
             fallible: true,
             values: Values::All,
-            map_spec: Some(BTreeMap::new()),
         }
     }
 
@@ -217,16 +261,17 @@ impl<'a> ResultSpec<'a> {
             nullable: col.nullable,
             fallible,
             values,
-            map_spec: Some(BTreeMap::new()),
         }
     }
 
     /// A spec that only matches the given value.
     pub fn value(value: Datum<'a>) -> ResultSpec<'a> {
-        if value.is_null() {
-            Self::null()
-        } else {
-            Self::value_between(value, value)
+        match value {
+            Datum::Null => Self::null(),
+            nonnull => ResultSpec {
+                values: Values::just(nonnull),
+                ..Self::nothing()
+            },
         }
     }
 
@@ -237,7 +282,6 @@ impl<'a> ResultSpec<'a> {
         assert!(min <= max);
         ResultSpec {
             values: Values::Within(min, max),
-            map_spec: Some(BTreeMap::new()),
             ..ResultSpec::nothing()
         }
     }
@@ -246,7 +290,6 @@ impl<'a> ResultSpec<'a> {
     pub fn value_all() -> ResultSpec<'a> {
         ResultSpec {
             values: Values::All,
-            map_spec: Some(BTreeMap::new()),
             ..ResultSpec::nothing()
         }
     }
@@ -254,8 +297,7 @@ impl<'a> ResultSpec<'a> {
     /// A spec that matches Datum::Maps of the given type.
     pub fn map_spec(map: BTreeMap<Datum<'a>, ResultSpec<'a>>) -> ResultSpec<'a> {
         ResultSpec {
-            values: Values::All,
-            map_spec: Some(map),
+            values: Values::Nested(map),
             ..ResultSpec::nothing()
         }
     }
@@ -266,20 +308,6 @@ impl<'a> ResultSpec<'a> {
             nullable: self.nullable || other.nullable,
             fallible: self.fallible || other.fallible,
             values: self.values.union(other.values),
-            map_spec: match (self.map_spec, other.map_spec) {
-                (Some(mut self_map), Some(mut other_map)) => {
-                    self_map.retain(|datum, spec| {
-                        if let Some(other_spec) = other_map.remove(datum) {
-                            *spec = spec.clone().union(other_spec);
-                        }
-                        *spec != Self::anything()
-                    });
-                    Some(self_map)
-                }
-                (Some(self_map), None) => Some(self_map),
-                (None, Some(other_map)) => Some(other_map),
-                (None, None) => None,
-            },
         }
     }
 
@@ -289,17 +317,6 @@ impl<'a> ResultSpec<'a> {
             nullable: self.nullable && other.nullable,
             fallible: self.fallible && other.fallible,
             values: self.values.intersect(other.values),
-            map_spec: match (self.map_spec, other.map_spec) {
-                (Some(mut self_map), Some(other_map)) => {
-                    for (datum, other_spec) in other_map {
-                        let spec = self_map.entry(datum).or_insert_with(Self::anything);
-                        *spec = spec.clone().intersect(other_spec);
-                    }
-                    Some(self_map)
-                }
-                (None, _) => None,
-                (_, None) => None,
-            },
         }
     }
 
@@ -309,11 +326,7 @@ impl<'a> ResultSpec<'a> {
             return self.nullable;
         }
 
-        match &self.values {
-            Values::Empty => false,
-            Values::Within(min, max) => *min <= value && value <= *max,
-            Values::All => true,
-        }
+        self.values.may_contain(value)
     }
 
     /// Check if an error value matches the spec.
@@ -370,7 +383,7 @@ impl<'a> ResultSpec<'a> {
                 }
                 Monotonic::Maybe | Monotonic::No => ResultSpec::anything(),
             },
-            Values::All => ResultSpec::anything(),
+            _ => ResultSpec::anything(),
         };
 
         null_spec.union(error_spec).union(values_spec)
@@ -813,12 +826,13 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                     .clone()
                     .flat_map(Monotonic::No, |datum| match datum {
                         Datum::Null => ResultSpec::null(),
-                        key => match &left.range.map_spec {
-                            None => ResultSpec::nothing(),
-                            Some(map_spec) => map_spec
+                        key => match &left.range.values {
+                            Values::Empty => ResultSpec::nothing(),
+                            Values::Nested(map_spec) => map_spec
                                 .get(&key)
                                 .cloned()
                                 .unwrap_or_else(ResultSpec::anything),
+                            _ => ResultSpec::anything(),
                         },
                     })
             }
