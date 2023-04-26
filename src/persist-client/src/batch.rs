@@ -193,6 +193,7 @@ pub struct BatchBuilderConfig {
     pub(crate) blob_target_size: usize,
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) stats_collection_enabled: bool,
+    pub(crate) stats_budget: usize,
 }
 
 impl From<&PersistConfig> for BatchBuilderConfig {
@@ -203,6 +204,10 @@ impl From<&PersistConfig> for BatchBuilderConfig {
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
             stats_collection_enabled: value.dynamic.stats_collection_enabled(),
+            // TODO(mfp): Make a dynamic config for this? This initial constant
+            // is the rough upper bound on what we see for the total serialized
+            // batch size in prod, so it will at worst double it.
+            stats_budget: 1024,
         }
     }
 }
@@ -663,6 +668,17 @@ pub(crate) struct BatchParts<T> {
     batch_metrics: BatchWriteMetrics,
 }
 
+fn force_keep_stats_col(name: &str) -> bool {
+    // TODO(mfp): Flesh out initial heuristics. At the very least, this should
+    // probably be case insensitive.
+    name == "mz_internal_super_secret_source_data_errors"
+        || name == "timestamp"
+        || name == "ts"
+        || name.ends_with("time")
+        || name.ends_with("_at")
+        || name.starts_with("last_")
+}
+
 impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) fn new(
         cfg: BatchBuilderConfig,
@@ -704,6 +720,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let key = partial_key.complete(&self.shard_id);
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
         let stats_collection_enabled = self.cfg.stats_collection_enabled;
+        let stats_budget = self.cfg.stats_budget;
         let schemas = schemas.clone();
 
         let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
@@ -737,7 +754,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                 // of additional complexity which I don't think
                                 // is worth it.
                                 Ok(x) if x.is_empty() => None,
-                                Ok(x) => Some(Arc::new(x)),
+                                Ok(mut x) => {
+                                    x.key.trim_to_budget(stats_budget, force_keep_stats_col);
+                                    Some(Arc::new(x))
+                                }
                                 Err(err) => {
                                     error!("failed to construct part stats: {}", err);
                                     None
