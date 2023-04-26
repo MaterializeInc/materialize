@@ -84,7 +84,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse;
 use axum::response::Response;
@@ -1307,14 +1307,9 @@ fn test_utilization_hold() {
         "SELECT * FROM mz_internal.mz_cluster_replica_statuses",
     ];
 
-    let now_millis = u64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis(),
-    )
-    .unwrap();
+    let now_millis = 619388520000;
     let past_millis = now_millis - THIRTY_DAYS_MS;
+    let past_since = Timestamp::from(past_millis);
 
     let now = Arc::new(Mutex::new(past_millis));
     let now_fn = {
@@ -1341,9 +1336,28 @@ fn test_utilization_hold() {
                 .execute(&format!("SET cluster={cluster}"), &[])
                 .unwrap();
 
-            let row = client.query_one(explain_q, &[]).unwrap();
-            let explain: String = row.get(0);
-            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+            // Hack: we think there might be an issue where sinces
+            // can briefly be zero on startup, which breaks our logic here.
+            //
+            // So just spin until it's not zero.
+            // TODO[btv] - Get rid of this loop if that bug is ever fixed
+            let mut n_sleeps = 0;
+            let explain = loop {
+                let row = client.query_one(explain_q, &[]).unwrap();
+                let explain: String = row.get(0);
+                let explain: TimestampExplanation<Timestamp> =
+                    serde_json::from_str(&explain).unwrap();
+                if explain.determination.since.clone().into_option() == Some(Timestamp::MIN) {
+                    n_sleeps += 1;
+                    if n_sleeps > 10 {
+                        panic!("Since never became non-zero");
+                    }
+                    println!("Since is 0, sleeping for 1 second");
+                    std::thread::sleep(Duration::from_secs(1));
+                } else {
+                    break explain;
+                }
+            };
             // Assert that we actually used the indexes/tables, as required
             for s in &explain.sources {
                 if *should_be_indexed {
@@ -1363,7 +1377,7 @@ fn test_utilization_hold() {
                 .since
                 .into_option()
                 .expect("The since must be finite");
-            let past_since = Timestamp::from(past_millis);
+
             assert!(since.less_equal(&past_since));
             // Assert we aren't lagging by more than 30 days + 1 second.
             // If we ever make the since granularity configurable, this line will
