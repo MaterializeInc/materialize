@@ -145,6 +145,11 @@ where
     );
 
     if upsert_envelope.disk {
+        tracing::info!(
+            "timely-{} rendering {} with rocksdb-backed upsert state",
+            source_config.worker_id,
+            source_config.id
+        );
         let rocksdb_metrics = Arc::clone(&upsert_metrics.rocksdb);
         let rocksdb_dir = instance_context
             .scratch_directory
@@ -172,6 +177,11 @@ where
             },
         )
     } else {
+        tracing::info!(
+            "timely-{} rendering {} with memory-backed upsert state",
+            source_config.worker_id,
+            source_config.id
+        );
         upsert_inner(
             input,
             upsert_envelope.key_indices,
