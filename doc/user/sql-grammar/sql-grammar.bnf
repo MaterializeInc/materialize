@@ -208,7 +208,7 @@ fetch ::=
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 format_spec ::=
   'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name key_strat? val_strat? with_options? |
-  'PROTOBUF USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name with_options |
+  'PROTOBUF USING' ('CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name with_options | 'MESSAGE' message_name 'SCHEMA' encoded_schema) |
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |

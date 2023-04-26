@@ -479,12 +479,56 @@ CREATE MATERIALIZED VIEW typed_kafka_source AS
 {{< /tab >}}
 {{< tab "Protobuf">}}
 
+#### Using Confluent Schema Registry
+
 ```sql
 CREATE SOURCE proto_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   WITH (SIZE = '3xsmall');
 ```
+
+#### Using an inline schema
+
+Suppose you have the following Protobuf schema in a file named `billing.proto`:
+
+```proto
+// billing.proto
+
+syntax = "proto3";
+
+message Batch {
+    int32 id = 1;
+    // ...
+}
+```
+
+Compile the schema into a Protobuf descriptor file:
+
+```bash
+protoc --include_imports --descriptor_set_out=billing.pb billing.proto
+```
+
+Encode the descriptor file into a SQL byte string:
+
+```bash
+$ printf '\\x' && xxd -p billing.pb | tr -d '\n'
+\x0a300a0d62696...
+```
+
+Create the source referencing the encoded descriptor bytes:
+
+```sql
+CREATE SOURCE proto_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...'
+  WITH (SIZE = '3xsmall');
+```
+
+Be sure to copy the encoded bytes in full, including the `\x` at the beginning.
+
+For details about Protobuf message names and descriptors, refer to the [Protobuf
+format](../#protobuf) documentation.
 
 {{< /tab >}}
 {{< tab "Text/bytes">}}
