@@ -761,7 +761,7 @@ fn wait_for_refresh(frontegg_server: &MzCloudServer, expires_in_secs: u64) {
     let expected = *frontegg_server.refreshes.lock().unwrap() + 1;
     Retry::default()
         .factor(1.0)
-        .max_duration(Duration::from_secs(expires_in_secs + 10))
+        .max_duration(Duration::from_secs(expires_in_secs + 20))
         .retry(|_| {
             let refreshes = *frontegg_server.refreshes.lock().unwrap();
             if refreshes >= expected {
@@ -799,8 +799,8 @@ fn test_auth_expiry() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    const EXPIRES_IN_SECS: u64 = 20;
-    const REFRESH_BEFORE_SECS: u64 = 10;
+    const EXPIRES_IN_SECS: u64 = 40;
+    const REFRESH_BEFORE_SECS: u64 = 20;
     let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
@@ -1577,8 +1577,8 @@ fn test_auth_admin() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    const EXPIRES_IN_SECS: u64 = 20;
-    const REFRESH_BEFORE_SECS: u64 = 10;
+    const EXPIRES_IN_SECS: u64 = 40;
+    const REFRESH_BEFORE_SECS: u64 = 20;
     let (role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,

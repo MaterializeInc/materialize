@@ -1297,6 +1297,7 @@ fn test_explain_timestamp_json() {
 // Feel free to modify this test if that product requirement changes,
 // but please at least keep _something_ that tests that custom compaction windows are working.
 #[test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18934
 fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_introspection` tests indexes, `default` tests tables.
@@ -1692,7 +1693,7 @@ fn test_timeline_read_holds() {
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mut mz_join_client = server.connect(postgres::NoTls).unwrap();
-    let _ = mz_ore::test::timeout(Duration::from_millis(1_000), move || {
+    let _ = mz_ore::test::timeout(Duration::from_millis(2_000), move || {
         Ok(mz_join_client
             .query_one(&format!("SELECT COUNT(t.a) FROM t, {view_name};"), &[])
             .unwrap()
@@ -2153,6 +2154,7 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18897
 fn test_coord_startup_blocking() {
     let initial_time = 0;
     let now = Arc::new(Mutex::new(initial_time));

@@ -566,7 +566,7 @@ fn pg_test_inner(dir: PathBuf) {
             _ => panic!("only tcp connections supported"),
         };
         let user = config.get_user().unwrap();
-        let timeout = Duration::from_secs(60);
+        let timeout = Duration::from_secs(120);
 
         mz_pgtest::run_test(tf, addr, user.to_string(), timeout);
     });

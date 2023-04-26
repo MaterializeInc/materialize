@@ -18,6 +18,8 @@ After some time your [Coverage run](https://buildkite.com/materialize/coverage/b
 
 We can see that some of the newly added code is not covered. This is the point where we should think about if we can write an explicit test case that tests this code adequately.
 
+Code that is only covered by unit tests, but not by any end-to-end test, is highlighted with a `.` instead of `!`.
+
 Additionally you can also download the full coverage report in HTML format from the artifacts of the "Analyze code coverage for PR" step. This should only be necessary if you are interested in seeing coverage of the entire product:
 
 ![Artifacts](assets/coverage-artifacts.png)
@@ -26,11 +28,9 @@ Additionally you can also download the full coverage report in HTML format from 
 
 The [Coverage](https://buildkite.com/materialize/coverage/builds) Buildkite pipeline runs a subset of tests from the [Tests](https://buildkite.com/materialize/tests) pipeline, which is already automatically run against each pull request. The excluded tests are marked with a `coverage: skip` in the [`pipeline.template.yml`](https://github.com/MaterializeInc/materialize/blob/main/ci/test/pipeline.template.yml):
 
-- Cargo test: Code should be tested in a real environment using SQL/Kafka/etc., unit test can give an incomplete picture of reliability
-- Miri test: Subset of cargo test
+- Miri test: Subset of cargo test, no additional use
 - Maelstrom coverage of persist: Randomized testing probably shouldn't count for coverage, not stable
 - Feature benchmark (Kafka only): Benchmarks shouldn't count for coverage
-- Cloudtest (WIP)
 
 https://github.com/MaterializeInc/materialize/blob/8147c0b1a6a4b6d0c318f947a23ca4c57ad47142/ci/test/pipeline.template.yml#L155-L162
 
