@@ -534,7 +534,9 @@ pub fn plan_subscribe(
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeUpsert);
             }
-            plan::SubscribeOutput::EnvelopeUpsert { order_by_keys: order_by }
+            plan::SubscribeOutput::EnvelopeUpsert {
+                order_by_keys: order_by,
+            }
         }
         SubscribeOutput::WithinTimestampOrderBy { order_by } => {
             scx.require_within_timestamp_order_by_in_subscribe()?;

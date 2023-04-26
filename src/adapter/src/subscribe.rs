@@ -190,7 +190,11 @@ impl ActiveSubscribe {
                                         for _ in 0..self.arity - order_by_keys.len() {
                                             packer.push(Datum::Null);
                                         }
-                                        new_rows.push((start.0, row_buf.clone(), total_negative_multiplicity));
+                                        new_rows.push((
+                                            start.0,
+                                            row_buf.clone(),
+                                            total_negative_multiplicity,
+                                        ));
                                     }
                                 }
                                 rows = new_rows;
@@ -215,7 +219,11 @@ impl ActiveSubscribe {
                                 }
 
                                 if matches!(self.output, SubscribeOutput::EnvelopeUpsert { .. }) {
-                                    packer.push(if diff < 0 { Datum::String("delete") } else { Datum::String("upsert") });
+                                    packer.push(if diff < 0 {
+                                        Datum::String("delete")
+                                    } else {
+                                        Datum::String("upsert")
+                                    });
                                 } else {
                                     packer.push(Datum::Int64(diff));
                                 }
