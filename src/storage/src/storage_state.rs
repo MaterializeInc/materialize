@@ -98,6 +98,7 @@ use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::instances::StorageInstanceContext;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
@@ -149,6 +150,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         sink_metrics: SinkBaseMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
+        instance_context: StorageInstanceContext,
         persist_clients: Arc<PersistClientCache>,
     ) -> Self {
         // It is very important that we only create the internal control
@@ -204,6 +206,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             timely_worker_index: timely_worker.index(),
             timely_worker_peers: timely_worker.peers(),
             connection_context,
+            instance_context,
             persist_clients,
             sink_tokens: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
@@ -261,6 +264,8 @@ pub struct StorageState {
     pub timely_worker_peers: usize,
     /// Configuration for source and sink connections.
     pub connection_context: ConnectionContext,
+    /// Other configuration for sources and sinks.
+    pub instance_context: StorageInstanceContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     pub persist_clients: Arc<PersistClientCache>,

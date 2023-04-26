@@ -386,11 +386,12 @@ where
                     };
                     let upsert = crate::render::upsert::upsert(
                         &upsert_input,
-                        upsert_envelope.key_indices.clone(),
+                        upsert_envelope.clone(),
                         resume_upper,
                         previous,
                         previous_token,
                         base_source_config,
+                        &storage_state.instance_context,
                     );
 
                     let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
