@@ -958,6 +958,9 @@ impl<T> TransactionError<T> {
             Some(&SqlState::UNDEFINED_TABLE)
                 | Some(&SqlState::WRONG_OBJECT_TYPE)
                 | Some(&SqlState::READ_ONLY_SQL_TRANSACTION)
+                // Cockroach reports errors from sql.conn.max_read_buffer_message_size as this (as
+                // well as others).
+                | Some(&SqlState::PROTOCOL_VIOLATION)
         ) {
             return false;
         }

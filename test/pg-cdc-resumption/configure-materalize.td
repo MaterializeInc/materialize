@@ -10,11 +10,11 @@
 > DROP SECRET IF EXISTS pgpass CASCADE;
 > DROP CONNECTION IF EXISTS pg CASCADE;
 
-> CREATE SECRET pgpass AS 'postgres'
+> CREATE SECRET pgpass AS 'materialize'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST toxiproxy,
     DATABASE postgres,
-    USER postgres,
+    USER materialize,
     PASSWORD SECRET pgpass
   );
 

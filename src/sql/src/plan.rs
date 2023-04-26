@@ -49,7 +49,6 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::TransactionIsolationLevel;
-use mz_storage_client::types::instances::StorageInstanceId;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 pub use optimize::OptimizerConfig;
@@ -232,7 +231,7 @@ impl Plan {
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
             Plan::CreateSource(_) => "create source",
-            Plan::CreateSources(_) => "create sources",
+            Plan::CreateSources(_) => "create source",
             Plan::CreateSecret(_) => "create secret",
             Plan::CreateSink(_) => "create sink",
             Plan::CreateTable(_) => "create table",
@@ -467,7 +466,7 @@ pub enum SourceSinkClusterConfig {
     /// Use an existing cluster.
     Existing {
         /// The ID of the cluster to use.
-        id: StorageInstanceId,
+        id: ClusterId,
     },
     /// Create a new linked storage cluster of the specified size.
     ///

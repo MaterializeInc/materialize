@@ -153,6 +153,6 @@ name                nullable    type
 name                nullable    type
 ------------------------------------------------------------
  roleid             false       oid
- member           false       oid
+ member             false       oid
  grantor            false       oid
  admin_option       false       boolean

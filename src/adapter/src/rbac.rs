@@ -22,7 +22,7 @@ use mz_sql::catalog::{CatalogItemType, SessionCatalog};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterOwnerPlan,
-    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, CreateMaterializedViewPlan, CreateSourcePlan,
+    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, CreateMaterializedViewPlan,CreateSinkPlan, CreateSourcePlan,
     CreateViewPlan, GrantPrivilegePlan, MutationKind, Plan, RevokePrivilegePlan,
 };
 use mz_sql::session::vars::SystemVars;
@@ -213,10 +213,25 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
         Plan::DropObjects(plan) if plan.object_type == ObjectType::Role => {
             Some(Attribute::CreateRole)
         }
-        Plan::CreateSource(_)
-        | Plan::CreateSink(_)
-        | Plan::CreateSources(_)
-        | Plan::CreateTable(_)
+        Plan::CreateSource(CreateSourcePlan { cluster_config, .. })
+        | Plan::CreateSink(CreateSinkPlan { cluster_config, .. }) => {
+            if cluster_config.cluster_id().is_none() {
+                Some(Attribute::CreateCluster)
+            } else {
+                None
+            }
+        }
+        Plan::CreateSources(plans) => {
+            if plans
+                .iter()
+                .any(|plan| plan.plan.cluster_config.cluster_id().is_none())
+            {
+                Some(Attribute::CreateCluster)
+            } else {
+                None
+            }
+        }
+        Plan::CreateTable(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateConnection(_)
         | Plan::CreateSchema(_)

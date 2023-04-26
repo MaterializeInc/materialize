@@ -8,8 +8,4 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE USER materialize PASSWORD 'materialize';
-ALTER USER materialize REPLICATION;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO materialize;
-
-CREATE PUBLICATION mz_source FOR ALL TABLES;
+REVOKE SELECT ON ALL TABLES IN SCHEMA "public" FROM materialize;

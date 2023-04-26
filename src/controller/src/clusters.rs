@@ -85,6 +85,23 @@ pub struct ReplicaAllocation {
     pub credits_per_hour: Numeric,
 }
 
+#[test]
+#[cfg_attr(miri, ignore)]
+// We test this particularly because we deserialize values from strings.
+fn test_replica_allocation_deserialization() {
+    let data = r#"
+        {
+            "cpu_limit": 1.0,
+            "memory_limit": "10GiB",
+            "scale": 16,
+            "workers": 1,
+            "credits_per_hour": "16"
+        }"#;
+
+    let _: ReplicaAllocation = serde_json::from_str(data)
+        .expect("deserialization from JSON succeeds for ReplicaAllocation");
+}
+
 /// Configures the location of a cluster replica.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaLocation {

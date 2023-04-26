@@ -518,14 +518,6 @@ impl NamespacedProcessOrchestrator {
             supervise_existing_process(&state_updater, &pid_file).await;
 
             loop {
-                for path in listen_addrs.values() {
-                    if let Err(e) = fs::remove_file(path).await {
-                        if e.kind() != io::ErrorKind::NotFound {
-                            warn!("unable to remove {path} while launching {full_id}-{i}: {e}")
-                        }
-                    }
-                }
-
                 let mut cmd = if command_wrapper.is_empty() {
                     let mut cmd = Command::new(&image);
                     cmd.args(&args);

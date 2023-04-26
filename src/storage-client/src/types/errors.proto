@@ -24,6 +24,7 @@ message ProtoDecodeError {
 message ProtoDecodeErrorKind {
     oneof kind {
         string text = 1;
+        string bytes = 2;
     }
 }
 

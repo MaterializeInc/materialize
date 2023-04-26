@@ -137,6 +137,7 @@ pub enum DataEncodingInner {
     Csv(CsvEncoding),
     Regex(RegexEncoding),
     Bytes,
+    Json,
     Text,
     RowCodec(RelationDesc),
 }
@@ -153,6 +154,7 @@ impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
                 DataEncodingInner::Bytes => Kind::Bytes(()),
                 DataEncodingInner::Text => Kind::Text(()),
                 DataEncodingInner::RowCodec(e) => Kind::RowCodec(e.into_proto()),
+                DataEncodingInner::Json => Kind::Json(()),
             }),
         }
     }
@@ -170,6 +172,7 @@ impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
             Kind::Bytes(()) => DataEncodingInner::Bytes,
             Kind::Text(()) => DataEncodingInner::Text,
             Kind::RowCodec(e) => DataEncodingInner::RowCodec(e.into_rust()?),
+            Kind::Json(()) => DataEncodingInner::Json,
         })
     }
 }
@@ -223,6 +226,9 @@ impl DataEncoding {
         let desc = match &self.inner {
             DataEncodingInner::Bytes => {
                 RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
+            }
+            DataEncodingInner::Json => {
+                RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
             }
             DataEncodingInner::Avro(AvroEncoding { schema, .. }) => {
                 let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
@@ -284,6 +290,7 @@ impl DataEncoding {
     pub fn op_name(&self) -> &'static str {
         match &self.inner {
             DataEncodingInner::Bytes => "Bytes",
+            DataEncodingInner::Json => "Json",
             DataEncodingInner::Avro(_) => "Avro",
             DataEncodingInner::Protobuf(_) => "Protobuf",
             DataEncodingInner::Regex { .. } => "Regex",

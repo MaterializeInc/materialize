@@ -347,6 +347,13 @@ pub enum CompareAndAppendBreak<T> {
     InvalidUsage(InvalidUsage<T>),
 }
 
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
+pub enum SnapshotErr<T> {
+    AsOfNotYetAvailable(SeqNo, Upper<T>),
+    AsOfHistoricalDistinctionsLost(Since<T>),
+}
+
 impl<T> StateCollections<T>
 where
     T: Timestamp + Lattice + Codec64,
@@ -1254,16 +1261,18 @@ where
     /// Returns the batches that contain updates up to (and including) the given `as_of`. The
     /// result `Vec` contains blob keys, along with a [`Description`] of what updates in the
     /// referenced parts are valid to read.
-    pub fn snapshot(
-        &self,
-        as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<HollowBatch<T>>, Upper<T>>, Since<T>> {
+    pub fn snapshot(&self, as_of: &Antichain<T>) -> Result<Vec<HollowBatch<T>>, SnapshotErr<T>> {
         if PartialOrder::less_than(as_of, self.collections.trace.since()) {
-            return Err(Since(self.collections.trace.since().clone()));
+            return Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(
+                self.collections.trace.since().clone(),
+            )));
         }
         let upper = self.collections.trace.upper();
         if PartialOrder::less_equal(upper, as_of) {
-            return Ok(Err(Upper(upper.clone())));
+            return Err(SnapshotErr::AsOfNotYetAvailable(
+                self.seqno,
+                Upper(upper.clone()),
+            ));
         }
 
         let mut batches = Vec::new();
@@ -1273,7 +1282,7 @@ where
             }
             batches.push(b.clone());
         });
-        Ok(Ok(batches))
+        Ok(batches)
     }
 
     // NB: Unlike the other methods here, this one is read-only.
@@ -1288,18 +1297,18 @@ where
         Ok(Ok(()))
     }
 
-    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Result<HollowBatch<T>, SeqNo> {
         // TODO: Avoid the O(n^2) here: `next_listen_batch` is called once per
         // batch and this iterates through all batches to find the next one.
-        let mut ret = None;
+        let mut ret = Err(self.seqno);
         self.collections.trace.map_batches(|b| {
-            if ret.is_some() {
+            if ret.is_ok() {
                 return;
             }
             if PartialOrder::less_equal(b.desc.lower(), frontier)
                 && PartialOrder::less_than(frontier, b.desc.upper())
             {
-                ret = Some(b.clone());
+                ret = Ok(b.clone());
             }
         });
         ret
@@ -1634,13 +1643,19 @@ mod tests {
         // Cannot take a snapshot with as_of == shard upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(0)),
-            Ok(Err(Upper(Antichain::from_elem(0))))
+            Err(SnapshotErr::AsOfNotYetAvailable(
+                SeqNo(0),
+                Upper(Antichain::from_elem(0))
+            ))
         );
 
         // Cannot take a snapshot with as_of > shard upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(5)),
-            Ok(Err(Upper(Antichain::from_elem(0))))
+            Err(SnapshotErr::AsOfNotYetAvailable(
+                SeqNo(0),
+                Upper(Antichain::from_elem(0))
+            ))
         );
 
         let writer_id = WriterId::new();
@@ -1662,23 +1677,29 @@ mod tests {
         // Can take a snapshot with as_of < upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(0)),
-            Ok(Ok(vec![hollow(0, 5, &["key1"], 1)]))
+            Ok(vec![hollow(0, 5, &["key1"], 1)])
         );
 
         // Can take a snapshot with as_of >= shard since, as long as as_of < shard_upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(4)),
-            Ok(Ok(vec![hollow(0, 5, &["key1"], 1)]))
+            Ok(vec![hollow(0, 5, &["key1"], 1)])
         );
 
         // Cannot take a snapshot with as_of >= upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(5)),
-            Ok(Err(Upper(Antichain::from_elem(5))))
+            Err(SnapshotErr::AsOfNotYetAvailable(
+                SeqNo(0),
+                Upper(Antichain::from_elem(5))
+            ))
         );
         assert_eq!(
             state.snapshot(&Antichain::from_elem(6)),
-            Ok(Err(Upper(Antichain::from_elem(5))))
+            Err(SnapshotErr::AsOfNotYetAvailable(
+                SeqNo(0),
+                Upper(Antichain::from_elem(5))
+            ))
         );
 
         let reader = LeasedReaderId::new();
@@ -1705,7 +1726,9 @@ mod tests {
         // Cannot take a snapshot with as_of < shard_since.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(1)),
-            Err(Since(Antichain::from_elem(2)))
+            Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(
+                Antichain::from_elem(2)
+            )))
         );
 
         // Advance the upper to 10 via an empty batch.
@@ -1722,13 +1745,16 @@ mod tests {
         // Can still take snapshots at times < upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(7)),
-            Ok(Ok(vec![hollow(0, 5, &["key1"], 1), hollow(5, 10, &[], 0)]))
+            Ok(vec![hollow(0, 5, &["key1"], 1), hollow(5, 10, &[], 0)])
         );
 
         // Cannot take snapshots with as_of >= upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(10)),
-            Ok(Err(Upper(Antichain::from_elem(10))))
+            Err(SnapshotErr::AsOfNotYetAvailable(
+                SeqNo(0),
+                Upper(Antichain::from_elem(10))
+            ))
         );
 
         // Advance upper to 15.
@@ -1746,26 +1772,26 @@ mod tests {
         // batches that are too far in the future for the requested as_of).
         assert_eq!(
             state.snapshot(&Antichain::from_elem(9)),
-            Ok(Ok(vec![hollow(0, 5, &["key1"], 1), hollow(5, 10, &[], 0)]))
+            Ok(vec![hollow(0, 5, &["key1"], 1), hollow(5, 10, &[], 0)])
         );
 
         // Don't filter out batches whose lowers are <= the requested as_of.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(10)),
-            Ok(Ok(vec![
+            Ok(vec![
                 hollow(0, 5, &["key1"], 1),
                 hollow(5, 10, &[], 0),
                 hollow(10, 15, &["key2"], 1)
-            ]))
+            ])
         );
 
         assert_eq!(
             state.snapshot(&Antichain::from_elem(11)),
-            Ok(Ok(vec![
+            Ok(vec![
                 hollow(0, 5, &["key1"], 1),
                 hollow(5, 10, &[], 0),
                 hollow(10, 15, &["key2"], 1)
-            ]))
+            ])
         );
     }
 
@@ -1782,8 +1808,11 @@ mod tests {
 
         // Empty collection never has any batches to listen for, regardless of the
         // current frontier.
-        assert_eq!(state.next_listen_batch(&Antichain::from_elem(0)), None);
-        assert_eq!(state.next_listen_batch(&Antichain::new()), None);
+        assert_eq!(
+            state.next_listen_batch(&Antichain::from_elem(0)),
+            Err(SeqNo(0))
+        );
+        assert_eq!(state.next_listen_batch(&Antichain::new()), Err(SeqNo(0)));
 
         let writer_id = WriterId::new();
         let _ = state
@@ -1815,7 +1844,7 @@ mod tests {
         for t in 0..=4 {
             assert_eq!(
                 state.next_listen_batch(&Antichain::from_elem(t)),
-                Some(hollow(0, 5, &["key1"], 1))
+                Ok(hollow(0, 5, &["key1"], 1))
             );
         }
 
@@ -1823,16 +1852,19 @@ mod tests {
         for t in 5..=9 {
             assert_eq!(
                 state.next_listen_batch(&Antichain::from_elem(t)),
-                Some(hollow(5, 10, &["key2"], 1))
+                Ok(hollow(5, 10, &["key2"], 1))
             );
         }
 
         // There is no batch currently available for t = 10.
-        assert_eq!(state.next_listen_batch(&Antichain::from_elem(10)), None);
+        assert_eq!(
+            state.next_listen_batch(&Antichain::from_elem(10)),
+            Err(SeqNo(0))
+        );
 
         // By definition, there is no frontier ever at the empty antichain which
         // is the time after all possible times.
-        assert_eq!(state.next_listen_batch(&Antichain::new()), None);
+        assert_eq!(state.next_listen_batch(&Antichain::new()), Err(SeqNo(0)));
     }
 
     #[test]

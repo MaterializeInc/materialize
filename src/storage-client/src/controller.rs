@@ -45,9 +45,9 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::soft_assert;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -2085,9 +2085,27 @@ where
             Some(StorageResponse::FrontierUppers(updates)) => {
                 self.update_write_frontiers(&updates);
             }
-            Some(StorageResponse::DroppedIds(_ids)) => {
+            Some(StorageResponse::DroppedIds(ids)) => {
                 // TODO(petrosagg): It looks like the storage controller never cleans up GlobalIds
                 // from its state. It should probably be done as a reaction to this response.
+                let shards_to_finalize: Vec<_> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        self.state.collections.get(id).map(
+                            |CollectionState {
+                                 collection_metadata: CollectionMetadata { data_shard, .. },
+                                 ..
+                             }| *data_shard,
+                        )
+                    })
+                    .collect();
+
+                // Ensure we don't leak any shards by tracking all of them we intend to
+                // finalize.
+                self.register_shards_for_finalization(shards_to_finalize)
+                    .await;
+
+                self.finalize_shards().await;
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -2611,9 +2629,6 @@ where
             .await
             .expect("connect to stash");
 
-        // Finalize any shards that are no longer-in use.
-        self.finalize_shards(dropped_shards).await;
-
         // Update in-memory state for remap shards.
         for id in remap_shards_to_replace {
             let c = match self.collection_mut(id) {
@@ -2664,23 +2679,25 @@ where
         }
     }
 
-    /// Closes the identified shards from further reads or writes.
+    /// Attempts to close all shards marked for finalization.
     #[allow(dead_code)]
-    async fn finalize_shards<I>(&mut self, shards: I)
-    where
-        I: IntoIterator<Item = ShardId> + Clone,
-    {
-        soft_assert!(
-            {
-                let mut all_registered = true;
-                for shard in shards.clone() {
-                    all_registered =
-                        self.is_shard_registered_for_finalization(shard).await && all_registered
-                }
-                all_registered
-            },
-            "finalized shards must be registered before calling finalize_shards"
-        );
+    async fn finalize_shards(&mut self) {
+        let shards = self
+            .state
+            .stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let collection = tx
+                        .collection::<ShardId, ()>(command_wals::SHARD_FINALIZATION.name())
+                        .await
+                        .expect("named collection must exist");
+                    tx.peek(collection).await
+                })
+            })
+            .await
+            .expect("stash operation succeeds")
+            .into_iter()
+            .map(|(shard, _, _)| shard);
 
         // Open a persist client to delete unused shards.
         let persist_client = self
@@ -2690,56 +2707,66 @@ where
             .unwrap();
 
         let persist_client = &persist_client;
-        // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
-        // this stream cannot all have exclusive access.
-        let this = &*self;
 
         use futures::stream::StreamExt;
-        let finalized_shards: BTreeSet<_> = futures::stream::iter(shards)
+        let finalized_shards: BTreeSet<ShardId> = futures::stream::iter(shards)
             .map(|shard_id| async move {
-                let (mut write, mut critical_since_handle) = this
-                    .open_data_handles(
-                        "finalizing shards",
+                // Open read handle, whose since is the global since.
+                let read_handle: ReadHandle<SourceData, (), T, Diff> = persist_client
+                    .open_leased_reader(
                         shard_id,
-                        RelationDesc::empty(),
-                        persist_client,
+                        "finalizing shards",
+                        Arc::new(RelationDesc::empty()),
+                        Arc::new(UnitSchema),
                     )
-                    .await;
-
-                let our_epoch = PersistEpoch::from(this.state.envd_epoch);
-
-                match critical_since_handle
-                    .compare_and_downgrade_since(&our_epoch, (&our_epoch, &Antichain::new()))
                     .await
-                {
-                    Ok(_) => info!("successfully finalized read handle for shard {shard_id:?}"),
-                    Err(e) => mz_ore::halt!("fenced by envd @ {e:?}. ours = {our_epoch:?}"),
-                }
+                    .expect("invalid persist usage");
 
-                if write.upper().is_empty() {
-                    info!("write handle for shard {:?} already finalized", shard_id);
-                } else {
-                    write
-                        .append(
-                            Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
-                            write.upper().clone(),
-                            Antichain::new(),
+                // If global since is empty, we can close shard because no one has an outstanding
+                // read hold.
+                if read_handle.since().is_empty() {
+                    let mut write_handle: WriteHandle<SourceData, (), T, Diff> = persist_client
+                        .open_writer(
+                            shard_id,
+                            "finalizing shards",
+                            Arc::new(RelationDesc::empty()),
+                            Arc::new(UnitSchema),
                         )
                         .await
-                        .expect("failed to connect")
-                        .expect("failed to truncate write handle");
+                        .expect("invalid persist usage");
+
+                    if !write_handle.upper().is_empty() {
+                        write_handle
+                            .append(
+                                Vec::<((crate::types::sources::SourceData, ()), T, Diff)>::new(),
+                                write_handle.upper().clone(),
+                                Antichain::new(),
+                            )
+                            .await
+                            // Rather than error, just leave this shard as one to finalize later.
+                            .ok()?
+                            .ok()?;
+                    }
+
+                    Some(shard_id)
+                } else {
+                    None
                 }
-                shard_id
             })
             // Poll each future for each collection concurrently, maximum of 10 at a time.
             .buffer_unordered(10)
             // HERE BE DRAGONS: see warning on other uses of buffer_unordered
             // before any changes to `collect`
-            .collect()
-            .await;
+            .collect::<BTreeSet<Option<ShardId>>>()
+            .await
+            .into_iter()
+            .filter_map(|shard| shard)
+            .collect();
 
-        self.clear_from_shard_finalization_register(finalized_shards)
-            .await;
+        if !finalized_shards.is_empty() {
+            self.clear_from_shard_finalization_register(finalized_shards)
+                .await;
+        }
     }
 }
 

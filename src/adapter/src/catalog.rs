@@ -6832,6 +6832,11 @@ fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) 
             .system_vars_mut()
             .set_enable_with_mutually_recursive(true);
     }
+    if !session_catalog.system_vars().enable_format_json() {
+        session_catalog
+            .system_vars_mut()
+            .set_enable_format_json(true);
+    }
 }
 
 #[derive(Debug, Copy, Clone)]

@@ -646,6 +646,17 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Boolean flag indicating whether to enable syncing from
+/// LaunchDarkly. Can be turned off as an emergency measure to still
+/// be able to alter parameters while LD is broken.
+pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_launchdarkly"),
+    value: &true,
+    description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled.
 static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_with_mutually_recursive"),
@@ -661,6 +672,15 @@ static ENABLE_MONOTONIC_ONESHOT_SELECTS: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Feature flag indicating whether monotonic evaluation of one-shot SELECT queries \
                   is enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// Feature flag indicating whether `FORMAT JSON` sources are enabled.
+static ENABLE_FORMAT_JSON: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_format_json"),
+    value: &false,
+    description: "Feature flag indicating whether `FORMAT JSON` sources are enabled (Materialize).",
     internal: true,
     safe: true,
 };
@@ -1468,6 +1488,7 @@ impl Default for SystemVars {
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
+            .with_var(&ENABLE_FORMAT_JSON)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
@@ -1475,6 +1496,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
+            .with_var(&ENABLE_LAUNCHDARKLY)
     }
 }
 
@@ -1801,6 +1823,20 @@ impl SystemVars {
     /// Returns the `enable_monotonic_oneshot_selects` configuration parameter.
     pub fn enable_monotonic_oneshot_selects(&self) -> bool {
         *self.expect_value(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
+    }
+
+    /// Returns the `enable_format_json` configuration parameter.
+    pub fn enable_format_json(&self) -> bool {
+        *self.expect_value(&ENABLE_FORMAT_JSON)
+    }
+
+    /// Sets the `enable_format_json` configuration parameter.
+    pub fn set_enable_format_json(&mut self, value: bool) -> bool {
+        self.vars
+            .get_mut(ENABLE_FORMAT_JSON.name)
+            .expect("var known to exist")
+            .set(VarInput::Flat(value.format().as_str()))
+            .expect("valid parameter value")
     }
 
     /// Returns the `enable_ld_rbac_checks` configuration parameter.

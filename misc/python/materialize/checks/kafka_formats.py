@@ -54,6 +54,11 @@ class KafkaFormats(Check):
                   format=protobuf descriptor-file=test.proto message=Value
                 {"key1": "key1A", "key2": "key1B"} {"value1": "value1A", "value2": "value1B"}
 
+                $ kafka-create-topic topic=format-json-bytes partitions=1
+
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-bytes
+                "object":{"a":"b","c":"d"}
+
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
                 > CREATE SOURCE format_bytes1
@@ -90,6 +95,13 @@ class KafkaFormats(Check):
                   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
                   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
+
+                > CREATE SOURCE format_json1
+                  IN CLUSTER kafka_formats
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-bytes-${testdrive.seed}')
+                  KEY FORMAT JSON
+                  VALUE FORMAT JSON
+                  ENVELOPE UPSERT
             """
             )
         )
@@ -136,6 +148,13 @@ class KafkaFormats(Check):
                   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
 
+                > CREATE SOURCE format_json2
+                  IN CLUSTER kafka_formats
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-bytes-${testdrive.seed}')
+                  KEY FORMAT JSON
+                  VALUE FORMAT JSON
+                  ENVELOPE UPSERT
+
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-bytes
                 key2A,key2B:value2A,value2B
 
@@ -143,6 +162,9 @@ class KafkaFormats(Check):
                   key-format=protobuf key-descriptor-file=test.proto key-message=Key
                   format=protobuf descriptor-file=test.proto message=Value
                 {"key1": "key2A", "key2": "key2B"} {"value1": "value2A", "value2": "value2B"}
+
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-bytes
+                "array":[1,2,3]
                 """,
                 """
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-bytes
@@ -152,6 +174,11 @@ class KafkaFormats(Check):
                   key-format=protobuf key-descriptor-file=test.proto key-message=Key
                   format=protobuf descriptor-file=test.proto message=Value
                 {"key1": "key3A", "key2": "key3B"} {"value1": "value3A", "value2": "value3B"}
+
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-bytes
+                "int":1
+                "float":1.23
+                "str":"hello"
                 """,
             ]
         ]
@@ -183,6 +210,13 @@ class KafkaFormats(Check):
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
 
+                > SELECT * FROM format_json1 ORDER BY key
+                "\\"array\\"" [1,2,3]
+                "\\"float\\"" 1.23
+                "\\"int\\"" 1
+                "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
+                "\\"str\\"" "\\"hello\\""
+
                 > SELECT * FROM format_text2
                 key1A,key1B value1A,value1B
                 key2A,key2B value2A,value2B
@@ -202,6 +236,13 @@ class KafkaFormats(Check):
                 key1A key1B value1A value1B
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
+
+                > SELECT * FROM format_json2 ORDER BY key
+                "\\"array\\"" [1,2,3]
+                "\\"float\\"" 1.23
+                "\\"int\\"" 1
+                "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
+                "\\"str\\"" "\\"hello\\""
                 """
             )
         )

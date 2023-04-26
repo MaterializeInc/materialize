@@ -2971,19 +2971,24 @@ fn plan_join(
             let joined = left.join(right, on, kind);
             (joined, product_scope)
         }
-        JoinConstraint::Using(column_names) => plan_using_constraint(
-            &column_names
+        JoinConstraint::Using { columns, alias } => {
+            let column_names = columns
                 .iter()
                 .map(|ident| normalize::column_name(ident.clone()))
-                .collect::<Vec<_>>(),
-            left_qcx,
-            left,
-            left_scope,
-            &right_qcx,
-            right,
-            right_scope,
-            kind,
-        )?,
+                .collect::<Vec<_>>();
+
+            plan_using_constraint(
+                &column_names,
+                left_qcx,
+                left,
+                left_scope,
+                &right_qcx,
+                right,
+                right_scope,
+                kind,
+                alias.as_ref(),
+            )?
+        }
         JoinConstraint::Natural => {
             // We shouldn't need to set ambiguous_columns on both the right and left qcx since they
             // have the same scx. However, it doesn't hurt to be safe.
@@ -3004,6 +3009,7 @@ fn plan_join(
                 right,
                 right_scope,
                 kind,
+                None,
             )?
         }
     };
@@ -3021,6 +3027,7 @@ fn plan_using_constraint(
     right: HirRelationExpr,
     right_scope: Scope,
     kind: JoinKind,
+    alias: Option<&Ident>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     let mut both_scope = left_scope.clone().product(right_scope.clone())?;
 
@@ -3036,6 +3043,23 @@ fn plan_using_constraint(
                 ),
                 issue_no: None,
             });
+        }
+    }
+
+    let alias_item_name = alias.map(|alias| PartialItemName {
+        database: None,
+        schema: None,
+        item: alias.clone().to_string(),
+    });
+
+    if let Some(alias_item_name) = &alias_item_name {
+        for partial_item_name in both_scope.table_names() {
+            if partial_item_name.matches(alias_item_name) {
+                sql_bail!(
+                    "table name \"{}\" specified more than once",
+                    alias_item_name
+                )
+            }
         }
     }
 
@@ -3104,6 +3128,25 @@ fn plan_using_constraint(
                 });
                 new_items.push(ScopeItem::from_column_name(column_name));
             }
+        }
+
+        // If a `join_using_alias` is present, add a new scope item that accepts
+        // only table-qualified references for each specified join column.
+        // Unlike regular table aliases, a `join_using_alias` should not hide the
+        // names of the joined relations.
+        if alias_item_name.is_some() {
+            let new_item_col = both_scope.items.len() + new_items.len();
+            join_cols.push(new_item_col);
+            hidden_cols.push(new_item_col);
+
+            new_items.push(ScopeItem::from_name(
+                alias_item_name.clone(),
+                column_name.clone().to_string(),
+            ));
+
+            // Should be safe to use either `lhs` or `rhs` here since the column
+            // is available in both scopes and must have the same type of the new item.
+            map_exprs.push(HirScalarExpr::Column(lhs));
         }
 
         join_exprs.push(HirScalarExpr::CallBinary {

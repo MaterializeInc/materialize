@@ -125,12 +125,12 @@ where
         Arc::clone(&val_schema),
         should_fetch_part,
     );
-    let (parts, completed_fetches_stream) = shard_source_fetch(
+    let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch(
         &descs, name, clients, location, shard_id, key_schema, val_schema,
     );
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
 
-    (parts, descs_token)
+    (parts, Rc::new((descs_token, fetch_token)))
 }
 
 /// Flow control configuration.
@@ -376,17 +376,21 @@ where
                 // to advance our SeqNo hold as we continue to emit batches.
                 //
                 // NB: AsyncInputHandle::next is cancel safe
-                Some(completed_fetch) = completed_fetches.next_mut() => {
+                completed_fetch = completed_fetches.next_mut() => {
                     match completed_fetch {
-                        Event::Data(_cap, data) => {
+                        Some(Event::Data(_cap, data)) => {
                             for part in data.drain(..) {
                                 lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                             }
                         }
-                        Event::Progress(frontier) => {
+                        Some(Event::Progress(frontier)) => {
                             if frontier.is_empty() {
                                 return;
                             }
+                        }
+                        None => {
+                            // the downstream operator has been dropped, nothing more to do
+                            return;
                         }
                     }
                 }
@@ -402,9 +406,6 @@ where
                         Some(ListenEvent::Progress(progress)) => {
                             let session_cap = cap_set.delayed(&current_ts);
 
-                            // NB: in order to play nice with downstream operators whose invariants
-                            // depend on seeing the full contents of an individual batch, we must
-                            // atomically emit all parts here (e.g. no awaits).
                             let bytes_emitted = {
                                 let mut bytes_emitted = 0;
                                 for mut part_desc in std::mem::take(&mut batch_parts) {
@@ -555,6 +556,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
 ) -> (
     Stream<G, FetchedPart<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
+    Rc<dyn Any>,
 )
 where
     K: Debug + Codec,
@@ -572,22 +574,7 @@ where
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
 
-    // NB: we intentionally do _not_ pass along the shutdown button here so that
-    // we can be assured we always emit the full contents of a batch. If we used
-    // the shutdown token, on Drop, it is possible we'd only partially emit the
-    // contents of a batch which could lead to downstream operators seeing records
-    // and collections that never existed, which may break their invariants.
-    //
-    // The downside of this approach is that we may be left doing (considerable)
-    // work if the dataflow is dropped but we have a large numbers of parts left
-    // in the batch to fetch and yield.
-    //
-    // This also means that a pre-requisite to this operator is for the input to
-    // atomically provide the parts for each batch.
-    //
-    // Note that this requirement would not be necessary if we were emitting
-    // fully consolidated data: https://github.com/MaterializeInc/materialize/issues/16860#issuecomment-1366094925
-    let _shutdown_button = builder.build(move |_capabilities| async move {
+    let shutdown_button = builder.build(move |_capabilities| async move {
         let fetcher = {
             let client = clients
                 .open(location.clone())
@@ -623,5 +610,9 @@ where
         }
     });
 
-    (fetched_stream, completed_fetches_stream)
+    (
+        fetched_stream,
+        completed_fetches_stream,
+        Rc::new(shutdown_button.press_on_drop()),
+    )
 }

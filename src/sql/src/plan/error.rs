@@ -53,6 +53,9 @@ pub enum PlanError {
     RequiresUnsafe {
         feature: String,
     },
+    RequiresVarOrUnsafe {
+        feature: String,
+    },
     UnknownColumn {
         table: Option<PartialItemName>,
         column: ColumnName,
@@ -196,6 +199,9 @@ impl PlanError {
             Self::RequiresUnsafe { .. } => {
                 Some("The requested feature is used only for internal development and testing of Materialize.".into())
             }
+            Self::RequiresVarOrUnsafe { .. } => {
+                Some("The requested feature is not currently enabled on this account.".into())
+            }
             _ => None,
         }
     }
@@ -285,6 +291,10 @@ impl fmt::Display for PlanError {
             }
             Self::RequiresUnsafe { feature} => {
                 write!(f, "{feature} is not supported",)?;
+                Ok(())
+            }
+            Self::RequiresVarOrUnsafe { feature} => {
+                write!(f, "{feature} is not enabled",)?;
                 Ok(())
             }
             Self::UnknownColumn { table, column } => write!(

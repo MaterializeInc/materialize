@@ -75,6 +75,7 @@ impl Display for DecodeError {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DecodeErrorKind {
     Text(String),
+    Bytes(String),
 }
 
 impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
@@ -83,6 +84,7 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
         ProtoDecodeErrorKind {
             kind: Some(match self {
                 DecodeErrorKind::Text(v) => Text(v.clone()),
+                DecodeErrorKind::Bytes(v) => Bytes(v.clone()),
             }),
         }
     }
@@ -91,6 +93,7 @@ impl RustType<ProtoDecodeErrorKind> for DecodeErrorKind {
         use proto_decode_error_kind::Kind::*;
         match proto.kind {
             Some(Text(v)) => Ok(DecodeErrorKind::Text(v)),
+            Some(Bytes(v)) => Ok(DecodeErrorKind::Bytes(v)),
             None => Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
         }
     }
@@ -100,6 +103,7 @@ impl Display for DecodeErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DecodeErrorKind::Text(e) => write!(f, "Text: {}", e),
+            DecodeErrorKind::Bytes(e) => write!(f, "Bytes: {}", e),
         }
     }
 }

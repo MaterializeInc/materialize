@@ -92,7 +92,7 @@ mod postgres;
 mod transaction;
 
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
-pub use crate::transaction::Transaction;
+pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 
 pub type Diff = i64;
 pub type Timestamp = i64;
