@@ -491,7 +491,7 @@ fn generate_required_privileges(
                 AclMode::CREATE,
                 role_id,
             )]);
-            if let SourceSinkClusterConfig::Existing { id } = &plan.cluster_config {
+            if let Some(id) = plan.cluster_config.cluster_id() {
                 privileges.insert((id.into(), AclMode::CREATE, role_id));
             }
             privileges.extend(
@@ -739,7 +739,7 @@ fn generate_required_source_privileges(
         AclMode::CREATE,
         role_id,
     )]);
-    if let SourceSinkClusterConfig::Existing { id } = &plan.cluster_config {
+    if let Some(id) = plan.cluster_config.cluster_id() {
         privileges.insert((id.into(), AclMode::CREATE, role_id));
     }
     privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));

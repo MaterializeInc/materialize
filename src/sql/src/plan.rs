@@ -487,6 +487,17 @@ pub enum SourceSinkClusterConfig {
     Undefined,
 }
 
+impl SourceSinkClusterConfig {
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists. If
+    /// one doesn't exist, then a new cluster will be created.
+    pub fn cluster_id(&self) -> Option<&ClusterId> {
+        match self {
+            SourceSinkClusterConfig::Existing { id } => Some(id),
+            SourceSinkClusterConfig::Linked { .. } | SourceSinkClusterConfig::Undefined => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct CreateConnectionPlan {
     pub name: QualifiedItemName,
