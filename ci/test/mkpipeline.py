@@ -74,8 +74,6 @@ so it is executed.""",
 
     if args.coverage:
         print("Coverage build, not trimming pipeline")
-    elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
-        print("On main branch or tag, so not trimming pipeline")
     elif have_paths_changed(CI_GLUE_GLOBS):
         # We still execute pipeline trimming on a copy of the pipeline to
         # protect against bugs in the pipeline trimming itself.
