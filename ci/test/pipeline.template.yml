@@ -176,6 +176,18 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: upsert
+    label: Upsert
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/upsert]
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: upsert
+    agents:
+      queue: linux-x86_64
+
   - id: kafka-persistence
     label: Kafka persistence
     depends_on: build-x86_64
