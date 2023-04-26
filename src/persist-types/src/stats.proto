@@ -9,6 +9,8 @@
 
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+
 package mz_persist_types.stats;
 
 message ProtoStructStats {
@@ -69,14 +71,19 @@ message ProtoPrimitiveStats {
 
 message ProtoJsonStats {
     uint64 json_nulls = 1;
-    ProtoPrimitiveStats bools = 2;
-    ProtoPrimitiveStats string = 3;
-    ProtoPrimitiveStats numeric = 4;
-    uint64 list = 5;
-    map<string, ProtoJsonStats> map = 6;
-    // The inverse of what you might normally imagine, for backwards-compatibility.
-    // TODO(mfp): make this more uniform.
-    bool no_maps = 7;
+    oneof values {
+        google.protobuf.Empty none = 2;
+        google.protobuf.Empty mixed = 3;
+        ProtoPrimitiveStats bools = 4;
+        ProtoPrimitiveStats strings = 5;
+        ProtoPrimitiveStats numerics = 6;
+        google.protobuf.Empty lists = 7;
+        ProtoJsonMapStats maps = 8;
+    }
+}
+
+message ProtoJsonMapStats {
+    map<string, ProtoJsonStats> elements = 1;
 }
 
 message ProtoBytesStats {
