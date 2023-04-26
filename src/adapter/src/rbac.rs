@@ -769,8 +769,7 @@ fn generate_read_privileges_inner(
 ) -> BTreeSet<(ObjectId, AclMode, RoleId)> {
     let mut privileges = BTreeSet::new();
     for id in ids {
-        if !seen.contains(&(id, role_id)) {
-            seen.insert((id, role_id));
+        if seen.insert((id, role_id)) {
             privileges
                 .extend(generate_read_privilege_inner(catalog, id, role_id, seen).into_iter());
         }
