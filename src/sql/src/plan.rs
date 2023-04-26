@@ -467,7 +467,7 @@ pub enum SourceSinkClusterConfig {
     /// Use an existing cluster.
     Existing {
         /// The ID of the cluster to use.
-        id: StorageInstanceId,
+        id: ClusterId,
     },
     /// Create a new linked storage cluster of the specified size.
     ///
@@ -488,10 +488,12 @@ pub enum SourceSinkClusterConfig {
 }
 
 impl SourceSinkClusterConfig {
-    pub fn will_create_new_cluster(&self) -> bool {
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists. If
+    /// one doesn't exist, then a new cluster will be created.
+    pub fn cluster_id(&self) -> Option<&ClusterId> {
         match self {
-            SourceSinkClusterConfig::Existing { .. } => false,
-            SourceSinkClusterConfig::Linked { .. } | SourceSinkClusterConfig::Undefined => true,
+            SourceSinkClusterConfig::Existing { id } => Some(id),
+            SourceSinkClusterConfig::Linked { .. } | SourceSinkClusterConfig::Undefined => None,
         }
     }
 }

@@ -209,7 +209,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
         }
         Plan::CreateSource(CreateSourcePlan { cluster_config, .. })
         | Plan::CreateSink(CreateSinkPlan { cluster_config, .. }) => {
-            if cluster_config.will_create_new_cluster() {
+            if cluster_config.cluster_id().is_none() {
                 Some(Attribute::CreateCluster)
             } else {
                 None
