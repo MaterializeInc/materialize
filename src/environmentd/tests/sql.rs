@@ -104,7 +104,7 @@ use tracing::{debug, info};
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
-use mz_ore::retry::Retry;
+use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_repr::Timestamp;
 use mz_sql::session::user::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
@@ -1341,23 +1341,23 @@ fn test_utilization_hold() {
             //
             // So just spin until it's not zero.
             // TODO[btv] - Get rid of this loop if that bug is ever fixed
-            let mut n_sleeps = 0;
-            let explain = loop {
-                let row = client.query_one(explain_q, &[]).unwrap();
-                let explain: String = row.get(0);
-                let explain: TimestampExplanation<Timestamp> =
-                    serde_json::from_str(&explain).unwrap();
-                if explain.determination.since.clone().into_option() == Some(Timestamp::MIN) {
-                    n_sleeps += 1;
-                    if n_sleeps > 10 {
-                        panic!("Since never became non-zero");
+            let explain = Retry::default()
+                .initial_backoff(Duration::from_secs(1))
+                .factor(1.0)
+                .max_tries(10)
+                .retry(|_| {
+                    let row = client.query_one(explain_q, &[]).unwrap();
+                    let explain: String = row.get(0);
+                    let explain: TimestampExplanation<Timestamp> =
+                        serde_json::from_str(&explain).unwrap();
+                    if explain.determination.since.clone().into_option() == Some(Timestamp::MIN) {
+                        RetryResult::RetryableErr(())
+                    } else {
+                        RetryResult::Ok(explain)
                     }
-                    println!("Since is 0, sleeping for 1 second");
-                    std::thread::sleep(Duration::from_secs(1));
-                } else {
-                    break explain;
-                }
-            };
+                })
+                .expect("Since never became non-zero");
+
             // Assert that we actually used the indexes/tables, as required
             for s in &explain.sources {
                 if *should_be_indexed {
