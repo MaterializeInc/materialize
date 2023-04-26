@@ -22,9 +22,8 @@ use mz_sql::catalog::{CatalogItemType, SessionCatalog};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterOwnerPlan,
-    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, CreateMaterializedViewPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateViewPlan, GrantPrivilegePlan, MutationKind, Plan, RevokePrivilegePlan,
-    SourceSinkClusterConfig,
+    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, CreateMaterializedViewPlan, CreateSourcePlan,
+    CreateViewPlan, GrantPrivilegePlan, MutationKind, Plan, RevokePrivilegePlan,
 };
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
