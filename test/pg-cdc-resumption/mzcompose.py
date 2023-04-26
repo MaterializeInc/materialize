@@ -23,8 +23,6 @@ def workflow_default(c: Composition) -> None:
     disrupting replication at various stages using Toxiproxy or service restarts
     """
 
-    initialize(c)
-
     # TODO: most of these should likely be converted to cluster tests
     for scenario in [
         disconnect_pg_during_snapshot,
@@ -34,20 +32,25 @@ def workflow_default(c: Composition) -> None:
         restart_pg_during_replication,
         restart_mz_during_replication,
         fix_pg_schema_while_mz_restarts,
+        verify_no_snapshot_reingestion,
     ]:
-        print(f">>> Running scenario {scenario.__name__}")
-        begin(c)
+        print(f"--- Running scenario {scenario.__name__}")
+        initialize(c)
         scenario(c)
         end(c)
 
 
 def initialize(c: Composition) -> None:
+    c.down(destroy_volumes=True)
     c.up("materialized", "postgres", "toxiproxy")
 
-    # We run configure-postgres.td only once for all workflows as
-    # it contains CREATE USER that is not indempotent
-
-    c.run("testdrive", "configure-postgres.td")
+    c.run(
+        "testdrive",
+        "configure-toxiproxy.td",
+        "populate-tables.td",
+        "configure-postgres.td",
+        "configure-materalize.td",
+    )
 
 
 def restart_pg(c: Composition) -> None:
@@ -58,17 +61,6 @@ def restart_pg(c: Composition) -> None:
 def restart_mz(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
-
-
-def begin(c: Composition) -> None:
-    """Configure Toxiproxy and Mz and populate initial data"""
-
-    c.run(
-        "testdrive",
-        "configure-toxiproxy.td",
-        "populate-tables.td",
-        "configure-materalize.td",
-    )
 
 
 def end(c: Composition) -> None:
@@ -137,3 +129,19 @@ def fix_pg_schema_while_mz_restarts(c: Composition) -> None:
         "alter-table-fix.td",
     )
     restart_mz(c)
+
+
+def verify_no_snapshot_reingestion(c: Composition) -> None:
+    """Confirm that Mz does not reingest the entire snapshot on restart by
+    revoking its SELECT privileges
+    """
+    c.run("testdrive", "wait-for-snapshot.td", "postgres-disable-select-permission.td")
+
+    restart_mz(c)
+
+    c.run(
+        "testdrive",
+        "delete-rows-t1.td",
+        "delete-rows-t2.td",
+        "alter-table.td",
+    )
