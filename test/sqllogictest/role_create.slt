@@ -1,0 +1,213 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Loosely based on https://github.com/postgres/postgres/blob/master/src/test/regress/expected/create_role.out
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_role_admin CREATEDB CREATECLUSTER CREATEROLE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE DATABASE regression
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON DATABASE regression TO regress_role_admin;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON DATABASE regression TO regress_role_admin WITH GRANT OPTION;
+----
+db error: ERROR: Expected end of statement, found WITH
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_role_limited_admin CREATEROLE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_role_normal;
+----
+COMPLETE 0
+
+simple conn=regress_role_limited_admin,user=regress_role_limited_admin
+CREATE ROLE regress_nosuch_superuser SUPERUSER;
+----
+db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+
+# This should fail, see https://github.com/MaterializeInc/materialize/issues/18960
+simple conn=regress_role_limited_admin,user=regress_role_limited_admin
+CREATE ROLE regress_nosuch_createdb CREATEDB;
+----
+COMPLETE 0
+
+# This should fail, see https://github.com/MaterializeInc/materialize/issues/18960
+simple conn=regress_role_limited_admin,user=regress_role_limited_admin
+CREATE ROLE regress_nosuch_createcluster CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=regress_role_limited_admin,user=regress_role_limited_admin
+CREATE ROLE regress_role_limited;
+----
+COMPLETE 0
+
+# This should fail, see https://github.com/MaterializeInc/materialize/issues/18960
+simple conn=regress_role_limited_admin,user=regress_role_limited_admin
+ALTER ROLE regress_role_limited CREATEDB;
+----
+COMPLETE 0
+
+# This should fail, see https://github.com/MaterializeInc/materialize/issues/18960
+simple conn=regress_role_limited_admin,user=regress_role_limited_admin
+ALTER ROLE regress_role_limited CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_createdb CREATEDB;
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE regress_createdb NOCREATEDB;
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE regress_createdb CREATEDB;
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_createcluster CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE regress_createcluster NOCREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE regress_createcluster CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE regress_createdb SUPERUSER;
+----
+db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+
+simple conn=regress_role_admin,user=regress_role_admin
+ALTER ROLE regress_createdb NOSUPERUSER;
+----
+db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_createrole CREATEROLE;
+----
+COMPLETE 0
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_connection_limit CONNECTION LIMIT 5;
+----
+db error: ERROR: Expected end of statement, found CONNECTION
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_password_null PASSWORD NULL;
+----
+db error: ERROR: Expected end of statement, found PASSWORD
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword SYSID 12345;
+----
+db error: ERROR: Expected end of statement, found identifier "sysid"
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword USER x;
+----
+db error: ERROR: Expected end of statement, found USER
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword ADMIN x
+----
+db error: ERROR: Expected end of statement, found identifier "admin"
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword ROLE x
+----
+db error: ERROR: Expected end of statement, found ROLE
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword IN GROUP x
+----
+db error: ERROR: Expected end of statement, found IN
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword IN ROLE x;
+----
+db error: ERROR: Expected end of statement, found IN
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword VALID UNTIL '2024';
+----
+db error: ERROR: Expected end of statement, found identifier "valid"
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword ENCRYPTED PASSWORD NULL;
+----
+db error: ERROR: Expected end of statement, found identifier "encrypted"
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword BYPASSRLS;
+----
+db error: ERROR: Expected end of statement, found identifier "bypassrls"
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword NOBYPASSRLS;
+----
+db error: ERROR: Expected end of statement, found identifier "nobypassrls"
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword REPLICATION;
+----
+db error: ERROR: Expected end of statement, found REPLICATION
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword NOREPLICATION;
+----
+db error: ERROR: Expected end of statement, found identifier "noreplication"
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword LOGIN;
+----
+db error: ERROR: LOGIN attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+
+simple conn=regress_role_admin,user=regress_role_admin
+CREATE ROLE regress_noiseword NOLOGIN;
+----
+db error: ERROR: LOGIN attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
