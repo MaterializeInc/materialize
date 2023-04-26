@@ -9,6 +9,8 @@
 
 from typing import TYPE_CHECKING, Any
 
+from materialize import ui
+
 if TYPE_CHECKING:
     from _pytest.config import Config
 
@@ -28,6 +30,7 @@ def pytest_configure(config: "Config") -> None:
 def mz(pytestconfig: pytest.Config) -> MaterializeApplication:
     return MaterializeApplication(
         release_mode=(not pytestconfig.getoption("dev")),
+        coverage=(pytestconfig.getoption("coverage")),
         aws_region=pytestconfig.getoption("aws_region"),
         log_filter=pytestconfig.getoption("log_filter"),
     )
@@ -40,6 +43,11 @@ def aws_region(pytestconfig: pytest.Config) -> Any:
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--dev", action="store_true")
+    parser.addoption(
+        "--coverage",
+        action="store_true",
+        default=ui.env_is_truthy("CI_COVERAGE_ENABLED"),
+    )
     parser.addoption(
         "--aws-region",
         action="store",

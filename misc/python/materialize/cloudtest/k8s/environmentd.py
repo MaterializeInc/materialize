@@ -69,12 +69,15 @@ class MaterializedAliasService(K8sService):
 class EnvironmentdStatefulSet(K8sStatefulSet):
     def __init__(
         self,
-        tag: Optional[str] = None,
-        release_mode: bool = True,
+        *,
+        tag: Optional[str],
+        release_mode: bool,
+        coverage: bool,
         log_filter: Optional[str] = None,
     ) -> None:
         self.tag = tag
         self.release_mode = release_mode
+        self.coverage = coverage
         self.log_filter = log_filter
         self.env: Dict[str, str] = {}
         super().__init__()
@@ -141,19 +144,37 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self._meets_minimum_version("0.38.0"):
             args += [
                 "--clusterd-image",
-                self.image("clusterd", tag=self.tag, release_mode=self.release_mode),
+                self.image(
+                    "clusterd",
+                    tag=self.tag,
+                    release_mode=self.release_mode,
+                    coverage=self.coverage,
+                ),
             ]
         else:
             args += [
                 "--storaged-image",
-                self.image("storaged", tag=self.tag, release_mode=self.release_mode),
+                self.image(
+                    "storaged",
+                    tag=self.tag,
+                    release_mode=self.release_mode,
+                    coverage=self.coverage,
+                ),
                 "--computed-image",
-                self.image("computed", tag=self.tag, release_mode=self.release_mode),
+                self.image(
+                    "computed",
+                    tag=self.tag,
+                    release_mode=self.release_mode,
+                    coverage=self.coverage,
+                ),
             ]
         container = V1Container(
             name="environmentd",
             image=self.image(
-                "environmentd", tag=self.tag, release_mode=self.release_mode
+                "environmentd",
+                tag=self.tag,
+                release_mode=self.release_mode,
+                coverage=self.coverage,
             ),
             args=args,
             env=env,

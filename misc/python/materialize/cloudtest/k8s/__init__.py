@@ -29,7 +29,7 @@ from kubernetes.client.exceptions import ApiException
 from kubernetes.config import new_client_from_config  # type: ignore
 from pg8000 import Connection, Cursor
 
-from materialize import ROOT, mzbuild, ui
+from materialize import ROOT, mzbuild
 
 
 class K8sResource:
@@ -63,12 +63,16 @@ class K8sResource:
         assert False
 
     def image(
-        self, service: str, tag: Optional[str] = None, release_mode: bool = True
+        self,
+        service: str,
+        tag: Optional[str],
+        *,
+        release_mode: bool,
+        coverage: bool,
     ) -> str:
         if tag is not None:
             return f"materialize/{service}:{tag}"
         else:
-            coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
             repo = mzbuild.Repository(
                 ROOT, release_mode=release_mode, coverage=coverage
             )

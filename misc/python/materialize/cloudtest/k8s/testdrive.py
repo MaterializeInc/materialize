@@ -18,7 +18,9 @@ from materialize.cloudtest.wait import wait
 
 
 class Testdrive(K8sPod):
-    def __init__(self, release_mode: bool, aws_region: Optional[str] = None) -> None:
+    def __init__(
+        self, release_mode: bool, coverage: bool, aws_region: Optional[str] = None
+    ) -> None:
         self.aws_region = aws_region
 
         metadata = V1ObjectMeta(name="testdrive")
@@ -35,7 +37,11 @@ class Testdrive(K8sPod):
 
         container = V1Container(
             name="testdrive",
-            image=self.image("testdrive", release_mode=release_mode),
+            # NOTE(benesch): is it intentional that this does not pass through
+            # the tag from the caller?
+            image=self.image(
+                "testdrive", tag=None, release_mode=release_mode, coverage=coverage
+            ),
             command=["sleep", "infinity"],
             env=env,
         )
