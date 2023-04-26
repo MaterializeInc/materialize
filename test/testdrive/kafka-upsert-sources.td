@@ -260,6 +260,9 @@ mammal1:
 ! select * from nullkey
 contains: record with NULL key in UPSERT source
 
+! select * from nullkey
+contains: to retract this error, produce a record upstream with a NULL key and NULL value
+
 # Ingest a null value for our null key, to retract it.
 $ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=:
 :
@@ -545,3 +548,43 @@ offset
 > SELECT "offset" FROM include_metadata_ts WHERE ts < '2021-01-01'
 offset
 ------
+
+
+#
+# JSON UPSERT source
+
+$ kafka-create-topic topic=format-json-bytes partitions=1
+
+$ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-bytes
+"object":{"a":"b","c":"d"}
+"array":[1,2,3]
+"int":1
+"float":1.23
+"str":"hello"
+
+> CREATE SOURCE format_json
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-bytes-${testdrive.seed}')
+  KEY FORMAT JSON
+  VALUE FORMAT JSON
+  ENVELOPE UPSERT;
+
+> SELECT * FROM format_json ORDER BY key
+"\"array\"" [1,2,3]
+"\"float\"" 1.23
+"\"int\"" 1
+"\"object\"" "{\"a\":\"b\",\"c\":\"d\"}"
+"\"str\"" "\"hello\""
+
+$ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-bytes
+"object":{"y":"z"}
+"array":[10,9,8]
+"int":99
+"float":3.14
+"str":"bye"
+
+> SELECT * FROM format_json ORDER BY key
+"\"array\"" [10,9,8]
+"\"float\"" 3.14
+"\"int\"" 99
+"\"object\"" "{\"y\":\"z\"}"
+"\"str\"" "\"bye\""

@@ -433,9 +433,9 @@ async fn make_machine(
     let machine = Machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::new(
         cfg.clone(),
         shard_id,
-        metrics,
+        Arc::clone(&metrics),
         state_versions,
-        &StateCache::default(),
+        &StateCache::new(metrics),
     )
     .await?;
 

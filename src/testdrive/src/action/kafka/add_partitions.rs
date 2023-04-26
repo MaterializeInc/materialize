@@ -16,7 +16,6 @@ use rdkafka::producer::Producer;
 
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
-use mz_ore::str::StrExt;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
@@ -41,15 +40,12 @@ pub async fn run_add_partitions(
                 bail!(
                     "new partition count {} is not greater than current partition count {}",
                     total_partitions,
-                    total_partitions
+                    *current_partitions
                 );
             }
         }
         None => {
-            bail!(
-                "topic {} not created by kafka-create-topic",
-                topic_name.quoted(),
-            )
+            // ignore that the topic was not created by this instance of kafka-create-topic
         }
     }
 

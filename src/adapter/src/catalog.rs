@@ -69,7 +69,8 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
+    Plan, PlanContext, PlanError, SourceSinkClusterConfig as PlanStorageClusterConfig,
+    StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -252,33 +253,37 @@ impl CatalogState {
     /// objects.
     fn object_dependents(
         &self,
-        object_ids: Vec<ObjectId>,
+        object_ids: &Vec<ObjectId>,
+        conn_id: ConnectionId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
         for object_id in object_ids {
             match object_id {
                 ObjectId::Cluster(id) => {
-                    dependents.extend_from_slice(&self.cluster_dependents(id, seen));
+                    dependents.extend_from_slice(&self.cluster_dependents(*id, seen));
                 }
                 ObjectId::ClusterReplica((cluster_id, replica_id)) => dependents.extend_from_slice(
-                    &self.cluster_replica_dependents(cluster_id, replica_id, seen),
+                    &self.cluster_replica_dependents(*cluster_id, *replica_id, seen),
                 ),
                 ObjectId::Database(id) => {
-                    dependents.extend_from_slice(&self.database_dependents(id, seen))
+                    dependents.extend_from_slice(&self.database_dependents(*id, conn_id, seen))
                 }
-                ObjectId::Schema((database_spec, schema_id)) => {
+                ObjectId::Schema((database_spec, schema_spec)) => {
                     dependents.extend_from_slice(&self.schema_dependents(
-                        database_spec,
-                        schema_id,
+                        database_spec.clone(),
+                        schema_spec.clone(),
+                        conn_id,
                         seen,
                     ));
                 }
                 id @ ObjectId::Role(_) => {
                     seen.insert(id.clone());
-                    dependents.push(id);
+                    dependents.push(id.clone());
                 }
-                ObjectId::Item(id) => dependents.extend_from_slice(&self.item_dependents(id, seen)),
+                ObjectId::Item(id) => {
+                    dependents.extend_from_slice(&self.item_dependents(*id, seen))
+                }
             }
         }
         dependents
@@ -345,6 +350,7 @@ impl CatalogState {
     fn database_dependents(
         &self,
         database_id: DatabaseId,
+        conn_id: ConnectionId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
@@ -355,7 +361,8 @@ impl CatalogState {
             for schema_id in database.schemas().values() {
                 dependents.extend_from_slice(&self.schema_dependents(
                     ResolvedDatabaseSpecifier::Id(database_id),
-                    *schema_id,
+                    SchemaSpecifier::Id(*schema_id),
+                    conn_id,
                     seen,
                 ));
             }
@@ -373,20 +380,15 @@ impl CatalogState {
     fn schema_dependents(
         &self,
         database_spec: ResolvedDatabaseSpecifier,
-        schema_id: SchemaId,
+        schema_spec: SchemaSpecifier,
+        conn_id: ConnectionId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
-        let object_id = ObjectId::Schema((database_spec, schema_id));
+        let object_id = ObjectId::Schema((database_spec, schema_spec.clone()));
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
-            let schemas = match database_spec {
-                ResolvedDatabaseSpecifier::Ambient => &self.ambient_schemas_by_id,
-                ResolvedDatabaseSpecifier::Id(database_id) => {
-                    &self.get_database(&database_id).schemas_by_id
-                }
-            };
-            let schema = schemas.get(&schema_id).expect("catalog out of sync");
+            let schema = self.get_schema(&database_spec, &schema_spec, conn_id);
             for item_id in schema.items().values() {
                 dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
             }
@@ -1366,7 +1368,9 @@ impl CatalogState {
 
     pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
         if !self.config.unsafe_mode {
-            Err(AdapterError::Unsupported(feature_name))
+            Err(AdapterError::PlanError(PlanError::RequiresUnsafe {
+                feature: feature_name.to_string(),
+            }))
         } else {
             Ok(())
         }
@@ -2451,9 +2455,14 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Secret(_))
     }
 
-    /// Reports whether this catalog entry is a introspection source.
+    /// Reports whether this catalog entry is an introspection source.
     pub fn is_introspection_source(&self) -> bool {
         matches!(self.item(), CatalogItem::Log(_))
+    }
+
+    /// Reports whether this catalog entry is an index.
+    pub fn is_index(&self) -> bool {
+        matches!(self.item(), CatalogItem::Index(_))
     }
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
@@ -4468,7 +4477,7 @@ impl Catalog {
             .cloned()
             .map(ObjectId::Item)
             .collect();
-        self.object_dependents(temp_ids)
+        self.object_dependents(&temp_ids, *conn_id)
             .into_iter()
             .map(Op::DropObject)
             .collect()
@@ -4481,9 +4490,13 @@ impl Catalog {
         Ok(())
     }
 
-    pub(crate) fn object_dependents(&self, object_ids: Vec<ObjectId>) -> Vec<ObjectId> {
+    pub(crate) fn object_dependents(
+        &self,
+        object_ids: &Vec<ObjectId>,
+        conn_id: ConnectionId,
+    ) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
-        self.state.object_dependents(object_ids, &mut seen)
+        self.state.object_dependents(object_ids, conn_id, &mut seen)
     }
 
     pub(crate) fn cluster_replica_dependents(
@@ -4652,8 +4665,8 @@ impl Catalog {
         match id {
             ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
             ObjectId::Database(id) => Some(self.get_database(id).privileges()),
-            ObjectId::Schema((database_spec, schema_id)) => Some(
-                self.get_schema(database_spec, &SchemaSpecifier::from(*schema_id), conn_id)
+            ObjectId::Schema((database_spec, schema_spec)) => Some(
+                self.get_schema(database_spec, schema_spec, conn_id)
                     .privileges(),
             ),
             ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
@@ -5465,10 +5478,10 @@ impl Catalog {
                         state.database_by_name.remove(db.name());
                         state.database_by_id.remove(&id);
                     }
-                    ObjectId::Schema((database_spec, schema_id)) => {
+                    ObjectId::Schema((database_spec, schema_spec)) => {
                         let schema = state.get_schema(
                             &database_spec,
-                            &SchemaSpecifier::Id(schema_id),
+                            &schema_spec,
                             session
                                 .map(|session| session.conn_id())
                                 .unwrap_or(SYSTEM_CONN_ID),
@@ -5477,6 +5490,7 @@ impl Catalog {
                             ResolvedDatabaseSpecifier::Ambient => None,
                             ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
                         };
+                        let schema_id = schema_spec.into();
                         tx.remove_schema(&database_id, &schema_id)?;
                         builtin_table_updates.push(state.pack_schema_update(
                             &database_spec,
@@ -5796,7 +5810,8 @@ impl Catalog {
                             tx.update_database(id, database)?;
                             builtin_table_updates.push(state.pack_database_update(database, 1));
                         }
-                        ObjectId::Schema((database_spec, schema_id)) => {
+                        ObjectId::Schema((database_spec, schema_spec)) => {
+                            let schema_id = schema_spec.clone().into();
                             builtin_table_updates.push(state.pack_schema_update(
                                 &database_spec,
                                 &schema_id,
@@ -5804,7 +5819,7 @@ impl Catalog {
                             ));
                             let schema = state.get_schema_mut(
                                 &database_spec,
-                                &schema_id.into(),
+                                &schema_spec,
                                 session
                                     .map(|session| session.conn_id())
                                     .unwrap_or(SYSTEM_CONN_ID),
@@ -5817,7 +5832,7 @@ impl Catalog {
                             tx.update_schema(database_id, schema_id, schema)?;
                             builtin_table_updates.push(state.pack_schema_update(
                                 &database_spec,
-                                &schema_id,
+                                &schema_spec.into(),
                                 1,
                             ));
                         }
@@ -6016,7 +6031,8 @@ impl Catalog {
                         tx.update_database(id, database)?;
                         builtin_table_updates.push(state.pack_database_update(database, 1));
                     }
-                    ObjectId::Schema((database_spec, schema_id)) => {
+                    ObjectId::Schema((database_spec, schema_spec)) => {
+                        let schema_id = schema_spec.clone().into();
                         builtin_table_updates.push(state.pack_schema_update(
                             &database_spec,
                             &schema_id,
@@ -6024,7 +6040,7 @@ impl Catalog {
                         ));
                         let schema = state.get_schema_mut(
                             &database_spec,
-                            &SchemaSpecifier::Id(schema_id),
+                            &schema_spec,
                             session
                                 .map(|session| session.conn_id())
                                 .unwrap_or(SYSTEM_CONN_ID),
@@ -6630,6 +6646,19 @@ impl Catalog {
         self.clusters().filter(|cluster| cluster.id.is_user())
     }
 
+    pub fn get_cluster_replica(
+        &self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> &ClusterReplica {
+        self.state.get_cluster_replica(cluster_id, replica_id)
+    }
+
+    pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
+        self.user_clusters()
+            .flat_map(|cluster| cluster.replicas_by_id.values())
+    }
+
     pub fn databases(&self) -> impl Iterator<Item = &Database> {
         self.state.database_by_id.values()
     }
@@ -6752,10 +6781,9 @@ impl Catalog {
                     Ok(())
                 }
             }
-            ObjectId::Schema((database_spec, schema_id)) => {
-                if schema_id.is_system() {
-                    let schema =
-                        self.get_schema(database_spec, &SchemaSpecifier::Id(*schema_id), conn_id);
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                if schema_spec.is_system() {
+                    let schema = self.get_schema(database_spec, schema_spec, conn_id);
                     Err(Error::new(ErrorKind::ReadOnlySystemSchema(
                         schema.name().schema.clone(),
                     )))
@@ -6803,6 +6831,11 @@ fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) 
         session_catalog
             .system_vars_mut()
             .set_enable_with_mutually_recursive(true);
+    }
+    if !session_catalog.system_vars().enable_format_json() {
+        session_catalog
+            .system_vars_mut()
+            .set_enable_format_json(true);
     }
 }
 
@@ -7411,18 +7444,17 @@ impl SessionCatalog for ConnCatalog<'_> {
                     .owner_id(),
             ),
             ObjectId::Database(id) => Some(self.get_database(id).owner_id()),
-            ObjectId::Schema((database_spec, schema_id)) => Some(
-                self.get_schema(database_spec, &SchemaSpecifier::Id(*schema_id))
-                    .owner_id(),
-            ),
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                Some(self.get_schema(database_spec, schema_spec).owner_id())
+            }
             ObjectId::Item(id) => Some(self.get_item(id).owner_id()),
             ObjectId::Role(_) => None,
         }
     }
 
-    fn object_dependents(&self, ids: Vec<ObjectId>) -> Vec<ObjectId> {
+    fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
-        self.state.object_dependents(ids, &mut seen)
+        self.state.object_dependents(ids, self.conn_id, &mut seen)
     }
 
     fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId> {

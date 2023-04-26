@@ -17,9 +17,10 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::Collection;
-use prometheus::core::{AtomicI64, AtomicU64};
+use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -32,7 +33,7 @@ use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
 
 use crate::render::sources::OutputIndex;
-use crate::source::metrics::SourceBaseMetrics;
+use crate::source::metrics::{SourceBaseMetrics, UpsertSharedMetrics};
 use crate::source::RawSourceCreationConfig;
 
 /// Describes a source that can render itself in a timely scope.
@@ -491,6 +492,30 @@ impl OffsetCommitMetrics {
             offset_commit_failures: base
                 .offset_commit_failures
                 .get_delete_on_drop_counter(vec![source_id.to_string()]),
+        }
+    }
+}
+
+/// Metrics for the `upsert` operator.
+pub struct UpsertMetrics {
+    pub(crate) rehydration_latency: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
+    pub(crate) rehydration_total: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) shared: Arc<UpsertSharedMetrics>,
+}
+
+impl UpsertMetrics {
+    pub fn new(base_metrics: &SourceBaseMetrics, source_id: GlobalId, worker_id: usize) -> Self {
+        let base = &base_metrics.upsert_specific;
+        let source_id_s = source_id.to_string();
+        let worker_id = worker_id.to_string();
+        Self {
+            rehydration_latency: base
+                .rehydration_latency
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+            rehydration_total: base
+                .rehydration_total
+                .get_delete_on_drop_gauge(vec![source_id_s, worker_id]),
+            shared: base.shared(&source_id),
         }
     }
 }

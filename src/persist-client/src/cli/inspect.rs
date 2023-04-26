@@ -606,7 +606,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let state_cache = Arc::new(StateCache::default());
+    let state_cache = Arc::new(StateCache::new(Arc::clone(&metrics)));
     let usage = StorageUsageClient::open(PersistClient::new(
         cfg,
         blob,

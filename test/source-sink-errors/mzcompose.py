@@ -366,7 +366,7 @@ disruptions: List[Disruption] = [
     PgDisruption(
         name="kill-postgres",
         breakage=lambda c, _: c.kill("postgres"),
-        expected_error="error connecting to server",
+        expected_error="error connecting to server|connection closed|deadline has elapsed",
         fixage=lambda c, _: c.up("postgres"),
     ),
     PgDisruption(

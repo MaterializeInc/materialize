@@ -73,6 +73,8 @@ pub struct Metrics {
     pub audit: UsageAuditMetrics,
     /// Metrics for locking.
     pub locks: LocksMetrics,
+    /// Metrics for StateWatch.
+    pub watch: WatchMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -114,6 +116,7 @@ impl Metrics {
             shards: ShardsMetrics::new(registry),
             audit: UsageAuditMetrics::new(registry),
             locks: vecs.locks_metrics(),
+            watch: WatchMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -496,6 +499,7 @@ impl MetricsVecs {
             applier_read_cacheable: self.lock_metrics("applier_read_cacheable"),
             applier_read_noncacheable: self.lock_metrics("applier_read_noncacheable"),
             applier_write: self.lock_metrics("applier_write"),
+            watch: self.lock_metrics("watch"),
         }
     }
 
@@ -1464,6 +1468,7 @@ pub struct LocksMetrics {
     pub(crate) applier_read_cacheable: LockMetrics,
     pub(crate) applier_read_noncacheable: LockMetrics,
     pub(crate) applier_write: LockMetrics,
+    pub(crate) watch: LockMetrics,
 }
 
 #[derive(Debug)]
@@ -1471,6 +1476,67 @@ pub struct LockMetrics {
     pub(crate) acquire_count: IntCounter,
     pub(crate) blocking_acquire_count: IntCounter,
     pub(crate) blocking_seconds: Counter,
+}
+
+#[derive(Debug)]
+pub struct WatchMetrics {
+    pub(crate) listen_woken_via_watch: IntCounter,
+    pub(crate) listen_woken_via_sleep: IntCounter,
+    pub(crate) snapshot_woken_via_watch: IntCounter,
+    pub(crate) snapshot_woken_via_sleep: IntCounter,
+    pub(crate) notify_sent: IntCounter,
+    pub(crate) notify_noop: IntCounter,
+    pub(crate) notify_recv: IntCounter,
+    pub(crate) notify_lagged: IntCounter,
+    pub(crate) notify_wait_started: IntCounter,
+    pub(crate) notify_wait_finished: IntCounter,
+}
+
+impl WatchMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        WatchMetrics {
+            listen_woken_via_watch: registry.register(metric!(
+                name: "mz_persist_listen_woken_via_watch",
+                help: "count of listen next batches wakes via watch notify",
+            )),
+            listen_woken_via_sleep: registry.register(metric!(
+                name: "mz_persist_listen_woken_via_sleep",
+                help: "count of listen next batches wakes via sleep",
+            )),
+            snapshot_woken_via_watch: registry.register(metric!(
+                name: "mz_persist_snapshot_woken_via_watch",
+                help: "count of snapshot wakes via watch notify",
+            )),
+            snapshot_woken_via_sleep: registry.register(metric!(
+                name: "mz_persist_snapshot_woken_via_sleep",
+                help: "count of snapshot wakes via sleep",
+            )),
+            notify_sent: registry.register(metric!(
+                name: "mz_persist_watch_notify_sent",
+                help: "count of watch notifications sent to a non-empty broadcast channel",
+            )),
+            notify_noop: registry.register(metric!(
+                name: "mz_persist_watch_notify_noop",
+                help: "count of watch notifications sent to an broadcast channel",
+            )),
+            notify_recv: registry.register(metric!(
+                name: "mz_persist_watch_notify_recv",
+                help: "count of watch notifications received from the broadcast channel",
+            )),
+            notify_lagged: registry.register(metric!(
+                name: "mz_persist_watch_notify_lagged",
+                help: "count of lagged events in the watch notification broadcast channel",
+            )),
+            notify_wait_started: registry.register(metric!(
+                name: "mz_persist_watch_notify_wait_started",
+                help: "count of watch wait calls started",
+            )),
+            notify_wait_finished: registry.register(metric!(
+                name: "mz_persist_watch_notify_wait_finished",
+                help: "count of watch wait calls resolved",
+            )),
+        }
+    }
 }
 
 #[derive(Debug)]

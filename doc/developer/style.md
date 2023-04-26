@@ -31,7 +31,7 @@ The formatting of SQL statements is generally straightforward. For example:
 ```sql
 SELECT
     sum(l_extendedprice * l_discount) AS revenue,
-    EXTRACT(DAY FROM l_shipdate)
+    EXTRACT (DAY FROM l_shipdate)
 FROM
     lineitem
 WHERE
@@ -120,7 +120,7 @@ Some key principles to highlight are:
 * Avoid mentioning called function names. Instead say what the code was trying to do.
 * Tricky words to avoid: unable, bad, illegal, unknown.
 * Avoid contractions and spell out words in full.
-* Word choices to be mindful of: find vs. exists, may vs. can vs. might.
+* Word choices to be mindful of: find vs. exist, may vs. can vs. might.
 
 ### System catalog style
 We adhere to standards for our system catalog relations (tables, views), which includes both the stable `mz_catalog` relations and the unstable `mz_internal` relations.
@@ -163,7 +163,7 @@ macros. Observe the following guidelines:
     ```
     fn handle_persist_thingy(shard_id: ShardId) {
         // Preferred.
-        info!(shard_id = ?the_shard, "handling persist thingy");
+        info!(shard_id = ?shard_id, "handling persist thingy");
         // Acceptable.
         info!("handling persist thingy for shard {}", shard_id);
     }

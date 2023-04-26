@@ -81,6 +81,10 @@ pub struct Config<'a> {
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
 
 impl Default for ClusterReplicaSizeMap {
+    // Used for testing and local purposes. This default value should not be used in production.
+    //
+    // Credits per hour are calculated as being equal to scale. This is not necessarily how the
+    // value is computed in production.
     fn default() -> Self {
         // {
         //     "1": {"scale": 1, "workers": 1},
@@ -105,14 +109,15 @@ impl Default for ClusterReplicaSizeMap {
         // }
         let mut inner = (0..=5)
             .map(|i| {
-                let workers = 1 << i;
+                let workers: u8 = 1 << i;
                 (
                     workers.to_string(),
                     ReplicaAllocation {
                         memory_limit: None,
                         cpu_limit: None,
                         scale: 1,
-                        workers,
+                        workers: workers.into(),
+                        credits_per_hour: 1.into(),
                     },
                 )
             })
@@ -127,6 +132,7 @@ impl Default for ClusterReplicaSizeMap {
                     cpu_limit: None,
                     scale,
                     workers: 1,
+                    credits_per_hour: scale.into(),
                 },
             );
 
@@ -137,6 +143,7 @@ impl Default for ClusterReplicaSizeMap {
                     cpu_limit: None,
                     scale,
                     workers: scale.into(),
+                    credits_per_hour: scale.into(),
                 },
             );
 
@@ -147,6 +154,7 @@ impl Default for ClusterReplicaSizeMap {
                     cpu_limit: None,
                     scale: 1,
                     workers: 8,
+                    credits_per_hour: 1.into(),
                 },
             );
         }
@@ -158,6 +166,7 @@ impl Default for ClusterReplicaSizeMap {
                 cpu_limit: None,
                 scale: 2,
                 workers: 4,
+                credits_per_hour: 2.into(),
             },
         );
         Self(inner)

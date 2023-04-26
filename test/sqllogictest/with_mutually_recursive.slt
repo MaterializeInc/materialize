@@ -332,3 +332,38 @@ SELECT round, COUNT(*) FROM (
 GROUP BY round;
 ----
 0  10
+
+## Regression test for https://github.com/MaterializeInc/materialize/issues/18949
+## Test the situation when a WMR cte has an inner WMR whose body ends with an arrangement.
+query I
+WITH MUTUALLY RECURSIVE
+  cnt (i int) AS (
+    (WITH MUTUALLY RECURSIVE
+       cnt (i int) AS (
+         SELECT 1 AS i
+         UNION
+         SELECT i+1 FROM cnt WHERE i < 3)
+       SELECT i FROM cnt
+    )
+    UNION
+    SELECT i+100 FROM cnt WHERE i < 500)
+SELECT i FROM cnt;
+----
+1
+2
+3
+301
+302
+303
+101
+102
+103
+401
+402
+403
+201
+202
+203
+501
+502
+503

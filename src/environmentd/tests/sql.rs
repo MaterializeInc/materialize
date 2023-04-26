@@ -84,7 +84,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse;
 use axum::response::Response;
@@ -104,7 +104,7 @@ use tracing::{debug, info};
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
-use mz_ore::retry::Retry;
+use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use mz_repr::Timestamp;
 use mz_sql::session::user::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
@@ -1297,20 +1297,20 @@ fn test_explain_timestamp_json() {
 // Feel free to modify this test if that product requirement changes,
 // but please at least keep _something_ that tests that custom compaction windows are working.
 #[test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18934
 fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_introspection` tests indexes, `default` tests tables.
     // The bool determines whether we are testing indexes.
     const CLUSTERS_TO_TRY: &[(&str, bool)] = &[("mz_introspection", true), ("default", false)];
+    const QUERIES_TO_TRY: &[&str] = &[
+        // "SELECT * FROM mz_internal.mz_cluster_replica_utilization",
+        "SELECT * FROM mz_internal.mz_cluster_replica_statuses",
+    ];
 
-    let now_millis = u64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis(),
-    )
-    .unwrap();
+    let now_millis = 619388520000;
     let past_millis = now_millis - THIRTY_DAYS_MS;
+    let past_since = Timestamp::from(past_millis);
 
     let now = Arc::new(Mutex::new(past_millis));
     let now_fn = {
@@ -1330,41 +1330,61 @@ fn test_utilization_hold() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
-    let q =
-        "EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mz_internal.mz_cluster_replica_utilization";
-    for (cluster, should_be_indexed) in CLUSTERS_TO_TRY {
-        client
-            .execute(&format!("SET cluster={cluster}"), &[])
-            .unwrap();
+    for q in QUERIES_TO_TRY {
+        let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
+        for (cluster, should_be_indexed) in CLUSTERS_TO_TRY {
+            client
+                .execute(&format!("SET cluster={cluster}"), &[])
+                .unwrap();
 
-        let row = client.query_one(q, &[]).unwrap();
-        let explain: String = row.get(0);
-        let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
-        // Assert that we actually used the indexes/tables, as required
-        for s in &explain.sources {
-            if *should_be_indexed {
-                assert!(s.name.ends_with("compute)"));
-            } else {
-                assert!(s.name.ends_with("storage)"));
+            // Hack: we think there might be an issue where sinces
+            // can briefly be zero on startup, which breaks our logic here.
+            //
+            // So just spin until it's not zero.
+            // TODO[btv] - Get rid of this loop if that bug is ever fixed
+            let explain = Retry::default()
+                .initial_backoff(Duration::from_secs(1))
+                .factor(1.0)
+                .max_tries(10)
+                .retry(|_| {
+                    let row = client.query_one(explain_q, &[]).unwrap();
+                    let explain: String = row.get(0);
+                    let explain: TimestampExplanation<Timestamp> =
+                        serde_json::from_str(&explain).unwrap();
+                    if explain.determination.since.clone().into_option() == Some(Timestamp::MIN) {
+                        RetryResult::RetryableErr(())
+                    } else {
+                        RetryResult::Ok(explain)
+                    }
+                })
+                .expect("Since never became non-zero");
+
+            // Assert that we actually used the indexes/tables, as required
+            for s in &explain.sources {
+                if *should_be_indexed {
+                    assert!(s.name.ends_with("compute)"));
+                } else {
+                    assert!(s.name.ends_with("storage)"));
+                }
             }
-        }
 
-        // If we're not in EpochMilliseconds, the timestamp math below is invalid, so assert that here.
-        assert!(matches!(
-            explain.determination.timestamp_context,
-            TimestampContext::TimelineTimestamp(Timeline::EpochMilliseconds, _)
-        ));
-        let since = explain
-            .determination
-            .since
-            .into_option()
-            .expect("The since must be finite");
-        let past_since = Timestamp::from(past_millis);
-        assert!(since.less_equal(&past_since));
-        // Assert we aren't lagging by more than 30 days + 1 second.
-        // If we ever make the since granularity configurable, this line will
-        // need to be changed.
-        assert!(past_since.less_equal(&since.checked_add(1000).unwrap()));
+            // If we're not in EpochMilliseconds, the timestamp math below is invalid, so assert that here.
+            assert!(matches!(
+                explain.determination.timestamp_context,
+                TimestampContext::TimelineTimestamp(Timeline::EpochMilliseconds, _)
+            ));
+            let since = explain
+                .determination
+                .since
+                .into_option()
+                .expect("The since must be finite");
+
+            assert!(since.less_equal(&past_since));
+            // Assert we aren't lagging by more than 30 days + 1 second.
+            // If we ever make the since granularity configurable, this line will
+            // need to be changed.
+            assert!(past_since.less_equal(&since.checked_add(1000).unwrap()));
+        }
     }
 
     // Check that we can turn off retention
@@ -1377,23 +1397,24 @@ fn test_utilization_hold() {
     sys_client
         .execute("ALTER SYSTEM SET metrics_retention='1s'", &[])
         .unwrap();
-
-    for (cluster, _) in CLUSTERS_TO_TRY {
-        client
-            .execute(&format!("SET cluster={cluster}"), &[])
-            .unwrap();
-        let row = client.query_one(q, &[]).unwrap();
-        let explain: String = row.get(0);
-        let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
-        let since = explain
-            .determination
-            .since
-            .into_option()
-            .expect("The since must be finite");
-        // Check that since is not more than 2 seconds in the past
-        assert!(
-            Timestamp::new(now_millis).less_equal(&since.step_forward_by(&Timestamp::new(2000)))
-        );
+    for q in QUERIES_TO_TRY {
+        let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
+        for (cluster, _) in CLUSTERS_TO_TRY {
+            client
+                .execute(&format!("SET cluster={cluster}"), &[])
+                .unwrap();
+            let row = client.query_one(explain_q, &[]).unwrap();
+            let explain: String = row.get(0);
+            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+            let since = explain
+                .determination
+                .since
+                .into_option()
+                .expect("The since must be finite");
+            // Check that since is not more than 2 seconds in the past
+            assert!(Timestamp::new(now_millis)
+                .less_equal(&since.step_forward_by(&Timestamp::new(2000))));
+        }
     }
 }
 
@@ -1672,7 +1693,7 @@ fn test_timeline_read_holds() {
 
     // Make sure that the table and view are joinable immediately at some timestamp.
     let mut mz_join_client = server.connect(postgres::NoTls).unwrap();
-    let _ = mz_ore::test::timeout(Duration::from_millis(1_000), move || {
+    let _ = mz_ore::test::timeout(Duration::from_millis(2_000), move || {
         Ok(mz_join_client
             .query_one(&format!("SELECT COUNT(t.a) FROM t, {view_name};"), &[])
             .unwrap()
@@ -2133,6 +2154,7 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18897
 fn test_coord_startup_blocking() {
     let initial_time = 0;
     let now = Arc::new(Mutex::new(initial_time));

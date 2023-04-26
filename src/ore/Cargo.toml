@@ -71,7 +71,7 @@ tokio-test = "0.4.2"
 default = ["workspace-hack"]
 async = ["async-trait", "futures", "openssl", "tokio-openssl", "tokio"]
 bytes_ = ["bytes", "smallvec", "smallvec/const_generics"]
-network = ["async", "bytes", "hyper", "smallvec", "tonic"]
+network = ["async", "bytes", "hyper", "smallvec", "tonic", "tracing"]
 tracing_ = [
   "anyhow",
   "atty",

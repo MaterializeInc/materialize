@@ -73,7 +73,7 @@ mod replica;
 
 pub mod error;
 
-/// Identifer of a compute instance.
+/// Identifier of a compute instance.
 pub type ComputeInstanceId = StorageInstanceId;
 
 /// Identifier of a replica.

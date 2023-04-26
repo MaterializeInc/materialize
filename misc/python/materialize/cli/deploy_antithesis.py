@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-from materialize import mzbuild, spawn
+from materialize import mzbuild, spawn, ui
 
 IMAGES = [
     "antithesis-cp-combined",
@@ -25,7 +25,7 @@ REGISTRY = "us-central1-docker.pkg.dev/molten-verve-216720/materialize-repositor
 
 def main() -> None:
     root = Path(os.environ["MZ_ROOT"])
-    coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
+    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     repo = mzbuild.Repository(root, coverage=coverage)
     deps = repo.resolve_dependencies([repo.images[name] for name in IMAGES])
     deps.acquire()

@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE USER debezium WITH SUPERUSER PASSWORD 'debezium';
-GRANT ALL PRIVILEGES ON DATABASE "postgres" TO debezium;
-GRANT ALL PRIVILEGES ON SCHEMA "public" TO debezium;
+CREATE USER materialize PASSWORD 'materialize';
+ALTER USER materialize REPLICATION;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO materialize;
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;

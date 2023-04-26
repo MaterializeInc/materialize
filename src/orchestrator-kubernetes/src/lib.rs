@@ -85,8 +85,9 @@ use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource, ObjectFieldSelector,
-    Pod, PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec, ResourceRequirements, Secret,
-    Service as K8sService, ServicePort, ServiceSpec,
+    PersistentVolumeClaim, PersistentVolumeClaimSpec, Pod, PodAffinityTerm, PodAntiAffinity,
+    PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort,
+    ServiceSpec, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -133,6 +134,8 @@ pub struct KubernetesOrchestratorConfig {
     /// An AWS external ID prefix to use when making AWS operations on behalf
     /// of the environment.
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
+    /// Whether to use code coverage mode or not. Always false for production.
+    pub coverage: bool,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -680,6 +683,49 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }]
         });
 
+        let env = if self.config.coverage {
+            Some(vec![EnvVar {
+                name: "LLVM_PROFILE_FILE".to_string(),
+                value: Some(format!("/coverage/{}-%p-%9m%c.profraw", self.namespace)),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
+        let volume_mounts = if self.config.coverage {
+            Some(vec![VolumeMount {
+                name: "coverage".to_string(),
+                mount_path: "/coverage".to_string(),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
+        let volume_claim_templates = if self.config.coverage {
+            Some(vec![PersistentVolumeClaim {
+                metadata: ObjectMeta {
+                    name: Some("coverage".to_string()),
+                    ..Default::default()
+                },
+                spec: Some(PersistentVolumeClaimSpec {
+                    access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                    resources: Some(ResourceRequirements {
+                        requests: Some(BTreeMap::from([(
+                            "storage".to_string(),
+                            Quantity("10Gi".to_string()),
+                        )])),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }])
+        } else {
+            None
+        };
+
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -707,6 +753,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         limits: Some(limits),
                         ..Default::default()
                     }),
+                    volume_mounts,
+                    env,
                     ..Default::default()
                 }],
                 node_selector: Some(node_selector),
@@ -750,10 +798,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 replicas: Some(scale.into()),
                 template: pod_template_spec,
                 pod_management_policy: Some("Parallel".to_string()),
+                volume_claim_templates,
                 ..Default::default()
             }),
             status: None,
         };
+
         self.service_api
             .patch(
                 &name,

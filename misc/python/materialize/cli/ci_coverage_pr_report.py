@@ -7,20 +7,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import os
 import re
 import subprocess
-import sys
 from collections import OrderedDict
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import junit_xml
 
 from materialize import ROOT, ci_util
 
-# None value indicates that this line is interesting, but we don't know yet if
-# it can actually be covered. Int values indicate that the line can be covered
-# and how often is has been covered.
+# - None value indicates that this line is interesting, but we don't know yet
+#   if it can actually be covered.
+# - Positive values indicate that the line can be covered and how often is has
+#   been covered in end-to-end tests.
+# - Negative values indicate that the line has only been covered in unit tests.
 Coverage = Dict[str, OrderedDict[int, Optional[int]]]
 SOURCE_RE = re.compile(
     "^/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/(.*$)"
@@ -70,11 +72,24 @@ def find_modified_lines() -> Coverage:
     return coverage
 
 
-def mark_covered_lines(lcov_file: str, coverage: Coverage) -> None:
+unittests_have_run = False
+
+
+def mark_covered_lines(
+    lcov_file: str, coverage: Coverage, unittests: bool = False
+) -> None:
     """
     For a description of the lcov tracing file format, see the bottom of
     https://linux.die.net/man/1/geninfo
     """
+    global unittests_have_run
+    if unittests:
+        unittests_have_run = True
+    else:
+        assert (
+            not unittests_have_run
+        ), "Call mark_covered_lines for unit tests last in order to get correct code coverage reports"
+
     for line in open(lcov_file):
         line = line.strip()
         if not line:
@@ -84,9 +99,12 @@ def mark_covered_lines(lcov_file: str, coverage: Coverage) -> None:
         method, content = tuple(line.strip().split(":", 1))
         # SF:/var/lib/buildkite-agent/builds/buildkite-builders-d43b1b5-i-0193496e7aec9a4e3-1/materialize/coverage/src/transform/src/lib.rs
         if method == "SF":
-            result = SOURCE_RE.search(content)
-            assert result, f"Unexpected file {content}"
-            file = result.group(1)
+            if content.startswith("src/"):  # for unit tests
+                file = content
+            else:
+                result = SOURCE_RE.search(content)
+                assert result, f"Unexpected file {content}"
+                file = result.group(1)
         # DA:111,15524
         # DA:112,0
         # DA:113,15901
@@ -95,41 +113,101 @@ def mark_covered_lines(lcov_file: str, coverage: Coverage) -> None:
             line_nr = int(line_str)
             hit = int(hit_str) if hit_str.isnumeric() else int(float(hit_str))
             if line_nr in coverage[file]:
-                coverage[file][line_nr] = (coverage[file][line_nr] or 0) + hit
+                if unittests:
+                    if not coverage[file][line_nr]:
+                        coverage[file][line_nr] = (coverage[file][line_nr] or 0) - hit
+                else:
+                    coverage[file][line_nr] = (coverage[file][line_nr] or 0) + hit
 
 
 def get_report(coverage: Coverage) -> str:
     """
     Remove uncovered lines in real files and print a git diff, then restore to
-    original state.
+    original state. This is pretty messy, we might want to do it without git if
+    it gets any more complex.
     """
     try:
+        # Remove lines which are only covered in unit tests as sindicated by a
+        # negative line count
         for file, lines in coverage.items():
             with open(file, "r+") as f:
                 content = f.readlines()
                 f.seek(0)
                 for i, line in enumerate(content):
-                    if lines.get(i + 1) != 0:
+                    if (lines.get(i + 1) or 0) < 0:
+                        f.write(line)
+                f.truncate()
+
+        subprocess.run(
+            ["git", "config", "user.email", "coverage@materialize.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Code Coverage"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-a", "-m", "Covered in unit test only"],
+            check=True,
+        )
+        # Add the lines back so they show up with a "." marker
+        subprocess.run(["git", "revert", "--no-commit", "HEAD"], check=True)
+
+        # Remove lines which are not covered at all so they show up with "!" marker
+        for file, lines in coverage.items():
+            with open(file, "r+") as f:
+                content = f.readlines()
+                f.seek(0)
+                for i, line in enumerate(content):
+                    if (lines.get(i + 1) or 0) > 0:
                         f.write(line)
                 f.truncate()
 
         result = subprocess.run(
-            ["git", "diff", "--output-indicator-old=!"], check=True, capture_output=True
+            [
+                "git",
+                "diff",
+                "--output-indicator-old=!",
+                "--output-indicator-new=.",
+                "HEAD",
+            ],
+            check=True,
+            capture_output=True,
         )
         return result.stdout.decode("utf-8").strip()
     finally:
         # Restore the code into its original state
-        subprocess.run(["git", "reset", "--hard", "HEAD"], check=True)
+        subprocess.run(["git", "reset", "--hard", "HEAD~"], check=True)
 
 
-def main(argv: List[str]) -> None:
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="ci-coverage-pr-report",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="""
+ci-coverage-pr-report creates a code coverage report for CI.""",
+    )
+
+    parser.add_argument("--unittests", type=str, help="unit test lcov file")
+    parser.add_argument("tests", nargs="+", help="all other lcov files from test runs")
+    args = parser.parse_args()
+
     result = subprocess.run(["git", "diff"], check=True, capture_output=True)
     output = result.stdout.decode("utf-8").strip()
     assert not output, f"Has to run on clean git state: \n{output}"
 
+    test_cases = []
+
     coverage = find_modified_lines()
-    for lcov_file in argv:
+    for lcov_file in args.tests:
         mark_covered_lines(lcov_file, coverage)
+    if args.unittests:
+        if os.path.isfile(args.unittests):
+            mark_covered_lines(args.unittests, coverage, unittests=True)
+        else:
+            test_case = junit_xml.TestCase("Unit Tests", "Code Coverage")
+            test_case.add_error_info(message="No coverage for unit tests available")
+            test_cases.append(test_case)
     report = get_report(coverage)
 
     test_case = junit_xml.TestCase("Uncovered Lines in Pull Request", "Code Coverage")
@@ -145,11 +223,12 @@ def main(argv: List[str]) -> None:
         test_case.add_error_info(
             message="Full coverage report is available in Buildkite. All changed lines are covered."
         )
-    junit_suite = junit_xml.TestSuite("Code Coverage", [test_case])
+    test_cases.append(test_case)
+    junit_suite = junit_xml.TestSuite("Code Coverage", test_cases)
     junit_report = ROOT / ci_util.junit_report_filename("coverage")
     with junit_report.open("w") as f:
         junit_xml.to_xml_report_file(f, [junit_suite])
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main()

@@ -49,7 +49,6 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::TransactionIsolationLevel;
-use mz_storage_client::types::instances::StorageInstanceId;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
 pub use optimize::OptimizerConfig;
@@ -105,7 +104,7 @@ pub enum Plan {
     DropObjects(DropObjectsPlan),
     EmptyQuery,
     ShowAllVariables,
-    ShowCreate(SendRowsPlan),
+    ShowCreate(ShowCreatePlan),
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
@@ -114,7 +113,6 @@ pub enum Plan {
     AbortTransaction(AbortTransactionPlan),
     Peek(PeekPlan),
     Subscribe(SubscribePlan),
-    SendRows(SendRowsPlan),
     CopyFrom(CopyFromPlan),
     CopyRows(CopyRowsPlan),
     Explain(ExplainPlan),
@@ -213,14 +211,13 @@ impl Plan {
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
                 PlanKind::Peek,
-                PlanKind::SendRows,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
                 PlanKind::ShowAllVariables,
             ],
             StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
             StatementKind::Subscribe => vec![PlanKind::Subscribe],
-            StatementKind::Update => vec![PlanKind::ReadThenWrite, PlanKind::SendRows],
+            StatementKind::Update => vec![PlanKind::ReadThenWrite],
         }
     }
 
@@ -234,7 +231,7 @@ impl Plan {
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
             Plan::CreateSource(_) => "create source",
-            Plan::CreateSources(_) => "create sources",
+            Plan::CreateSources(_) => "create source",
             Plan::CreateSecret(_) => "create secret",
             Plan::CreateSink(_) => "create sink",
             Plan::CreateTable(_) => "create table",
@@ -272,7 +269,6 @@ impl Plan {
             Plan::AbortTransaction(_) => "abort",
             Plan::Peek(_) => "select",
             Plan::Subscribe(_) => "subscribe",
-            Plan::SendRows(_) => "send rows",
             Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
             Plan::Explain(_) => "explain",
@@ -470,7 +466,7 @@ pub enum SourceSinkClusterConfig {
     /// Use an existing cluster.
     Existing {
         /// The ID of the cluster to use.
-        id: StorageInstanceId,
+        id: ClusterId,
     },
     /// Create a new linked storage cluster of the specified size.
     ///
@@ -488,6 +484,17 @@ pub enum SourceSinkClusterConfig {
     /// to the active cluster. This behavior won't be ergonomic until we have
     /// multipurpose clusters though.
     Undefined,
+}
+
+impl SourceSinkClusterConfig {
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists. If
+    /// one doesn't exist, then a new cluster will be created.
+    pub fn cluster_id(&self) -> Option<&ClusterId> {
+        match self {
+            SourceSinkClusterConfig::Existing { id } => Some(id),
+            SourceSinkClusterConfig::Linked { .. } | SourceSinkClusterConfig::Undefined => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -524,8 +531,10 @@ pub struct CreateTablePlan {
 pub struct CreateViewPlan {
     pub name: QualifiedItemName,
     pub view: View,
-    /// The IDs of the objects that this view is replacing, if any.
-    pub replace: Vec<GlobalId>,
+    /// The ID of the object that this view is replacing, if any.
+    pub replace: Option<GlobalId>,
+    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -536,8 +545,10 @@ pub struct CreateViewPlan {
 pub struct CreateMaterializedViewPlan {
     pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
-    /// The IDs of the objects that this view is replacing, if any.
-    pub replace: Vec<GlobalId>,
+    /// The ID of the object that this view is replacing, if any.
+    pub replace: Option<GlobalId>,
+    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<GlobalId>,
     pub if_not_exists: bool,
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -560,7 +571,10 @@ pub struct CreateTypePlan {
 
 #[derive(Debug)]
 pub struct DropObjectsPlan {
-    pub ids: Vec<ObjectId>,
+    /// The IDs of only the objects directly referenced in the `DROP` statement.
+    pub referenced_ids: Vec<ObjectId>,
+    /// All object IDs to drop. Includes `referenced_ids` and all descendants.
+    pub drop_ids: Vec<ObjectId>,
     /// The type of object that was dropped explicitly in the DROP statement. `ids` may contain
     /// objects of different types due to CASCADE.
     pub object_type: ObjectType,
@@ -631,8 +645,9 @@ pub enum SubscribeFrom {
 }
 
 #[derive(Debug)]
-pub struct SendRowsPlan {
-    pub rows: Vec<Row>,
+pub struct ShowCreatePlan {
+    pub id: GlobalId,
+    pub row: Row,
 }
 
 #[derive(Debug)]

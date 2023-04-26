@@ -1,7 +1,7 @@
 [package]
 name = "mz-persist-client"
 description = "Client for Materialize pTVC durability system"
-version = "0.52.0-dev"
+version = "0.53.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -38,7 +38,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures = "0.3.25"
 futures-util = "0.3"
 mz-build-info = { path = "../build-info" }
-mz-ore = { path = "../ore", features = ["bytes_", "tracing_"] }
+mz-ore = { path = "../ore", features = ["bytes_", "test", "tracing_"] }
 mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }

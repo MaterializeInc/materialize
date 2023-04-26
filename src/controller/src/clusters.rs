@@ -17,7 +17,6 @@ use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
-use mz_ore::halt;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -34,7 +33,9 @@ use mz_orchestrator::{
     CpuLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
+use mz_ore::halt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
 
 use crate::Controller;
@@ -79,6 +80,26 @@ pub struct ReplicaAllocation {
     pub scale: u16,
     /// The number of worker threads in the replica.
     pub workers: usize,
+    /// The number of credits per hour that the replica consumes.
+    #[serde(deserialize_with = "mz_repr::adt::numeric::str_serde::deserialize")]
+    pub credits_per_hour: Numeric,
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+// We test this particularly because we deserialize values from strings.
+fn test_replica_allocation_deserialization() {
+    let data = r#"
+        {
+            "cpu_limit": 1.0,
+            "memory_limit": "10GiB",
+            "scale": 16,
+            "workers": 1,
+            "credits_per_hour": "16"
+        }"#;
+
+    let _: ReplicaAllocation = serde_json::from_str(data)
+        .expect("deserialization from JSON succeeds for ReplicaAllocation");
 }
 
 /// Configures the location of a cluster replica.

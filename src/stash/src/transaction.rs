@@ -31,6 +31,17 @@ use crate::{
     StashError, Timestamp,
 };
 
+// The limit AFTER which to split an update batch (that is, we will ship an update that
+// exceeds this number, but then start another batch).
+//
+// Cockroach's default limit for sql.conn.max_read_buffer_message_size is 16MiB
+// (https://github.com/cockroachdb/cockroach/blob/7e4e0b195cd61da6cd7a719a5b9aa2e84f68d475/pkg/sql/pgwire/pgwirebase/encoding.go#L50).
+// Use a number well under that but still big ish that most things won't ever need to
+// batch. Because we are only estimating the value size and ignoring various other
+// things that contribute to the total pgwire message size, having a 14MiB headspace
+// seems safe here.
+pub const INSERT_BATCH_SPLIT_SIZE: usize = 2 * 1024 * 1024;
+
 impl Stash {
     pub async fn with_transaction<F, T>(&mut self, f: F) -> Result<T, StashError>
     where
@@ -713,17 +724,65 @@ impl<'a> Transaction<'a> {
             Ok(upper)
         };
 
-        let mut args: Vec<&'_ (dyn ToSql + Sync)> = Vec::with_capacity(1 + entries.len() * 4);
-        // All rows use the collection id, so hard code it as the first.
-        args.push(&collection_id);
-        for ((key, value), time, diff) in entries {
-            args.push(key);
-            args.push(value);
-            args.push(time);
-            args.push(diff);
+        /// Returns the estimated number of bytes v would take when encoded using ToSql. This is
+        /// meant to be a fast estimate that accounts for things that could be possibly large, and
+        /// isn't too worried about missing various single bytes.
+        fn estimate_json_value_size(v: &Value) -> usize {
+            match v {
+                Value::Null => 4,    // "null"
+                Value::Bool(_) => 5, // "false"
+                Value::Number(_) => 8,
+                Value::String(v) => v.len() + 2, // string bytes + double quotes; will be incorrect for strings needing escaping
+                Value::Array(v) => {
+                    let mut s = 2; // "[]"
+                    for element in v {
+                        s += estimate_json_value_size(element);
+                        s += 2; // ", "
+                    }
+                    s
+                }
+                Value::Object(v) => {
+                    let mut s = 2; // "{}"
+                    for (key, val) in v {
+                        s += key.len() + 2;
+                        s += 2; // ": "
+                        s += estimate_json_value_size(val);
+                        s += 2; // ", "
+                    }
+                    s
+                }
+            }
         }
-        let stmt = self.stmts.update(self.client, entries.len()).await?;
-        let insert_fut = self.client.execute(&stmt, &args).map_err(|err| err.into());
+
+        let insert_fut = async {
+            let mut entries = entries.iter();
+            loop {
+                let mut args: Vec<&'_ (dyn ToSql + Sync)> = Vec::new();
+                // All rows use the collection id, so hard code it as the first.
+                args.push(&collection_id);
+                let mut batch_size = 0;
+                let mut estimated_json_size = 0;
+                // Accumulate into a batch until the size limit is exceeded or there are no more
+                // entries.
+                while let Some(((key, value), time, diff)) = entries.next() {
+                    estimated_json_size += estimate_json_value_size(key);
+                    estimated_json_size += estimate_json_value_size(value);
+                    args.push(key);
+                    args.push(value);
+                    args.push(time);
+                    args.push(diff);
+                    batch_size += 1;
+                    if estimated_json_size > INSERT_BATCH_SPLIT_SIZE {
+                        break;
+                    }
+                }
+                if batch_size == 0 {
+                    return Ok(());
+                }
+                let stmt = self.stmts.update(self.client, batch_size).await?;
+                self.client.execute(&stmt, &args).await?;
+            }
+        };
         try_join(upper_fut, insert_fut).await?;
         Ok(())
     }

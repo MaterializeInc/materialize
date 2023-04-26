@@ -25,7 +25,10 @@ use mz_expr::{
     MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::soft_panic_or_log;
+use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::explain::text::text_string_at;
+use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::{Diff, GlobalId, Row};
 
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -381,6 +384,25 @@ impl<T> Plan<T> {
             .chain(second)
             .chain(rest.into_iter().flatten())
             .chain(last)
+    }
+}
+
+impl Plan {
+    /// Pretty-print this [Plan] to a string.
+    pub fn pretty(&self) -> String {
+        let config = ExplainConfig::default();
+        self.explain(&config, None)
+    }
+
+    /// Pretty-print this [Plan] to a string using a custom
+    /// [ExplainConfig] and an optionally provided [ExprHumanizer].
+    pub fn explain(&self, config: &ExplainConfig, humanizer: Option<&dyn ExprHumanizer>) -> String {
+        text_string_at(self, || PlanRenderingContext {
+            indent: Indent::default(),
+            humanizer: humanizer.unwrap_or(&DummyHumanizer),
+            annotations: BTreeMap::default(),
+            config,
+        })
     }
 }
 
@@ -1093,11 +1115,29 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                         let forms = AvailableCollections::new_raw();
 
-                        lir_value = Plan::ArrangeBy {
-                            input: Box::new(lir_value),
-                            forms,
-                            input_key,
-                            input_mfp,
+                        // We just want to insert an `ArrangeBy` to form an unarranged collection,
+                        // but there is a complication: We shouldn't break the invariant (created by
+                        // `NormalizeLets`, and relied upon by the rendering) that there isn't
+                        // anything between two `LetRec`s. So if `lir_value` is itself a `LetRec`,
+                        // then we insert the `ArrangeBy` on the `body` of the inner `LetRec`,
+                        // instead of on top of the inner `LetRec`.
+                        lir_value = match lir_value {
+                            Plan::LetRec { ids, values, body } => Plan::LetRec {
+                                ids,
+                                values,
+                                body: Box::new(Plan::ArrangeBy {
+                                    input: body,
+                                    forms,
+                                    input_key,
+                                    input_mfp,
+                                }),
+                            },
+                            lir_value => Plan::ArrangeBy {
+                                input: Box::new(lir_value),
+                                forms,
+                                input_key,
+                                input_mfp,
+                            },
                         };
                         v_keys.raw = true;
                     }

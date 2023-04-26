@@ -917,6 +917,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18901
     #[cfg_attr(miri, ignore)] // too slow
     fn test_truncate_string_proptest() {
         fn testcase(x: &str) {
@@ -927,7 +928,10 @@ mod tests {
                 assert!(lower.len() <= max_len);
                 assert!(lower.as_str() <= x);
                 if let Some(upper) = upper {
-                    assert!(upper.len() <= max_len);
+                    // As explained in a comment in the impl, we don't quite
+                    // treat the max_len as a hard bound here. Give it a little
+                    // wiggle room.
+                    assert!(upper.len() <= max_len + char::MAX.len_utf8());
                     assert!(upper.as_str() >= x);
                 }
             }

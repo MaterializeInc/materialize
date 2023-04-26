@@ -24,6 +24,7 @@ use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
+use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 
 use crate::ast::Ident;
@@ -317,7 +318,7 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     safe: true,
 };
 
-const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
+pub const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_aws_privatelink_connections"),
     value: &0,
     description: "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
@@ -325,7 +326,7 @@ const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_TABLES: ServerVar<u32> = ServerVar {
+pub const MAX_TABLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_tables"),
     value: &25,
     description: "The maximum number of tables in the region, across all schemas (Materialize).",
@@ -333,7 +334,7 @@ const MAX_TABLES: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_SOURCES: ServerVar<u32> = ServerVar {
+pub const MAX_SOURCES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sources"),
     value: &25,
     description: "The maximum number of sources in the region, across all schemas (Materialize).",
@@ -341,7 +342,7 @@ const MAX_SOURCES: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_SINKS: ServerVar<u32> = ServerVar {
+pub const MAX_SINKS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sinks"),
     value: &25,
     description: "The maximum number of sinks in the region, across all schemas (Materialize).",
@@ -349,7 +350,7 @@ const MAX_SINKS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
+pub const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_materialized_views"),
     value: &100,
     description:
@@ -358,7 +359,7 @@ const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
+pub const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_clusters"),
     value: &10,
     description: "The maximum number of clusters in the region (Materialize).",
@@ -366,7 +367,7 @@ const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
+pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_replicas_per_cluster"),
     value: &5,
     description: "The maximum number of replicas of a single cluster (Materialize).",
@@ -374,7 +375,18 @@ const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_DATABASES: ServerVar<u32> = ServerVar {
+static DEFAULT_MAX_CREDIT_CONSUMPTION_RATE: Lazy<Numeric> = Lazy::new(|| 1024.into());
+pub static MAX_CREDIT_CONSUMPTION_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
+    ServerVar {
+    name: UncasedStr::new("max_credit_consumption_rate"),
+    value: &DEFAULT_MAX_CREDIT_CONSUMPTION_RATE,
+    description: "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize).",
+    internal: false,
+    safe: true,
+}
+});
+
+pub const MAX_DATABASES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_databases"),
     value: &1000,
     description: "The maximum number of databases in the region (Materialize).",
@@ -382,7 +394,7 @@ const MAX_DATABASES: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
+pub const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_schemas_per_database"),
     value: &1000,
     description: "The maximum number of schemas in a database (Materialize).",
@@ -390,7 +402,7 @@ const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
+pub const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_objects_per_schema"),
     value: &1000,
     description: "The maximum number of objects in a schema (Materialize).",
@@ -398,7 +410,7 @@ const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_SECRETS: ServerVar<u32> = ServerVar {
+pub const MAX_SECRETS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_secrets"),
     value: &100,
     description: "The maximum number of secrets in the region, across all schemas (Materialize).",
@@ -406,7 +418,7 @@ const MAX_SECRETS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
-const MAX_ROLES: ServerVar<u32> = ServerVar {
+pub const MAX_ROLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_roles"),
     value: &1000,
     description: "The maximum number of roles in the region (Materialize).",
@@ -634,6 +646,17 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Boolean flag indicating whether to enable syncing from
+/// LaunchDarkly. Can be turned off as an emergency measure to still
+/// be able to alter parameters while LD is broken.
+pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_launchdarkly"),
+    value: &true,
+    description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled.
 static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_with_mutually_recursive"),
@@ -649,6 +672,15 @@ static ENABLE_MONOTONIC_ONESHOT_SELECTS: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Feature flag indicating whether monotonic evaluation of one-shot SELECT queries \
                   is enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// Feature flag indicating whether `FORMAT JSON` sources are enabled.
+static ENABLE_FORMAT_JSON: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_format_json"),
+    value: &false,
+    description: "Feature flag indicating whether `FORMAT JSON` sources are enabled (Materialize).",
     internal: true,
     safe: true,
 };
@@ -1448,6 +1480,7 @@ impl Default for SystemVars {
             .with_var(&MAX_MATERIALIZED_VIEWS)
             .with_var(&MAX_CLUSTERS)
             .with_var(&MAX_REPLICAS_PER_CLUSTER)
+            .with_var(&MAX_CREDIT_CONSUMPTION_RATE)
             .with_var(&MAX_DATABASES)
             .with_var(&MAX_SCHEMAS_PER_DATABASE)
             .with_var(&MAX_OBJECTS_PER_SCHEMA)
@@ -1471,6 +1504,7 @@ impl Default for SystemVars {
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
+            .with_var(&ENABLE_FORMAT_JSON)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
@@ -1478,6 +1512,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
+            .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
     }
@@ -1492,8 +1527,8 @@ impl SystemVars {
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
     where
-        V: Value + Debug + Eq + Clone + 'static,
-        V::Owned: Debug + Eq + Send + Clone + Sync,
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
     {
         self.vars.insert(var.name, Box::new(SystemVar::new(var)));
         self
@@ -1501,8 +1536,8 @@ impl SystemVars {
 
     fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
     where
-        V: Value + Debug + Eq + Clone + 'static,
-        V::Owned: Debug + Eq + Send + Clone + Sync,
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
     {
         let var = self
             .vars
@@ -1649,6 +1684,11 @@ impl SystemVars {
     /// Returns the value of the `max_replicas_per_cluster` configuration parameter.
     pub fn max_replicas_per_cluster(&self) -> u32 {
         *self.expect_value(&MAX_REPLICAS_PER_CLUSTER)
+    }
+
+    /// Returns the value of the `max_credit_consumption_rate` configuration parameter.
+    pub fn max_credit_consumption_rate(&self) -> Numeric {
+        *self.expect_value(&MAX_CREDIT_CONSUMPTION_RATE)
     }
 
     /// Returns the value of the `max_databases` configuration parameter.
@@ -1801,6 +1841,20 @@ impl SystemVars {
     /// Returns the `enable_monotonic_oneshot_selects` configuration parameter.
     pub fn enable_monotonic_oneshot_selects(&self) -> bool {
         *self.expect_value(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
+    }
+
+    /// Returns the `enable_format_json` configuration parameter.
+    pub fn enable_format_json(&self) -> bool {
+        *self.expect_value(&ENABLE_FORMAT_JSON)
+    }
+
+    /// Sets the `enable_format_json` configuration parameter.
+    pub fn set_enable_format_json(&mut self, value: bool) -> bool {
+        self.vars
+            .get_mut(ENABLE_FORMAT_JSON.name)
+            .expect("var known to exist")
+            .set(VarInput::Flat(value.format().as_str()))
+            .expect("valid parameter value")
     }
 
     /// Returns the `enable_ld_rbac_checks` configuration parameter.
@@ -1956,7 +2010,7 @@ where
 
 impl<V> SystemVar<V>
 where
-    V: Value + fmt::Debug + Eq + ?Sized + 'static,
+    V: Value + fmt::Debug + PartialEq + ?Sized + 'static,
     V::Owned: fmt::Debug,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
@@ -1980,7 +2034,7 @@ where
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + fmt::Debug + Eq + ?Sized + 'static,
+    V: Value + fmt::Debug + PartialEq + ?Sized + 'static,
     V::Owned: fmt::Debug,
 {
     fn name(&self) -> &'static str {
@@ -2010,7 +2064,7 @@ where
 
 impl<V> VarMut for SystemVar<V>
 where
-    V: Value + fmt::Debug + Eq + 'static,
+    V: Value + fmt::Debug + PartialEq + 'static,
     V::Owned: fmt::Debug + Clone + Send + Sync,
 {
     fn as_var(&self) -> &dyn Var {
@@ -2302,6 +2356,31 @@ impl Value for usize {
 
     fn format(&self) -> String {
         self.to_string()
+    }
+}
+
+impl Value for Numeric {
+    const TYPE_NAME: &'static str = "numeric";
+
+    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+        let s = extract_single_value(input)?;
+        let n: Numeric = s.parse().map_err(|_| ())?;
+        // TODO(jkosh44) This is a hacky way of of imposing validations on Numerics. Ideally this type
+        //  of validation should be specific to the variable that requires it, not all Numerics.
+        //  Additionally, it should return an InvalidParameterValue error, but this eventually gets
+        //  turned into an InvalidParameterType error. Unfortunately, SystemVars has no way of doing
+        //  this kind of validation.
+        // NaN and negatives are not valid values. Positive infinity is allowed because it's useful
+        // to signify that there is no limit.
+        if n.is_nan() || n.is_negative() {
+            Err(())
+        } else {
+            Ok(n)
+        }
+    }
+
+    fn format(&self) -> String {
+        self.to_standard_notation_string()
     }
 }
 

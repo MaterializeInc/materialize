@@ -126,9 +126,10 @@ pub enum AdapterError {
     /// A query tried to create more resources than is allowed in the system configuration.
     ResourceExhaustion {
         resource_type: String,
-        limit: u32,
-        current_amount: usize,
-        new_instances: i32,
+        limit_name: String,
+        desired: String,
+        limit: String,
+        current: String,
     },
     /// Result size of a query is too large.
     ResultSize(String),
@@ -234,6 +235,11 @@ impl AdapterError {
                     ),
                 }
             )),
+            AdapterError::SourceOrSinkSizeRequired { .. } => Some(
+                "Either specify the cluster that will maintain this object via IN CLUSTER or \
+                specify size via SIZE option."
+                    .into(),
+            ),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -316,6 +322,9 @@ impl AdapterError {
                  selection, use `RESET cluster_replica`."
                     .into(),
             ),
+            AdapterError::ResourceExhaustion { resource_type, .. } => Some(format!(
+                "Drop an existing {resource_type} or contact sales to request a limit increase."
+            )),
             AdapterError::StatementTimeout => Some(
                 "Consider increasing the maximum allowed statement duration for this session by \
                  setting the statement_timeout session variable. For example, `SET \
@@ -380,7 +389,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "unknown source size {size}")
             }
             AdapterError::SourceOrSinkSizeRequired { .. } => {
-                write!(f, "size option is required")
+                write!(f, "must specify either cluster or size option")
             }
             AdapterError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")
@@ -430,15 +439,14 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ResourceExhaustion {
                 resource_type,
+                limit_name,
+                desired,
                 limit,
-                current_amount,
-                new_instances,
+                current,
             } => {
                 write!(
                     f,
-                    "{resource_type} resource limit of {limit} cannot be exceeded. \
-                    Current amount is {current_amount} instances, tried to create \
-                    {new_instances} new instances."
+                    "creating {resource_type} would violate {limit_name} limit (desired: {desired}, limit: {limit}, current: {current})"
                 )
             }
             AdapterError::ResultSize(e) => write!(f, "{e}"),

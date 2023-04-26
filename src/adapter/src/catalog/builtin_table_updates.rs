@@ -1144,6 +1144,7 @@ impl CatalogState {
                         cpu_limit,
                         scale,
                         workers,
+                        credits_per_hour,
                     },
                 )| {
                     // Just invent something when the limits are `None`,
@@ -1159,6 +1160,7 @@ impl CatalogState {
                         memory_bytes.into(),
                         // TODO(guswynn): disk size will be filled in later.
                         Datum::Null,
+                        (*credits_per_hour).into(),
                     ]);
                     BuiltinTableUpdate { id, row, diff: 1 }
                 },

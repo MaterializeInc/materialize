@@ -181,6 +181,7 @@ where
     let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
 
     builder.build(move |_caps| {
+        let name = name.to_owned();
         // Acquire an activator to reschedule the operator when it has unfinished work.
         let activations = scope.activations();
         let activator = Activator::new(&operator_info.address[..], activations);
@@ -207,6 +208,7 @@ where
             while !pending_work.is_empty() && !yield_fn(start_time, work) {
                 let done = pending_work.front_mut().unwrap().do_work(
                     &mut work,
+                    &name,
                     start_time,
                     &yield_fn,
                     &until,
@@ -242,6 +244,7 @@ impl PendingWork {
     fn do_work<P, YFn>(
         &mut self,
         work: &mut usize,
+        name: &str,
         start_time: Instant,
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
@@ -254,6 +257,7 @@ impl PendingWork {
         P: Push<Bundle<Timestamp, (Result<Row, DataflowError>, Timestamp, Diff)>>,
         YFn: Fn(Instant, usize) -> bool,
     {
+        let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit().cloned();
         while let Some(((key, val), time, diff)) = self.fetched_part.next() {
             if until.less_equal(&time) {
                 continue;
@@ -271,6 +275,12 @@ impl PendingWork {
                             |time| !until.less_equal(time),
                             row_builder,
                         ) {
+                            if let Some(key) = is_filter_pushdown_audit {
+                                // Ideally we'd be able to include the part stats here, but that
+                                // would require us to exchange them around. It's unclear if that's
+                                // worth it for work that's already known to be unnecessary.
+                                panic!("persist filter pushdown correctness violation! {} {} val={:?} mfp={:?}", name, key, result, map_filter_project);
+                            }
                             match result {
                                 Ok((row, time, diff)) => {
                                     // Additional `until` filtering due to temporal filters.

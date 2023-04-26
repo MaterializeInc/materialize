@@ -30,11 +30,12 @@ use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
-    ExpiryMetrics, HollowBatch, Since, StateCollections, TypedState, Upper,
+    ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState, Upper,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
+use crate::internal::watch::StateWatch;
 use crate::{PersistConfig, ShardId};
 
 /// An applier of persist commands.
@@ -57,7 +58,7 @@ pub struct Applier<K, V, T, D> {
     //
     // NB: This is very intentionally not pub(crate) so that it's easy to reason
     //     very locally about the duration of locks.
-    state: LockingTypedState<K, V, T, D>,
+    state: Arc<LockingTypedState<K, V, T, D>>,
 }
 
 // Impl Clone regardless of the type params.
@@ -69,7 +70,7 @@ impl<K, V, T: Clone, D> Clone for Applier<K, V, T, D> {
             shard_metrics: Arc::clone(&self.shard_metrics),
             state_versions: Arc::clone(&self.state_versions),
             shard_id: self.shard_id,
-            state: self.state.clone(),
+            state: Arc::clone(&self.state),
         }
     }
 }
@@ -104,6 +105,11 @@ where
             shard_id,
             state,
         })
+    }
+
+    /// Returns a new [StateWatch] for changes to this Applier's State.
+    pub fn watch(&self) -> StateWatch<K, V, T, D> {
+        StateWatch::new(Arc::clone(&self.state), Arc::clone(&self.metrics))
     }
 
     /// Fetches the latest state from Consensus and passes its `upper` to the provided closure.
@@ -200,10 +206,7 @@ where
             })
     }
 
-    pub fn snapshot(
-        &self,
-        as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<HollowBatch<T>>, Upper<T>>, Since<T>> {
+    pub fn snapshot(&self, as_of: &Antichain<T>) -> Result<Vec<HollowBatch<T>>, SnapshotErr<T>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state.snapshot(as_of)
@@ -217,7 +220,7 @@ where
             })
     }
 
-    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Option<HollowBatch<T>> {
+    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Result<HollowBatch<T>, SeqNo> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state.next_listen_batch(frontier)

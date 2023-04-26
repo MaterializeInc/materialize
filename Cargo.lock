@@ -1165,12 +1165,9 @@ dependencies = [
 
 [[package]]
 name = "connection-string"
-version = "0.1.13"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b97faeec45f49581c458f8bf81992c5e3ec17d82cda99f59d3cea14eff62698d"
-dependencies = [
- "wasm-bindgen",
-]
+checksum = "510ca239cf13b7f8d16a2b48f263de7b4f8c566f0af58d901031473c76afb1e3"
 
 [[package]]
 name = "console"
@@ -1923,22 +1920,22 @@ dependencies = [
 
 [[package]]
 name = "enumflags2"
-version = "0.7.1"
+version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8672257d642ffdd235f6e9c723c2326ac1253c8f3c022e7cfd2e57da55b1131"
+checksum = "c041f5090df68b32bcd905365fd51769c8b9d553fe87fde0b683534f10c01bd2"
 dependencies = [
  "enumflags2_derive",
 ]
 
 [[package]]
 name = "enumflags2_derive"
-version = "0.7.0"
+version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33526f770a27828ce7c2792fdb7cb240220237e0ff12933ed6c23957fc5dd7cf"
+checksum = "5e9a1f9f7d83e59740248a6e14ecf93929ade55027844dfcea78beafccc15745"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 2.0.12",
 ]
 
 [[package]]
@@ -2182,9 +2179,9 @@ dependencies = [
 
 [[package]]
 name = "fs_extra"
-version = "1.2.0"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2022715d62ab30faffd124d40b76f4134a550a87792276512b18d63272333394"
+checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "funty"
@@ -3626,7 +3623,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.52.0-dev"
+version = "0.53.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3764,6 +3761,7 @@ dependencies = [
  "once_cell",
  "regex",
  "serde",
+ "serde_json",
  "timely",
  "tokio",
  "tokio-stream",
@@ -3774,7 +3772,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.52.0-dev"
+version = "0.53.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4280,7 +4278,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.52.0-dev"
+version = "0.53.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4573,11 +4571,12 @@ name = "mz-rocksdb"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "itertools",
  "mz-ore",
- "mz-persist-types",
  "prometheus",
  "rocksdb",
+ "serde",
  "tempfile",
  "thiserror",
  "tokio",
@@ -4865,6 +4864,7 @@ dependencies = [
  "globset",
  "http",
  "humantime",
+ "indexmap",
  "itertools",
  "maplit",
  "mz-avro",
@@ -4886,6 +4886,7 @@ dependencies = [
  "mz-pid-file",
  "mz-postgres-util",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-service",
  "mz-storage-client",
@@ -7330,9 +7331,9 @@ dependencies = [
 
 [[package]]
 name = "tiberius"
-version = "0.11.3"
+version = "0.11.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "348c8abe373536f3b08b75794b8d0588ecaad3ab7e5618b25eee2b6bfb8e89e8"
+checksum = "66303a42b7c5daffb95c10cd8f3007a9c29b3e90128cf42b3738f58102aa2516"
 dependencies = [
  "async-trait",
  "asynchronous-codec",

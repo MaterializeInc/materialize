@@ -725,6 +725,101 @@ INSERT INTO t4 VALUES
     (4, 3),
     (9, 10);
 
+# Test join using aliases
+# Adapted from: https://github.com/postgres/postgres/blob/master/src/test/regress/sql/join.sql
+
+query T
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f2 = 1;
+----
+
+query III colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE t1.f1 = 3;
+----
+f1  f2  f2
+3   4   4
+
+query III colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x;
+----
+f1  f2  f2
+3   4   4
+
+query II colnames
+SELECT * FROM t1 JOIN t2 USING (f1, f2) AS x;
+----
+f1  f2
+3   4
+
+query II colnames
+SELECT * FROM (SELECT x.f2 AS f3 FROM t1 JOIN t2 USING (f2) AS x) t5 JOIN t3 USING (f3) AS x;
+----
+f3  f1
+4   3
+
+query error table name "x" specified more than once
+SELECT * FROM t1 JOIN t2 USING (f1) AS x JOIN t3 USING (f1) AS x;
+
+query IIII colnames
+SELECT * FROM t1 JOIN t2 USING (f1) AS x JOIN t3 USING (f1) AS y;
+----
+f1  f2  f2  f3
+3   4   4   4
+
+query error column "t1.f1" does not exist
+SELECT * FROM (t1 JOIN t2 USING (f1)) AS x WHERE t1.f1 = 1;
+
+query error column "x.f5" does not exist
+SELECT * FROM t1 JOIN t2 USING (f1) AS x WHERE x.f5 = 'one';
+
+query error column "x.f4" does not exist
+SELECT * FROM (t3 JOIN t4 USING (f3) AS x) AS xx WHERE x.f4 = 1;
+
+query error table name "a1" specified more than once
+SELECT * FROM t1 a1 JOIN t2 a2 USING (f1) AS a1
+
+query I colnames
+SELECT x.* FROM t3 JOIN t4 USING (f3) AS x WHERE t3.f3 = 4;
+----
+f3
+4
+
+query II colnames
+SELECT x.* FROM t1 JOIN t2 USING (f1, f2) AS x;
+----
+f1  f2
+3   4
+
+query T colnames
+SELECT ROW(x.*) FROM t1 JOIN t2 USING (f1) AS x;
+----
+row
+("(3)")
+
+statement ok
+CREATE VIEW v1 AS SELECT x.* FROM t1 JOIN t2 USING (f1) AS x WHERE x.f1 = 3;
+
+query T colnames
+SELECT * FROM v1;
+----
+f1
+3
+
+# Ensure the output from `SHOW CREATE VIEW` contains a correctly-formed `AS` part
+
+mode standard
+
+query TT
+SHOW CREATE VIEW v1;
+----
+materialize.public.v1
+CREATE VIEW "materialize"."public"."v1" AS SELECT "x".* FROM "materialize"."public"."t1" JOIN "materialize"."public"."t2" USING ("f1") AS "x" WHERE "x"."f1" = 3
+
+mode cockroach
+
+statement ok
+DROP VIEW v1;
+
+
 # Left
 
 query TTTTTT

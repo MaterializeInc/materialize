@@ -63,7 +63,7 @@ impl Coordinator {
         tx.set_allowed(responses);
 
         let session_catalog = self.catalog.for_session(&session);
-        if let Err(e) = rbac::check_plan(&session_catalog, &session, &plan) {
+        if let Err(e) = rbac::check_plan(&session_catalog, &session, &plan, &depends_on) {
             return tx.send(Err(e), session);
         }
 
@@ -241,8 +241,8 @@ impl Coordinator {
                     session,
                 );
             }
-            Plan::ShowCreate(plan) | Plan::SendRows(plan) => {
-                tx.send(Ok(send_immediate_rows(plan.rows)), session);
+            Plan::ShowCreate(plan) => {
+                tx.send(Ok(send_immediate_rows(vec![plan.row])), session);
             }
             Plan::CopyFrom(plan) => {
                 tx.send(

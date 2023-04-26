@@ -26,7 +26,9 @@ _new&lowbar;owner_ | The role name you want to set as the new owner.
 ## Details
 
 You must be a member of the new owner role to alter the ownership of an object.
-
+You cannot alter the owner of an index. If you try, it will return successfully with a warning, but
+will not actually change the owner of the index. This is for backwards compatibility reasons. The
+index owner is always kept in-sync with the owner of the underlying relation.
 
 ## Examples
 

@@ -72,7 +72,7 @@ pervasively throughout Cargo, and eventually you get used to it. (It's also the
 POSIX-blessed syntax for indicating that you want option parsing to stop, so you
 might be familiar with it from other command-line tools.)
 
-Without `--nocapture`, `println!()` and `dbg!()` output from tests can go
+Without `--nocapture`, `println!()` and `dbg!()`, output from tests can go
 missing, making debugging a very frustrating experience.
 
 The second argument worth special mention is the filter argument, which only
