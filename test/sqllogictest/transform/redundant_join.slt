@@ -144,7 +144,8 @@ Explained Query:
       Project (#2) // { arity: 1 }
         Get l1 // { arity: 3 }
       Project (#1) // { arity: 1 }
-        Get l0 // { arity: 2 }
+        Map (42) // { arity: 2 }
+          Get l0 // { arity: 1 }
   With Mutually Recursive
     cte l1 =
       Distinct group_by=[#0..=#2] // { arity: 3 }
@@ -153,17 +154,16 @@ Explained Query:
             Union // { arity: 3 }
               Get l1 // { arity: 3 }
               Project (#0, #0, #0) // { arity: 3 }
-                Get l0 // { arity: 2 }
+                Get l0 // { arity: 1 }
           Join on=(#2 = (#0 % 2)) type=differential // { arity: 3 }
             implementation
-              %0:t2[(#0 % 2)]K » %1:l0[#0]K
+              %1:l0[#0]UK » %0:t2[(#0 % 2)]K
             ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
               Get materialize.public.t2 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Get l0 // { arity: 2 }
+              Get l0 // { arity: 1 }
     cte l0 =
-      Distinct group_by=[(#0 % 2), 42] // { arity: 2 }
+      Distinct group_by=[(#0 % 2)] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Get materialize.public.t2 // { arity: 2 }
 
