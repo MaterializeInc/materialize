@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use itertools::Itertools;
-use mz_expr::{compare_columns, ColumnOrder};
+use mz_expr::compare_columns;
 use mz_ore::now::EpochMillis;
 use mz_sql::plan::SubscribeOutput;
 use timely::progress::Antichain;
@@ -56,9 +56,6 @@ pub struct ActiveSubscribe {
     /// How to modify output
     pub output: SubscribeOutput,
 }
-
-static UPSERT: Datum = Datum::String("upsert");
-static DELETE: Datum = Datum::String("delete");
 
 impl ActiveSubscribe {
     pub(crate) fn initialize(&self) {
@@ -126,22 +123,14 @@ impl ActiveSubscribe {
                                     })
                                 });
                             }
-                            SubscribeOutput::EnvelopeUpsert { key_indices } => {
+                            SubscribeOutput::EnvelopeUpsert { order_by_keys } => {
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
                                 let mut right_datum_vec = mz_repr::DatumVec::new();
-                                let order_by = &key_indices
-                                    .iter()
-                                    .map(|idx| ColumnOrder {
-                                        column: *idx,
-                                        desc: false,
-                                        nulls_last: true,
-                                    })
-                                    .collect_vec();
                                 rows.sort_by(|(left_time, left_row, left_diff), (right_time, right_row, right_diff)| {
                                     left_time.cmp(right_time).then_with(|| {
                                         let left_datums = left_datum_vec.borrow_with(left_row);
                                         let right_datums = right_datum_vec.borrow_with(right_row);
-                                        compare_columns(order_by, &left_datums, &right_datums, || {
+                                        compare_columns(order_by_keys, &left_datums, &right_datums, || {
                                             left_row.cmp(right_row).then(left_diff.cmp(right_diff))
                                         })
                                     })
@@ -157,49 +146,51 @@ impl ActiveSubscribe {
                                             let right_datums = right_datum_vec.borrow_with(&row.1);
                                             start.0 == row.0
                                                 && compare_columns(
-                                                    order_by,
+                                                    order_by_keys,
                                                     &left_datums,
                                                     &right_datums,
                                                     || Ordering::Equal,
                                                 ) == Ordering::Equal
                                         }));
                                     let mut saw_new_row = false;
-                                    for (t, r, d) in group {
+                                    let mut total_negative_multiplicity = 0;
+                                    for (time, row, diff) in group {
                                         // We don't have to consider (k, v, -1), (k, v, +1) because
                                         // the rows are already consolidated. For a key, if all we
                                         // see is retractions we generate (k, null), otherwise we
                                         // produce all values that k can take. If there are multiple
                                         // live values for a given key it's impossible for a client
                                         // to figure out when they are all deleted with ENVELOPE UPSERT.
-                                        if *d < 0 {
+                                        if *diff < 0 {
+                                            total_negative_multiplicity += diff;
                                             continue;
                                         }
                                         let mut packer = row_buf.packer();
-                                        let datums = datum_vec.borrow_with(r);
-                                        for idx in key_indices {
-                                            packer.push(datums[*idx]);
+                                        let datums = datum_vec.borrow_with(row);
+                                        for column_order in order_by_keys {
+                                            packer.push(datums[column_order.column]);
                                         }
                                         for idx in 0..self.arity {
-                                            if !key_indices.contains(&idx) {
+                                            if !order_by_keys.iter().any(|co| co.column == idx) {
                                                 packer.push(datums[idx]);
                                             }
                                         }
 
                                         saw_new_row = true;
-                                        new_rows.push((*t, row_buf.clone(), 1));
+                                        new_rows.push((*time, row_buf.clone(), *diff));
                                     }
 
                                     if !saw_new_row {
                                         // emit deletion
                                         let mut packer = row_buf.packer();
                                         let datums = datum_vec.borrow_with(&start.1);
-                                        for idx in key_indices {
-                                            packer.push(datums[*idx]);
+                                        for column_order in order_by_keys {
+                                            packer.push(datums[column_order.column]);
                                         }
-                                        for _ in 0..self.arity - key_indices.len() {
+                                        for _ in 0..self.arity - order_by_keys.len() {
                                             packer.push(Datum::Null);
                                         }
-                                        new_rows.push((start.0, row_buf.clone(), -1));
+                                        new_rows.push((start.0, row_buf.clone(), total_negative_multiplicity));
                                     }
                                 }
                                 rows = new_rows;
@@ -224,7 +215,7 @@ impl ActiveSubscribe {
                                 }
 
                                 if matches!(self.output, SubscribeOutput::EnvelopeUpsert { .. }) {
-                                    packer.push(if diff < 0 { DELETE } else { UPSERT });
+                                    packer.push(if diff < 0 { Datum::String("delete") } else { Datum::String("upsert") });
                                 } else {
                                     packer.push(Datum::Int64(diff));
                                 }

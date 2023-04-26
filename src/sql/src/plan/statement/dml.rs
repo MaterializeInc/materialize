@@ -532,12 +532,9 @@ pub fn plan_subscribe(
                 &[],
             )?;
             if !map_exprs.is_empty() {
-                sql_bail!(
-                        "Unsupported keys in SUBSCRIBE ENVELOPE UPSERT (KEY (..)); all keys must be columns on the underlying relation"
-                    );
+                return Err(PlanError::InvalidKeysInSubscribeEnvelopeUpsert);
             }
-            let key_indices = order_by.iter().map(|co| co.column).collect_vec();
-            plan::SubscribeOutput::EnvelopeUpsert { key_indices }
+            plan::SubscribeOutput::EnvelopeUpsert { order_by_keys: order_by }
         }
         SubscribeOutput::WithinTimestampOrderBy { order_by } => {
             scx.require_within_timestamp_order_by_in_subscribe()?;
@@ -551,9 +548,7 @@ pub fn plan_subscribe(
                 &[(mz_diff_fake_column, &"mz_diff".into())],
             )?;
             if !map_exprs.is_empty() {
-                sql_bail!(
-                        "Unsupported ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY; all order bys must be variables that are getting returned"
-                    );
+                return Err(PlanError::InvalidOrderByInSubscribeWithinTimestampOrderBy);
             }
             for column_order in &mut order_by {
                 if column_order.column == mz_diff_fake_column {

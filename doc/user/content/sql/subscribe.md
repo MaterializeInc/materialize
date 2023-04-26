@@ -302,9 +302,14 @@ In the example above, `Column 1` acts as the column key that uniquely identifies
 
 #### `ENVELOPE UPSERT`
 
-Takes a list of columns to interpret as a key (given by the `KEY` option) and within each distinct timestamp interprets the updates as a series of upserts. The output columns are reordered as `(mz_timestamp, mz_state, k1, k2, .., v1, v2, ..)`. There is no `mz_diff` column. The values `v1, v2, ..` are set the last value if there's an update or an insert and are all set to `NULL` if the only updates to the key in that timestamp were deletions. `mz_state` is either "delete" or "upsert" to distinguish the two cases; when there are no values or the values can all be NULL this column is the only way to distinguish a deletion from an upsert. If `PROGRESS` is set we also return the `mz_progressed` column as usual before `mz_state` and each progress message nulls out all the key and value columns.
+Takes a list of columns to interpret as a key (given by the `KEY` option) and within each distinct timestamp interprets the updates as a series of upserts.
+The output columns are reordered as `(mz_timestamp, mz_state, k1, k2, .., v1, v2, ..)`.
+There is no `mz_diff` column.
+The values `v1, v2, ..` are set to the last value if there's an update or an insert and are all set to `NULL` if the only updates to the key in that timestamp were deletions.
+`mz_state` is either "delete" or "upsert" to distinguish the two cases; when there are no values or the values can all be NULL this column is the only way to distinguish a deletion from an upsert.
 
-Using `ENVELOPE UPSERT` when there is more than one live value per key can be confusing. The upserts generated have no way to express which value was deleted for a given key.
+Using `ENVELOPE UPSERT` when there is more than one live value per key can be confusing.
+The upserts generated have no way to express which value was deleted for a given key.
 
 Example:
 
@@ -345,7 +350,6 @@ mz_timestamp | mz_state | key  | value
 This `ORDER BY` can take any column in the underlying object or query in addition to the `mz_diff` column.
 A common use case of recovering upserts to key-value data would be sort by all the keys and `mz_diff`.
 Since `SUBSCRIBE` guarantees that there won't be multiple updates for the same row (the batch is already consolidated), this will produce data that looks like `(k, v1, -1), (k, v2, +1)` which are easier to handle.
-If `PROGRESS` is set, progress messages are unaffected.
 
 Example:
 ```nofmt

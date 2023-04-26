@@ -605,7 +605,8 @@ pub enum SubscribeOutput {
         order_by: Vec<ColumnOrder>,
     },
     EnvelopeUpsert {
-        key_indices: Vec<usize>,
+        /// Order by with just keys
+        order_by_keys: Vec<ColumnOrder>,
     },
 }
 
