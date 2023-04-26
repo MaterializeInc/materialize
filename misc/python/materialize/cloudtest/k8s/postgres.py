@@ -50,7 +50,7 @@ class PostgresDeployment(K8sDeployment):
         ports = [V1ContainerPort(container_port=5432, name="sql")]
         container = V1Container(
             name="postgres",
-            image=self.image("postgres", tag=None, release_mode=True),
+            image=self.image("postgres", tag=None, release_mode=True, coverage=False),
             args=["-c", "wal_level=logical"],
             env=env,
             ports=ports,

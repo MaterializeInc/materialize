@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from pg8000.exceptions import InterfaceError
 
-from materialize import ROOT, mzbuild, ui
+from materialize import ROOT, mzbuild
 from materialize.cloudtest.k8s import K8sResource
 from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
 from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
@@ -38,6 +38,7 @@ class Application:
     resources: List[K8sResource]
     images: List[str]
     release_mode: bool
+    coverage: bool
     aws_region: Optional[str]
 
     def __init__(self) -> None:
@@ -49,9 +50,8 @@ class Application:
             resource.create()
 
     def acquire_images(self) -> None:
-        coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
         repo = mzbuild.Repository(
-            ROOT, release_mode=self.release_mode, coverage=coverage
+            ROOT, release_mode=self.release_mode, coverage=self.coverage
         )
         for image in self.images:
             deps = repo.resolve_dependencies([repo.images[image]])
@@ -79,15 +79,19 @@ class Application:
 class MaterializeApplication(Application):
     def __init__(
         self,
-        release_mode: bool = True,
+        release_mode: bool,
+        coverage: bool,
         tag: Optional[str] = None,
         aws_region: Optional[str] = None,
         log_filter: Optional[str] = None,
     ) -> None:
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
-        self.testdrive = Testdrive(release_mode=release_mode, aws_region=aws_region)
+        self.testdrive = Testdrive(
+            release_mode=release_mode, coverage=coverage, aws_region=aws_region
+        )
         self.release_mode = release_mode
+        self.coverage = coverage
         self.aws_region = aws_region
 
         # Register the VpcEndpoint CRD.
@@ -129,7 +133,10 @@ class MaterializeApplication(Application):
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
             EnvironmentdStatefulSet(
-                release_mode=release_mode, tag=tag, log_filter=log_filter
+                release_mode=release_mode,
+                coverage=coverage,
+                tag=tag,
+                log_filter=log_filter,
             ),
             self.environmentd,
             self.materialized_alias,
