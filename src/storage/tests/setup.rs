@@ -232,6 +232,7 @@ where
                     sink_metrics,
                     SYSTEM_TIME.clone(),
                     connection_context,
+                    mz_storage_client::types::instances::InstanceContext::for_tests(),
                     Arc::clone(&persist_clients),
                 )
             };

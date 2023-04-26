@@ -10,9 +10,10 @@
 //! Types related to storage instances.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::str::FromStr;
 
-use anyhow::bail;
+use anyhow::{bail, Context, Error};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -94,6 +95,37 @@ impl RustType<ProtoStorageInstanceId> for StorageInstanceId {
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageInstanceId::kind",
             )),
+        }
+    }
+}
+
+/// Extra context to used to render sources and sinks, that are not related
+/// to connections.
+#[derive(Debug, Clone)]
+pub struct InstanceContext {
+    /// A directory that can be used for scratch work.
+    pub scratch_directory: Option<PathBuf>,
+}
+
+impl InstanceContext {
+    pub async fn new(scratch_directory: Option<PathBuf>) -> Result<InstanceContext, Error> {
+        if let Some(scratch_directory) = &scratch_directory {
+            tokio::fs::create_dir_all(scratch_directory)
+                .await
+                .with_context(|| {
+                    format!(
+                        "creating scratch directory: {}",
+                        scratch_directory.display()
+                    )
+                })?;
+        }
+        Ok(Self { scratch_directory })
+    }
+
+    /// Constructs a new connection context for usage in tests.
+    pub fn for_tests() -> InstanceContext {
+        Self {
+            scratch_directory: None,
         }
     }
 }

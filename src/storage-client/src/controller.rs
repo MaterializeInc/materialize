@@ -43,6 +43,7 @@ use tracing::{debug, info};
 
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -64,6 +65,7 @@ use crate::controller::rehydration::RehydratingStorageClient;
 use crate::healthcheck;
 use crate::metrics::StorageControllerMetrics;
 use crate::types::errors::DataflowError;
+use crate::types::instances::InstanceContext;
 use crate::types::instances::StorageInstanceId;
 use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
@@ -778,6 +780,8 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances.
     config: StorageParameters,
+    /// Additional context used to validate sources being created.
+    instance_context: InstanceContext,
 }
 
 /// A storage controller for a storage instance.
@@ -934,6 +938,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         now: NowFn,
         factory: &StashFactory,
         envd_epoch: NonZeroI64,
+        instance_context: InstanceContext,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
@@ -1022,6 +1027,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             clients: BTreeMap::new(),
             initialized: false,
             config: StorageParameters::default(),
+            instance_context,
         }
     }
 }
@@ -1439,6 +1445,11 @@ where
                         let metadata = self.collection(id)?.collection_metadata.clone();
                         source_imports.insert(id, metadata);
                     }
+
+                    ingestion
+                        .desc
+                        .validate_against_context(&self.state.instance_context)
+                        .map_err(|e| StorageError::InvalidUsage(e.to_string_with_causes()))?;
 
                     // The ingestion metadata is simply the collection metadata of the collection with
                     // the associated ingestion
@@ -2253,13 +2264,21 @@ where
         postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
+        initialize_context: InstanceContext,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
             build_info,
-            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
-                .await,
+            state: StorageControllerState::new(
+                postgres_url,
+                tx,
+                now,
+                postgres_factory,
+                envd_epoch,
+                initialize_context,
+            )
+            .await,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,

@@ -365,6 +365,14 @@ pub struct Args {
         env = "ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY"
     )]
     orchestrator_process_prometheus_service_discovery_directory: Option<PathBuf>,
+    /// The directory of instance storage. If the process orchestrator
+    /// is being used, this can be a relative path.
+    #[clap(
+        long,
+        env = "ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY",
+        value_name = "PATH"
+    )]
+    orchestrator_process_scratch_directory: Option<PathBuf>,
     /// Whether to use coverage build and collect coverage information. Not to be used for
     /// production, only testing.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_COVERAGE")]
@@ -654,6 +662,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         Option<Arc<dyn CloudResourceController>>,
     ) = match args.orchestrator {
         OrchestratorKind::Kubernetes => {
+            if args.orchestrator_process_scratch_directory.is_some() {
+                bail!(
+                    "--orchestrator-process-scratch-directory is \
+                      not currently usable with the kubernetes orchestrator"
+                );
+            }
+
             let orchestrator = Arc::new(
                 runtime
                     .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
@@ -710,6 +725,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                     .orchestrator_process_prometheus_service_discovery_directory,
                             },
                         ),
+                        scratch_directory: args.orchestrator_process_scratch_directory.clone(),
                     }))
                     .context("creating process orchestrator")?,
             );
@@ -725,6 +741,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     );
     let persist_clients = Arc::new(persist_clients);
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
+
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
@@ -739,6 +756,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
+        scratch_directory: args.orchestrator_process_scratch_directory,
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {

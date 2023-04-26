@@ -849,6 +849,7 @@ impl RunnerInner {
                 command_wrapper: vec![],
                 propagate_crashes: true,
                 tcp_proxy: None,
+                scratch_directory: None,
             })
             .await?,
         );
@@ -878,6 +879,7 @@ impl RunnerInner {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
+                scratch_directory: None,
             },
             secrets_controller,
             cloud_resource_controller: None,

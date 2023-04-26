@@ -414,7 +414,6 @@ where
 
         Box::pin(stream)
     }
-
     /// Provisions a replica with the service orchestrator.
     async fn provision_replica(
         &self,
@@ -436,7 +435,7 @@ where
                 ServiceConfig {
                     image: self.clusterd_image.clone(),
                     init_container_image: self.init_container_image.clone(),
-                    args: &|assigned| {
+                    args: &move |assigned| {
                         vec![
                             format!(
                                 "--storage-controller-listen-addr={}",

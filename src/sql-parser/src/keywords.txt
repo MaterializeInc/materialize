@@ -109,6 +109,7 @@ Delimiter
 Desc
 Details
 Discard
+Disk
 Distinct
 Dot
 Double

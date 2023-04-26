@@ -2572,7 +2572,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP])? {
+        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP, DISK])? {
             IGNORE => {
                 self.expect_keyword(KEYS)?;
                 CreateSourceOptionName::IgnoreKeys
@@ -2583,6 +2583,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(INTERVAL)?;
                 CreateSourceOptionName::TimestampInterval
             }
+            DISK => CreateSourceOptionName::Disk,
             _ => unreachable!(),
         };
         Ok(name)

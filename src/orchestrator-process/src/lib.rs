@@ -149,6 +149,9 @@ pub struct ProcessOrchestratorConfig {
     /// that do not support Unix domain sockets (e.g., Prometheus, web
     /// browsers).
     pub tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
+    /// An optional top-level path that new sub-directories per-cluster will
+    /// be created in.
+    pub scratch_directory: Option<PathBuf>,
 }
 
 /// Configures the TCP proxy for a [`ProcessOrchestrator`].
@@ -189,6 +192,7 @@ pub struct ProcessOrchestrator {
     command_wrapper: Vec<String>,
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
+    scratch_directory: Option<PathBuf>,
 }
 
 impl ProcessOrchestrator {
@@ -202,6 +206,7 @@ impl ProcessOrchestrator {
             command_wrapper,
             propagate_crashes,
             tcp_proxy,
+            scratch_directory,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
         let metadata_dir = env::temp_dir().join(format!("environmentd-{environment_id}"));
@@ -232,6 +237,7 @@ impl ProcessOrchestrator {
             command_wrapper,
             propagate_crashes,
             tcp_proxy,
+            scratch_directory,
         })
     }
 }
@@ -253,6 +259,7 @@ impl Orchestrator for ProcessOrchestrator {
                 system: Mutex::new(System::new()),
                 propagate_crashes: self.propagate_crashes,
                 tcp_proxy: self.tcp_proxy.clone(),
+                scratch_directory: self.scratch_directory.clone(),
             })
         }))
     }
@@ -271,6 +278,7 @@ struct NamespacedProcessOrchestrator {
     system: Mutex<System>,
     propagate_crashes: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
+    scratch_directory: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -473,7 +481,7 @@ impl NamespacedProcessOrchestrator {
 
         let state_updater = ProcessStateUpdater {
             namespace: self.namespace.clone(),
-            id,
+            id: id.clone(),
             i,
             services: Arc::clone(&self.services),
             service_event_tx: self.service_event_tx.clone(),
@@ -493,6 +501,12 @@ impl NamespacedProcessOrchestrator {
             "--secrets-reader-process-dir={}",
             self.secrets_dir.display()
         ));
+        if let Some(scratch_directory) = &self.scratch_directory {
+            args.push(format!(
+                "--scratch-directory={}",
+                scratch_directory.join(id).display()
+            ));
+        }
 
         async move {
             let mut proxy_handles = vec![];

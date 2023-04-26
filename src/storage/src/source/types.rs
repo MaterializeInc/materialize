@@ -501,6 +501,7 @@ pub struct UpsertMetrics {
     pub(crate) rehydration_latency: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
     pub(crate) rehydration_total: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) shared: Arc<UpsertSharedMetrics>,
+    pub(crate) rocksdb: Arc<mz_rocksdb::RocksDBMetrics>,
 }
 
 impl UpsertMetrics {
@@ -516,6 +517,7 @@ impl UpsertMetrics {
                 .rehydration_total
                 .get_delete_on_drop_gauge(vec![source_id_s, worker_id]),
             shared: base.shared(&source_id),
+            rocksdb: base.rocksdb(&source_id),
         }
     }
 }

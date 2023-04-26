@@ -27,6 +27,12 @@ pub struct RocksDB {
     rocksdb: RocksDBInstance<UpsertKey, UpsertValue>,
 }
 
+impl RocksDB {
+    pub fn new(rocksdb: RocksDBInstance<UpsertKey, UpsertValue>) -> Self {
+        Self { rocksdb }
+    }
+}
+
 #[async_trait::async_trait(?Send)]
 impl UpsertState for RocksDB {
     async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>

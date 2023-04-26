@@ -364,7 +364,8 @@ generate_extracted_config!(
     (IgnoreKeys, bool),
     (Size, String),
     (Timeline, String),
-    (TimestampInterval, Interval)
+    (TimestampInterval, Interval),
+    (Disk, bool)
 );
 
 generate_extracted_config!(
@@ -874,6 +875,15 @@ pub fn plan_create_source(
         conn.table_casts.retain(|pos, _| used_pos.contains(pos));
     }
 
+    let CreateSourceOptionExtracted {
+        size,
+        timeline,
+        timestamp_interval,
+        ignore_keys,
+        disk,
+        seen: _,
+    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
+
     let (key_desc, value_desc) = encoding.desc()?;
 
     let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
@@ -894,9 +904,10 @@ pub fn plan_create_source(
             let (_before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
             match mode {
-                DbzMode::Plain => {
-                    UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
-                }
+                DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
+                    style: UpsertStyle::Debezium { after_idx },
+                    disk: disk.unwrap_or(false),
+                },
             }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
@@ -911,7 +922,10 @@ pub fn plan_create_source(
             if key_envelope == KeyEnvelope::None {
                 key_envelope = get_unnamed_key_envelope(key_encoding)?;
             }
-            UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
+            UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::Default(key_envelope),
+                disk: disk.unwrap_or(false),
+            }
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
             scx.require_unsafe_mode("ENVELOPE MATERIALIZE")?;
@@ -924,18 +938,20 @@ pub fn plan_create_source(
         }
     };
 
+    if disk.is_some() {
+        scx.require_unsafe_mode("ON DISK")?;
+        match &envelope {
+            UnplannedSourceEnvelope::Upsert { .. } => {}
+            _ => {
+                bail_unsupported!("ON DISK used with non-UPSERT/DEBEZIUM ENVELOPE");
+            }
+        }
+    }
+
     let metadata_columns = external_connection.metadata_columns();
     let metadata_column_types = external_connection.metadata_column_types();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
-
-    let CreateSourceOptionExtracted {
-        size,
-        timeline,
-        timestamp_interval,
-        ignore_keys,
-        seen: _,
-    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     if ignore_keys.unwrap_or(false) {
         desc = desc.without_keys();
@@ -4143,6 +4159,7 @@ pub fn plan_alter_source(
                 timeline: timeline_opt,
                 timestamp_interval: timestamp_interval_opt,
                 ignore_keys: ignore_keys_opt,
+                disk: disk_opt,
             } = CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(value) = size_opt {
@@ -4156,6 +4173,9 @@ pub fn plan_alter_source(
             }
             if let Some(_) = ignore_keys_opt {
                 sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
+            }
+            if let Some(_) = disk_opt {
+                sql_bail!("Cannot modify the DISK property of a SOURCE.");
             }
         }
         AlterSourceAction::ResetOptions(reset) => {
@@ -4172,6 +4192,9 @@ pub fn plan_alter_source(
                     }
                     CreateSourceOptionName::IgnoreKeys => {
                         sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
+                    }
+                    CreateSourceOptionName::Disk => {
+                        sql_bail!("Cannot modify the DISK property of a SOURCE.");
                     }
                 }
             }
