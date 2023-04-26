@@ -35,6 +35,7 @@ $ set-from-sql var=source_id
 SELECT id FROM mz_sources WHERE name = 'kafka_source'
 
 > select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${source_id} running <null> <null>
 
 > select * from mz_internal.mz_source_statuses where id = '${source_id}';
@@ -73,6 +74,7 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
 "${sink_id}" kafka_sink kafka "<TIMESTAMP> UTC" running <null> <null>
 
 > select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${source_id} running <null> <null>
 
 > select * from mz_internal.mz_source_statuses where id = '${source_id}';
@@ -100,6 +102,7 @@ SELECT id FROM mz_sinks WHERE name = 'kafka_sink_2'
 "<TIMESTAMP> UTC" ${sink_id_2} running <null> <null>
 
 > select * from mz_internal.mz_source_status_history where source_id = '${source_id_2}' order by occurred_at;
+"<TIMESTAMP> UTC" ${source_id_2} starting <null> <null>
 "<TIMESTAMP> UTC" ${source_id_2} running <null> <null>
 
 > select * from mz_internal.mz_sink_statuses where id in ('${sink_id}', '${sink_id_2}') order by id;
@@ -122,5 +125,6 @@ SELECT id FROM mz_sinks WHERE name = 'kafka_sink_2'
 > DROP SOURCE kafka_source
 
 > select * from mz_internal.mz_source_status_history where source_id = '${source_id}' order by occurred_at;
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
 "<TIMESTAMP> UTC" ${source_id} running <null> <null>
 "<TIMESTAMP> UTC" ${source_id} dropped <null> <null>
