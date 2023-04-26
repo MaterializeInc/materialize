@@ -362,6 +362,23 @@ structure:
    ...
   ```
 
+* Only use `ENVELOPE UPSERT` when there is at most one live value per key.
+  If materialize detects that a given key has multiple values, it will generate
+  an update with `mz_state` set to `"key violation"`, the problematic key, and all
+  the values nulled out. Materialize is not guaranteed to detect this case,
+  please don't rely on it.
+
+  _Key violation_
+
+  ```sql
+   -- at time 500, introduce a key violation
+   mz_timestamp | mz_state        | key  | value
+   -------------|-----------------|------|--------
+   ...
+   500          | key violation   | 1    | NULL
+   ...
+  ```
+
 * If [`PROGRESS`](#progress) is set, Materialize also returns the `mz_progressed`
 column. Each progress row will have a `NULL` key and a `NULL` value.
 
