@@ -104,7 +104,7 @@ pub enum Plan {
     DropObjects(DropObjectsPlan),
     EmptyQuery,
     ShowAllVariables,
-    ShowCreate(SendRowsPlan),
+    ShowCreate(ShowCreatePlan),
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
     ResetVariable(ResetVariablePlan),
@@ -631,8 +631,9 @@ pub enum SubscribeFrom {
 }
 
 #[derive(Debug)]
-pub struct SendRowsPlan {
-    pub rows: Vec<Row>,
+pub struct ShowCreatePlan {
+    pub id: GlobalId,
+    pub row: Row,
 }
 
 #[derive(Debug)]

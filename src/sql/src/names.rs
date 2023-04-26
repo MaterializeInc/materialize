@@ -290,7 +290,7 @@ impl From<DatabaseId> for ResolvedDatabaseSpecifier {
  * their Id.
  */
 /// An id of a schema.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SchemaSpecifier {
     /// A temporary schema
     Temporary,
@@ -848,6 +848,78 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
                 ResolvedItemName::Error => Err(anyhow!("error in name resolution")),
             },
         }
+    }
+}
+
+impl From<ClusterId> for ObjectId {
+    fn from(id: ClusterId) -> Self {
+        ObjectId::Cluster(id)
+    }
+}
+
+impl From<&ClusterId> for ObjectId {
+    fn from(id: &ClusterId) -> Self {
+        ObjectId::Cluster(*id)
+    }
+}
+
+impl From<(ClusterId, ReplicaId)> for ObjectId {
+    fn from(id: (ClusterId, ReplicaId)) -> Self {
+        ObjectId::ClusterReplica(id)
+    }
+}
+
+impl From<&(ClusterId, ReplicaId)> for ObjectId {
+    fn from(id: &(ClusterId, ReplicaId)) -> Self {
+        ObjectId::ClusterReplica(*id)
+    }
+}
+
+impl From<DatabaseId> for ObjectId {
+    fn from(id: DatabaseId) -> Self {
+        ObjectId::Database(id)
+    }
+}
+
+impl From<&DatabaseId> for ObjectId {
+    fn from(id: &DatabaseId) -> Self {
+        ObjectId::Database(*id)
+    }
+}
+
+impl From<ItemQualifiers> for ObjectId {
+    fn from(qualifiers: ItemQualifiers) -> Self {
+        ObjectId::Schema((qualifiers.database_spec, qualifiers.schema_spec))
+    }
+}
+
+impl From<&ItemQualifiers> for ObjectId {
+    fn from(qualifiers: &ItemQualifiers) -> Self {
+        ObjectId::Schema((qualifiers.database_spec, qualifiers.schema_spec))
+    }
+}
+
+impl From<RoleId> for ObjectId {
+    fn from(id: RoleId) -> Self {
+        ObjectId::Role(id)
+    }
+}
+
+impl From<&RoleId> for ObjectId {
+    fn from(id: &RoleId) -> Self {
+        ObjectId::Role(*id)
+    }
+}
+
+impl From<GlobalId> for ObjectId {
+    fn from(id: GlobalId) -> Self {
+        ObjectId::Item(id)
+    }
+}
+
+impl From<&GlobalId> for ObjectId {
+    fn from(id: &GlobalId) -> Self {
+        ObjectId::Item(*id)
     }
 }
 
