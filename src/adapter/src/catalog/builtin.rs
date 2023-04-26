@@ -2584,12 +2584,16 @@ FROM (VALUES
 pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
     name: "pg_auth_members",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_auth_members AS SELECT
-    NULL::pg_catalog.oid as roleid,
-    NULL::pg_catalog.oid as member,
-    NULL::pg_catalog.oid as grantor,
-    NULL::pg_catalog.bool as admin_option
-WHERE false",
+    sql: "CREATE VIEW pg_catalog.pg_auth_members AS SELECT  
+    role.oid AS roleid,
+    member.oid AS member,
+    grantor.oid AS grantor,
+    -- Materialize hasn't implemented admin_option.
+    false as admin_option
+FROM mz_role_members membership
+LEFT JOIN mz_roles role ON membership.role_id = role.id
+LEFT JOIN mz_roles member ON membership.member = member.id
+LEFT JOIN mz_roles grantor ON membership.grantor = grantor.id",
 };
 
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
