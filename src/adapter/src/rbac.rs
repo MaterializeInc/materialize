@@ -18,7 +18,10 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::ObjectId;
-use mz_sql::plan::{AlterOwnerPlan, CreateMaterializedViewPlan, CreateViewPlan, Plan};
+use mz_sql::plan::{
+    AlterOwnerPlan, CreateMaterializedViewPlan, CreateSinkPlan, CreateSourcePlan, CreateViewPlan,
+    Plan,
+};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
 
@@ -204,15 +207,30 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
         Plan::DropObjects(plan) if plan.object_type == ObjectType::Role => {
             Some(Attribute::CreateRole)
         }
-        Plan::CreateSource(_)
-        | Plan::CreateSources(_)
-        | Plan::CreateTable(_)
+        Plan::CreateSource(CreateSourcePlan { cluster_config, .. })
+        | Plan::CreateSink(CreateSinkPlan { cluster_config, .. }) => {
+            if cluster_config.will_create_new_cluster() {
+                Some(Attribute::CreateCluster)
+            } else {
+                None
+            }
+        }
+        Plan::CreateSources(plans) => {
+            if plans
+                .iter()
+                .any(|plan| plan.plan.cluster_config.will_create_new_cluster())
+            {
+                Some(Attribute::CreateCluster)
+            } else {
+                None
+            }
+        }
+        Plan::CreateTable(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateConnection(_)
         | Plan::CreateSchema(_)
         | Plan::CreateClusterReplica(_)
         | Plan::CreateSecret(_)
-        | Plan::CreateSink(_)
         | Plan::CreateView(_)
         | Plan::CreateIndex(_)
         | Plan::CreateType(_)

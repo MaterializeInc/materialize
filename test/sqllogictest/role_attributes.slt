@@ -540,6 +540,29 @@ CREATE ROLE joeson INHERIT
 ----
 COMPLETE 0
 
+# Test that you need CREATECLUSTER to make sources with linked clusters
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE joe NOCREATEROLE NOCREATEDB NOCREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE src FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+db error: ERROR: permission denied to create source
+DETAIL: You must have the CREATECLUSTER attribute to create source
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE joe CREATECLUSTER;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE src FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
 # Disable RBAC checks
 
 simple conn=mz_system,user=mz_system
