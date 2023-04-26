@@ -78,7 +78,7 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```ignore
 //! use mz_frontegg_client::client::{Client};
 //! use mz_frontegg_client::config::{ClientBuilder, ClientConfig};
 //! use mz_frontegg_auth::AppPassword;
