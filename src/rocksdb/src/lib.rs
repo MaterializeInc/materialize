@@ -83,6 +83,7 @@
 #![warn(missing_docs)]
 
 use std::convert::AsRef;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -140,11 +141,11 @@ pub struct RocksDBMetrics {
     /// Latency of multi_gets, in fractional seconds.
     pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Size of multi_get batches.
-    pub multi_get_batch_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Latency of write batch writes, in fractional seconds.
-    pub write_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Size of write batches.
-    pub write_batch_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_put_size: DeleteOnDropHistogram<'static, Vec<String>>,
 }
 
 impl Options {
@@ -233,10 +234,10 @@ where
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     /// Start a new RocksDB instance at the path.
-    pub async fn new(
+    pub async fn new<M: Deref<Target = RocksDBMetrics> + Send + 'static>(
         instance_path: &Path,
         options: Options,
-        metrics: RocksDBMetrics,
+        metrics: M,
     ) -> Result<Self, Error> {
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
@@ -369,14 +370,15 @@ where
 }
 
 // TODO(guswynn): retry retryable rocksdb errors.
-fn rocksdb_core_loop<K, V>(
+fn rocksdb_core_loop<K, V, M>(
     options: Options,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
-    metrics: RocksDBMetrics,
+    metrics: M,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
+    M: Deref<Target = RocksDBMetrics> + Send + 'static,
 {
     let db: DB = DB::open(&options.as_rocksdb_options(), &instance_path).unwrap();
     let wo = options.as_rocksdb_write_options();
@@ -405,9 +407,7 @@ fn rocksdb_core_loop<K, V>(
                 match gets {
                     Ok(gets) => {
                         metrics.multi_get_latency.observe(latency.as_secs_f64());
-                        metrics
-                            .multi_get_batch_size
-                            .observe(f64::cast_lossy(batch_size));
+                        metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
                         for previous_value in gets {
                             let previous_value = match previous_value
                                 .map(|v| bincode::deserialize(&v))
@@ -463,10 +463,8 @@ fn rocksdb_core_loop<K, V>(
                 match db.write_opt(writes, &wo) {
                     Ok(()) => {
                         let latency = now.elapsed();
-                        metrics.write_latency.observe(latency.as_secs_f64());
-                        metrics
-                            .write_batch_size
-                            .observe(f64::cast_lossy(batch_size));
+                        metrics.multi_put_latency.observe(latency.as_secs_f64());
+                        metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
                         let _ = response_sender.send(Ok(batch));
                     }
                     Err(e) => {

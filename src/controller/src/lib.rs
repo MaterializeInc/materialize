@@ -90,6 +90,7 @@
 use std::collections::BTreeMap;
 use std::mem;
 use std::num::NonZeroI64;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -124,6 +125,7 @@ use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::StorageController;
+use mz_storage_client::types::instances::StorageInstanceContext;
 
 pub mod clusters;
 
@@ -152,6 +154,8 @@ pub struct ControllerConfig {
     pub postgres_factory: StashFactory,
     /// The metrics registry.
     pub metrics_registry: MetricsRegistry,
+    /// The directory of instance storage.
+    pub scratch_directory: Option<PathBuf>,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -229,6 +233,9 @@ pub struct Controller<T = mz_repr::Timestamp> {
     metrics_tx: UnboundedSender<(ReplicaId, Vec<ServiceProcessMetrics>)>,
     /// Receiver for the channel over which replica metrics are sent.
     metrics_rx: Peekable<UnboundedReceiverStream<(ReplicaId, Vec<ServiceProcessMetrics>)>>,
+
+    /// Additional context to pass through to cluster instances.
+    pub instance_context: StorageInstanceContext,
 }
 
 impl<T> Controller<T> {
@@ -336,6 +343,9 @@ where
 {
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig, envd_epoch: NonZeroI64) -> Self {
+        let instance_context = StorageInstanceContext::new(config.scratch_directory)
+            .await
+            .expect("failed to create instance context");
         let storage_controller = mz_storage_client::controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
@@ -345,6 +355,7 @@ where
             &config.postgres_factory,
             envd_epoch,
             config.metrics_registry.clone(),
+            instance_context.clone(),
         )
         .await;
 
@@ -365,6 +376,7 @@ where
             metrics_tasks: BTreeMap::new(),
             metrics_tx,
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
+            instance_context,
         }
     }
 }

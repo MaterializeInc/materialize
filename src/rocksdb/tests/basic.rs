@@ -77,16 +77,16 @@ use mz_ore::metrics::HistogramVecExt;
 use mz_rocksdb::{Options, RocksDBInstance, RocksDBMetrics};
 use prometheus::{HistogramOpts, HistogramVec};
 
-fn metrics_for_tests() -> Result<RocksDBMetrics, anyhow::Error> {
+fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
     let fake_hist_vec =
         HistogramVec::new(HistogramOpts::new("fake", "fake_help"), &["fake_label"])?;
 
-    Ok(RocksDBMetrics {
+    Ok(Box::new(RocksDBMetrics {
         multi_get_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["one".to_string()]),
-        multi_get_batch_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["two".to_string()]),
-        write_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["three".to_string()]),
-        write_batch_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
-    })
+        multi_get_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["two".to_string()]),
+        multi_put_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["three".to_string()]),
+        multi_put_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
+    }))
 }
 
 #[tokio::test]
