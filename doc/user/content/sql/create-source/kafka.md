@@ -449,6 +449,8 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 {{< tabs tabID="1" >}}
 {{< tab "Avro">}}
 
+**Using Confluent Schema Registry**
+
 ```sql
 CREATE SOURCE avro_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
@@ -466,7 +468,6 @@ CREATE SOURCE json_source
   WITH (SIZE = '3xsmall');
 ```
 
-
 ```sql
 CREATE MATERIALIZED VIEW typed_kafka_source AS
   SELECT
@@ -479,7 +480,7 @@ CREATE MATERIALIZED VIEW typed_kafka_source AS
 {{< /tab >}}
 {{< tab "Protobuf">}}
 
-#### Using Confluent Schema Registry
+**Using Confluent Schema Registry**
 
 ```sql
 CREATE SOURCE proto_source
@@ -488,47 +489,44 @@ CREATE SOURCE proto_source
   WITH (SIZE = '3xsmall');
 ```
 
-#### Using an inline schema
+**Using an inline schema**
 
-Suppose you have the following Protobuf schema in a file named `billing.proto`:
+If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause to specify a Protobuf schema descriptor inline. Protobuf does not serialize a schema with the message, so before creating a source you must:
 
-```proto
-// billing.proto
+* Compile the Protobuf schema into a descriptor file using [`protoc`](https://grpc.io/docs/protoc-installation/):
 
-syntax = "proto3";
+  ```proto
+  // example.proto
+  syntax = "proto3";
+  message Batch {
+      int32 id = 1;
+      // ...
+  }
+  ```
 
-message Batch {
-    int32 id = 1;
-    // ...
-}
-```
+  ```bash
+  protoc --include_imports --descriptor_set_out=example.pb example.proto
+  ```
 
-Compile the schema into a Protobuf descriptor file:
+* Encode the descriptor file into a SQL byte string:
 
-```bash
-protoc --include_imports --descriptor_set_out=billing.pb billing.proto
-```
+  ```bash
+  $ printf '\\x' && xxd -p example.pb | tr -d '\n'
+  \x0a300a0d62696...
+  ```
 
-Encode the descriptor file into a SQL byte string:
+* Create the source using the encoded descriptor bytes from the previous step
+  (including the `\x` at the beginning):
 
-```bash
-$ printf '\\x' && xxd -p billing.pb | tr -d '\n'
-\x0a300a0d62696...
-```
+  ```sql
+  CREATE SOURCE proto_source
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+    FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...'
+    WITH (SIZE = '3xsmall');
+  ```
 
-Create the source referencing the encoded descriptor bytes:
-
-```sql
-CREATE SOURCE proto_source
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...'
-  WITH (SIZE = '3xsmall');
-```
-
-Be sure to copy the encoded bytes in full, including the `\x` at the beginning.
-
-For details about Protobuf message names and descriptors, refer to the [Protobuf
-format](../#protobuf) documentation.
+  For more details about Protobuf message names and descriptors, check the
+  [Protobuf format](../#protobuf) documentation.
 
 {{< /tab >}}
 {{< tab "Text/bytes">}}
