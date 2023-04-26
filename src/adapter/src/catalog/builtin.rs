@@ -2584,7 +2584,7 @@ FROM (VALUES
 pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
     name: "pg_auth_members",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_auth_members AS SELECT  
+    sql: "CREATE VIEW pg_catalog.pg_auth_members AS SELECT
     role.oid AS roleid,
     member.oid AS member,
     grantor.oid AS grantor,
