@@ -38,9 +38,14 @@ const CREATE_APP_PASSWORDS_PATH: [&str; 6] = [
 /// A structure that represents an app-password _metadata_.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(missing_docs)] // TODO: add docs to all fields
 pub struct AppPassword {
+    /// Description of the password.
+    ///
+    /// E.g.: "CI/CD Password", "Production password",
     pub description: String,
+    /// Creation date in ISO 8601 of the password.
+    ///
+    /// E.g.: 2023-04-26T08:37:03.000Z
     pub created_at: String,
 }
 
