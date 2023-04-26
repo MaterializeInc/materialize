@@ -181,6 +181,42 @@ DELETE FROM t1 WHERE key = 1
 > FETCH ALL c
 <TIMESTAMP> delete 1 <null>
 
+$ postgres-execute connection=mz_system
+INSERT INTO t1 VALUES (1, 1), (1, 1)
+
+> FETCH ALL c
+<TIMESTAMP> "key violation" 1 <null>
+
+$ postgres-execute connection=mz_system
+DELETE FROM t1 WHERE key = 1
+
+> FETCH ALL c
+<TIMESTAMP> "key violation" 1 <null>
+
+$ postgres-execute connection=mz_system
+INSERT INTO t1 VALUES (1, 1), (1, 2)
+
+> FETCH ALL c
+<TIMESTAMP> "key violation" 1 <null>
+
+$ postgres-execute connection=mz_system
+INSERT INTO t1 VALUES (1, 3)
+
+> FETCH ALL c
+<TIMESTAMP> upsert 1 3
+
+$ postgres-execute connection=mz_system
+DELETE FROM t1 WHERE key = 1 AND value = 1
+
+> FETCH ALL c
+<TIMESTAMP> delete 1 <null>
+
+$ postgres-execute connection=mz_system
+DELETE FROM t1 WHERE key = 1
+
+> FETCH ALL c
+<TIMESTAMP> "key violation" 1 <null>
+
 > COMMIT
 
 > CREATE TABLE t2(value int, key int, UNIQUE (key))
