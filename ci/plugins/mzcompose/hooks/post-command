@@ -31,12 +31,10 @@ export_cov() {
 if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     ci_unimportant_heading "Generate coverage information"
 
-    # Currently no coverage for unit tests, do we want it?
     if [ -n "$(find . -name '*.profraw')" ]; then
         find . -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
         find . -name '*.profraw' -delete
 
-        ls -lha coverage/
         ARGS=()
         for program in clusterd environmentd sqllogictest; do
             if [ -f coverage/"$program" ]; then

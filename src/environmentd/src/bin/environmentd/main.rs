@@ -365,6 +365,10 @@ pub struct Args {
         env = "ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY"
     )]
     orchestrator_process_prometheus_service_discovery_directory: Option<PathBuf>,
+    /// Whether to use coverage build and collect coverage information. Not to be used for
+    /// production, only testing.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_COVERAGE")]
+    orchestrator_kubernetes_coverage: bool,
     /// The clusterd image reference to use.
     #[structopt(
         long,
@@ -660,6 +664,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         service_account: args.orchestrator_kubernetes_service_account,
                         image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
                         aws_external_id_prefix: args.aws_external_id_prefix.clone(),
+                        coverage: args.orchestrator_kubernetes_coverage,
                     }))
                     .context("creating kubernetes orchestrator")?,
             );

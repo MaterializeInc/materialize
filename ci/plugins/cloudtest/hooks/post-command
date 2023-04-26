@@ -17,6 +17,50 @@ kubectl() {
     bin/ci-builder run stable kubectl --context=kind-cloudtest "$@"
 }
 
+export_cov() {
+    bin/ci-builder run stable rust-cov export \
+      --ignore-filename-regex=.cargo/ \
+      --ignore-filename-regex=target/release/ \
+      --ignore-filename-regex=/cargo/ \
+      --ignore-filename-regex=/mnt/build/ \
+      --ignore-filename-regex=/rustc/ \
+      --format=lcov "$1" --instr-profile=coverage/"$BUILDKITE_JOB_ID".profdata src/ \
+      > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
+}
+
+if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+    ci_uncollapsed_heading "cloudtest: Fetching binaries for coverage"
+    mkdir -p coverage/
+    chmod 777 coverage/
+    kubectl cp environmentd-0:/usr/local/bin/environmentd coverage/environmentd
+    kubectl cp environmentd-0:/coverage coverage/
+    for pod in $(kubectl get pods -o name | grep -E 'cluster-'); do
+      kubectl cp "$pod":/coverage coverage/ || true # Could get deleted
+      kubectl cp "$pod":/usr/local/bin/clusterd coverage/clusterd || true
+    done
+
+    ci_unimportant_heading "cloudtest: Generate coverage information"
+    if [ -n "$(find . -name '*.profraw')" ]; then
+        find . -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
+        find . -name '*.profraw' -delete
+
+        ARGS=()
+        for program in clusterd environmentd; do
+            if [ -f coverage/"$program" ]; then
+              export_cov coverage/"$program"
+              ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
+            fi
+        done
+        rm coverage/"$BUILDKITE_JOB_ID".profdata
+        if [ "${#ARGS[@]}" != 0 ]; then
+          bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
+          rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
+          bin/ci-builder run stable xz -0 coverage/"$BUILDKITE_JOB_ID".lcov
+          buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.xz
+        fi
+    fi
+fi
+
 ci_unimportant_heading "cloudtest: Uploading logs..."
 for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
   kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log || true
