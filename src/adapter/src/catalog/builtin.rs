@@ -2591,9 +2591,9 @@ pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
     -- Materialize hasn't implemented admin_option.
     false as admin_option
 FROM mz_role_members membership
-LEFT JOIN mz_roles role ON membership.role_id = role.id
-LEFT JOIN mz_roles member ON membership.member = member.id
-LEFT JOIN mz_roles grantor ON membership.grantor = grantor.id",
+JOIN mz_roles role ON membership.role_id = role.id
+JOIN mz_roles member ON membership.member = member.id
+JOIN mz_roles grantor ON membership.grantor = grantor.id",
 };
 
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
