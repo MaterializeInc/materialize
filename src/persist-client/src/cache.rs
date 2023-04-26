@@ -35,6 +35,7 @@ use crate::error::{CodecConcreteType, CodecMismatch};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus};
 use crate::internal::state::TypedState;
+use crate::internal::watch::StateWatchNotifier;
 use crate::{PersistClient, PersistConfig, PersistLocation, ShardId};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
@@ -67,14 +68,14 @@ impl Drop for RttLatencyTask {
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
     pub fn new(cfg: PersistConfig, registry: &MetricsRegistry) -> Self {
-        let metrics = Metrics::new(&cfg, registry);
+        let metrics = Arc::new(Metrics::new(&cfg, registry));
         PersistClientCache {
             cfg,
-            metrics: Arc::new(metrics),
+            metrics: Arc::clone(&metrics),
             blob_by_uri: Mutex::new(BTreeMap::new()),
             consensus_by_uri: Mutex::new(BTreeMap::new()),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
-            state_cache: Arc::new(StateCache::default()),
+            state_cache: Arc::new(StateCache::new(metrics)),
         }
     }
 
@@ -267,7 +268,7 @@ trait DynState: Debug + Send + Sync {
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
-impl<K, V, T, D> DynState for RwLock<TypedState<K, V, T, D>>
+impl<K, V, T, D> DynState for LockingTypedState<K, V, T, D>
 where
     K: Codec,
     V: Codec,
@@ -280,9 +281,7 @@ where
             V::codec_name(),
             T::codec_name(),
             D::codec_name(),
-            Some(CodecConcreteType(std::any::type_name::<
-                TypedState<K, V, T, D>,
-            >())),
+            Some(CodecConcreteType(std::any::type_name::<(K, V, T, D)>())),
         )
     }
 
@@ -301,8 +300,9 @@ where
 /// command for the same shard are executing concurrently, only one can win
 /// anyway, the other will retry. With the mutex, we even get to avoid the retry
 /// if the racing commands are on the same process.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StateCache {
+    metrics: Arc<Metrics>,
     states: Mutex<BTreeMap<ShardId, Arc<OnceCell<Weak<dyn DynState>>>>>,
 }
 
@@ -313,11 +313,27 @@ enum StateCacheInit {
 }
 
 impl StateCache {
+    /// Returns a new StateCache.
+    pub fn new(metrics: Arc<Metrics>) -> Self {
+        StateCache {
+            metrics,
+            states: Default::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_no_metrics() -> Self {
+        Self::new(Arc::new(Metrics::new(
+            &PersistConfig::new_for_tests(),
+            &MetricsRegistry::new(),
+        )))
+    }
+
     pub(crate) async fn get<K, V, T, D, F, InitFn>(
         &self,
         shard_id: ShardId,
         mut init_fn: InitFn,
-    ) -> Result<LockingTypedState<K, V, T, D>, Box<CodecMismatch>>
+    ) -> Result<Arc<LockingTypedState<K, V, T, D>>, Box<CodecMismatch>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -348,11 +364,15 @@ impl StateCache {
             let state = match init {
                 StateCacheInit::Init(x) => x,
                 StateCacheInit::NeedInit(init_once) => {
-                    let mut did_init: Option<Arc<RwLock<TypedState<K, V, T, D>>>> = None;
+                    let mut did_init: Option<Arc<LockingTypedState<K, V, T, D>>> = None;
                     let state = init_once
                         .get_or_try_init::<Box<CodecMismatch>, _, _>(|| async {
                             let init_res = init_fn().await;
-                            let state = Arc::new(RwLock::new(init_res?));
+                            let state = Arc::new(LockingTypedState {
+                                shard_id,
+                                notifier: StateWatchNotifier::new(Arc::clone(&self.metrics)),
+                                state: RwLock::new(init_res?),
+                            });
                             let ret = Arc::downgrade(&state);
                             did_init = Some(state);
                             let ret: Weak<dyn DynState> = ret;
@@ -362,7 +382,7 @@ impl StateCache {
                     if let Some(x) = did_init {
                         // We actually did the init work, don't bother casting back
                         // the type erased and weak version.
-                        return Ok(LockingTypedState(x));
+                        return Ok(x);
                     }
                     let Some(state) = state.upgrade() else {
                         // Race condition. Between when we first checked the
@@ -379,9 +399,9 @@ impl StateCache {
 
             match Arc::clone(&state)
                 .as_any()
-                .downcast::<RwLock<TypedState<K, V, T, D>>>()
+                .downcast::<LockingTypedState<K, V, T, D>>()
             {
-                Ok(x) => return Ok(LockingTypedState(x)),
+                Ok(x) => return Ok(x),
                 Err(_) => {
                     return Err(Box::new(CodecMismatch {
                         requested: (
@@ -389,9 +409,7 @@ impl StateCache {
                             V::codec_name(),
                             T::codec_name(),
                             D::codec_name(),
-                            Some(CodecConcreteType(std::any::type_name::<
-                                TypedState<K, V, T, D>,
-                            >())),
+                            Some(CodecConcreteType(std::any::type_name::<(K, V, T, D)>())),
                         ),
                         actual: state.codecs(),
                     }))
@@ -434,28 +452,44 @@ impl StateCache {
 /// A locked decorator for TypedState that abstracts out the specific lock implementation used.
 /// Guards the private lock with public accessor fns to make locking scopes more explicit and
 /// simpler to reason about.
-#[derive(Debug)]
-pub(crate) struct LockingTypedState<K, V, T, D>(Arc<RwLock<TypedState<K, V, T, D>>>);
+pub(crate) struct LockingTypedState<K, V, T, D> {
+    shard_id: ShardId,
+    state: RwLock<TypedState<K, V, T, D>>,
+    notifier: StateWatchNotifier,
+}
 
-impl<K, V, T, D> Clone for LockingTypedState<K, V, T, D> {
-    fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let LockingTypedState {
+            shard_id,
+            state,
+            notifier,
+        } = self;
+        f.debug_struct("LockingTypedState")
+            .field("shard_id", shard_id)
+            .field("state", state)
+            .field("notifier", notifier)
+            .finish()
     }
 }
 
 impl<K, V, T, D> LockingTypedState<K, V, T, D> {
+    pub(crate) fn shard_id(&self) -> &ShardId {
+        &self.shard_id
+    }
+
     pub(crate) fn read_lock<R, F: FnMut(&TypedState<K, V, T, D>) -> R>(
         &self,
         metrics: &LockMetrics,
         mut f: F,
     ) -> R {
         metrics.acquire_count.inc();
-        let state = match self.0.try_read() {
+        let state = match self.state.try_read() {
             Ok(x) => x,
             Err(TryLockError::WouldBlock) => {
                 metrics.blocking_acquire_count.inc();
                 let start = Instant::now();
-                let state = self.0.read().expect("lock poisoned");
+                let state = self.state.read().expect("lock poisoned");
                 metrics
                     .blocking_seconds
                     .inc_by(start.elapsed().as_secs_f64());
@@ -472,12 +506,12 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         f: F,
     ) -> R {
         metrics.acquire_count.inc();
-        let mut state = match self.0.try_write() {
+        let mut state = match self.state.try_write() {
             Ok(x) => x,
             Err(TryLockError::WouldBlock) => {
                 metrics.blocking_acquire_count.inc();
                 let start = Instant::now();
-                let state = self.0.write().expect("lock poisoned");
+                let state = self.state.write().expect("lock poisoned");
                 metrics
                     .blocking_seconds
                     .inc_by(start.elapsed().as_secs_f64());
@@ -485,7 +519,21 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
             }
             Err(TryLockError::Poisoned(err)) => panic!("state read lock poisoned: {}", err),
         };
-        f(&mut state)
+        let seqno_before = state.seqno;
+        let ret = f(&mut state);
+        let seqno_after = state.seqno;
+        debug_assert!(seqno_after >= seqno_before);
+        if seqno_after > seqno_before {
+            self.notifier.notify(seqno_after);
+        }
+        // For now, make sure to notify while under lock. It's possible to move
+        // this out of the lock window, see [StateWatchNotifier::notify].
+        drop(state);
+        ret
+    }
+
+    pub(crate) fn notifier(&self) -> &StateWatchNotifier {
+        &self.notifier
     }
 }
 
@@ -589,13 +637,13 @@ mod tests {
             state1: &LockingTypedState<K, V, T, D>,
             state2: &LockingTypedState<K, V, T, D>,
         ) {
-            let pointer1 = format!("{:p}", state1.0.read().expect("lock").deref());
-            let pointer2 = format!("{:p}", state2.0.read().expect("lock").deref());
+            let pointer1 = format!("{:p}", state1.state.read().expect("lock").deref());
+            let pointer2 = format!("{:p}", state2.state.read().expect("lock").deref());
             assert_eq!(pointer1, pointer2);
         }
 
         let s1 = ShardId::new();
-        let states = Arc::new(StateCache::default());
+        let states = Arc::new(StateCache::new_no_metrics());
 
         // The cache starts empty.
         assert_eq!(states.states.lock().await.len(), 0);
@@ -670,7 +718,7 @@ mod tests {
         assert_eq!(did_work.load(Ordering::SeqCst), false);
         assert_eq!(
             format!("{}", res.expect_err("types shouldn't match")),
-            "requested codecs (\"String\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"mz_persist_client::internal::state::TypedState<alloc::string::String, (), u64, i64>\"))) did not match ones in durable storage (\"()\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"mz_persist_client::internal::state::TypedState<(), (), u64, i64>\")))"
+            "requested codecs (\"String\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"(alloc::string::String, (), u64, i64)\"))) did not match ones in durable storage (\"()\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"((), (), u64, i64)\")))"
         );
         assert_eq!(states.initialized_count().await, 1);
         assert_eq!(states.strong_count().await, 1);
@@ -715,7 +763,7 @@ mod tests {
 
         const COUNT: usize = 1000;
         let id = ShardId::new();
-        let cache = Arc::new(StateCache::default());
+        let cache = Arc::new(StateCache::new_no_metrics());
 
         let mut futures = (0..COUNT)
             .map(|_| {
