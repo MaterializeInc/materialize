@@ -218,7 +218,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
         Plan::CreateSources(plans) => {
             if plans
                 .iter()
-                .any(|plan| plan.plan.cluster_config.will_create_new_cluster())
+                .any(|plan| plan.plan.cluster_config.cluster_id().is_none())
             {
                 Some(Attribute::CreateCluster)
             } else {
