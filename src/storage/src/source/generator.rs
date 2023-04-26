@@ -90,20 +90,14 @@ impl SourceRender for LoadGeneratorSourceConnection {
         Stream<G, (usize, HealthStatusUpdate)>,
         Rc<dyn Any>,
     ) {
-        let mut builder = AsyncOperatorBuilder::new(config.name, scope.clone());
+        let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
         let (mut data_output, stream) = builder.new_output();
 
         let button = builder.build(move |caps| async move {
             let mut cap = caps.into_element();
 
-            let responsible = crate::source::responsible_for(
-                &config.id,
-                config.worker_id,
-                config.worker_count,
-                (),
-            );
-            if !responsible {
+            if !config.responsible_for(()) {
                 return;
             }
 
