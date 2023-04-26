@@ -67,13 +67,13 @@ class JsonSource(Check):
                 30000
 
                 > SHOW CREATE SOURCE format_jsonA;
-                materialize.public.format_jsona "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsona\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-1') FORMAT JSON EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsonA_progress\\""
+                materialize.public.format_jsona "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsona\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-1') FORMAT JSON EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsona_progress\\""
 
                 > SELECT SUM((data -> 'f1')::STRING::INTEGER) + SUM((data -> 'f2')::STRING::INTEGER) + SUM((data -> 'f3')::STRING::INTEGER) FROM format_jsonB;
                 30000
 
                 > SHOW CREATE SOURCE format_jsonB;
-                materialize.public.format_jsonb "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsonb\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-1') FORMAT JSON EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsonB_progress\\""
+                materialize.public.format_jsonb "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsonb\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-1') FORMAT JSON EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsonb_progress\\""
            """
             )
         )
