@@ -1,6 +1,6 @@
 ---
 title: "SUBSCRIBE"
-description: "`SUBSCRIBE` streams updates from a source, table, or view as they occur."
+description: "`SUBSCRIBE` streams updates from a source, table, view, or materialized view as they occur."
 menu:
   main:
     parent: commands
@@ -8,7 +8,8 @@ aliases:
   - /sql/tail
 ---
 
-`SUBSCRIBE` streams updates from a source, table, or view as they occur.
+`SUBSCRIBE` streams updates from a source, table, view, or materialized view as
+they occur.
 
 ## Conceptual framework
 
@@ -30,10 +31,12 @@ You can use `SUBSCRIBE` to:
 
 {{< diagram "subscribe-stmt.svg" >}}
 
-| Field                  | Use                                                                                                                                      |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| _object_name_          | The name of the source, table, or view that you want to subscribe to.                                                                            |
-| _select_stmt_          | The [`SELECT` statement](../select) whose output you want to subscribe to.                                                                       |
+| Field                           | Use                                                                                                                                      |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| _object_name_                   | The name of the source, table, or view that you want to subscribe to.                                                                    |
+| _select_stmt_                   | The [`SELECT` statement](../select) whose output you want to subscribe to.
+| **ENVELOPE UPSERT**             | Use the upsert envelope, which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **WITHIN TIMESTAMP...ORDER BY** | Use an `ORDER BY` clause to sort the subscription output within a timestamp. For more information, see [Modifying the output format](#modifying-the-output-format). |
 
 ### `WITH` options
 
@@ -43,14 +46,6 @@ The following options are valid within the `WITH` clause.
 | ----------- | ---------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `SNAPSHOT`  | `boolean`  | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot). |
 | `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress).                                              |
-
-### `ENVELOPE UPSERT` options
-
-`ENVELOPE UPSERT` takes a list of columns that make up the key. See [`ENVELOPE UPSERT`].
-
-### `WITHIN TIMESTAMP ORDER BY` options
-
-`WITHIN TIMESTAMP ORDER BY` takes a `SELECT`-like `ORDER BY` clause to sort subscribe data within a timestamp. See [`WITHIN TIMESTAMP ORDER BY`].
 
 ## Details
 
@@ -296,74 +291,103 @@ If your row has a unique column key, it is possible to map the update to its cor
 
 In the example above, `Column 1` acts as the column key that uniquely identifies the origin row the update refers to; in case this was unknown, hashing the values from `Column 1` to `Column N` would identify the origin row.
 
-### Alternate output formats
+[//]: # "TODO(morsapaes) This page is now complex enough that we should
+restructure it using the same feature-oriented approach as CREATE SOURCE/SINK.
+See #18829 for the design doc."
+
+### Modifying the output format
 
 {{< alpha />}}
 
 #### `ENVELOPE UPSERT`
 
-Takes a list of columns to interpret as a key (given by the `KEY` option) and within each distinct timestamp interprets the updates as a series of upserts.
-The output columns are reordered as `(mz_timestamp, mz_state, k1, k2, .., v1, v2, ..)`.
-There is no `mz_diff` column.
-The values `v1, v2, ..` are set to the last value if there's an update or an insert and are all set to `NULL` if the only updates to the key in that timestamp were deletions.
-`mz_state` is either "delete" or "upsert" to distinguish the two cases; when there are no values or the values can all be NULL this column is the only way to distinguish a deletion from an upsert.
+To modify the output of `SUBSCRIBE` to support upserts, use `ENVELOPE UPSERT`.
+This clause allows you to specify a `KEY` that Materialize uses to interpret
+the rows as a series of inserts, updates and deletes within each distinct
+timestamp.
 
-Using `ENVELOPE UPSERT` when there is more than one live value per key can be confusing.
-The upserts generated have no way to express which value was deleted for a given key.
+* Using this modifier, the output rows will have the following
+structure:
 
-Example:
+   ```sql
+   SUBSCRIBE mview ENVELOPE UPSERT (KEY (key));
+   ```
 
-```nofmt
-> CREATE TABLE kv_store(key int, value int, UNIQUE(key))
-> INSERT INTO kv_store VALUES (1, 2), (2, 4)
-> SUBSCRIBE kv_store ENVELOPE UPSERT (KEY (key))
-mz_timestamp | mz_state | key  | value
--------------|----------|------|--------
-100          | upsert   | 1    | 2
-100          | upsert   | 2    | 4
+   ```sql
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   100          | upsert   | 1    | 2
+   100          | upsert   | 2    | 4
+   ```
 
-...
--- at time 200, update key=1's value to 10
-...
+* For inserts and updates, the value columns for each key are set to the
+  resulting value of the series of operations, and `mz_state` is set to
+  `upsert`.
 
-200          | upsert   | 1    | 10
+  _Insert_
 
+  ```sql
+   -- at time 200, update key=1's value to 10
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   ...
+   200          | upsert   | 1    | 10
+   ...
+  ```
 
-...
--- at time 300, add a new row with key=3, value=6
-...
+  _Update_
 
-300          | upsert   | 3    | 6
+  ```sql
+   -- at time 300, add a new row with key=3, value=6
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   ...
+   300          | upsert   | 3    | 6
+   ...
+  ```
 
-...
--- at time 400, delete all rows
-...
+* If only deletes occur within a timestamp, the value columns for each key are
+  set to `NULL`, and `mz_state` is set to `delete`.
 
-400          | delete   | 1    | NULL
-400          | delete   | 2    | NULL
-400          | delete   | 3    | NULL
-```
+  _Delete_
+
+  ```sql
+   -- at time 400, delete all rows
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   ...
+   400          | delete   | 1    | NULL
+   400          | delete   | 2    | NULL
+   400          | delete   | 3    | NULL
+   ...
+  ```
+
+* If [`PROGRESS`](#progress) is set, Materialize also returns the `mz_progressed`
+column. Each progress row will have a `NULL` key and a `NULL` value.
 
 #### `WITHIN TIMESTAMP ORDER BY`
 
-`WITHIN TIMESTAMP ORDER BY` takes a `ORDER BY` expression and sorts the returned data within each distinct timestamp.
-This `ORDER BY` can take any column in the underlying object or query in addition to the `mz_diff` column.
-A common use case of recovering upserts to key-value data would be sort by all the keys and `mz_diff`.
-Since `SUBSCRIBE` guarantees that there won't be multiple updates for the same row (the batch is already consolidated), this will produce data that looks like `(k, v1, -1), (k, v2, +1)` which are easier to handle.
+To modify the ordering of the output of `SUBSCRIBE`, use `WITHIN TIMESTAMP ORDER
+BY`. This clause allows you to specify an `ORDER BY` expression which is used
+to sort the rows within each distinct timestamp.
 
-Example:
-```nofmt
-> CREATE TABLE table(c1 int, c2 int, c3 text)
-> SUBSCRIBE table WITHIN TIMESTAMP ORDER BY c1, c2 DESC NULLS LAST, mz_diff
-mz_timestamp | mz_diff | c1            | c2   | c3
--------------|---------|---------------|------|-----
-100          | +1      | 1             | 20   | foo
-100          | -1      | 1             | 2    | bar
-100          | +1      | 1             | 2    | boo
-100          | +1      | 1             | 0    | data
-100          | -1      | 2             | 0    | old
-100          | +1      | 2             | 0    | new
-```
+* The `ORDER BY` expression can take any column in the underlying object or
+  query, including `mz_diff`.
+
+   ```sql
+   SUBSCRIBE mview WITHIN TIMESTAMP ORDER BY c1, c2 DESC NULLS LAST, mz_diff;
+
+   mz_timestamp | mz_diff | c1            | c2   | c3
+   -------------|---------|---------------|------|-----
+   100          | +1      | 1             | 20   | foo
+   100          | -1      | 1             | 2    | bar
+   100          | +1      | 1             | 2    | boo
+   100          | +1      | 1             | 0    | data
+   100          | -1      | 2             | 0    | old
+   100          | +1      | 2             | 0    | new
+   ```
+
+* If [`PROGRESS`](#progress) is set, progress messages are unaffected.
 
 ### Dropping the `counter` load generator source
 
