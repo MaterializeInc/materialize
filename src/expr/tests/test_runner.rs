@@ -74,13 +74,14 @@
 // END LINT CONFIG
 
 mod test {
+    use itertools::Itertools;
     use mz_expr::canonicalize::{canonicalize_equivalences, canonicalize_predicates};
-    use mz_expr::{MapFilterProject, MirScalarExpr};
+    use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, MirScalarExpr};
     use mz_expr_test_util::*;
     use mz_lowertest::{deserialize, deserialize_optional, tokenize, MzReflect};
     use mz_ore::result::ResultExt;
     use mz_ore::str::separated;
-    use mz_repr::ColumnType;
+    use mz_repr::{ColumnType, RelationType, RowArena};
 
     use serde::{Deserialize, Serialize};
 
@@ -178,6 +179,49 @@ mod test {
         Ok(equivalences)
     }
 
+    fn test_interpret(s: &str) -> Result<Vec<String>, String> {
+        let mut input_stream = tokenize(s)?.into_iter();
+        let mut ctx = MirScalarExprDeserializeContext::default();
+        let types: Vec<ColumnType> = deserialize(&mut input_stream, "Vec<ColumnType>", &mut ctx)?;
+        let values: Vec<Vec<MirScalarExpr>> =
+            deserialize(&mut input_stream, "Vec<Vec<MirScalarExpr>>", &mut ctx)?;
+        let expr: MirScalarExpr = deserialize(&mut input_stream, "MirScalarExpr", &mut ctx)?;
+        let tests: Vec<MirScalarExpr> =
+            deserialize(&mut input_stream, "Vec<MirScalarExpr>", &mut ctx)?;
+
+        let arena = RowArena::new();
+        let mut interpreter = ColumnSpecs::new(RelationType::new(types), &arena);
+
+        let specs: Vec<_> = values
+            .into_iter()
+            .map(|col_exprs| {
+                col_exprs
+                    .into_iter()
+                    .map(|expr| interpreter.eval_expr(&expr).range)
+                    .reduce(|a, b| a.union(b))
+                    .expect("at least one literal")
+            })
+            .collect();
+
+        for (id, spec) in specs.into_iter().enumerate() {
+            interpreter.push_column(id, spec);
+        }
+        let output = interpreter.eval_expr(&expr);
+
+        let mut may_contain: Vec<_> = tests
+            .iter()
+            .map(|t| t.eval(&[], &arena).expect("literal datum"))
+            .filter(|d| output.range.may_contain(*d))
+            .map(|d| d.to_string())
+            .collect();
+
+        if output.range.may_fail() {
+            may_contain.push("<err>".into())
+        }
+
+        Ok(may_contain)
+    }
+
     #[test]
     fn run() {
         datadriven::walk("tests/testdata", |f| {
@@ -205,6 +249,12 @@ mod test {
                                 separated(" ", filter.iter()),
                                 separated(" ", project.iter())
                             )
+                        }
+                        Err(err) => format!("error: {}\n", err),
+                    },
+                    "interpret" => match test_interpret(&s.input) {
+                        Ok(contains) => {
+                            format!("may contain: [{}]\n", contains.into_iter().join(" "))
                         }
                         Err(err) => format!("error: {}\n", err),
                     },
