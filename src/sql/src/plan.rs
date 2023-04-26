@@ -232,7 +232,7 @@ impl Plan {
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
             Plan::CreateSource(_) => "create source",
-            Plan::CreateSources(_) => "create source",
+            Plan::CreateSources(_) => "create sources",
             Plan::CreateSecret(_) => "create secret",
             Plan::CreateSink(_) => "create sink",
             Plan::CreateTable(_) => "create table",
