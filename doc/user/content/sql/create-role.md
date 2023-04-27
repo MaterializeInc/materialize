@@ -27,7 +27,7 @@ Field               | Use
 _role_name_         | A name for the role.
 **INHERIT**         | Grants the role the ability to inheritance of privileges of other roles.
 **CREATEROLE**      | Grants the role the ability to create, alter, delete roles and the ability to grant and revoke role membership. This attribute is very powerful. It allows roles to grant and revoke membership in other roles, even if it doesn't have explicit membership in those roles. As a consequence, any role with this attribute can obtain the privileges of any other role in the system.
-**NOCREATEROLE**    | Denies the role the ability to create, alter, delete roles and the ability to grant and revoke role membership.
+**NOCREATEROLE**    | Denies the role the ability to create, alter, delete roles or grant and revoke role membership.
 **CREATEDB**        | Grants the role the ability to create databases.
 **NOCREATEDB**      | Denies the role the ability to create databases.
 **CREATECLUSTER**   | Grants the role the ability to create clusters.
