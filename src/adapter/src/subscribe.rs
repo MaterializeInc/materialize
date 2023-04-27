@@ -105,7 +105,7 @@ impl ActiveSubscribe {
                     Ok(mut rows) => {
                         // Sort results by time. We use stable sort here because it will produce deterministic
                         // results since the cursor will always produce rows in the same order.
-                        // TODO: Is sorting by time necessary?
+                        // Compute doesn't guarantee that the results are sorted (#18936)
                         match &self.output {
                             SubscribeOutput::WithinTimestampOrderBy { order_by } => {
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
