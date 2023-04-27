@@ -139,8 +139,8 @@ impl ActiveSubscribe {
                                 let mut it = rows.iter();
                                 let mut datum_vec = mz_repr::DatumVec::new();
                                 while let Some(start) = it.next() {
-                                    let group =
-                                        iter::once(start).chain(it.take_while_ref(|row| {
+                                    let group = iter::once(start)
+                                        .chain(it.take_while_ref(|row| {
                                             let left_datums = left_datum_vec.borrow_with(&start.1);
                                             let right_datums = right_datum_vec.borrow_with(&row.1);
                                             start.0 == row.0
@@ -150,7 +150,8 @@ impl ActiveSubscribe {
                                                     &right_datums,
                                                     || Ordering::Equal,
                                                 ) == Ordering::Equal
-                                        })).collect_vec();
+                                        }))
+                                        .collect_vec();
 
                                     // Four cases:
                                     // [(key, value, +1)] => ("upsert", key, value
@@ -166,7 +167,8 @@ impl ActiveSubscribe {
                                                 packer.push(datums[column_order.column]);
                                             }
                                             for idx in 0..self.arity {
-                                                if !order_by_keys.iter().any(|co| co.column == idx) {
+                                                if !order_by_keys.iter().any(|co| co.column == idx)
+                                                {
                                                     packer.push(datums[idx]);
                                                 }
                                             }
@@ -222,7 +224,9 @@ impl ActiveSubscribe {
                                         -1 => Datum::String("delete"),
                                         0 => Datum::String("key violation"),
                                         1 => Datum::String("upsert"),
-                                        _ => unreachable!("envelope upsert can only generate -1..1 diffs"),
+                                        _ => unreachable!(
+                                            "envelope upsert can only generate -1..1 diffs"
+                                        ),
                                     });
                                 } else {
                                     packer.push(Datum::Int64(diff));
