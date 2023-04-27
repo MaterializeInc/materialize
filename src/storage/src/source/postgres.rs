@@ -413,6 +413,11 @@ impl SourceRender for PostgresSourceConnection {
                         );
                     }
                 }
+                // During dataflow shutdown this loop can end due to the general chaos caused by
+                // dropping tokens as a means to shutdown. This call ensures this future never ends
+                // and we instead rely on this operator being dropped altogether when *its* token
+                // is dropped.
+                std::future::pending::<()>().await;
             };
             tokio::pin!(offset_commit_loop);
 
