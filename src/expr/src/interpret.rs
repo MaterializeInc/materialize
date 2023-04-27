@@ -383,7 +383,7 @@ impl<'a> ResultSpec<'a> {
                 }
                 Monotonic::Maybe | Monotonic::No => ResultSpec::anything(),
             },
-            _ => ResultSpec::anything(),
+            Values::Nested(_) | Values::All => ResultSpec::anything(),
         };
 
         null_spec.union(error_spec).union(values_spec)
@@ -820,7 +820,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         let col_type = func.output_type(left.col_type, right.col_type);
 
         let range_special = match func {
-            BinaryFunc::JsonbGetString { stringify: false } => {
+            BinaryFunc::JsonbGetString { stringify } => {
                 right
                     .range
                     .clone()
@@ -828,10 +828,32 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                         Datum::Null => ResultSpec::null(),
                         key => match &left.range.values {
                             Values::Empty => ResultSpec::nothing(),
-                            Values::Nested(map_spec) => map_spec
-                                .get(&key)
-                                .cloned()
-                                .unwrap_or_else(ResultSpec::anything),
+                            Values::Nested(map_spec) => map_spec.get(&key).cloned().map_or_else(
+                                ResultSpec::anything,
+                                |field_spec| {
+                                    eprintln!("WOW {map_spec:?} {key:?}");
+                                    if *stringify {
+                                        // We only preserve value-range information when stringification
+                                        // is a noop. (Common in real queries.)
+                                        let values = match field_spec.values {
+                                            Values::Empty => Values::Empty,
+                                            Values::Within(
+                                                min @ Datum::String(_),
+                                                max @ Datum::String(_),
+                                            ) => Values::Within(min, max),
+                                            Values::Within(_, _)
+                                            | Values::Nested(_)
+                                            | Values::All => Values::All,
+                                        };
+                                        ResultSpec {
+                                            values,
+                                            ..field_spec
+                                        }
+                                    } else {
+                                        field_spec
+                                    }
+                                },
+                            ),
                             _ => ResultSpec::anything(),
                         },
                     })
