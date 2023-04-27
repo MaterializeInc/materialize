@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Borrow;
+use std::collections::BTreeMap;
 
 use mz_persist_types::columnar::{ColumnGet, Data};
 use mz_persist_types::stats::{JsonStats, PrimitiveStats};
@@ -158,13 +159,9 @@ pub(crate) fn jsonb_stats_nulls(
 
 fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), String> {
     fn update_stats<T: PartialOrd + ToOwned + ?Sized>(
-        stats: &mut Option<PrimitiveStats<T::Owned>>,
+        stats: &mut PrimitiveStats<T::Owned>,
         val: &T,
     ) {
-        let stats = stats.get_or_insert_with(|| PrimitiveStats {
-            lower: val.to_owned(),
-            upper: val.to_owned(),
-        });
         if val < stats.lower.borrow() {
             stats.lower = val.to_owned();
         }
@@ -174,24 +171,76 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
     }
 
     match datum {
-        Datum::JsonNull => stats.json_nulls += 1,
-        Datum::False => update_stats(&mut stats.bools, &false),
-        Datum::True => update_stats(&mut stats.bools, &true),
-        Datum::String(x) => update_stats(&mut stats.string, x),
-        Datum::Numeric(x) => {
-            let x = f64::try_from(x.0)
-                .map_err(|_| format!("TODO: Could not collect stats for decimal: {}", x))?;
-            update_stats(&mut stats.numeric, &x);
-        }
-        Datum::List(_) => {
-            stats.list += 1;
-        }
-        Datum::Map(x) => {
-            for (k, v) in x.iter() {
-                let key_stats = stats.map.entry(k.to_owned()).or_default();
-                let () = jsonb_stats_datum(key_stats, v)?;
+        Datum::JsonNull => match stats {
+            JsonStats::None => *stats = JsonStats::JsonNulls,
+            JsonStats::JsonNulls => {}
+            _ => *stats = JsonStats::Mixed,
+        },
+        Datum::False => match stats {
+            JsonStats::None => {
+                *stats = JsonStats::Bools(PrimitiveStats {
+                    lower: false,
+                    upper: false,
+                })
             }
-            stats.maps = true;
+            JsonStats::Bools(stats) => update_stats(stats, &false),
+            _ => *stats = JsonStats::Mixed,
+        },
+        Datum::True => match stats {
+            JsonStats::None => {
+                *stats = JsonStats::Bools(PrimitiveStats {
+                    lower: true,
+                    upper: true,
+                })
+            }
+            JsonStats::Bools(stats) => update_stats(stats, &true),
+            _ => *stats = JsonStats::Mixed,
+        },
+        Datum::String(val) => match stats {
+            JsonStats::None => {
+                *stats = JsonStats::Strings(PrimitiveStats {
+                    lower: val.to_owned(),
+                    upper: val.to_owned(),
+                })
+            }
+            JsonStats::Strings(stats) => update_stats(stats, val),
+            _ => *stats = JsonStats::Mixed,
+        },
+        Datum::Numeric(val) => {
+            let val = f64::try_from(val.0)
+                .map_err(|_| format!("TODO: Could not collect stats for decimal: {}", val))?;
+            match stats {
+                JsonStats::None => {
+                    *stats = JsonStats::Numerics(PrimitiveStats {
+                        lower: val,
+                        upper: val,
+                    })
+                }
+                JsonStats::Numerics(stats) => update_stats(stats, &val),
+                _ => *stats = JsonStats::Mixed,
+            }
+        }
+        Datum::List(_) => match stats {
+            JsonStats::None => *stats = JsonStats::Lists,
+            JsonStats::Lists => {}
+            _ => *stats = JsonStats::Mixed,
+        },
+        Datum::Map(val) => {
+            if let JsonStats::None = stats {
+                *stats = JsonStats::Maps(BTreeMap::new());
+            }
+            match stats {
+                JsonStats::None => unreachable!("set to Maps above"),
+                JsonStats::Maps(stats) => {
+                    for (k, v) in val.iter() {
+                        let key_stats = stats.entry(k.to_owned()).or_default();
+                        let () = jsonb_stats_datum(key_stats, v)?;
+                    }
+                }
+                _ => {
+                    *stats = JsonStats::Mixed;
+                }
+            };
         }
         _ => {
             return Err(format!(
@@ -201,4 +250,69 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_persist_types::columnar::{PartEncoder, Schema};
+    use mz_persist_types::part::PartBuilder;
+    use mz_persist_types::stats::StructStats;
+    use mz_proto::RustType;
+    use proptest::prelude::*;
+
+    use crate::{Datum, RelationDesc, Row, ScalarType};
+
+    fn datum_stats_roundtrip<'a>(schema: &RelationDesc, datums: impl IntoIterator<Item = &'a Row>) {
+        let mut part = PartBuilder::new(schema, &UnitSchema);
+        {
+            let part_mut = part.get_mut();
+            let mut encoder = schema.encoder(part_mut.key).unwrap();
+            for datum in datums {
+                encoder.encode(datum);
+                part_mut.ts.push(1);
+                part_mut.diff.push(1);
+            }
+        }
+        let part = part.finish().unwrap();
+        let expected = part.key_stats(schema).unwrap();
+        let _actual = StructStats::from_proto(expected.into_proto()).unwrap();
+        // It's not particularly easy to give StructStats a PartialEq impl, but
+        // verifying that there weren't any panics gets us pretty far.
+    }
+
+    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
+        let mut rows = Vec::new();
+        for datum in scalar_type.interesting_datums() {
+            rows.push(Row::pack(std::iter::once(datum)));
+        }
+
+        // Non-nullable version of the column.
+
+        let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
+        for row in rows.iter() {
+            datum_stats_roundtrip(&schema, [row]);
+        }
+        datum_stats_roundtrip(&schema, &rows[..]);
+
+        // Nullable version of the column.
+        let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
+        rows.push(Row::pack(std::iter::once(Datum::Null)));
+        for row in rows.iter() {
+            datum_stats_roundtrip(&schema, [row]);
+        }
+        datum_stats_roundtrip(&schema, &rows[..]);
+    }
+
+    // Ideally, this test would live in persist-types next to the stats <->
+    // proto code, but it's much easier to proptest them from Datums.
+    #[test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn all_scalar_type_stats_roundtrip() {
+        mz_ore::test::init_logging();
+        proptest!(|(scalar_type in any::<ScalarType>())| {
+            // The proptest! macro interferes with rustfmt.
+            scalar_type_stats_roundtrip(scalar_type)
+        });
+    }
 }

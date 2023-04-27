@@ -138,66 +138,52 @@ impl StructStats {
 // Each element could be any of a JsonNull, a bool, a string, a numeric, a list,
 // or a map/object. The column might be a single type but could also be a
 // mixture of any subset of these types.
-#[derive(Default)]
-pub struct JsonStats {
-    /// The count of `Datum::JsonNull`s, or 0 if there were none.
-    pub json_nulls: usize,
+pub enum JsonStats {
+    /// A sentinel that indicates there were no elements.
+    None,
+    /// There were elements from more than one category of: bools, strings,
+    /// numerics, lists, maps.
+    Mixed,
+    /// A sentinel that indicates all elements were `Datum::JsonNull`s.
+    JsonNulls,
     /// The min and max bools, or None if there were none.
-    pub bools: Option<PrimitiveStats<bool>>,
+    Bools(PrimitiveStats<bool>),
     /// The min and max strings, or None if there were none.
-    pub string: Option<PrimitiveStats<String>>,
+    Strings(PrimitiveStats<String>),
     /// The min and max numerics, or None if there were none.
     ///
     /// TODO(mfp): Storing this as an f64 is not correct.
-    pub numeric: Option<PrimitiveStats<f64>>,
-    /// The count of `Datum::List`s, or 0 if there were none.
+    Numerics(PrimitiveStats<f64>),
+    /// A sentinel that indicates all elements were `Datum::List`s.
     ///
     /// TODO: We could also do something for list indexes analogous to what we
     /// do for map keys, but it initially seems much less likely that a user
     /// would expect that to work with pushdown, so don't bother keeping the
     /// stats until someone asks for it.
-    pub list: usize,
+    Lists,
     /// Recursive statistics about the set of keys present in any maps/objects
     /// in the column, or None if there were no maps/objects.
-    pub map: BTreeMap<String, JsonStats>,
-    /// True if maps may be present. (This is _almost_ redundant
-    /// with the above, but handles the case where a map may not have any fields
-    /// or fields have been pruned.)
-    pub maps: bool,
+    Maps(BTreeMap<String, JsonStats>),
+}
+
+impl Default for JsonStats {
+    fn default() -> Self {
+        JsonStats::None
+    }
 }
 
 impl std::fmt::Debug for JsonStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let JsonStats {
-            json_nulls,
-            bools,
-            string,
-            numeric,
-            list,
-            map,
-            maps,
-        } = self;
         let mut f = &mut f.debug_tuple("json");
-        if json_nulls > &0 {
-            f = f.field(json_nulls);
-        }
-        if let Some(bools) = bools {
-            f = f.field(bools);
-        }
-        if let Some(string) = string {
-            f = f.field(string);
-        }
-        if let Some(numeric) = numeric {
-            f = f.field(numeric);
-        }
-        if list > &0 {
-            f = f.field(list);
-        }
-        if !map.is_empty() {
-            f = f.field(map);
-        }
-        if *maps {
-            f = f.field(&"maps")
+        match self {
+            JsonStats::None => {}
+            JsonStats::Mixed => f = f.field(&"mixed"),
+            JsonStats::JsonNulls => f = f.field(&"json_null"),
+            JsonStats::Bools(x) => f = f.field(x),
+            JsonStats::Strings(x) => f = f.field(x),
+            JsonStats::Numerics(x) => f = f.field(x),
+            JsonStats::Lists => f = f.field(&"list"),
+            JsonStats::Maps(x) => f = f.field(x),
         }
         f.finish()
     }
@@ -317,10 +303,11 @@ mod impls {
 
     use crate::columnar::Data;
     use crate::stats::{
-        proto_bytes_stats, proto_dyn_stats, proto_primitive_stats, truncate_bytes, truncate_string,
-        BytesStats, ColumnStats, DynStats, JsonStats, OptionStats, PrimitiveStats, ProtoBytesStats,
-        ProtoDynStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats,
-        StructStats, TruncateBound, TRUNCATE_LEN,
+        proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
+        truncate_bytes, truncate_string, BytesStats, ColumnStats, DynStats, JsonStats, OptionStats,
+        PrimitiveStats, ProtoBytesStats, ProtoDynStats, ProtoJsonMapStats, ProtoJsonStats,
+        ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats, StructStats, TruncateBound,
+        TRUNCATE_LEN,
     };
 
     impl<T> DynStats for PrimitiveStats<T>
@@ -610,33 +597,45 @@ mod impls {
     impl RustType<ProtoJsonStats> for JsonStats {
         fn into_proto(&self) -> ProtoJsonStats {
             ProtoJsonStats {
-                json_nulls: self.json_nulls.into_proto(),
-                bools: self.bools.into_proto(),
-                string: self.string.into_proto(),
-                numeric: self.numeric.into_proto(),
-                list: self.list.into_proto(),
-                map: self
-                    .map
-                    .iter()
-                    .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
-                    .collect(),
-                no_maps: !self.maps.into_proto(),
+                kind: Some(match self {
+                    JsonStats::None => proto_json_stats::Kind::None(()),
+                    JsonStats::Mixed => proto_json_stats::Kind::Mixed(()),
+                    JsonStats::JsonNulls => proto_json_stats::Kind::JsonNulls(()),
+                    JsonStats::Bools(x) => proto_json_stats::Kind::Bools(RustType::into_proto(x)),
+                    JsonStats::Strings(x) => {
+                        proto_json_stats::Kind::Strings(RustType::into_proto(x))
+                    }
+                    JsonStats::Numerics(x) => {
+                        proto_json_stats::Kind::Numerics(RustType::into_proto(x))
+                    }
+                    JsonStats::Lists => proto_json_stats::Kind::Lists(()),
+                    JsonStats::Maps(x) => proto_json_stats::Kind::Maps(ProtoJsonMapStats {
+                        elements: x
+                            .iter()
+                            .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
+                            .collect(),
+                    }),
+                }),
             }
         }
 
         fn from_proto(proto: ProtoJsonStats) -> Result<Self, TryFromProtoError> {
-            let mut map = BTreeMap::new();
-            for (k, v) in proto.map {
-                map.insert(k.into_rust()?, v.into_rust()?);
-            }
-            Ok(JsonStats {
-                json_nulls: proto.json_nulls.into_rust()?,
-                bools: proto.bools.into_rust()?,
-                string: proto.string.into_rust()?,
-                numeric: proto.numeric.into_rust()?,
-                list: proto.list.into_rust()?,
-                map,
-                maps: !proto.no_maps.into_rust()?,
+            Ok(match proto.kind {
+                Some(proto_json_stats::Kind::None(())) => JsonStats::None,
+                Some(proto_json_stats::Kind::Mixed(())) => JsonStats::Mixed,
+                Some(proto_json_stats::Kind::JsonNulls(())) => JsonStats::JsonNulls,
+                Some(proto_json_stats::Kind::Bools(x)) => JsonStats::Bools(x.into_rust()?),
+                Some(proto_json_stats::Kind::Strings(x)) => JsonStats::Strings(x.into_rust()?),
+                Some(proto_json_stats::Kind::Numerics(x)) => JsonStats::Numerics(x.into_rust()?),
+                Some(proto_json_stats::Kind::Lists(())) => JsonStats::Lists,
+                Some(proto_json_stats::Kind::Maps(x)) => {
+                    let mut map = BTreeMap::new();
+                    for (k, v) in x.elements {
+                        map.insert(k.into_rust()?, v.into_rust()?);
+                    }
+                    JsonStats::Maps(map)
+                }
+                None => return Err(TryFromProtoError::missing_field("ProtoJsonStats::values")),
             })
         }
     }
