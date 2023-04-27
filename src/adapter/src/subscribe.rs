@@ -222,7 +222,7 @@ impl ActiveSubscribe {
                                         -1 => Datum::String("delete"),
                                         0 => Datum::String("key violation"),
                                         1 => Datum::String("upsert"),
-                                        _ => panic!("envelope upsert can only generate -1..1 diffs"),
+                                        _ => unreachable!("envelope upsert can only generate -1..1 diffs"),
                                     });
                                 } else {
                                     packer.push(Datum::Int64(diff));
