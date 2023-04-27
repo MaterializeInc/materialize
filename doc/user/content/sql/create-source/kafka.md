@@ -91,8 +91,8 @@ Note that:
 #### Null keys
 
 If a message with a `NULL` key is detected, Materialize sets the source into an
-error state. To recover the errored source, the upstream Kafka broker must emit
-a record with a `NULL` value and a `NULL` key to force a retraction.
+error state. To recover an errored source, you must produce a record with a
+`NULL` value and a `NULL` key to the topic, to force a retraction.
 
 As an example, you can use [`kcat`](https://docs.confluent.io/platform/current/clients/kafkacat-usage.html)
 to produce an empty message:
