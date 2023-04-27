@@ -128,6 +128,8 @@ pub struct Config {
     // === Special modes. ===
     /// Whether to permit usage of unsafe features.
     pub unsafe_mode: bool,
+    /// What role, if any, should be initially created with elevated privileges.
+    pub bootstrap_role: Option<String>,
 
     // === Connection options. ===
     /// The IP address and port to listen for pgwire connections on.
@@ -316,6 +318,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 .choose(&mut rand::thread_rng())
                 .cloned()
                 .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
+            bootstrap_role: config.bootstrap_role,
         },
     )
     .await?;

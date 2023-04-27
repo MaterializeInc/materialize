@@ -148,6 +148,8 @@ class Materialized(Service):
             "--orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus",
         ]
 
+        environment += ["BOOTSTRAP_ROLE=materialize"]
+
         command += options
 
         config: ServiceConfig = {}

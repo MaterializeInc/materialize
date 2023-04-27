@@ -4067,6 +4067,7 @@ impl Catalog {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
+                bootstrap_role: None,
             },
         )
         .await?;

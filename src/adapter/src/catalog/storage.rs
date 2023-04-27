@@ -420,6 +420,92 @@ async fn migrate(
             ));
             txn.configs
                 .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
+
+            if let Some(bootstrap_role) = &bootstrap_args.bootstrap_role {
+                let role_id =
+                    RoleId::User(txn.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?);
+                txn.roles.insert(
+                    RoleKey { id: role_id },
+                    RoleValue {
+                        role: SerializedRole {
+                            name: bootstrap_role.clone(),
+                            attributes: Some(
+                                RoleAttributes::new().with_create_db().with_create_cluster(),
+                            ),
+                            membership: Some(RoleMembership::new()),
+                        },
+                    },
+                )?;
+                let audit_log_id = txn.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+                txn.audit_log_updates.push((
+                    AuditLogKey {
+                        event: VersionedEvent::new(
+                            audit_log_id,
+                            EventType::Create,
+                            ObjectType::Role,
+                            EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                                id: role_id.to_string(),
+                                name: "materialize".into(),
+                            }),
+                            None,
+                            now,
+                        ),
+                    },
+                    (),
+                    1,
+                ));
+                txn.databases.update(|key, value| {
+                    if key.id == MATERIALIZE_DATABASE_ID {
+                        let mut value = value.clone();
+                        value
+                            .privileges
+                            .as_mut()
+                            .expect("privileges not migrated")
+                            .push(MzAclItem {
+                                grantee: role_id,
+                                grantor: MZ_SYSTEM_ROLE_ID,
+                                acl_mode: AclMode::CREATE,
+                            });
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })?;
+                txn.schemas.update(|key, value| {
+                    if key.id == PUBLIC_SCHEMA_ID {
+                        let mut value = value.clone();
+                        value
+                            .privileges
+                            .as_mut()
+                            .expect("privileges not migrated")
+                            .push(MzAclItem {
+                                grantee: role_id,
+                                grantor: MZ_SYSTEM_ROLE_ID,
+                                acl_mode: AclMode::CREATE,
+                            });
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })?;
+                txn.clusters.update(|key, value| {
+                    if key.id == DEFAULT_USER_CLUSTER_ID {
+                        let mut value = value.clone();
+                        value
+                            .privileges
+                            .as_mut()
+                            .expect("privileges not migrated")
+                            .push(MzAclItem {
+                                grantee: role_id,
+                                grantor: MZ_SYSTEM_ROLE_ID,
+                                acl_mode: AclMode::CREATE,
+                            });
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })?;
+            }
             Ok(())
         },
         // These migrations were removed, but we need to keep empty migrations because the
@@ -882,6 +968,7 @@ pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
     pub default_availability_zone: String,
+    pub bootstrap_role: Option<String>,
 }
 
 #[derive(Debug)]

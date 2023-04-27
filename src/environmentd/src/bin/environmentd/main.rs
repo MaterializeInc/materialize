@@ -163,6 +163,15 @@ pub struct Args {
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
 
+    /// If set, a role with the provided name will be created with `CREATEDB` and `CREATECLUSTER`
+    /// attributes. It will also have `CREATE` privileges on the `materialize` database,
+    /// `materialize.public` schema, and `default` cluster.
+    ///
+    /// This option is meant for local development and testing to simplify the initial process of
+    /// granting attributes and privileges to some default role.
+    #[clap(long, env = "BOOTSTRAP_ROLE")]
+    bootstrap_role: Option<String>,
+
     // === Connection options. ===
     /// The address on which to listen for untrusted SQL connections.
     ///
@@ -796,6 +805,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .map(|kv| (kv.key, kv.value))
             .collect(),
         config_sync_loop_interval: args.config_sync_loop_interval,
+        bootstrap_role: args.bootstrap_role,
     }))?;
 
     metrics.start_time_environmentd.set(
