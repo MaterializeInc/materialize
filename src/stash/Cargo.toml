@@ -34,5 +34,10 @@ mz-postgres-util = { path = "../postgres-util" }
 once_cell = "1.16.0"
 tokio = { version = "1.24.2", features = ["macros"] }
 
+[build-dependencies]
+anyhow = "1.0.66"
+md-5 = "0.10.5"
+prost-build = "0.11.2"
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
