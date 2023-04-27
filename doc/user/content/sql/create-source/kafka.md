@@ -88,6 +88,23 @@ Note that:
 
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
 
+#### Null keys
+
+If a message with a `NULL` key is detected, Materialize sets the source into an
+error state. To recover the errored source, the upstream Kafka broker must emit
+a record with a `NULL` value and a `NULL` key to force a retraction.
+
+As an example, you can use [`kcat`](https://docs.confluent.io/platform/current/clients/kafkacat-usage.html)
+to produce an empty message:
+
+```bash
+echo ":" | kcat -b $BROKER -t $TOPIC -Z -K: \
+  -X security.protocol=SASL_SSL \
+  -X sasl.mechanisms=SCRAM-SHA-256 \
+  -X sasl.username=$KAFKA_USERNAME \
+  -X sasl.password=$KAFKA_PASSWORD
+```
+
 ### Using Debezium
 
 {{< debezium-json >}}
