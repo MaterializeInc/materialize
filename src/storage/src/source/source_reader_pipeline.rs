@@ -30,6 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fmt::Display;
 use std::future::Future;
+use std::hash::Hash;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -134,6 +135,15 @@ pub struct RawSourceCreationConfig {
     pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
     /// Configuration parameters, possibly from LaunchDarkly
     pub params: SourceCreationParams,
+}
+
+impl RawSourceCreationConfig {
+    /// Returns true if this worker is responsible for handling the given partition.
+    pub fn responsible_for<P: Hash>(&self, partition: P) -> bool {
+        let key = usize::cast_from((self.id, partition).hashed());
+        // Distribute partitions equally amongst workers.
+        (key % self.worker_count) == self.worker_id
+    }
 }
 
 #[derive(Clone)]

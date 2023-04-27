@@ -294,14 +294,7 @@ impl SourceRender for PostgresSourceConnection {
             let mut data_capability = capabilities.pop().unwrap();
             assert!(capabilities.is_empty());
 
-            let active_read_worker = crate::source::responsible_for(
-                &config.id,
-                config.worker_id,
-                config.worker_count,
-                (),
-            );
-
-            if !active_read_worker {
+            if !config.responsible_for(()) {
                 return;
             }
 
