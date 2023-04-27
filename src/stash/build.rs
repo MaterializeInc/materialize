@@ -80,7 +80,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 
 /// The path of a protobuf file and its [`md5`] hash.
 ///
@@ -161,12 +161,13 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Write the hashes back out to disk.
-    let file = fs::File::options()
+    let mut file = fs::File::options()
         .write(true)
         .truncate(true)
         .open(PROTO_HASHES)
         .context("opening hashes file to write")?;
-    serde_json::to_writer(file, &to_persist).context("persisting hashes")?;
+    serde_json::to_writer_pretty(&mut file, &to_persist).context("persisting hashes")?;
+    write!(&mut file, "\n").context("writing newline")?;
 
     // Generate protos!
     let paths: Vec<_> = to_persist
