@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::TransformArgs;
-use itertools::{Either, Itertools};
+use itertools::{zip_eq, Either, Itertools};
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
@@ -50,6 +50,10 @@ impl CheckedRecursion for NonNullRequirements {
 }
 
 impl crate::Transform for NonNullRequirements {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -104,19 +108,49 @@ impl NonNullRequirements {
                     let id = Id::Local(*id);
                     let prior = gets.insert(id, Vec::new());
                     self.action(body, columns, gets)?;
-                    let mut needs = gets.remove(&id).unwrap();
+                    let columns = intersect_all(&gets.remove(&id).unwrap());
                     if let Some(prior) = prior {
                         gets.insert(id, prior);
                     }
-                    if let Some(mut need) = needs.pop() {
-                        while let Some(x) = needs.pop() {
-                            need.retain(|col| x.contains(col))
-                        }
-                        self.action(value, need, gets)?;
-                    }
+                    self.action(value, columns, gets)?;
                     Ok(())
                 }
-                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
+                MirRelationExpr::LetRec { ids, values, body } => {
+                    // Determine the recursive IDs in this LetRec binding.
+                    let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
+
+                    // Seed the gets map with an empty vector for each ID.
+                    for id in ids.iter() {
+                        let prior = gets.insert(Id::Local(*id), vec![]);
+                        assert!(prior.is_none());
+                    }
+
+                    // Descend into the body with the supplied columns.
+                    self.action(body, columns, gets)?;
+
+                    // Descend into the values in reverse order.
+                    for (id, value) in zip_eq(ids.iter().rev(), values.iter_mut().rev()) {
+                        // Compute the required non-null columns for this value.
+                        let columns = if rec_ids.contains(id) {
+                            // For recursive IDs: conservatively don't assume
+                            // any non-null column requests. TODO: This can be
+                            // improved using a fixpoint-based approximation.
+                            BTreeSet::new()
+                        } else {
+                            // For non-recursive IDs: request the intersection
+                            // of all `columns` sets in the gets vector.
+                            intersect_all(gets.get(&Id::Local(*id)).unwrap())
+                        };
+                        self.action(value, columns, gets)?;
+                    }
+
+                    // Remove the entries for all ids.
+                    for id in ids.iter() {
+                        gets.remove(&Id::Local(*id));
+                    }
+
+                    Ok(())
+                }
                 MirRelationExpr::Project { input, outputs } => self.action(
                     input,
                     columns.into_iter().map(|c| outputs[c]).collect(),
@@ -305,4 +339,14 @@ impl NonNullRequirements {
             }
         })
     }
+}
+
+fn intersect_all(columns_vec: &Vec<BTreeSet<usize>>) -> BTreeSet<usize> {
+    columns_vec.iter().skip(1).fold(
+        columns_vec.first().cloned().unwrap_or_default(),
+        |mut intersection, columns| {
+            intersection.retain(|col| columns.contains(col));
+            intersection
+        },
+    )
 }
