@@ -12,7 +12,7 @@ menu:
 ---
 
 A [source](../../overview/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
-Like other relations, sources are namespaced by a database and schema.
+Like other relations, sources are [namespaced](../namespaces/) by a database and schema.
 
 [//]: # "TODO(morsapaes) Add short description about what the command gets going in the background."
 
