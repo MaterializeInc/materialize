@@ -393,9 +393,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.timely_worker.index(),
                     ),
                     sink_tokens: BTreeMap::new(),
-                    subscribe_response_buffer: std::rc::Rc::new(
-                        std::cell::RefCell::new(Vec::new()),
-                    ),
+                    subscribe_response_buffer: Rc::new(RefCell::new(Vec::new())),
                     sink_write_frontiers: BTreeMap::new(),
                     flow_control_probes: BTreeMap::new(),
                     pending_peeks: BTreeMap::new(),
@@ -670,14 +668,18 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.
+            //
+            // Dropping the tokens of active subscribes makes them place `DroppedAt` responses into
+            // the subscribe response buffer. We drop that buffer in the next step, which ensures
+            // that we don't send out `DroppedAt` responses for subscribes dropped during
+            // reconciliation.
             compute_state
                 .sink_tokens
                 .retain(|id, _| retain_ids.contains(id));
 
             // We must drop the subscribe response buffer as it is global across all subscribes.
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
-            compute_state.subscribe_response_buffer =
-                std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            compute_state.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
         } else {
             todo_commands = new_commands.clone();
         }
