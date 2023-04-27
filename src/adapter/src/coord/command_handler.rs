@@ -623,20 +623,22 @@ impl Coordinator {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
-        self.clear_transaction(session);
+        if self.active_conns.contains_key(&session.conn_id()) {
+            self.clear_transaction(session);
 
-        self.drop_temp_items(session).await;
-        self.catalog_mut()
-            .drop_temporary_schema(&session.conn_id())
-            .unwrap_or_terminate("unable to drop temporary schema");
-        let session_type = metrics::session_type_label_value(session.user());
-        self.metrics
-            .active_sessions
-            .with_label_values(&[session_type])
-            .dec();
-        self.active_conns.remove(&session.conn_id());
-        self.cancel_pending_peeks(&session.conn_id());
-        let update = self.catalog().state().pack_session_update(session, -1);
-        self.send_builtin_table_updates(vec![update]).await;
+            self.drop_temp_items(session).await;
+            self.catalog_mut()
+                .drop_temporary_schema(&session.conn_id())
+                .unwrap_or_terminate("unable to drop temporary schema");
+            let session_type = metrics::session_type_label_value(session.user());
+            self.metrics
+                .active_sessions
+                .with_label_values(&[session_type])
+                .dec();
+            self.active_conns.remove(&session.conn_id());
+            self.cancel_pending_peeks(&session.conn_id());
+            let update = self.catalog().state().pack_session_update(session, -1);
+            self.send_builtin_table_updates(vec![update]).await;
+        }
     }
 }
