@@ -137,6 +137,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
             (PUBLICATION 'mz_source')
             FOR ALL TABLES;
+
+          > SELECT COUNT(*) > 0 FROM t1;
+          true
      """
         )
     )
