@@ -75,41 +75,114 @@
 
 use anyhow::Context;
 use md5::{Digest, Md5};
-use std::{fs, io::Read};
+use serde::{Deserialize, Serialize};
 
-/// A list of all the protobuf files we generate Rust types for, and their MD5 hashes.
+use std::collections::BTreeMap;
+use std::env;
+use std::fs;
+use std::io::BufReader;
+
+/// The path of a protobuf file and its [`md5`] hash.
 ///
 /// We store a hash of all the files to make sure they don't accidentally change, which would
 /// invalidate our snapshotted types, and could silently introduce bugs.
-const PROTO_FILES: &[(&str, &str)] = &[
-    ("protos/objects.proto", "77a7b13df3990b895f64313d450dbd59"),
-];
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ProtoHash {
+    name: String,
+    md5: String,
+}
+
+const PROTO_DIRECTORY: &str = "protos";
+const PROTO_HASHES: &str = "protos/hashes.json";
 
 fn main() -> anyhow::Result<()> {
-    // Hash all of our files, and make sure the persisted hashes match, to assert that the
-    // snapshots haven't changed.
-    for (path, og_hash) in PROTO_FILES {
-        let mut file = fs::File::open(path).context(format!("opening {path}"))?;
-        let mut buffer = Vec::new();
-        let mut hasher = Md5::new();
+    env::set_var("PROTOC", protobuf_src::protoc());
 
-        file.read_to_end(&mut buffer)?;
-        hasher.update(buffer);
-        let cur_hash = format!("{:x}", hasher.finalize());
+    // Read in the persisted hashes from disk.
+    let hashes = fs::File::open(PROTO_HASHES).context("opening proto hashes")?;
+    let reader = BufReader::new(&hashes);
+    let hashes: Vec<ProtoHash> = serde_json::from_reader(reader)?;
+    let mut persisted: BTreeMap<String, String> =
+        hashes.into_iter().map(|e| (e.name, e.md5)).collect();
 
-        if *og_hash != &cur_hash {
-            anyhow::bail!("persisted_hash({og_hash}) =! current_hash({cur_hash})\nPath: {path}");
+    // Discover all of the protobuf files on disk.
+    let protos: BTreeMap<String, String> = fs::read_dir(PROTO_DIRECTORY)?
+        // If we fail to read one file, fail everything.
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        // Filter to only files with the .proto extension.
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .map(|e| e.to_string_lossy().contains("proto"))
+                .unwrap_or(false)
+        })
+        .map(|file| {
+            let path = file.path();
+
+            // Hash the entire file.
+            let mut hasher = Md5::new();
+            let buffer = std::fs::read(&path).expect("To be able to read file");
+            hasher.update(buffer);
+
+            let name = path
+                .file_name()
+                .expect("To have file name")
+                .to_str()
+                .expect("UTF-8")
+                .to_string();
+            let hash = format!("{:x}", hasher.finalize());
+
+            (name, hash)
+        })
+        .collect();
+
+    // After validating our hashes we'll re-write the file.
+    let mut to_persist: Vec<ProtoHash> = Vec::new();
+
+    // Check the persisted hashes against what we just read in from disk.
+    for (name, hash) in protos {
+        match persisted.remove(&name) {
+            // Hashes have changed!
+            Some(og_hash) if hash != og_hash => {
+                anyhow::bail!(error_message(og_hash, hash, name));
+            }
+            // Found a proto file on disk that we didn't have persisted, we'll just persist it.
+            None => to_persist.push(ProtoHash { name, md5: hash }),
+            // We match!
+            Some(_) => to_persist.push(ProtoHash { name, md5: hash }),
         }
     }
 
+    // Check if there are any proto files we should have had hashes for, but didn't exist.
+    if !persisted.is_empty() {
+        anyhow::bail!("Have persisted hashes, but no files on disk? {persisted:#?}");
+    }
+
+    // Write the hashes back out to disk.
+    let file = fs::File::options()
+        .write(true)
+        .truncate(true)
+        .open(PROTO_HASHES)
+        .context("opening hashes file to write")?;
+    serde_json::to_writer(file, &to_persist).context("persisting hashes")?;
+
     // Generate protos!
-    let paths: Vec<_> = PROTO_FILES.iter().map(|(path, _hash)| path).collect();
+    let paths: Vec<_> = to_persist
+        .iter()
+        .map(|entry| format!("protos/{}", entry.name))
+        .collect();
+
+    // 'as' is okay here because we're using it to define the type of the empty slice, which is
+    // necessary since the method takes the slice as a generic arg.
+    #[allow(clippy::as_conversions)]
     prost_build::Config::new()
         .btree_map(["."])
         .bytes(["."])
         .compile_protos(
             &paths,
-            &[ /* 
+            &[ /*
                   This is purposefully empty, and we should never
                   add any includes because we don't want to allow
                   our protos to have dependencies. This allows us
@@ -119,4 +192,16 @@ fn main() -> anyhow::Result<()> {
         )?;
 
     Ok(())
+}
+
+/// A (hopefully) helpful error message that describes what to do when the hashes differ.
+fn error_message(og_hash: String, hash: String, filename: String) -> String {
+    let title = "Hashes changed for the persisted protobuf files!";
+    let body1 = format!("If you changed '{filename}' without first making a snapshot, then you need to copy '{filename}' and rename it with a suffix like '_vX.proto'.");
+    let body2 = format!(
+        "Otherwise you can update the hash for '{filename}' in '{PROTO_HASHES}' to be '{hash}'."
+    );
+    let hashes = format!("persisted_hash({og_hash}) =! current_hash({hash})\nFile: {filename}");
+
+    format!("{title}\n\n{body1}\n{body2}\n\n{hashes}")
 }
