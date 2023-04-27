@@ -70,10 +70,10 @@ message ProtoPrimitiveStats {
 }
 
 message ProtoJsonStats {
-    uint64 json_nulls = 1;
-    oneof values {
-        google.protobuf.Empty none = 2;
-        google.protobuf.Empty mixed = 3;
+    oneof kind {
+        google.protobuf.Empty none = 1;
+        google.protobuf.Empty mixed = 2;
+        google.protobuf.Empty json_nulls = 3;
         ProtoPrimitiveStats bools = 4;
         ProtoPrimitiveStats strings = 5;
         ProtoPrimitiveStats numerics = 6;

@@ -138,19 +138,14 @@ impl StructStats {
 // Each element could be any of a JsonNull, a bool, a string, a numeric, a list,
 // or a map/object. The column might be a single type but could also be a
 // mixture of any subset of these types.
-#[derive(Default)]
-pub struct JsonStats {
-    /// The count of `Datum::JsonNull`s, or 0 if there were none.
-    pub json_nulls: usize,
-    /// Statistics about the elements that were not `JsonNull` or None if there
-    /// were none.
-    pub values: Option<JsonStatsValues>,
-}
-
-pub enum JsonStatsValues {
+pub enum JsonStats {
+    /// A sentinel that indicates there were no elements.
+    None,
     /// There were elements from more than one category of: bools, strings,
     /// numerics, lists, maps.
     Mixed,
+    /// A sentinel that indicates all elements were `Datum::JsonNull`s.
+    JsonNulls,
     /// The min and max bools, or None if there were none.
     Bools(PrimitiveStats<bool>),
     /// The min and max strings, or None if there were none.
@@ -171,22 +166,24 @@ pub enum JsonStatsValues {
     Maps(BTreeMap<String, JsonStats>),
 }
 
+impl Default for JsonStats {
+    fn default() -> Self {
+        JsonStats::None
+    }
+}
+
 impl std::fmt::Debug for JsonStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let JsonStats { json_nulls, values } = self;
         let mut f = &mut f.debug_tuple("json");
-        if json_nulls > &0 {
-            f = f.field(json_nulls);
-        }
-        if let Some(values) = values.as_ref() {
-            match values {
-                JsonStatsValues::Mixed => f = f.field(&"mixed"),
-                JsonStatsValues::Bools(x) => f = f.field(x),
-                JsonStatsValues::Strings(x) => f = f.field(x),
-                JsonStatsValues::Numerics(x) => f = f.field(x),
-                JsonStatsValues::Lists => f = f.field(&"list"),
-                JsonStatsValues::Maps(x) => f = f.field(x),
-            }
+        match self {
+            JsonStats::None => {}
+            JsonStats::Mixed => f = f.field(&"mixed"),
+            JsonStats::JsonNulls => f = f.field(&"json_null"),
+            JsonStats::Bools(x) => f = f.field(x),
+            JsonStats::Strings(x) => f = f.field(x),
+            JsonStats::Numerics(x) => f = f.field(x),
+            JsonStats::Lists => f = f.field(&"list"),
+            JsonStats::Maps(x) => f = f.field(x),
         }
         f.finish()
     }
@@ -307,10 +304,10 @@ mod impls {
     use crate::columnar::Data;
     use crate::stats::{
         proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
-        truncate_bytes, truncate_string, BytesStats, ColumnStats, DynStats, JsonStats,
-        JsonStatsValues, OptionStats, PrimitiveStats, ProtoBytesStats, ProtoDynStats,
-        ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats,
-        StructStats, TruncateBound, TRUNCATE_LEN,
+        truncate_bytes, truncate_string, BytesStats, ColumnStats, DynStats, JsonStats, OptionStats,
+        PrimitiveStats, ProtoBytesStats, ProtoDynStats, ProtoJsonMapStats, ProtoJsonStats,
+        ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats, StructStats, TruncateBound,
+        TRUNCATE_LEN,
     };
 
     impl<T> DynStats for PrimitiveStats<T>
@@ -600,61 +597,45 @@ mod impls {
     impl RustType<ProtoJsonStats> for JsonStats {
         fn into_proto(&self) -> ProtoJsonStats {
             ProtoJsonStats {
-                json_nulls: self.json_nulls.into_proto(),
-                // Subtle: We map None to Some(Values::None) so that in the
-                // future, we can distinguish between that and reading a oneof
-                // that we didn't understand.
-                values: Some(match &self.values {
-                    None => proto_json_stats::Values::None(()),
-                    Some(JsonStatsValues::Mixed) => proto_json_stats::Values::Mixed(()),
-                    Some(JsonStatsValues::Bools(x)) => {
-                        proto_json_stats::Values::Bools(RustType::into_proto(x))
+                kind: Some(match self {
+                    JsonStats::None => proto_json_stats::Kind::None(()),
+                    JsonStats::Mixed => proto_json_stats::Kind::Mixed(()),
+                    JsonStats::JsonNulls => proto_json_stats::Kind::JsonNulls(()),
+                    JsonStats::Bools(x) => proto_json_stats::Kind::Bools(RustType::into_proto(x)),
+                    JsonStats::Strings(x) => {
+                        proto_json_stats::Kind::Strings(RustType::into_proto(x))
                     }
-                    Some(JsonStatsValues::Strings(x)) => {
-                        proto_json_stats::Values::Strings(RustType::into_proto(x))
+                    JsonStats::Numerics(x) => {
+                        proto_json_stats::Kind::Numerics(RustType::into_proto(x))
                     }
-                    Some(JsonStatsValues::Numerics(x)) => {
-                        proto_json_stats::Values::Numerics(RustType::into_proto(x))
-                    }
-                    Some(JsonStatsValues::Lists) => proto_json_stats::Values::Lists(()),
-                    Some(JsonStatsValues::Maps(x)) => {
-                        proto_json_stats::Values::Maps(ProtoJsonMapStats {
-                            elements: x
-                                .iter()
-                                .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
-                                .collect(),
-                        })
-                    }
+                    JsonStats::Lists => proto_json_stats::Kind::Lists(()),
+                    JsonStats::Maps(x) => proto_json_stats::Kind::Maps(ProtoJsonMapStats {
+                        elements: x
+                            .iter()
+                            .map(|(k, v)| (k.into_proto(), RustType::into_proto(v)))
+                            .collect(),
+                    }),
                 }),
             }
         }
 
         fn from_proto(proto: ProtoJsonStats) -> Result<Self, TryFromProtoError> {
-            let values = match proto.values {
-                Some(proto_json_stats::Values::None(())) => None,
-                Some(proto_json_stats::Values::Mixed(())) => Some(JsonStatsValues::Mixed),
-                Some(proto_json_stats::Values::Bools(x)) => {
-                    Some(JsonStatsValues::Bools(x.into_rust()?))
-                }
-                Some(proto_json_stats::Values::Strings(x)) => {
-                    Some(JsonStatsValues::Strings(x.into_rust()?))
-                }
-                Some(proto_json_stats::Values::Numerics(x)) => {
-                    Some(JsonStatsValues::Numerics(x.into_rust()?))
-                }
-                Some(proto_json_stats::Values::Lists(())) => Some(JsonStatsValues::Lists),
-                Some(proto_json_stats::Values::Maps(x)) => {
+            Ok(match proto.kind {
+                Some(proto_json_stats::Kind::None(())) => JsonStats::None,
+                Some(proto_json_stats::Kind::Mixed(())) => JsonStats::Mixed,
+                Some(proto_json_stats::Kind::JsonNulls(())) => JsonStats::JsonNulls,
+                Some(proto_json_stats::Kind::Bools(x)) => JsonStats::Bools(x.into_rust()?),
+                Some(proto_json_stats::Kind::Strings(x)) => JsonStats::Strings(x.into_rust()?),
+                Some(proto_json_stats::Kind::Numerics(x)) => JsonStats::Numerics(x.into_rust()?),
+                Some(proto_json_stats::Kind::Lists(())) => JsonStats::Lists,
+                Some(proto_json_stats::Kind::Maps(x)) => {
                     let mut map = BTreeMap::new();
                     for (k, v) in x.elements {
                         map.insert(k.into_rust()?, v.into_rust()?);
                     }
-                    Some(JsonStatsValues::Maps(map))
+                    JsonStats::Maps(map)
                 }
                 None => return Err(TryFromProtoError::missing_field("ProtoJsonStats::values")),
-            };
-            Ok(JsonStats {
-                json_nulls: proto.json_nulls.into_rust()?,
-                values,
             })
         }
     }

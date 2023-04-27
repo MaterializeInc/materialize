@@ -11,7 +11,7 @@ use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
 use mz_persist_types::columnar::{ColumnGet, Data};
-use mz_persist_types::stats::{JsonStats, JsonStatsValues, PrimitiveStats};
+use mz_persist_types::stats::{JsonStats, PrimitiveStats};
 use prost::Message;
 
 use crate::row::encoding::{DatumToPersist, NullableProtoDatumToPersist};
@@ -171,69 +171,74 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
     }
 
     match datum {
-        Datum::JsonNull => stats.json_nulls += 1,
-        Datum::False => match &mut stats.values {
-            None => {
-                stats.values = Some(JsonStatsValues::Bools(PrimitiveStats {
+        Datum::JsonNull => match stats {
+            JsonStats::None => *stats = JsonStats::JsonNulls,
+            JsonStats::JsonNulls => {}
+            _ => *stats = JsonStats::Mixed,
+        },
+        Datum::False => match stats {
+            JsonStats::None => {
+                *stats = JsonStats::Bools(PrimitiveStats {
                     lower: false,
                     upper: false,
-                }))
+                })
             }
-            Some(JsonStatsValues::Bools(stats)) => update_stats(stats, &false),
-            Some(_) => stats.values = Some(JsonStatsValues::Mixed),
+            JsonStats::Bools(stats) => update_stats(stats, &false),
+            _ => *stats = JsonStats::Mixed,
         },
-        Datum::True => match &mut stats.values {
-            None => {
-                stats.values = Some(JsonStatsValues::Bools(PrimitiveStats {
+        Datum::True => match stats {
+            JsonStats::None => {
+                *stats = JsonStats::Bools(PrimitiveStats {
                     lower: true,
                     upper: true,
-                }))
+                })
             }
-            Some(JsonStatsValues::Bools(stats)) => update_stats(stats, &true),
-            Some(_) => stats.values = Some(JsonStatsValues::Mixed),
+            JsonStats::Bools(stats) => update_stats(stats, &true),
+            _ => *stats = JsonStats::Mixed,
         },
-        Datum::String(val) => match &mut stats.values {
-            None => {
-                stats.values = Some(JsonStatsValues::Strings(PrimitiveStats {
+        Datum::String(val) => match stats {
+            JsonStats::None => {
+                *stats = JsonStats::Strings(PrimitiveStats {
                     lower: val.to_owned(),
                     upper: val.to_owned(),
-                }))
+                })
             }
-            Some(JsonStatsValues::Strings(stats)) => update_stats(stats, val),
-            Some(_) => stats.values = Some(JsonStatsValues::Mixed),
+            JsonStats::Strings(stats) => update_stats(stats, val),
+            _ => *stats = JsonStats::Mixed,
         },
         Datum::Numeric(val) => {
             let val = f64::try_from(val.0)
                 .map_err(|_| format!("TODO: Could not collect stats for decimal: {}", val))?;
-            match &mut stats.values {
-                None => {
-                    stats.values = Some(JsonStatsValues::Numerics(PrimitiveStats {
+            match stats {
+                JsonStats::None => {
+                    *stats = JsonStats::Numerics(PrimitiveStats {
                         lower: val,
                         upper: val,
-                    }))
+                    })
                 }
-                Some(JsonStatsValues::Numerics(stats)) => update_stats(stats, &val),
-                Some(_) => stats.values = Some(JsonStatsValues::Mixed),
+                JsonStats::Numerics(stats) => update_stats(stats, &val),
+                _ => *stats = JsonStats::Mixed,
             }
         }
-        Datum::List(_) => match stats.values {
-            None => stats.values = Some(JsonStatsValues::Lists),
-            Some(JsonStatsValues::Lists) => {}
-            Some(_) => stats.values = Some(JsonStatsValues::Mixed),
+        Datum::List(_) => match stats {
+            JsonStats::None => *stats = JsonStats::Lists,
+            JsonStats::Lists => {}
+            _ => *stats = JsonStats::Mixed,
         },
         Datum::Map(val) => {
-            let mut values = stats
-                .values
-                .get_or_insert_with(|| JsonStatsValues::Maps(BTreeMap::new()));
-            match &mut values {
-                JsonStatsValues::Maps(stats) => {
+            if let JsonStats::None = stats {
+                *stats = JsonStats::Maps(BTreeMap::new());
+            }
+            match stats {
+                JsonStats::None => unreachable!("set to Maps above"),
+                JsonStats::Maps(stats) => {
                     for (k, v) in val.iter() {
                         let key_stats = stats.entry(k.to_owned()).or_default();
                         let () = jsonb_stats_datum(key_stats, v)?;
                     }
                 }
                 _ => {
-                    stats.values = Some(JsonStatsValues::Mixed);
+                    *stats = JsonStats::Mixed;
                 }
             };
         }
