@@ -603,7 +603,7 @@ pub struct ResetVariablePlan {
     pub name: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PeekPlan {
     pub source: MirRelationExpr,
     pub when: QueryWhen,
@@ -650,7 +650,7 @@ pub struct CopyRowsPlan {
     pub rows: Vec<Row>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ExplainPlan {
     pub raw_plan: HirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
@@ -942,7 +942,7 @@ pub struct Type {
 }
 
 /// Specifies when a `Peek` or `Subscribe` should occur.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
