@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use anyhow::bail;
 use reqwest::{Method, Url};
@@ -19,20 +20,29 @@ use serde::{Deserialize, Serialize};
 use crate::config::Auth;
 
 /// An API client for a Confluent-compatible schema registry.
-#[derive(Debug)]
 pub struct Client {
     inner: reqwest::Client,
-    url: Url,
+    url: Arc<dyn Fn() -> Url + Send + Sync + 'static>,
     auth: Option<Auth>,
+}
+
+impl fmt::Debug for Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Client")
+            .field("inner", &self.inner)
+            .field("url", &"...")
+            .field("auth", &self.auth)
+            .finish()
+    }
 }
 
 impl Client {
     pub(crate) fn new(
         inner: reqwest::Client,
-        url: Url,
+        url: Arc<dyn Fn() -> Url + Send + Sync + 'static>,
         auth: Option<Auth>,
     ) -> Result<Self, anyhow::Error> {
-        if url.cannot_be_a_base() {
+        if url().cannot_be_a_base() {
             bail!("cannot construct a CCSR client with a cannot-be-a-base URL");
         }
         Ok(Client { inner, url, auth })
@@ -43,7 +53,7 @@ impl Client {
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
-        let mut url = self.url.clone();
+        let mut url = (self.url)();
         url.path_segments_mut()
             .expect("constructor validated URL can be a base")
             .clear()

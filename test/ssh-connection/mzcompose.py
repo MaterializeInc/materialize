@@ -12,6 +12,7 @@ from materialize.mzcompose.services import (
     Kafka,
     Materialized,
     Postgres,
+    Redpanda,
     SchemaRegistry,
     SshBastionHost,
     TestCerts,
@@ -28,6 +29,7 @@ SERVICES = [
     SshBastionHost(),
     Postgres(),
     TestCerts(),
+    Redpanda(),
 ]
 
 
@@ -43,8 +45,15 @@ def restart_bastion(c: Composition) -> None:
     c.up("ssh-bastion-host")
 
 
-def workflow_basic_ssh_features(c: Composition) -> None:
-    c.up("materialized", "ssh-bastion-host", "postgres")
+def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
+    c.down()
+
+    dependencies = ["materialized", "ssh-bastion-host"]
+    if redpanda:
+        dependencies += ["redpanda"]
+    else:
+        dependencies += ["zookeeper", "kafka", "schema-registry"]
+    c.up(*dependencies)
 
     c.run("testdrive", "ssh-connections.td")
 
@@ -68,7 +77,8 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     c.run("testdrive", "--no-reset", "pg-source.td")
 
 
-def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
+def workflow_kafka_csr_via_ssh_tunnel(c: Composition, redpanda: bool = False) -> None:
+    c.down()
     # Configure the SSH bastion host to allow only two connections to be
     # initiated simultaneously. This is enough to establish *one* Kafka SSH
     # tunnel and *one* Confluent Schema Registry tunnel simultaneously.
@@ -76,9 +86,13 @@ def workflow_kafka_csr_via_ssh_tunnel(c: Composition) -> None:
     # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
     # per Kafka broker per worker.
     with c.override(SshBastionHost(max_startups="2")):
-        c.up(
-            "zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host"
-        )
+
+        dependencies = ["materialized", "ssh-bastion-host"]
+        if redpanda:
+            dependencies += ["redpanda"]
+        else:
+            dependencies += ["zookeeper", "kafka", "schema-registry"]
+        c.up(*dependencies)
 
         c.run("testdrive", "setup.td")
 
@@ -242,8 +256,12 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    workflow_basic_ssh_features(c)
-    workflow_kafka_csr_via_ssh_tunnel(c)
+    # Test against both standard schema registry
+    # and kafka implementations.
+    workflow_basic_ssh_features(c, redpanda=False)
+    workflow_basic_ssh_features(c, redpanda=True)
+    workflow_kafka_csr_via_ssh_tunnel(c, redpanda=False)
+    workflow_kafka_csr_via_ssh_tunnel(c, redpanda=True)
     workflow_ssh_key_after_restart(c)
     workflow_rotated_ssh_key_after_restart(c)
     workflow_pg_via_ssh_tunnel(c)

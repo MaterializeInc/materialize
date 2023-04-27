@@ -589,14 +589,16 @@ impl CsrConnection {
                 // computed for every request. This ensures that, if the tunnel
                 // fails and restarts at a new address, requests will start
                 // using the new tunnel address.
-                client_config = client_config.add_proxy(mz_ccsr::Proxy::custom(move |url| {
+
+                let remote_url = self.url.clone();
+                client_config = client_config.dynamic_url(move || {
                     let addr = ssh_tunnel.local_addr();
-                    let mut url = url.clone();
+                    let mut url = remote_url.clone();
                     url.set_host(Some(&addr.ip().to_string()))
                         .expect("cannot fail");
                     url.set_port(Some(addr.port())).expect("cannot fail");
-                    Some(url)
-                }));
+                    url
+                });
             }
             Tunnel::AwsPrivatelink(connection) => {
                 assert!(connection.port.is_none());
