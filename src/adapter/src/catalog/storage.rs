@@ -445,7 +445,7 @@ async fn migrate(
                             ObjectType::Role,
                             EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
                                 id: role_id.to_string(),
-                                name: "materialize".into(),
+                                name: bootstrap_role.clone(),
                             }),
                             None,
                             now,
