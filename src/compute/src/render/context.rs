@@ -94,8 +94,8 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
-    /// An optional token that operators can probe to know whether the dataflow is shutting down.
-    pub shutdown_token: Option<Weak<()>>,
+    /// An token that operators can probe to know whether the dataflow is shutting down.
+    pub(super) shutdown_token: ShutdownToken,
 }
 
 impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
@@ -121,7 +121,7 @@ where
             as_of_frontier,
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
-            shutdown_token: None,
+            shutdown_token: Default::default(),
         }
     }
 }
@@ -172,6 +172,42 @@ where
 
     pub(super) fn error_logger(&self) -> ErrorLogger {
         ErrorLogger::new(self.shutdown_token.clone(), self.debug_name.clone())
+    }
+}
+
+/// Convenient wrapper around an optional `Weak` instance that can be used to check whether a
+/// datalow is shutting down.
+///
+/// Instances created through the `Default` impl act as if the dataflow never shuts down.
+/// Instances created through [`ShutdownToken::new`] defer to the wrapped token.
+#[derive(Clone, Default)]
+pub(super) struct ShutdownToken(Option<Weak<()>>);
+
+impl ShutdownToken {
+    /// Construct a `ShutdownToken` instance that defers to `token`.
+    pub(super) fn new(token: Weak<()>) -> Self {
+        Self(Some(token))
+    }
+
+    /// Probe the token for dataflow shutdown.
+    ///
+    /// This method is meant to be used with the `?` operator: It returns `None` if the dataflow is
+    /// in the process of shutting down and `Some` otherwise.
+    pub(super) fn probe(&self) -> Option<()> {
+        match &self.0 {
+            Some(t) => t.upgrade().map(|_| ()),
+            None => Some(()),
+        }
+    }
+
+    /// Returns whether the dataflow is in the process of shutting down.
+    pub(super) fn in_shutdown(&self) -> bool {
+        self.probe().is_none()
+    }
+
+    /// Returns a reference to the wrapped `Weak`.
+    pub(crate) fn get_inner(&self) -> Option<&Weak<()>> {
+        self.0.as_ref()
     }
 }
 
