@@ -149,16 +149,18 @@ To evaluate an MFP for a particular part in the persist source, we:
 The above is enough for normal temporal filters.
 However, we'd also like to be able to push down queries against nested structures, like JSON.
 To be able to tell whether a query like `select * from x where (json_field -> 'ts')::numeric < mz_now()` matches our part,
-we'll need to know the range of possible numeric values in our `'ts'` column.
+we'll need to know the range of possible numeric values in our `'ts'` field.
 (Or whether there could be any non-numeric values that might make the cast fail.)
+
+We'll introduce another variant in our `Values` enum to handle this case:
 
 ```rust
 use std::collections::BTreeMap;
 
-pub struct ResultSpec<'a> {
+enum Values<'a> {
     // For map datums, constraints on individual fields in the map.
-    fields: BTreeMap<Datum<'a>, ResultSpec<'a>>,
-    // ...and other fields as above: `nullable`, `fallible`, `values`.
+    Nested(BTreeMap<Datum<'a>, ResultSpec<'a>>),
+    // ...and other variants as above.
 }
 ```
 
@@ -176,7 +178,7 @@ In the `json_field` example above, assuming `ts` is always numeric in our shard,
   and determine the possible booleans for the overall expression.
 
 As mentioned, due to stats trimming, we may not have statistics for any particular field.
-To be conservative, we'll assume that that field might have any possible value.
+To be conservative, we'll assume that a missing field might have any possible value.
 
 # Rollout
 
