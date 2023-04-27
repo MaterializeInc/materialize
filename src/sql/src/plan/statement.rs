@@ -744,7 +744,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn require_format_json(&self) -> Result<(), PlanError> {
-        self.require_var_or_unsafe_mode(SystemVars::enable_format_json, "`FORMAT JSON")
+        self.require_var_or_unsafe_mode(SystemVars::enable_format_json, "`FORMAT JSON`")
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {
