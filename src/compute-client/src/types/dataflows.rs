@@ -213,6 +213,29 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         }
         panic!("GlobalId {} not found in DataflowDesc", id);
     }
+
+    /// Calls r and s on any sub-members of those types in self. Halts at the first error return.
+    pub fn visit_children<R, S, E>(&mut self, r: R, s: S) -> Result<(), E>
+    where
+        R: Fn(&mut OptimizedMirRelationExpr) -> Result<(), E>,
+        S: Fn(&mut MirScalarExpr) -> Result<(), E>,
+    {
+        for BuildDesc { plan, .. } in &mut self.objects_to_build {
+            r(plan)?;
+        }
+        for (source_instance_desc, _) in self.source_imports.values_mut() {
+            let Some(mfp) =  source_instance_desc.arguments.operators.as_mut() else {
+                continue;
+            };
+            for expr in mfp.expressions.iter_mut() {
+                s(expr)?;
+            }
+            for (_, expr) in mfp.predicates.iter_mut() {
+                s(expr)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<P, S, T> DataflowDescription<P, S, T>

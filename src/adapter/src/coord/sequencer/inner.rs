@@ -16,7 +16,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use maplit::btreeset;
-use mz_transform::Optimizer;
 use rand::seq::SliceRandom;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
@@ -24,7 +23,7 @@ use tracing::{event, warn, Level};
 
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::controller::ComputeReplicaConfig;
-use mz_compute_client::types::dataflows::{BuildDesc, DataflowDesc, IndexDesc};
+use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
@@ -42,7 +41,7 @@ use mz_ore::task;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
@@ -73,6 +72,7 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
+use mz_transform::Optimizer;
 
 use crate::catalog::{
     self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
@@ -80,16 +80,16 @@ use crate::catalog::{
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
-use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
+use crate::coord::dataflows::{prep_relation_expr, prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
 use crate::coord::{
-    introspection, peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageTimestamp,
-    PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext, SinkConnectionReady,
-    DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    introspection, peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
+    PeekStageTimestamp, PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
+    SinkConnectionReady, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -1852,6 +1852,11 @@ impl Coordinator {
                 PeekStage::Validate(stage) => {
                     let next =
                         return_if_err!(self.peek_stage_validate(&mut session, stage), tx, session);
+                    (tx, session, PeekStage::Optimize(next))
+                }
+                PeekStage::Optimize(stage) => {
+                    let next =
+                        return_if_err!(self.peek_stage_optimize(&session, stage), tx, session);
                     (tx, session, PeekStage::Timestamp(next))
                 }
                 PeekStage::Timestamp(stage) => {
@@ -1873,7 +1878,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         PeekStageValidate { plan }: PeekStageValidate,
-    ) -> Result<PeekStageTimestamp, AdapterError> {
+    ) -> Result<PeekStageOptimize, AdapterError> {
         let PeekPlan {
             source,
             when,
@@ -1934,7 +1939,7 @@ impl Coordinator {
             .index_oracle(cluster.id)
             .sufficient_collections(&source_ids);
 
-        Ok(PeekStageTimestamp {
+        Ok(PeekStageOptimize {
             source,
             finishing,
             copy_to,
@@ -1950,12 +1955,10 @@ impl Coordinator {
         })
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
-    fn peek_stage_timestamp(
+    fn peek_stage_optimize(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
-        PeekStageTimestamp {
+        session: &Session,
+        PeekStageOptimize {
             source,
             finishing,
             copy_to,
@@ -1968,6 +1971,86 @@ impl Coordinator {
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
+        }: PeekStageOptimize,
+    ) -> Result<PeekStageTimestamp, AdapterError> {
+        let source = self.view_optimizer.optimize(source)?;
+
+        // We create a dataflow and optimize it, to determine if we can avoid building it.
+        // This can happen if the result optimizes to a constant, or to a `Get` expression
+        // around a maintained arrangement.
+        let typ = source.typ();
+        let key: Vec<MirScalarExpr> = typ
+            .default_key()
+            .iter()
+            .map(|k| MirScalarExpr::Column(*k))
+            .collect();
+        // The assembled dataflow contains a view and an index of that view.
+        let mut dataflow = DataflowDesc::new(format!("oneshot-select-{}", view_id));
+        let mut builder = self.dataflow_builder(cluster_id);
+        builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
+
+        // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
+        // timestamp.
+        let style = ExprPrepStyle::OneShot {
+            logical_time: EvalTime::Deferred,
+            session,
+        };
+        let state = self.catalog().state();
+        dataflow.visit_children(
+            |r| prep_relation_expr(state, r, style),
+            |s| prep_scalar_expr(state, s, style),
+        )?;
+
+        dataflow.export_index(
+            index_id,
+            IndexDesc {
+                on_id: view_id,
+                key: key.clone(),
+            },
+            typ.clone(),
+        );
+
+        // Optimize the dataflow across views, and any other ways that appeal.
+        mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
+
+        Ok(PeekStageTimestamp {
+            dataflow,
+            finishing,
+            copy_to,
+            view_id,
+            index_id,
+            source_ids,
+            cluster_id,
+            id_bundle,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+            key,
+            typ,
+        })
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn peek_stage_timestamp(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        PeekStageTimestamp {
+            dataflow,
+            finishing,
+            copy_to,
+            view_id,
+            index_id,
+            source_ids,
+            cluster_id,
+            id_bundle,
+            when,
+            target_replica,
+            timeline_context,
+            in_immediate_multi_stmt_txn,
+            key,
+            typ,
         }: PeekStageTimestamp,
     ) -> Option<(ClientTransmitter<ExecuteResponse>, Session, PeekStageFinish)> {
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
@@ -1981,7 +2064,7 @@ impl Coordinator {
                         tx,
                         finishing,
                         copy_to,
-                        source,
+                        dataflow,
                         session,
                         cluster_id,
                         when,
@@ -1992,6 +2075,8 @@ impl Coordinator {
                         source_ids,
                         id_bundle,
                         in_immediate_multi_stmt_txn,
+                        key,
+                        typ,
                     },
                 );
                 task::spawn(|| "real_time_recency_peek", async move {
@@ -2014,7 +2099,7 @@ impl Coordinator {
                 PeekStageFinish {
                     finishing,
                     copy_to,
-                    source,
+                    dataflow,
                     cluster_id,
                     when,
                     target_replica,
@@ -2025,6 +2110,8 @@ impl Coordinator {
                     id_bundle,
                     in_immediate_multi_stmt_txn,
                     real_time_recency_ts: None,
+                    key,
+                    typ,
                 },
             )),
         }
@@ -2037,7 +2124,7 @@ impl Coordinator {
         PeekStageFinish {
             finishing,
             copy_to,
-            source,
+            dataflow,
             cluster_id,
             when,
             target_replica,
@@ -2048,10 +2135,12 @@ impl Coordinator {
             id_bundle,
             in_immediate_multi_stmt_txn,
             real_time_recency_ts,
+            key,
+            typ,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut peek_plan = self.plan_peek(
-            source,
+            dataflow,
             session,
             &when,
             cluster_id,
@@ -2062,6 +2151,8 @@ impl Coordinator {
             id_bundle,
             in_immediate_multi_stmt_txn,
             real_time_recency_ts,
+            key,
+            typ,
         )?;
 
         if let Some(id_bundle) = peek_plan.read_holds.take() {
@@ -2106,7 +2197,7 @@ impl Coordinator {
 
     fn plan_peek(
         &self,
-        source: MirRelationExpr,
+        mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
         session: &Session,
         when: &QueryWhen,
         cluster_id: ClusterId,
@@ -2117,6 +2208,8 @@ impl Coordinator {
         id_bundle: CollectionIdBundle,
         in_immediate_multi_stmt_txn: bool,
         real_time_recency_ts: Option<Timestamp>,
+        key: Vec<MirScalarExpr>,
+        typ: RelationType,
     ) -> Result<PlannedPeek, AdapterError> {
         let mut read_holds = None;
         let conn_id = session.conn_id();
@@ -2211,50 +2304,19 @@ impl Coordinator {
             }
         }
 
-        // before we have the corrected timestamp ^
-        // TODO(guswynn&mjibson): partition `sequence_peek` by the response to
-        // `linearize_sources(source_ids.iter().collect()).await`
-        // ------------------------------
-        // after we have the timestamp \/
-
-        let source = self.view_optimizer.optimize(source)?;
-
-        // We create a dataflow and optimize it, to determine if we can avoid building it.
-        // This can happen if the result optimizes to a constant, or to a `Get` expression
-        // around a maintained arrangement.
-        let typ = source.typ();
-        let key: Vec<MirScalarExpr> = typ
-            .default_key()
-            .iter()
-            .map(|k| MirScalarExpr::Column(*k))
-            .collect();
-        let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
-        // The assembled dataflow contains a view and an index of that view.
-        let mut dataflow = DataflowDesc::new(format!("oneshot-select-{}", view_id));
+        // Now that we have a timestamp, set the as of and resolve calls to mz_now().
         dataflow.set_as_of(timestamp_context.antichain());
-        let mut builder = self.dataflow_builder(cluster_id);
-        builder.import_view_into_dataflow(&view_id, &source, &mut dataflow)?;
-        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(
-                self.catalog().state(),
-                plan,
-                ExprPrepStyle::OneShot {
-                    logical_time: Some(timestamp_context.timestamp_or_default()),
-                    session,
-                },
-            )?;
-        }
-        dataflow.export_index(
-            index_id,
-            IndexDesc {
-                on_id: view_id,
-                key: key.clone(),
-            },
-            typ,
-        );
+        let style = ExprPrepStyle::OneShot {
+            logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+            session,
+        };
+        let state = self.catalog().state();
+        dataflow.visit_children(
+            |r| prep_relation_expr(state, r, style),
+            |s| prep_scalar_expr(state, s, style),
+        )?;
 
-        // Optimize the dataflow across views, and any other ways that appeal.
-        mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
+        let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
 
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -2273,7 +2335,7 @@ impl Coordinator {
             read_holds,
             timestamp_context,
             conn_id,
-            source_arity: source.arity(),
+            source_arity: typ.arity(),
             id_bundle,
             source_ids,
         })
@@ -3548,7 +3610,7 @@ impl Coordinator {
             self.catalog().state(),
             secret_as,
             ExprPrepStyle::OneShot {
-                logical_time: None,
+                logical_time: EvalTime::NotAvailable,
                 session,
             },
         )?;
