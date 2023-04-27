@@ -77,48 +77,53 @@ upserts. The output columns are reordered as `(mz_timestamp, mz_state,
 k1, k2, .., v1, v2, ..)`. There is no `mz_diff` column. The values
 `v1, v2, ..` are set the last value if there's an update or an insert
 and are all set to `NULL` if the only updates to the key in that
-timestamp were deletions. `mz_state` is either `"delete"` or
-`"upsert"` to distinguish the two cases; when there are no values or
-the values can all be `NULL` this column is the only way to
-distinguish a deletion from an upsert. See the [update
-table](#update-table) for more examples. If PROGRESS is set we also
-return `mz_progressed` as usual before `mz_state` and each progress
-message nulls out all the key and value columns.
+timestamp were deletions. There should not be multiple values for a
+given key. If materialize detects that case (which can only reasonably
+happen if there are multiple updates for the same key in a given
+timestamp), materialize will emit an update a "key violation"
+state. `mz_state` is either `"delete"`, `"upsert"`, or `"key
+violation"` to represent these three cases.
 
-Using `ENVELOPE UPSERT` when there is more than one live value per key
-can be confusing. The upserts generated have no way to express which
-value was deleted for a given key.
+If PROGRESS is set we also return `mz_progressed` as usual before
+`mz_state` and each progress message nulls out all the key and value
+columns.
 
 Example:
 ```sql
 > CREATE TABLE kv_store(key int, value int, UNIQUE(key))
 > INSERT INTO kv_store VALUES (1, 2), (2, 4)
 > SUBSCRIBE kv_store ENVELOPE UPSERT (KEY (key))
-mz_timestamp | mz_state | key  | value
--------------|----------|------|--------
-100          | upsert   | 1    | 2
-100          | upsert   | 2    | 4
+mz_timestamp | mz_state       | key  | value
+-------------|----------------|------|--------
+100          | upsert         | 1    | 2
+100          | upsert         | 2    | 4
 
 ...
 -- at time 200, update key=1's value to 10
 ...
 
-200          | upsert   | 1    | 10
+200          | upsert         | 1    | 10
 
 
 ...
 -- at time 300, add a new row with key=3, value=6
 ...
 
-300          | upsert   | 3    | 6
+300          | upsert         | 3    | 6
 
 ...
 -- at time 400, delete all rows
 ...
 
-400          | delete   | 1    | NULL
-400          | delete   | 2    | NULL
-400          | delete   | 3    | NULL
+400          | delete         | 1    | NULL
+400          | delete         | 2    | NULL
+400          | delete         | 3    | NULL
+
+-- at time 500, introduce a key violation for key=1
+...
+
+500          | key violation  | 1    | NULL
+
 ```
 
 `ENVELOPE DEBEZIUM`: Similarly to `ENVELOPE UPSERT`, takes a list of
@@ -131,17 +136,56 @@ the `before` values are all set to `NULL`. When there is an update,
 `mz_state` is set to `"upsert"`, `before` has the previous contents,
 and `after` has the current values. When there is a deletion,
 `mz_state` is set to `"delete"`, the `before` values are set to the
-previous values and the `after` values are all `NULL`.
+previous values and the `after` values are all `NULL`. If it's
+detected that there are multiple values for a given key, `mz_state` is
+set to `"key violation"` and `before` and `after` are both all set to
+`NULL`.
 
-Similar to `ENVELOPE UPSERT` the `ENVELOPE DEBEZIUM` is confusing when
-there is more than one live value per key because new values may
-either appear as inserts or upserts. See the [update
-table](#update-table) for some example of confusing cases like rows 4
-and 5.
+Similar to `ENVELOPE UPSERT`, `ENVELOPE DEBEZIUM` should not be used
+when there can be more than one live value per key.
 
 If PROGRESS is set, the key, `before_v*` and `after_v*` are all set to
 `NULL` an addition `mz_progressed` column is inserted before
 `mz_state`.
+
+Example:
+```sql
+> CREATE TABLE kv_store(key int, value int, UNIQUE(key))
+> INSERT INTO kv_store VALUES (1, 2), (2, 4)
+> SUBSCRIBE kv_store ENVELOPE DEBEZIUM (KEY (key))
+mz_timestamp | mz_state        | key  | before_value | after_value
+-------------|-----------------|------|--------------|--------------
+100          | insert          | 1    | NULL         | 2
+100          | insert          | 2    | NULL         | 4
+
+...
+-- at time 200, update key=1's value to 10
+...
+
+200          | upsert          | 1    | 2            | 10
+
+
+...
+-- at time 300, add a new row with key=3, value=6
+...
+
+300          | insert          | 3    | NULL         | 6
+
+...
+-- at time 400, delete all rows
+...
+
+400          | delete          | 1    | 10           | NULL
+400          | delete          | 2    | 4            | NULL
+400          | delete          | 3    | 6            | NULL
+
+...
+-- at time 500, introduce a key violation
+...
+
+500          | key violation   | 1    | NULL           | NULL
+
+```
 
 Today only one output modifier can be used at a time. `ENVELOPE
 DEBEZIUM` and `ENVELOPE UPSERT` are conflicting directions. `WITHIN
@@ -152,56 +196,6 @@ ORDER BY` and `ENVELOPE UPSERT` could be used together if the client
 wanted a specific sort order out of subscribe. There are few cases
 where that's useful so I propose disallowing it until there is client
 demand.
-
-Example:
-```sql
-> CREATE TABLE kv_store(key int, value int, UNIQUE(key))
-> INSERT INTO kv_store VALUES (1, 2), (2, 4)
-> SUBSCRIBE kv_store ENVELOPE DEBEZIUM (KEY (key))
-mz_timestamp | mz_state | key  | before_value | after_value
--------------|----------|------|--------------|--------------
-100          | insert   | 1    | NULL         | 2
-100          | insert   | 2    | NULL         | 4
-
-...
--- at time 200, update key=1's value to 10
-...
-
-200          | upsert   | 1    | 2            | 10
-
-
-...
--- at time 300, add a new row with key=3, value=6
-...
-
-300          | insert   | 3    | NULL         | 6
-
-...
--- at time 400, delete all rows
-...
-
-400          | delete   | 1    | 10           | NULL
-400          | delete   | 2    | 4            | NULL
-400          | delete   | 3    | 6            | NULL
-```
-
-
-### Update table:
-[update-table]: #update-table
-
-| Updates | `ENVELOPE UPSERT` | `ENVELOPE DEBEZIUM` |
-| --- | --- | --- |
-| `(k, v1, +1)` | `(k, upsert, v1)` | `(k, insert, NULL, v1)` |
-| `(k, v1, +1)`, `(k, v2, +1)` | `(k, upsert, v1)`, `(k, upsert, v2)` | `(k, insert, NULL, v1)`, `(k, insert, NULL, v2)` |
-| `(k, v1, -1)`, `(k, v2, +1)` | `(k, upsert, v2)` | `(k, upsert, v1, v2)` |
-| `(k, v1, -1)`, `(k, v2, +1)`, `(k, v3, +1)` | `(k, upsert, v2)`, `(k, upsert, v3)` | either `(k, upsert, v1, v2)`, `(k, insert, NULL, v3)` or `(k, upsert, v1, v3)`, `(k, insert, NULL, v2)` |
-| `(k, v1, -1)`, `(k, v2, -1)`, `(k, v3, +1)` | `(k, upsert, v3)` | either `(k, delete, v1, NULL)`, `(k, upsert, v2, v3)` or `(k, delete, v2, NULL)`, `(k, upsert, v1, v3)` |
-| `(k, v1, -1)`, `(k, v2, -1)`, `(k, v3, +1)`, `(k, v4, +1)` | `(k, upsert, v3)`, `(k, upsert, v4)` | `(k, upsert, v1, v3)`, `(k, upsert, v2, v4)` or `(k, upsert, v2, v3)`, `(k, upsert, v1, v4)` |
-| `(k, v1, -1)` | `(k, delete, NULL)` | `(k, delete, v1, NULL)` |
-| `(k, v1, -1)`, `(k, v2, -1)` | `(k, delete, NULL)` | `(k, delete, v1, NULL)`, `(k, delete, v2, NULL)` |
-
-
-We don't have to handle unconsolidated data.
 
 # Reference explanation
 [reference-explanation]: #reference-explanation
@@ -228,19 +222,22 @@ finding the indexes of the key columns. The changes to describe are a
 tad more interesting: we have to reorder columns and remove the
 `mz_diff` column.
 
-For `ENVELOPE UPSERT`, if all the updates to a key are retractions we
-emit a deletion for that key. Otherwise we emit an upsert for every
-added row.
+For `ENVELOPE UPSERT`, there are four cases for a given timestamp and key.
+ - [(k, v, +1)] => (upsert, k, v)
+ - [(k, v, -1)] => (delete, k, NULL)
+ - [(k, v1, -1), (k, v2, +1)] => (upsert, k, v2)
+ - everything else => (key violation, k, NULL)
+ 
+"Everything else" includes multiple new values for a given key,
+multiple retractions of given values (perhaps key violations that
+happened in the past that we may not have known about), or a mix.
 
-For `ENVELOPE DEBEZIUM`, for a given timestamp and key, sort the
-updates by `mz_diff`. Pair up as many retractions and insertions as
-possible and emit one debezium update for that pair. Any leftovers get
-their own debezium update that's either a sole insertion or
-deletion. For the normal case of a single live value for a key this
-algorithm does the right thing; when there are multiple values we
-favor updates over inserts or deletes. There's no guarantee on the
-order of the debezium updates or how values get paired together since
-from MZ's perspective all these updates happened in the same moment.
+For `ENVELOPE DEBEZIUM`, we have the same four cases as `ENVELOPE
+UPSERT`, just slightly different outputs:
+ - [(k, v, +1)] => (insert, k, NULL, v)
+ - [(k, v, -1)] => (delete, k, v, NULL)
+ - [(k, v1, -1), (k, v2, +1)] => (upsert, k, v1, v2)
+ - everything else => (key violation, k, NULL, NULL)
 
 # Rollout
 [rollout]: #rollout
@@ -258,9 +255,9 @@ New testdrive tests that exercise these new output types.
 There isn't a performance concern because these output types only need
 to sort the data for a given timestamp.
 
-We'll add metrics to see how often these options are used in order to
-find clients that are using subscribe and get more detail on their
-usecases.
+We'll add metrics to prometheus to see how often these options are
+used in order to find clients that are using subscribe and get more
+detail on their usecases.
 
 ## Lifecycle
 [lifecycle]: #lifecycle
