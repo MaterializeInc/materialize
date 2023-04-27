@@ -978,8 +978,8 @@ impl QueryWhen {
     /// Returns whether the candidate can be advanced to the upper.
     pub fn can_advance_to_upper(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
-            QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the upper.
