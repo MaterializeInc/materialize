@@ -17,6 +17,8 @@ use mz_ore::collections::HashMap;
 
 use super::{UpsertKey, UpsertValue};
 use crate::source::metrics::UpsertSharedMetrics;
+use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
+use mz_storage_client::client::SourceStatisticsUpdate;
 
 /// A trait that defines the fundamental primitives required by a state-backing of
 /// the `upsert` operator.
@@ -93,11 +95,20 @@ impl UpsertState for InMemoryHashMap {
 pub struct StatsState<S> {
     inner: S,
     metrics: Arc<UpsertSharedMetrics>,
+    source_metrics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
 }
 
 impl<S> StatsState<S> {
-    pub(crate) fn new(inner: S, metrics: Arc<UpsertSharedMetrics>) -> Self {
-        Self { inner, metrics }
+    pub(crate) fn new(
+        inner: S,
+        metrics: Arc<UpsertSharedMetrics>,
+        source_metrics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
+    ) -> Self {
+        Self {
+            inner,
+            metrics,
+            source_metrics,
+        }
     }
 }
 

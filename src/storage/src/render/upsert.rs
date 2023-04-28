@@ -270,7 +270,11 @@ where
         consolidation::consolidate(&mut snapshot);
 
         // The main key->value used to store previous values.
-        let mut state = StatsState::new(state().await, upsert_shared_metrics);
+        let mut state = StatsState::new(
+            state().await,
+            upsert_shared_metrics,
+            source_config.source_statistics.clone(),
+        );
 
         // A re-usable buffer of changes, per key. This is
         // an `IndexMap` because it has to be `drain`-able
