@@ -306,6 +306,9 @@ This clause allows you to specify a `KEY` that Materialize uses to interpret
 the rows as a series of inserts, updates and deletes within each distinct
 timestamp.
 
+The output columns are reordered so that all the key columns come before the
+value columns.
+
 * Using this modifier, the output rows will have the following
 structure:
 

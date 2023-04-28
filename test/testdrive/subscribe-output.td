@@ -102,6 +102,16 @@ ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
 <TIMESTAMP> 1 1 2 3
 > COMMIT
 
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE t WITHIN TIMESTAMP ORDER BY 4, 3, 1, 2  -- same as above
+> FETCH 1 c
+<TIMESTAMP> 1 2 5 -6
+> FETCH 1 c
+<TIMESTAMP> 1 4 0 -4
+> FETCH 1 c
+<TIMESTAMP> 1 1 2 3
+> COMMIT
+
 > CREATE TABLE t0(key int, value int)
 > INSERT INTO t0 VALUES (1, 2), (2, 3)
 
@@ -141,6 +151,12 @@ contains: column "c" does not exist
 
 ! SUBSCRIBE (SELECT 1 as c, 2 as c union select 2, 1) WITHIN TIMESTAMP ORDER BY c
 contains: column reference "c" is ambiguous
+
+! SUBSCRIBE (SELECT 1 as a) WITHIN TIMESTAMP ORDER BY mz_diff + 1 DESC
+contains: invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY
+
+! SUBSCRIBE (SELECT 1 as a) WITHIN TIMESTAMP ORDER BY a + 1 DESC
+contains: invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) ENVELOPE UPSERT (KEY (a, b))
@@ -253,3 +269,6 @@ DELETE FROM t2 WHERE key = 1
 <TIMESTAMP> true <null> <null> <null>
 
 > COMMIT
+
+! SUBSCRIBE (SELECT * FROM t2) WITH (PROGRESS, SNAPSHOT) ENVELOPE UPSERT (KEY (invalid_key))
+contains: column "invalid_key" does not exist

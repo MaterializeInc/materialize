@@ -511,6 +511,7 @@ pub fn plan_subscribe(
         allow_windows: false,
     };
 
+    let output_columns: Vec<_> = scope.column_names().enumerate().collect();
     let output = match output {
         SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
         SubscribeOutput::EnvelopeUpsert { key_columns } => {
@@ -529,7 +530,7 @@ pub fn plan_subscribe(
                     ..ecx
                 },
                 &order_by[..],
-                &[],
+                &output_columns[..],
             )?;
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeUpsert);
@@ -540,27 +541,30 @@ pub fn plan_subscribe(
         }
         SubscribeOutput::WithinTimestampOrderBy { order_by } => {
             scx.require_within_timestamp_order_by_in_subscribe()?;
-            let mz_diff_fake_column = usize::MAX;
-            let (mut order_by, map_exprs) = query::plan_order_by_exprs(
+            let mz_diff = "mz_diff".into();
+            let output_columns = std::iter::once((0, &mz_diff)).chain(output_columns.into_iter().map(|(i, c)| (i+1, c))).collect_vec();
+            match query::plan_order_by_exprs(
                 &ExprContext {
                     name: "WITHIN TIMESTAMP ORDER BY clause",
                     ..ecx
                 },
                 &order_by[..],
-                &[(mz_diff_fake_column, &"mz_diff".into())],
-            )?;
-            if !map_exprs.is_empty() {
-                return Err(PlanError::InvalidOrderByInSubscribeWithinTimestampOrderBy);
-            }
-            for column_order in &mut order_by {
-                if column_order.column == mz_diff_fake_column {
-                    column_order.column = 0;
-                } else {
-                    column_order.column += 1;
+                &output_columns[..],
+            ) {
+                Err(PlanError::UnknownColumn { table: None, column }) if &column == &mz_diff => {
+                    // mz_diff is being used in an expression. Since mz_diff isn't part of the table
+                    // it looks like an unknown column. Instead, return a better error
+                    return Err(PlanError::InvalidOrderByInSubscribeWithinTimestampOrderBy);
+                }
+                Err(e) => return Err(e),
+                Ok((order_by, map_exprs)) => {
+                    if !map_exprs.is_empty() {
+                        return Err(PlanError::InvalidOrderByInSubscribeWithinTimestampOrderBy);
+                    }
+
+                    plan::SubscribeOutput::WithinTimestampOrderBy { order_by }
                 }
             }
-
-            plan::SubscribeOutput::WithinTimestampOrderBy { order_by }
         }
     };
 

@@ -276,7 +276,7 @@ impl PlanError {
                 Some("All keys must be columns on the underlying relation.".into())
             }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
-                Some("All order bys must be variables that are getting returned.".into())
+                Some("All order bys must be output columns.".into())
             }
             _ => None,
         }
