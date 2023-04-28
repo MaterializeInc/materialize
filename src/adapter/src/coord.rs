@@ -98,7 +98,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{stack, task, soft_panic_or_log};
+use mz_ore::{soft_panic_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsage, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
@@ -1357,16 +1357,29 @@ impl Coordinator {
     }
 
     fn new_temporary_dataflow(&mut self, cluster: ClusterId) -> Result<(), AdapterError> {
-        let value = self.active_dataflows_per_cluster.get(&cluster).unwrap_or(&0);
-        self.validate_resource_limit(*value, 1,
-             SystemVars::max_temporary_dataflows_per_cluster,
-             "temporary dataflows", "max_temporary_dataflows_per_cluster")?;
-        *self.active_dataflows_per_cluster.entry(cluster).or_default() += 1;
+        let value = self
+            .active_dataflows_per_cluster
+            .get(&cluster)
+            .unwrap_or(&0);
+        self.validate_resource_limit(
+            *value,
+            1,
+            SystemVars::max_temporary_dataflows_per_cluster,
+            "temporary dataflows",
+            "max_temporary_dataflows_per_cluster",
+        )?;
+        *self
+            .active_dataflows_per_cluster
+            .entry(cluster)
+            .or_default() += 1;
         Ok(())
     }
 
     fn temporary_dataflow_finished(&mut self, cluster: ClusterId) {
-        let val: &mut _ = self.active_dataflows_per_cluster.get_mut(&cluster).expect("must have been created by `new_temporary_dataflow`");
+        let val: &mut _ = self
+            .active_dataflows_per_cluster
+            .get_mut(&cluster)
+            .expect("must have been created by `new_temporary_dataflow`");
         match val.checked_sub(1) {
             Some(v) => *val = v,
             None => soft_panic_or_log!("bug in temporary dataflow counting"),

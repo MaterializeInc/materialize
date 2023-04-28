@@ -1858,10 +1858,10 @@ impl SystemVars {
         *self.expect_value(&ENABLE_RBAC_CHECKS)
     }
 
-        /// Returns the `max_temporary_dataflows_per_cluster` configuration parameter.
-        pub fn max_temporary_dataflows_per_cluster(&self) -> u32 {
-            *self.expect_value(&MAX_TEMPORARY_DATAFLOWS_PER_CLUSTER)
-        }
+    /// Returns the `max_temporary_dataflows_per_cluster` configuration parameter.
+    pub fn max_temporary_dataflows_per_cluster(&self) -> u32 {
+        *self.expect_value(&MAX_TEMPORARY_DATAFLOWS_PER_CLUSTER)
+    }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.

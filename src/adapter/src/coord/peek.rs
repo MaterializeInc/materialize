@@ -508,7 +508,7 @@ impl crate::coord::Coordinator {
 
             uuids
                 .iter()
-                .filter_map(|(uuid, _)|  {
+                .filter_map(|(uuid, _)| {
                     let pending_peek = self.pending_peeks.remove(uuid);
                     if let Some(pending_peek) = &pending_peek {
                         if !pending_peek.fast_path_peek {
