@@ -342,6 +342,13 @@ DROP CLUSTER foo CASCADE;
 statement ok
 CREATE VIEW keys AS ( SELECT key FROM bar );
 
-# But creating materialized views, which install resources, should not be allowed.
+# But creating objects that install resources, should not be allowed.
+
 statement error system cluster 'mz_introspection' cannot be modified
 CREATE MATERIALIZED VIEW live_keys AS ( SELECT key FROM bar );
+
+statement error system cluster 'mz_introspection' cannot be modified
+CREATE CLUSTER REPLICA mz_introspection.backup SIZE '1';
+
+statement error system cluster 'mz_introspection' cannot be modified
+CREATE INDEX i_keys ON bar (key);
