@@ -24,7 +24,7 @@ anyhow = "1.0.66"
 datadriven = "0.6.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["test"] }
 proc-macro2 = "1.0.47"
 serde_json = "1.0.89"
 

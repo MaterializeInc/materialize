@@ -508,6 +508,8 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn run() {
+        mz_ore::test::init_logging();
+
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();
             f.run(move |s| -> String {
