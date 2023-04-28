@@ -227,7 +227,7 @@ For `ENVELOPE UPSERT`, there are four cases for a given timestamp and key.
  - [(k, v, -1)] => (delete, k, NULL)
  - [(k, v1, -1), (k, v2, +1)] => (upsert, k, v2)
  - everything else => (key_violation, k, NULL)
- 
+
 "Everything else" includes multiple new values for a given key,
 multiple retractions of given values (perhaps key violations that
 happened in the past that we may not have known about), or a mix.
