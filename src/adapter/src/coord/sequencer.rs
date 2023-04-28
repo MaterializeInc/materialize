@@ -73,7 +73,7 @@ impl Coordinator {
             return tx.send(Err(e), session);
         }
         if let Err(e) =
-            introspection::check_cluster_restrictions(&session_catalog, &plan, &depends_on)
+            introspection::check_cluster_restrictions(&session_catalog, &plan)
         {
             return tx.send(Err(e), session);
         }
