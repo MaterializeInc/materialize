@@ -89,6 +89,7 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
+            "BOOTSTRAP_ROLE=materialize",
             *environment_extra,
         ]
 
@@ -147,8 +148,6 @@ class Materialized(Service):
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
             "--orchestrator-process-prometheus-service-discovery-directory=/mzdata/prometheus",
         ]
-
-        environment += ["BOOTSTRAP_ROLE=materialize"]
 
         command += options
 
