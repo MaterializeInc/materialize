@@ -80,9 +80,9 @@ and are all set to `NULL` if the only updates to the key in that
 timestamp were deletions. There should not be multiple values for a
 given key. If materialize detects that case (which can only reasonably
 happen if there are multiple updates for the same key in a given
-timestamp), materialize will emit an update a "key violation"
-state. `mz_state` is either `"delete"`, `"upsert"`, or `"key
-violation"` to represent these three cases.
+timestamp), materialize will emit an update a "key_violation"
+state. `mz_state` is either `"delete"`, `"upsert"`, or
+`"key_violation"` to represent these three cases.
 
 If PROGRESS is set we also return `mz_progressed` as usual before
 `mz_state` and each progress message nulls out all the key and value
@@ -122,7 +122,7 @@ mz_timestamp | mz_state       | key  | value
 -- at time 500, introduce a key violation for key=1
 ...
 
-500          | key violation  | 1    | NULL
+500          | key_violation  | 1    | NULL
 
 ```
 
@@ -138,7 +138,7 @@ and `after` has the current values. When there is a deletion,
 `mz_state` is set to `"delete"`, the `before` values are set to the
 previous values and the `after` values are all `NULL`. If it's
 detected that there are multiple values for a given key, `mz_state` is
-set to `"key violation"` and `before` and `after` are both all set to
+set to `"key_violation"` and `before` and `after` are both all set to
 `NULL`.
 
 Similar to `ENVELOPE UPSERT`, `ENVELOPE DEBEZIUM` should not be used
@@ -183,7 +183,7 @@ mz_timestamp | mz_state        | key  | before_value | after_value
 -- at time 500, introduce a key violation
 ...
 
-500          | key violation   | 1    | NULL           | NULL
+500          | key_violation   | 1    | NULL           | NULL
 
 ```
 
@@ -226,7 +226,7 @@ For `ENVELOPE UPSERT`, there are four cases for a given timestamp and key.
  - [(k, v, +1)] => (upsert, k, v)
  - [(k, v, -1)] => (delete, k, NULL)
  - [(k, v1, -1), (k, v2, +1)] => (upsert, k, v2)
- - everything else => (key violation, k, NULL)
+ - everything else => (key_violation, k, NULL)
  
 "Everything else" includes multiple new values for a given key,
 multiple retractions of given values (perhaps key violations that
@@ -237,7 +237,7 @@ UPSERT`, just slightly different outputs:
  - [(k, v, +1)] => (insert, k, NULL, v)
  - [(k, v, -1)] => (delete, k, v, NULL)
  - [(k, v1, -1), (k, v2, +1)] => (upsert, k, v1, v2)
- - everything else => (key violation, k, NULL, NULL)
+ - everything else => (key_violation, k, NULL, NULL)
 
 # Rollout
 [rollout]: #rollout
