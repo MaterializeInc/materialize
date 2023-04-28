@@ -185,19 +185,19 @@ $ postgres-execute connection=mz_system
 INSERT INTO t1 VALUES (1, 1), (1, 1)
 
 > FETCH ALL c
-<TIMESTAMP> "key violation" 1 <null>
+<TIMESTAMP> "key_violation" 1 <null>
 
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1
 
 > FETCH ALL c
-<TIMESTAMP> "key violation" 1 <null>
+<TIMESTAMP> "key_violation" 1 <null>
 
 $ postgres-execute connection=mz_system
 INSERT INTO t1 VALUES (1, 1), (1, 2)
 
 > FETCH ALL c
-<TIMESTAMP> "key violation" 1 <null>
+<TIMESTAMP> "key_violation" 1 <null>
 
 $ postgres-execute connection=mz_system
 INSERT INTO t1 VALUES (1, 3)
@@ -215,7 +215,7 @@ $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1
 
 > FETCH ALL c
-<TIMESTAMP> "key violation" 1 <null>
+<TIMESTAMP> "key_violation" 1 <null>
 
 > COMMIT
 
