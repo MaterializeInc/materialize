@@ -10,10 +10,6 @@
 $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT 1 as a, 2 as b union select 2, 1) WITHIN TIMESTAMP ORDER BY a, mz_diff
