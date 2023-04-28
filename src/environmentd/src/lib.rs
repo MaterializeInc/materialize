@@ -128,8 +128,6 @@ pub struct Config {
     // === Special modes. ===
     /// Whether to permit usage of unsafe features.
     pub unsafe_mode: bool,
-    /// What role, if any, should be initially created with elevated privileges.
-    pub bootstrap_role: Option<String>,
 
     // === Connection options. ===
     /// The IP address and port to listen for pgwire connections on.
@@ -205,6 +203,8 @@ pub struct Config {
     /// An invertible map from system parameter names to LaunchDarkly feature
     /// keys to use when propagating values from the latter to the former.
     pub launchdarkly_key_map: BTreeMap<String, String>,
+    /// What role, if any, should be initially created with elevated privileges.
+    pub bootstrap_role: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
