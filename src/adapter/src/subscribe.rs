@@ -157,7 +157,7 @@ impl ActiveSubscribe {
                                     // [(key, value, +1)] => ("upsert", key, value
                                     // [(key, v1, -1), (key, v2, +1)] => ("upsert", key, v2)
                                     // [(key, value, -1)] => ("delete", key, NULL)
-                                    // everything else => ("key violation", key, NULL)
+                                    // everything else => ("key_violation", key, NULL)
                                     let mut packer = row_buf.packer();
                                     new_rows.push(match &group[..] {
                                         [(_, row, 1)] | [(_, _, -1), (_, row, 1)] => {
@@ -186,7 +186,7 @@ impl ActiveSubscribe {
                                             (start.0, row_buf.clone(), -1)
                                         }
                                         _ => {
-                                            // key violation
+                                            // key_violation
                                             let datums = datum_vec.borrow_with(&start.1);
                                             for column_order in order_by_keys {
                                                 packer.push(datums[column_order.column]);
@@ -222,7 +222,7 @@ impl ActiveSubscribe {
                                 if matches!(self.output, SubscribeOutput::EnvelopeUpsert { .. }) {
                                     packer.push(match diff {
                                         -1 => Datum::String("delete"),
-                                        0 => Datum::String("key violation"),
+                                        0 => Datum::String("key_violation"),
                                         1 => Datum::String("upsert"),
                                         _ => unreachable!(
                                             "envelope upsert can only generate -1..1 diffs"
