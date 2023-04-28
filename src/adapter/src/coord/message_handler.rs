@@ -264,7 +264,9 @@ impl Coordinator {
                 if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
                     let remove = active_subscribe.process_response(response);
                     if remove {
+                        let cluster_id = active_subscribe.cluster_id;
                         self.remove_active_subscribe(sink_id).await;
+                        self.temporary_dataflow_finished(cluster_id);
                     }
                 }
             }

@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-connect name=other url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 
 ! ALTER SYSTEM SET max_tables TO 42
 contains:permission denied to alter system
@@ -283,6 +284,50 @@ ALTER SYSTEM RESET ALL
 
 > DROP TABLE t3;
 > DROP TABLE t4;
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_temporary_dataflows_per_cluster = 0
+
+> SHOW max_temporary_dataflows_per_cluster
+0
+
+> CREATE TABLE subscribe_table(a int)
+
+> BEGIN
+
+> DECLARE c2 CURSOR FOR SUBSCRIBE subscribe_table
+
+! FETCH 1 c2 WITH (TIMEOUT='0s')
+contains: creating temporary dataflows would violate max_temporary_dataflows_per_cluster limit (desired: 1, limit: 0, current: 0)
+
+> ROLLBACK
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_temporary_dataflows_per_cluster = 1
+
+$ postgres-execute connection=other
+BEGIN
+
+$ postgres-execute connection=other
+DECLARE c CURSOR FOR SUBSCRIBE subscribe_table
+
+$ postgres-execute connection=other
+FETCH 1 c WITH (TIMEOUT='0s')
+
+> BEGIN
+
+> DECLARE c2 CURSOR FOR SUBSCRIBE subscribe_table
+
+! FETCH 1 c2 WITH (TIMEOUT='0s')
+contains: creating temporary dataflows would violate max_temporary_dataflows_per_cluster limit (desired: 2, limit: 1, current: 1)
+
+> ROLLBACK
+
+$ postgres-execute connection=other
+ROLLBACK
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET max_temporary_dataflows_per_cluster
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_sources = 2

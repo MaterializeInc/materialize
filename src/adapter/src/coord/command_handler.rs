@@ -609,6 +609,7 @@ impl Coordinator {
                 conn_id: _,
                 cluster_id: _,
                 depends_on: _,
+                fast_path_peek: _,
             } in self.cancel_pending_peeks(&conn_id)
             {
                 // Cancel messages can be sent after the connection has hung

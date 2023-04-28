@@ -2505,6 +2505,7 @@ impl Coordinator {
             start_time: self.now(),
             dropping: false,
         };
+        self.new_temporary_dataflow(cluster_id)?;
         active_subscribe.initialize();
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
@@ -2512,6 +2513,7 @@ impl Coordinator {
             Ok(_) => {}
             Err(e) => {
                 self.remove_active_subscribe(sink_id).await;
+                self.temporary_dataflow_finished(cluster_id);
                 return Err(e);
             }
         };

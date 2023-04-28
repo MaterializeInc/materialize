@@ -50,6 +50,7 @@ pub(crate) struct PendingPeek {
     pub(crate) cluster_id: ClusterId,
     /// All `GlobalId`s that the peek depend on.
     pub(crate) depends_on: BTreeSet<GlobalId>,
+    pub(crate) fast_path_peek: bool,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -195,8 +196,7 @@ pub fn create_fast_path_plan<T: timely::progress::Timestamp>(
         if let Some((rows, ..)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
             return Ok(Some(FastPathPlan::Constant(
-                rows.clone()
-                    .map(|rows| rows.into_iter().map(|(row, diff)| (row, diff)).collect()),
+                rows.clone(),
                 // For best accuracy, we need to recalculate typ.
                 mir.typ(),
             )));
@@ -316,12 +316,8 @@ impl crate::coord::Coordinator {
 
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
-            let rows = match rows {
-                Ok(rows) => rows,
-                Err(e) => return Err(e.into()),
-            };
             // Consolidate down the results to get correct totals.
-            let rows = consolidate_constant_updates(rows);
+            let rows = consolidate_constant_updates(rows?);
 
             let mut results = Vec::new();
             for (row, count) in rows {
@@ -378,6 +374,7 @@ impl crate::coord::Coordinator {
             }) => {
                 let output_ids = dataflow.export_ids().collect();
 
+                self.new_temporary_dataflow(compute_instance)?;
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
                     .active_compute()
@@ -439,6 +436,7 @@ impl crate::coord::Coordinator {
                 conn_id,
                 cluster_id: compute_instance,
                 depends_on: source_ids,
+                fast_path_peek: drop_dataflow.is_none(),
             },
         );
         self.client_pending_peeks
@@ -510,7 +508,15 @@ impl crate::coord::Coordinator {
 
             uuids
                 .iter()
-                .filter_map(|(uuid, _)| self.pending_peeks.remove(uuid))
+                .filter_map(|(uuid, _)|  {
+                    let pending_peek = self.pending_peeks.remove(uuid);
+                    if let Some(pending_peek) = &pending_peek {
+                        if !pending_peek.fast_path_peek {
+                            self.temporary_dataflow_finished(pending_peek.cluster_id);
+                        }
+                    }
+                    pending_peek
+                })
                 .collect()
         } else {
             Vec::new()
@@ -530,6 +536,7 @@ impl crate::coord::Coordinator {
             conn_id: _,
             cluster_id: _,
             depends_on: _,
+            fast_path_peek: _,
         }) = self.remove_pending_peek(&uuid)
         {
             otel_ctx.attach_as_parent();
@@ -552,6 +559,9 @@ impl crate::coord::Coordinator {
             uuids.remove(uuid);
             if uuids.is_empty() {
                 self.client_pending_peeks.remove(&pending_peek.conn_id);
+            }
+            if !pending_peek.fast_path_peek {
+                self.temporary_dataflow_finished(pending_peek.cluster_id);
             }
         }
         pending_peek

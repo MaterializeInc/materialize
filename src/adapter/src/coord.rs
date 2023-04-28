@@ -78,6 +78,7 @@ use derivative::Derivative;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_sql::session::vars::SystemVars;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -97,7 +98,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{stack, task};
+use mz_ore::{stack, task, soft_panic_or_log};
 use mz_persist_client::usage::{ShardsUsage, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
@@ -500,6 +501,9 @@ pub struct Coordinator {
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
     active_conns: BTreeMap<ConnectionId, ConnMeta>,
+
+    /// Number of active dataflows per cluster
+    active_dataflows_per_cluster: BTreeMap<ClusterId, usize>,
 
     /// For each identifier in STORAGE, its read policy and any read holds on time.
     ///
@@ -1351,6 +1355,23 @@ impl Coordinator {
             let _ = meta.notice_tx.send(notice.clone());
         }
     }
+
+    fn new_temporary_dataflow(&mut self, cluster: ClusterId) -> Result<(), AdapterError> {
+        let value = self.active_dataflows_per_cluster.get(&cluster).unwrap_or(&0);
+        self.validate_resource_limit(*value, 1,
+             SystemVars::max_temporary_dataflows_per_cluster,
+             "temporary dataflows", "max_temporary_dataflows_per_cluster")?;
+        *self.active_dataflows_per_cluster.entry(cluster).or_default() += 1;
+        Ok(())
+    }
+
+    fn temporary_dataflow_finished(&mut self, cluster: ClusterId) {
+        let val: &mut _ = self.active_dataflows_per_cluster.get_mut(&cluster).expect("must have been created by `new_temporary_dataflow`");
+        match val.checked_sub(1) {
+            Some(v) => *val = v,
+            None => soft_panic_or_log!("bug in temporary dataflow counting"),
+        }
+    }
 }
 
 /// Serves the coordinator based on the provided configuration.
@@ -1489,6 +1510,7 @@ pub async fn serve(
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
                 active_conns: BTreeMap::new(),
+                active_dataflows_per_cluster: Default::default(),
                 storage_read_capabilities: Default::default(),
                 compute_read_capabilities: Default::default(),
                 txn_reads: Default::default(),

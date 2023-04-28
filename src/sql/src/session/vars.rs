@@ -759,6 +759,14 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const MAX_TEMPORARY_DATAFLOWS_PER_CLUSTER: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_temporary_dataflows_per_cluster"),
+    value: &100,
+    description: "The maximum number of temporary dataflows (from SELECTs or SUBSCRIBEs) on a single cluster (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1497,6 +1505,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
+            .with_var(&MAX_TEMPORARY_DATAFLOWS_PER_CLUSTER)
     }
 }
 
@@ -1848,6 +1857,11 @@ impl SystemVars {
     pub fn enable_rbac_checks(&self) -> bool {
         *self.expect_value(&ENABLE_RBAC_CHECKS)
     }
+
+        /// Returns the `max_temporary_dataflows_per_cluster` configuration parameter.
+        pub fn max_temporary_dataflows_per_cluster(&self) -> u32 {
+            *self.expect_value(&MAX_TEMPORARY_DATAFLOWS_PER_CLUSTER)
+        }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
