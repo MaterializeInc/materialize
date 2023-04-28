@@ -32,6 +32,8 @@ pub(crate) struct SourceStatisticsMetricsDefinitions {
     pub(crate) updates_staged: IntCounterVec,
     pub(crate) updates_committed: IntCounterVec,
     pub(crate) bytes_received: IntCounterVec,
+    pub(crate) envelope_state_bytes: IntCounterVec,
+    pub(crate) envelope_state_count: IntCounterVec,
 }
 
 impl SourceStatisticsMetricsDefinitions {
@@ -62,6 +64,16 @@ impl SourceStatisticsMetricsDefinitions {
                 help: "The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
             )),
+            envelope_state_bytes: registry.register(metric!(
+                name: "mz_source_envelope_state_bytes",
+                help: "The number of bytes of the source envelope state kept. This will be specific to the envelope in use.",
+                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+            )),
+            envelope_state_count: registry.register(metric!(
+                name: "mz_source_envelope_state_count",
+                help: "The number of records in the source envelope state. This will be specific to the envelope in use",
+                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+            )),
         }
     }
 }
@@ -74,6 +86,8 @@ pub struct SourceStatisticsMetrics {
     pub(crate) updates_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) updates_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -120,7 +134,7 @@ impl SourceStatisticsMetrics {
                     id.to_string(),
                     worker_id.to_string(),
                     parent_source_id.to_string(),
-                    shard,
+                    shard.clone(),
                 ]),
             bytes_received: metrics
                 .source_statistics
@@ -129,6 +143,24 @@ impl SourceStatisticsMetrics {
                     id.to_string(),
                     worker_id.to_string(),
                     parent_source_id.to_string(),
+                ]),
+            envelope_state_bytes: metrics
+                .source_statistics
+                .envelope_state_bytes
+                .get_delete_on_drop_counter(vec![
+                    id.to_string(),
+                    worker_id.to_string(),
+                    parent_source_id.to_string(),
+                    shard.clone(),
+                ]),
+            envelope_state_count: metrics
+                .source_statistics
+                .envelope_state_count
+                .get_delete_on_drop_counter(vec![
+                    id.to_string(),
+                    worker_id.to_string(),
+                    parent_source_id.to_string(),
+                    shard,
                 ]),
         }
     }
@@ -267,6 +299,8 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
                     updates_staged: 0,
                     updates_committed: 0,
                     bytes_received: 0,
+                    envelope_state_bytes: 0,
+                    envelope_state_count: 0,
                 },
                 SourceStatisticsMetrics::new(id, worker_id, metrics, parent_source_id, shard_id),
             ))),
@@ -318,6 +352,20 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
         let mut cur = self.stats.borrow_mut();
         cur.1.bytes_received = cur.1.bytes_received + value;
         cur.2.bytes_received.inc_by(value);
+    }
+
+    /// Increment the `envelope_state_bytes` stat.
+    pub fn inc_envelope_state_bytes_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.envelope_state_bytes = cur.1.envelope_state_bytes + value;
+        cur.2.envelope_state_bytes.inc_by(value);
+    }
+
+    /// Increment the `envelope_state_count` stat.
+    pub fn inc_envelope_state_count_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.envelope_state_count = cur.1.envelope_state_count + value;
+        cur.2.envelope_state_count.inc_by(value);
     }
 }
 
