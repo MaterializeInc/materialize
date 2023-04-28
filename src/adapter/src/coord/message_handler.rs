@@ -683,14 +683,14 @@ impl Coordinator {
         match real_time_recency_context {
             RealTimeRecencyContext::ExplainTimestamp {
                 tx,
-                session,
+                mut session,
                 format,
                 cluster_id,
                 optimized_plan,
                 id_bundle,
             } => tx.send(
                 self.sequence_explain_timestamp_finish(
-                    &session,
+                    &mut session,
                     format,
                     cluster_id,
                     optimized_plan,
