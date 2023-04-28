@@ -2345,33 +2345,16 @@ impl Coordinator {
                 // after the transaction started.
                 let outside = incoming_id_bundle.difference(&allowed_id_bundle);
                 if !outside.is_empty() {
-                    let mut names: Vec<_> = allowed_id_bundle
-                        .iter()
-                        // This could filter out a view that has been replaced in another transaction.
-                        .filter_map(|id| self.catalog().try_get_entry(&id))
-                        .map(|item| item.name())
-                        .map(|name| {
-                            self.catalog()
-                                .resolve_full_name(name, Some(session.conn_id()))
-                                .to_string()
-                        })
-                        .collect();
-                    let mut outside: Vec<_> = outside
-                        .iter()
-                        .filter_map(|id| self.catalog().try_get_entry(&id))
-                        .map(|item| item.name())
-                        .map(|name| {
-                            self.catalog()
-                                .resolve_full_name(name, Some(session.conn_id()))
-                                .to_string()
-                        })
-                        .collect();
+                    let mut valid_names =
+                        self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
+                    let mut invalid_names =
+                        self.resolve_collection_id_bundle_names(session, &outside);
                     // Sort so error messages are deterministic.
-                    names.sort();
-                    outside.sort();
+                    valid_names.sort();
+                    invalid_names.sort();
                     return Err(AdapterError::RelationOutsideTimeDomain {
-                        relations: outside,
-                        names,
+                        relations: invalid_names,
+                        names: valid_names,
                     });
                 }
             }
