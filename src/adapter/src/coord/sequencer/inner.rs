@@ -2893,17 +2893,7 @@ impl Coordinator {
         };
         let conn_id = session.conn_id();
         let source_ids = source.depends_on();
-        // If the source IDs are timestamp independent but the query contains temporal functions,
-        // then the timeline context needs to be upgraded to timestamp dependent. This is
-        // required because `source_ids` doesn't contain functions.
-        let timeline_context = {
-            match self.validate_timeline_context(source_ids.clone())? {
-                TimelineContext::TimestampIndependent if source.as_inner().contains_temporal() => {
-                    TimelineContext::TimestampDependent
-                }
-                context => context,
-            }
-        };
+        let timeline_context = self.validate_timeline_context(source_ids.clone())?;
 
         let mut determination = self.determine_timestamp(
             session,
