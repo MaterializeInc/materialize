@@ -421,14 +421,14 @@ async fn migrate(
             txn.configs
                 .insert(USER_VERSION.to_string(), ConfigValue { value: 0 })?;
 
-            if let Some(bootstrap_role) = &bootstrap_args.bootstrap_role {
+            if let Some(local_bootstrap_role) = &bootstrap_args.local_bootstrap_role {
                 let role_id =
                     RoleId::User(txn.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?);
                 txn.roles.insert(
                     RoleKey { id: role_id },
                     RoleValue {
                         role: SerializedRole {
-                            name: bootstrap_role.clone(),
+                            name: local_bootstrap_role.clone(),
                             attributes: Some(
                                 RoleAttributes::new().with_create_db().with_create_cluster(),
                             ),
@@ -445,7 +445,7 @@ async fn migrate(
                             ObjectType::Role,
                             EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
                                 id: role_id.to_string(),
-                                name: bootstrap_role.clone(),
+                                name: local_bootstrap_role.clone(),
                             }),
                             None,
                             now,
@@ -968,7 +968,7 @@ pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub builtin_cluster_replica_size: String,
     pub default_availability_zone: String,
-    pub bootstrap_role: Option<String>,
+    pub local_bootstrap_role: Option<String>,
 }
 
 #[derive(Debug)]

@@ -128,8 +128,6 @@ pub struct Config {
     // === Special modes. ===
     /// Whether to permit usage of unsafe features.
     pub unsafe_mode: bool,
-    /// What role, if any, should be initially created with elevated privileges.
-    pub bootstrap_role: Option<String>,
 
     // === Connection options. ===
     /// The IP address and port to listen for pgwire connections on.
@@ -148,8 +146,6 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     /// Frontegg JWT authentication configuration.
     pub frontegg: Option<FronteggAuthentication>,
-
-    // === Connection options. ===
     /// Configuration for source and sink connections created by the storage
     /// layer. This can include configuration for external
     /// sources.
@@ -215,6 +211,8 @@ pub struct Config {
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
+    /// What role, if any, should be initially created with elevated privileges.
+    pub local_bootstrap_role: Option<String>,
 }
 
 /// Configures TLS encryption for connections.
@@ -318,7 +316,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 .choose(&mut rand::thread_rng())
                 .cloned()
                 .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
-            bootstrap_role: config.bootstrap_role,
+            local_bootstrap_role: config.local_bootstrap_role,
         },
     )
     .await?;
