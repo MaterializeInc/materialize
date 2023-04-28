@@ -542,7 +542,9 @@ pub fn plan_subscribe(
         SubscribeOutput::WithinTimestampOrderBy { order_by } => {
             scx.require_within_timestamp_order_by_in_subscribe()?;
             let mz_diff = "mz_diff".into();
-            let output_columns = std::iter::once((0, &mz_diff)).chain(output_columns.into_iter().map(|(i, c)| (i+1, c))).collect_vec();
+            let output_columns = std::iter::once((0, &mz_diff))
+                .chain(output_columns.into_iter().map(|(i, c)| (i + 1, c)))
+                .collect_vec();
             match query::plan_order_by_exprs(
                 &ExprContext {
                     name: "WITHIN TIMESTAMP ORDER BY clause",
@@ -551,7 +553,10 @@ pub fn plan_subscribe(
                 &order_by[..],
                 &output_columns[..],
             ) {
-                Err(PlanError::UnknownColumn { table: None, column }) if &column == &mz_diff => {
+                Err(PlanError::UnknownColumn {
+                    table: None,
+                    column,
+                }) if &column == &mz_diff => {
                     // mz_diff is being used in an expression. Since mz_diff isn't part of the table
                     // it looks like an unknown column. Instead, return a better error
                     return Err(PlanError::InvalidOrderByInSubscribeWithinTimestampOrderBy);
