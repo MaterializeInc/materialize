@@ -18,28 +18,30 @@ class JsonSource(Check):
     """Test CREATE SOURCE ... FORMAT JSON"""
 
     def _can_run(self) -> bool:
-        return self.base_version >= MzVersion.parse("0.52.0-dev")
+        return self.base_version >= MzVersion.parse("0.53.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
                 """
-                $ kafka-create-topic topic=format-json
+                $ kafka-create-topic topic=format-json partitions=1
 
-                $ kafka-ingest format=bytes topic=format-json repeat=10000
-                {"f1": 1}
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
+                "object":{"a":"b","c":"d"}
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 > CREATE SOURCE format_jsonA
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
-                  FORMAT JSON
+                  KEY FORMAT JSON
+                  VALUE FORMAT JSON
+                  ENVELOPE UPSERT
 
                 > CREATE SOURCE format_jsonB
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
-                  FORMAT JSON
+                  KEY FORMAT JSON
+                  VALUE FORMAT JSON
+                  ENVELOPE UPSERT
                 """
             )
         )
@@ -49,12 +51,14 @@ class JsonSource(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                $ kafka-ingest format=bytes topic=format-json repeat=10000
-                {"f2": 1}
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
+                "float":1.23
+                "str":"hello"
                 """,
                 """
-                $ kafka-ingest format=bytes topic=format-json repeat=10000
-                {"f3": 1}
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
+                "array":[1,2,3]
+                "int":1
                 """,
             ]
         ]
@@ -63,17 +67,22 @@ class JsonSource(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT SUM((data -> 'f1')::STRING::INTEGER) + SUM((data -> 'f2')::STRING::INTEGER) + SUM((data -> 'f3')::STRING::INTEGER) FROM format_jsonA;
-                30000
+                > SELECT * FROM format_jsonA ORDER BY key
+                "\\"array\\"" [1,2,3]
+                "\\"float\\"" 1.23
+                "\\"int\\"" 1
+                "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
+                "\\"str\\"" "\\"hello\\""
 
-                > SHOW CREATE SOURCE format_jsonA;
-                materialize.public.format_jsona "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsona\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-1') FORMAT JSON EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsona_progress\\""
-
-                > SELECT SUM((data -> 'f1')::STRING::INTEGER) + SUM((data -> 'f2')::STRING::INTEGER) + SUM((data -> 'f3')::STRING::INTEGER) FROM format_jsonB;
-                30000
+                > SELECT * FROM format_jsonB ORDER BY key
+                "\\"array\\"" [1,2,3]
+                "\\"float\\"" 1.23
+                "\\"int\\"" 1
+                "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
+                "\\"str\\"" "\\"hello\\""
 
                 > SHOW CREATE SOURCE format_jsonB;
-                materialize.public.format_jsonb "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsonb\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-1') FORMAT JSON EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsonb_progress\\""
+                materialize.public.format_jsonb "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsonb\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-1') KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsonb_progress\\""
            """
             )
         )
