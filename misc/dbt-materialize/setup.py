@@ -41,6 +41,6 @@ setup(
     },
     install_requires=["dbt-postgres~=1.4.0"],
     extras_require={
-        "dev": ["dbt-tests-adapter~=1.4.0"],
+        "dev": ["dbt-tests-adapter>=1.4,<1.6"],
     },
 )
