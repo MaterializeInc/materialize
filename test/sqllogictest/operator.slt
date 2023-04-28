@@ -129,17 +129,11 @@ SHOW CREATE VIEW ADDER
 materialize.public.adder
 CREATE VIEW "materialize"."public"."adder" AS SELECT 2 + 2
 
-
-# Test: Show user view on mz_introspection
-
-statement ok
-SET cluster = mz_introspection
-
-statement error querying the following items "materialize\.public\.adder" is not allowed from the "mz_introspection" cluster\nHINT: Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.
+simple conn=mz_introspection,user=mz_introspection
 SHOW CREATE VIEW ADDER
-
-statement ok
-RESET cluster
+----
+materialize.public.adder,CREATE VIEW "materialize"."public"."adder" AS SELECT 2 + 2
+COMPLETE 1
 
 statement ok
 CREATE VIEW MULTIPLIER AS SELECT 2 OPERATOR(*) 2;
