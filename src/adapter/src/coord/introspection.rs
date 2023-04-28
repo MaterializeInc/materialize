@@ -94,9 +94,10 @@ pub fn check_cluster_restrictions(
         return Ok(());
     }
 
-    // Allows explain queries.
-    if let Plan::Explain(_) = plan {
-        return Ok(());
+    // Only continue, and check restrictions, if a Plan would run some computation on the cluster.
+    match plan {
+        Plan::Subscribe(_) | Plan::Peek(_) | Plan::ReadThenWrite(_) => (),
+        _ => return Ok(()),
     }
 
     // Collect any items that are not allowed to be run on the introspection cluster.
