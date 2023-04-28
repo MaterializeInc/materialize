@@ -1,13 +1,10 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.4.1 - 2023-04-28
 
-* **Breaking change.** Automatically run introspection queries in the
-    `mz_introspection` cluster via the new `auto_route_introspection_queries`
-    session variable, instead of hardcoding the cluster on connection.
-
-  This change requires [Materialize >=0.49.0](https://materialize.com/docs/releases/v0.49/).
-  **Users of older versions should pin `dbt-materialize` to `v1.4.0`.**
+* Let Materialize automatically run introspection queries in the
+  `mz_introspection` cluster via the new `auto_route_introspection_queries`
+  session variable, instead of hardcoding the cluster on connection.
 
 ## 1.4.0 - 2023-02-03
 
