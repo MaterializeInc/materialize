@@ -21,7 +21,7 @@ use mz_repr::explain::ExplainFormat;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, FetchPlan, Plan,
-    PlanKind, RaisePlan, RotateKeysPlan,
+    PlanKind, RaisePlan, RotateKeysPlan, SubscribeFrom,
 };
 
 use crate::command::{Command, ExecuteResponse};
@@ -50,17 +50,61 @@ use super::introspection;
 mod inner;
 
 impl Coordinator {
+    fn optimize(&self, plan: Plan) -> Result<Plan, AdapterError> {
+        match plan {
+            Plan::Insert(mut plan) => {
+                if let Some(..) = &plan.values.as_const() {
+                    // We don't perform any optimizations on an expression that is already
+                    // a constant for writes, as we want to maximize bulk-insert throughput.
+                } else {
+                    plan.values = self.view_optimizer.optimize(plan.values)?.into_inner();
+                };
+                Ok(Plan::Insert(plan))
+            }
+            Plan::Peek(mut plan) => {
+                plan.source = self.view_optimizer.optimize(plan.source)?.into_inner();
+                Ok(Plan::Peek(plan))
+            }
+            Plan::CreateView(mut plan) => {
+                plan.view.expr = self.view_optimizer.optimize(plan.view.expr)?.into_inner();
+                Ok(Plan::CreateView(plan))
+            }
+            Plan::CreateMaterializedView(mut plan) => {
+                plan.materialized_view.expr = self
+                    .view_optimizer
+                    .optimize(plan.materialized_view.expr)?
+                    .into_inner();
+                Ok(Plan::CreateMaterializedView(plan))
+            }
+            Plan::Subscribe(mut plan) => {
+                match plan.from {
+                    SubscribeFrom::Id(_) => {}
+                    SubscribeFrom::Query { expr, desc } => {
+                        plan.from = SubscribeFrom::Query {
+                            expr: self.view_optimizer.optimize(expr)?.into_inner(),
+                            desc,
+                        };
+                    }
+                }
+                Ok(Plan::Subscribe(plan))
+            }
+            _ => Ok(plan),
+        }
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_plan(
         &mut self,
         mut tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
-        plan: Plan,
+        mut plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
         let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
         tx.set_allowed(responses);
+
+        plan = return_if_err!(self.optimize(plan), tx, session);
 
         let session_catalog = self.catalog.for_session(&session);
         if let Err(e) = rbac::check_plan(&session_catalog, &session, &plan, &depends_on) {

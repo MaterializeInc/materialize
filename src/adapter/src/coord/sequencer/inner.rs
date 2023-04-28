@@ -1126,7 +1126,7 @@ impl Coordinator {
         );
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
-        let optimized_expr = self.view_optimizer.optimize(view.expr)?;
+        let optimized_expr = OptimizedMirRelationExpr(view.expr);
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
         let view = catalog::View {
             create_sql: view.create_sql,
@@ -1209,7 +1209,7 @@ impl Coordinator {
         // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
 
-        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
+        let optimized_expr = OptimizedMirRelationExpr(view_expr);
         let desc = RelationDesc::new(optimized_expr.typ(), column_names);
 
         // Pick the least valid read timestamp as the as-of for the view
@@ -1973,7 +1973,7 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
         }: PeekStageOptimize,
     ) -> Result<PeekStageTimestamp, AdapterError> {
-        let source = self.view_optimizer.optimize(source)?;
+        let source = OptimizedMirRelationExpr(source);
 
         // We create a dataflow and optimize it, to determine if we can avoid building it.
         // This can happen if the result optimizes to a constant, or to a `Get` expression
@@ -2474,7 +2474,7 @@ impl Coordinator {
                     &mut target_replica,
                 )?;
                 let id = self.allocate_transient_id()?;
-                let expr = self.view_optimizer.optimize(expr)?;
+                let expr = OptimizedMirRelationExpr(expr);
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let sink_desc = make_sink_desc(self, session, id, desc)?;
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
@@ -2990,15 +2990,7 @@ impl Coordinator {
         mut session: Session,
         plan: InsertPlan,
     ) {
-        let optimized_mir = if let Some(..) = &plan.values.as_const() {
-            // We don't perform any optimizations on an expression that is already
-            // a constant for writes, as we want to maximize bulk-insert throughput.
-            OptimizedMirRelationExpr(plan.values)
-        } else {
-            return_if_err!(self.view_optimizer.optimize(plan.values), tx, session)
-        };
-
-        match optimized_mir.into_inner() {
+        match plan.values {
             selection if selection.as_const().is_some() && plan.returning.is_empty() => {
                 let catalog = self.owned_catalog();
                 mz_ore::task::spawn(|| "coord::sequence_inner", async move {
