@@ -34,7 +34,7 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     if [ -n "$(find . -name '*.profraw')" ]; then
         # Workaround for "invalid instrumentation profile data (file header is corrupt)"
         find . -name '*.profraw' | while read -r i; do
-            bin/ci-builder run stable rust-profdata show "$i" > /dev/null || rm "$i"
+            bin/ci-builder run stable rust-profdata show "$i" > /dev/null || rm "$i" || true
         done
         find . -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
         find . -name '*.profraw' -delete
