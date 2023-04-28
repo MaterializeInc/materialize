@@ -71,7 +71,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self,
         tag: Optional[str] = None,
         release_mode: bool = True,
-        coverage_mode: bool = True,
+        coverage_mode: bool = False,
         log_filter: Optional[str] = None,
     ) -> None:
         self.tag = tag
