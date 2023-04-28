@@ -32,8 +32,8 @@ pub(crate) struct SourceStatisticsMetricsDefinitions {
     pub(crate) updates_staged: IntCounterVec,
     pub(crate) updates_committed: IntCounterVec,
     pub(crate) bytes_received: IntCounterVec,
-    pub(crate) envelope_state_bytes: IntCounterVec,
-    pub(crate) envelope_state_count: IntCounterVec,
+    pub(crate) envelope_state_bytes: UIntGaugeVec,
+    pub(crate) envelope_state_count: UIntGaugeVec,
 }
 
 impl SourceStatisticsMetricsDefinitions {
@@ -86,8 +86,8 @@ pub struct SourceStatisticsMetrics {
     pub(crate) updates_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) updates_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) envelope_state_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) envelope_state_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -147,7 +147,7 @@ impl SourceStatisticsMetrics {
             envelope_state_bytes: metrics
                 .source_statistics
                 .envelope_state_bytes
-                .get_delete_on_drop_counter(vec![
+                .get_delete_on_drop_gauge(vec![
                     id.to_string(),
                     worker_id.to_string(),
                     parent_source_id.to_string(),
@@ -156,7 +156,7 @@ impl SourceStatisticsMetrics {
             envelope_state_count: metrics
                 .source_statistics
                 .envelope_state_count
-                .get_delete_on_drop_counter(vec![
+                .get_delete_on_drop_gauge(vec![
                     id.to_string(),
                     worker_id.to_string(),
                     parent_source_id.to_string(),
@@ -358,14 +358,28 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     pub fn inc_envelope_state_bytes_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
         cur.1.envelope_state_bytes = cur.1.envelope_state_bytes + value;
-        cur.2.envelope_state_bytes.inc_by(value);
+        cur.2.envelope_state_bytes.add(value);
+    }
+
+    /// Decrement the `envelope_state_bytes` stat.
+    pub fn dec_envelope_state_bytes_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.envelope_state_bytes = cur.1.envelope_state_bytes - value;
+        cur.2.envelope_state_bytes.sub(value);
     }
 
     /// Increment the `envelope_state_count` stat.
     pub fn inc_envelope_state_count_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
         cur.1.envelope_state_count = cur.1.envelope_state_count + value;
-        cur.2.envelope_state_count.inc_by(value);
+        cur.2.envelope_state_count.add(value);
+    }
+
+    /// Decrement the `envelope_state_count` stat.
+    pub fn dec_envelope_state_count_by(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.envelope_state_count = cur.1.envelope_state_count - value;
+        cur.2.envelope_state_count.sub(value);
     }
 }
 
