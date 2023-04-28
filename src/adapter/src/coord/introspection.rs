@@ -18,6 +18,7 @@
 //!
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
+use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::Plan;
@@ -95,16 +96,20 @@ pub fn check_cluster_restrictions(
     }
 
     // Only continue, and check restrictions, if a Plan would run some computation on the cluster.
-    match plan {
-        Plan::Subscribe(_) | Plan::Peek(_) | Plan::ReadThenWrite(_) => (),
+    //
+    // Note: Creating other objects like Materialized Views is prevented elsewhere. We define the
+    // 'mz_introspection' cluster to be "read-only", which restricts these actions.
+    let depends_on: Box<dyn Iterator<Item = GlobalId>> = match plan {
+        Plan::Subscribe(_) | Plan::ReadThenWrite(_) => Box::new(depends_on.into_iter().copied()),
+        // Some statements e.g. 'SHOW' ultimately depend on only system objects, _after_ planning.
+        Plan::Peek(plan) => Box::new(plan.source.depends_on().into_iter()),
         _ => return Ok(()),
-    }
+    };
 
     // Collect any items that are not allowed to be run on the introspection cluster.
     let unallowed_dependents: SmallVec<[String; 2]> = depends_on
-        .iter()
         .filter_map(|id| {
-            let item = catalog.get_item(id);
+            let item = catalog.get_item(&id);
             let full_name = catalog.resolve_full_name(item.name());
 
             if !catalog.is_system_schema(&full_name.schema) {
