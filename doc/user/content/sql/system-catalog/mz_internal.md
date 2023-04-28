@@ -82,12 +82,13 @@ The concept of a linked cluster is not user-facing, and is intentionally undocum
 The `mz_cluster_replica_statuses` table contains a row describing the status
 of each process in each cluster replica in the system.
 
-| Field                | Type                            | Meaning                                                    |
-| -------------------- | ------------------------------- | --------                                                   |
-| `replica_id`         | [`text`]                        | Materialize's unique ID for the cluster replica.           |
-| `process_id`         | [`uint8`]                       | The ID of the process within the cluster replica.          |
-| `status`             | [`text`]                        | The status of the cluster replica: `ready` or `not-ready`. |
-| `updated_at`         | [`timestamp with time zone`]    | The time at which the status was last updated.             |
+| Field                | Type                            | Meaning                                                                      |
+| -------------------- | ------------------------------- | --------                                                                     |
+| `replica_id`         | [`text`]                        | Materialize's unique ID for the cluster replica.                             |
+| `process_id`         | [`uint8`]                       | The ID of the process within the cluster replica.                            |
+| `status`             | [`text`]                        | The status of the cluster replica: `ready` or `not-ready`.                   |
+| `reason`             | [`text`]                        | If the cluster replica is in a `not-ready` state, the reason (if available). |
+| `updated_at`         | [`timestamp with time zone`]    | The time at which the status was last updated.                               |
 
 ### `mz_cluster_replica_utilization`
 
