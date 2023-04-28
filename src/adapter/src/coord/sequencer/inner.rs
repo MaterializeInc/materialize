@@ -2283,51 +2283,7 @@ impl Coordinator {
         };
 
         if in_immediate_multi_stmt_txn {
-            // If there are no `txn_reads`, then this must be the first query in the transaction
-            // and we can skip timedomain validations.
-            if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
-                // Queries without a timestamp and timeline can belong to any existing timedomain.
-                if let TimestampContext::TimelineTimestamp(_, _) = &timestamp_context {
-                    // Verify that the references and indexes for this query are in the
-                    // current read transaction.
-                    let allowed_id_bundle = txn_reads.id_bundle();
-                    // Find the first reference or index (if any) that is not in the transaction. A
-                    // reference could be caused by a user specifying an object in a different
-                    // schema than the first query. An index could be caused by a CREATE INDEX
-                    // after the transaction started.
-                    let outside = id_bundle.difference(&allowed_id_bundle);
-                    if !outside.is_empty() {
-                        let mut names: Vec<_> = allowed_id_bundle
-                            .iter()
-                            // This could filter out a view that has been replaced in another transaction.
-                            .filter_map(|id| self.catalog().try_get_entry(&id))
-                            .map(|item| item.name())
-                            .map(|name| {
-                                self.catalog()
-                                    .resolve_full_name(name, Some(session.conn_id()))
-                                    .to_string()
-                            })
-                            .collect();
-                        let mut outside: Vec<_> = outside
-                            .iter()
-                            .filter_map(|id| self.catalog().try_get_entry(&id))
-                            .map(|item| item.name())
-                            .map(|name| {
-                                self.catalog()
-                                    .resolve_full_name(name, Some(session.conn_id()))
-                                    .to_string()
-                            })
-                            .collect();
-                        // Sort so error messages are deterministic.
-                        names.sort();
-                        outside.sort();
-                        return Err(AdapterError::RelationOutsideTimeDomain {
-                            relations: outside,
-                            names,
-                        });
-                    }
-                }
-            }
+            self.check_txn_timedomain_conflicts(session, &timestamp_context, &id_bundle)?;
         }
 
         // Now that we have a timestamp, set the as of and resolve calls to mz_now().
@@ -2365,6 +2321,63 @@ impl Coordinator {
             id_bundle,
             source_ids,
         })
+    }
+
+    /// Verifies that no timedomain conflicts exist between the transaction's current read
+    /// holds and the specified sets of incoming collections
+    fn check_txn_timedomain_conflicts(
+        &self,
+        session: &Session,
+        timestamp_context: &TimestampContext<Timestamp>,
+        incoming_id_bundle: &CollectionIdBundle,
+    ) -> Result<(), AdapterError> {
+        // If there are no `txn_reads`, then this must be the first query in the transaction
+        // and we can skip timedomain validations.
+        if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
+            // Queries without a timestamp and timeline can belong to any existing timedomain.
+            if let TimestampContext::TimelineTimestamp(_, _) = timestamp_context {
+                // Verify that the references and indexes for this query are in the
+                // current read transaction.
+                let allowed_id_bundle = txn_reads.id_bundle();
+                // Find the first reference or index (if any) that is not in the transaction. A
+                // reference could be caused by a user specifying an object in a different
+                // schema than the first query. An index could be caused by a CREATE INDEX
+                // after the transaction started.
+                let outside = incoming_id_bundle.difference(&allowed_id_bundle);
+                if !outside.is_empty() {
+                    let mut names: Vec<_> = allowed_id_bundle
+                        .iter()
+                        // This could filter out a view that has been replaced in another transaction.
+                        .filter_map(|id| self.catalog().try_get_entry(&id))
+                        .map(|item| item.name())
+                        .map(|name| {
+                            self.catalog()
+                                .resolve_full_name(name, Some(session.conn_id()))
+                                .to_string()
+                        })
+                        .collect();
+                    let mut outside: Vec<_> = outside
+                        .iter()
+                        .filter_map(|id| self.catalog().try_get_entry(&id))
+                        .map(|item| item.name())
+                        .map(|name| {
+                            self.catalog()
+                                .resolve_full_name(name, Some(session.conn_id()))
+                                .to_string()
+                        })
+                        .collect();
+                    // Sort so error messages are deterministic.
+                    names.sort();
+                    outside.sort();
+                    return Err(AdapterError::RelationOutsideTimeDomain {
+                        relations: outside,
+                        names,
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Checks to see if the session needs a real time recency timestamp and if so returns
@@ -2778,7 +2791,7 @@ impl Coordinator {
     fn sequence_explain_timestamp_begin(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        mut session: Session,
         plan: ExplainPlan,
         depends_on: Vec<GlobalId>,
     ) {
@@ -2821,8 +2834,8 @@ impl Coordinator {
                 });
             }
             None => tx.send(
-                self.sequence_explain_timestamp_finish(
-                    &session,
+                self.sequence_explain_timestamp_finish_inner(
+                    &mut session,
                     format,
                     cluster_id,
                     optimized_plan,
@@ -2863,11 +2876,11 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_explain_timestamp_finish_inner(
-        &self,
-        session: &Session,
+        &mut self,
+        session: &mut Session,
         format: ExplainFormat,
         cluster_id: ClusterId,
-        optimized_plan: OptimizedMirRelationExpr,
+        source: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -2878,15 +2891,65 @@ impl Coordinator {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
         };
-        let timeline_context = self.validate_timeline_context(optimized_plan.depends_on())?;
-        let determination = self.determine_timestamp(
+        let conn_id = session.conn_id();
+        let source_ids = source.depends_on();
+        // If the source IDs are timestamp independent but the query contains temporal functions,
+        // then the timeline context needs to be upgraded to timestamp dependent. This is
+        // required because `source_ids` doesn't contain functions.
+        let timeline_context = {
+            match self.validate_timeline_context(source_ids.clone())? {
+                TimelineContext::TimestampIndependent if source.as_inner().contains_temporal() => {
+                    TimelineContext::TimestampDependent
+                }
+                context => context,
+            }
+        };
+
+        let mut determination = self.determine_timestamp(
             session,
             &id_bundle,
             &QueryWhen::Immediately,
             cluster_id,
-            timeline_context,
+            timeline_context.clone(),
             real_time_recency_ts,
         )?;
+
+        if session.transaction().is_in_multi_statement_transaction() {
+            if let Some(ts_context @ TimestampContext::TimelineTimestamp(_, _)) =
+                session.get_transaction_timestamp_context()
+            {
+                // In this case, `timestamp_context` should be updated to reflect the one
+                // chosen as a result of the transaction's initial peek.
+                determination.timestamp_context = ts_context;
+            } else {
+                if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
+                    session.add_transaction_ops(TransactionOps::Peeks(
+                        determination.timestamp_context.clone(),
+                    ))?;
+                }
+            }
+
+            self.check_txn_timedomain_conflicts(
+                session,
+                &determination.timestamp_context,
+                &id_bundle,
+            )?;
+
+            // If we're in a transaction, acquire read holds on any sources in the current time-domain
+            // if they have not already been acquired.
+            let timedomain_id_bundle =
+                self.timedomain_for(&source_ids, &timeline_context, conn_id, cluster_id)?;
+
+            if !timedomain_id_bundle.is_empty() && !self.txn_reads.contains_key(&session.conn_id())
+            {
+                if let Some(timestamp) = determination.timestamp_context.timestamp() {
+                    let read_holds =
+                        self.acquire_read_holds(timestamp.clone(), &timedomain_id_bundle);
+                    self.txn_reads.insert(session.conn_id(), read_holds);
+                }
+            }
+        }
+
         let mut sources = Vec::new();
         {
             for id in id_bundle.storage_ids.iter() {
