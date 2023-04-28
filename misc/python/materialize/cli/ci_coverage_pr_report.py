@@ -127,14 +127,14 @@ def get_report(coverage: Coverage) -> str:
     it gets any more complex.
     """
     try:
-        # Remove lines which are only covered in unit tests as sindicated by a
+        # Remove lines which are only covered in unit tests as indicated by a
         # negative line count
         for file, lines in coverage.items():
             with open(file, "r+") as f:
                 content = f.readlines()
                 f.seek(0)
                 for i, line in enumerate(content):
-                    if (lines.get(i + 1) or 0) < 0:
+                    if (lines.get(i + 1) or 0) >= 0:
                         f.write(line)
                 f.truncate()
 
@@ -159,7 +159,11 @@ def get_report(coverage: Coverage) -> str:
                 content = f.readlines()
                 f.seek(0)
                 for i, line in enumerate(content):
-                    if (lines.get(i + 1) or 0) > 0:
+                    # If a line has "None" marker, then it can't be covered, print it out.
+                    # If a line has positive or negative coverage then it is
+                    # covered in normal tests or unit tests, print it out.
+                    # All remaining lines can be covered, but are not covered.
+                    if lines.get(i + 1) is None or (lines.get(i + 1) or 0) != 0:
                         f.write(line)
                 f.truncate()
 
