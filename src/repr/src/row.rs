@@ -227,6 +227,10 @@ mod columnation {
         {
             self.region.reserve(regions.map(|r| r.region.len()).sum());
         }
+
+        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            self.region.heap_size(callback)
+        }
     }
 }
 
