@@ -25,7 +25,6 @@ buildkite-agent artifact upload junit_coverage*.xml
 ci_unimportant_heading "Create coverage report"
 REPORT=coverage_without_unittests_"$BUILDKITE_BUILD_ID"
 REPORT_UNITTESTS=coverage_with_unittests_"$BUILDKITE_BUILD_ID"
-head -n1 coverage/cargotest.lcov # TODO(def-) Check if this matches the expected path
 find coverage -name '*.lcov' -exec sed -i "s#SF:/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/#SF:#" {} +
 find coverage -name '*.lcov' -not -name 'cargotest.lcov' -exec genhtml -o "$REPORT" {} +
 find coverage -name '*.lcov' -exec genhtml -o "$REPORT_UNITTESTS" {} +
