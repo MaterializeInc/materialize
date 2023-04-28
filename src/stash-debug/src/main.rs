@@ -397,7 +397,7 @@ impl Usage {
                 default_cluster_replica_size: "1".into(),
                 builtin_cluster_replica_size: "1".into(),
                 default_availability_zone: DUMMY_AVAILABILITY_ZONE.into(),
-                local_bootstrap_role: None,
+                bootstrap_role: None,
             },
         )
         .await?;

@@ -135,7 +135,7 @@ pub struct Config {
     builtin_cluster_replica_size: String,
     propagate_crashes: bool,
     enable_tracing: bool,
-    local_bootstrap_role: Option<String>,
+    bootstrap_role: Option<String>,
 }
 
 impl Default for Config {
@@ -154,7 +154,7 @@ impl Default for Config {
             builtin_cluster_replica_size: "1".to_string(),
             propagate_crashes: false,
             enable_tracing: false,
-            local_bootstrap_role: Some("materialize".into()),
+            bootstrap_role: Some("materialize".into()),
         }
     }
 }
@@ -235,8 +235,8 @@ impl Config {
         self
     }
 
-    pub fn with_local_bootstrap_role(mut self, bootstrap_role: Option<String>) -> Self {
-        self.local_bootstrap_role = bootstrap_role;
+    pub fn with_bootstrap_role(mut self, bootstrap_role: Option<String>) -> Self {
+        self.bootstrap_role = bootstrap_role;
         self
     }
 }
@@ -375,7 +375,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         launchdarkly_sdk_key: None,
         launchdarkly_key_map: Default::default(),
         config_sync_loop_interval: None,
-        local_bootstrap_role: config.local_bootstrap_role,
+        bootstrap_role: config.bootstrap_role,
     }))?;
     let server = Server {
         inner,

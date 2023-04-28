@@ -196,7 +196,7 @@ def main() -> int:
                 f"--adapter-stash-url={args.postgres}?options=--search_path=adapter",
                 f"--storage-stash-url={args.postgres}?options=--search_path=storage",
                 f"--environment-id={environment_id}",
-                "--local-bootstrap-role=materialize",
+                "--bootstrap-role=materialize",
                 *args.args,
             ]
         elif args.program == "sqllogictest":

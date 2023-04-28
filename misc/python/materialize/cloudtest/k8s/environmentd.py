@@ -183,7 +183,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ]
         if self._meets_minimum_version("0.53.0"):
             args += [
-                "--local-bootstrap-role",
+                "--bootstrap-role",
                 "materialize",
             ]
         container = V1Container(
