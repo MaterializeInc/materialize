@@ -310,3 +310,45 @@ Used Indexes:
   - mz_internal.mz_source_status_history_ind
 
 EOF
+
+# Querying user objects should not be allowed from the introspection cluster.
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'));
+
+statement ok
+SET CLUSTER TO foo;
+
+statement ok
+CREATE TABLE bar ( key text, val bigint );
+
+statement ok
+SET CLUSTER TO mz_introspection;
+
+statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_introspection" cluster\nHINT: Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.
+SELECT key FROM bar;
+
+# But inspecting those objects, e.g. checking what indexes exist, should be allowed.
+statement ok
+SHOW INDEXES on bar;
+
+statement ok
+SET CLUSTER TO mz_introspection;
+
+statement ok
+DROP CLUSTER foo CASCADE;
+
+# Creating views with the mz_introspection cluster active should be allowed though.
+statement ok
+CREATE VIEW keys AS ( SELECT key FROM bar );
+
+# But creating objects that install resources, should not be allowed.
+
+statement error system cluster 'mz_introspection' cannot be modified
+CREATE MATERIALIZED VIEW live_keys AS ( SELECT key FROM bar );
+
+statement error system cluster 'mz_introspection' cannot be modified
+CREATE CLUSTER REPLICA mz_introspection.backup SIZE '1';
+
+statement error system cluster 'mz_introspection' cannot be modified
+CREATE INDEX i_keys ON bar (key);

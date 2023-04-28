@@ -258,15 +258,11 @@ materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"
 
 # Test: SHOW CREATE MATERIALIZED VIEW as mz_introspection
 
-
-statement ok
-SET cluster = mz_introspection
-
-statement error querying the following items "materialize\.public\.mv" is not allowed from the "mz_introspection" cluster\nHINT: Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.
+simple conn=mz_introspection,user=mz_introspection
 SHOW CREATE MATERIALIZED VIEW mv
-
-statement ok
-RESET cluster
+----
+materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT 1
+COMPLETE 1
 
 # Test: SHOW MATERIALIZED VIEWS
 
