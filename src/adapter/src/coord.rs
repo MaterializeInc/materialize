@@ -203,8 +203,14 @@ pub enum Message<T = mz_repr::Timestamp> {
     StorageUsageUpdate(ShardsUsage),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
-        transient_revision: u64,
         real_time_recency_ts: Timestamp,
+        replan: TransientPlan,
+    },
+    /// Replans a statement because the transient revision changed while doing off-thread work.
+    Replan {
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        replan: TransientPlan,
     },
 }
 
@@ -261,7 +267,6 @@ pub enum RealTimeRecencyContext {
         index_id: GlobalId,
         timeline_context: TimelineContext,
         source_ids: BTreeSet<GlobalId>,
-        id_bundle: CollectionIdBundle,
         in_immediate_multi_stmt_txn: bool,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
@@ -288,10 +293,12 @@ pub enum PeekStage {
 #[derive(Debug)]
 pub struct PeekStageValidate {
     pub plan: mz_sql::plan::PeekPlan,
+    depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug)]
 pub struct PeekStageOptimize {
+    replan: TransientPlan,
     source: MirRelationExpr,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -299,7 +306,6 @@ pub struct PeekStageOptimize {
     index_id: GlobalId,
     source_ids: BTreeSet<GlobalId>,
     cluster_id: ClusterId,
-    id_bundle: CollectionIdBundle,
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -308,6 +314,7 @@ pub struct PeekStageOptimize {
 
 #[derive(Debug)]
 pub struct PeekStageTimestamp {
+    replan: TransientPlan,
     dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -315,7 +322,6 @@ pub struct PeekStageTimestamp {
     index_id: GlobalId,
     source_ids: BTreeSet<GlobalId>,
     cluster_id: ClusterId,
-    id_bundle: CollectionIdBundle,
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -326,6 +332,7 @@ pub struct PeekStageTimestamp {
 
 #[derive(Debug)]
 pub struct PeekStageFinish {
+    replan: TransientPlan,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
     pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
@@ -336,11 +343,19 @@ pub struct PeekStageFinish {
     pub index_id: GlobalId,
     pub timeline_context: TimelineContext,
     pub source_ids: BTreeSet<GlobalId>,
-    pub id_bundle: CollectionIdBundle,
     pub in_immediate_multi_stmt_txn: bool,
     pub real_time_recency_ts: Option<mz_repr::Timestamp>,
     pub key: Vec<MirScalarExpr>,
     pub typ: RelationType,
+}
+
+/// A struct to hold information on how to determine if a plan may have changed and how to re-plan
+/// it if so.
+#[derive(Debug)]
+pub struct TransientPlan {
+    transient_revision: u64,
+    plan: mz_sql::plan::Plan,
+    depends_on: Vec<GlobalId>,
 }
 
 /// Configures a coordinator.

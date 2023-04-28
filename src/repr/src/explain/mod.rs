@@ -222,7 +222,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
 }
 
 /// The type of object to be explained
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Explainee {
     /// An object that will be served using a dataflow
     Dataflow(GlobalId),
