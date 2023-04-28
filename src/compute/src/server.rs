@@ -630,6 +630,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
             }
 
+            // Clear the list of dropped collections.
+            // We intended to report their dropping, but the controller does not expect to hear
+            // about them anymore.
+            compute_state.dropped_collections = Default::default();
+
             // Adjust reported frontiers:
             //  * For dataflows we continue to use, reset to ensure we report something not before
             //    the new `as_of` next.
