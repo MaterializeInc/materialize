@@ -109,7 +109,7 @@ For this guide, you'll create 2 clusters, one for ingesting source data and the 
 1. Use the [`SHOW CLUSTER REPLICAS`](https://materialize.com/docs/sql/show-cluster-replicas/) command to check the status of the replicas:
 
     ```sql
-    SHOW CLUSTER REPLICAS WHERE CLUSTER = 'compute_qck';
+    SHOW CLUSTER REPLICAS WHERE cluster = 'compute_qck' OR cluster = 'ingest_qck';
     ```
     <p></p>
 
@@ -117,16 +117,27 @@ For this guide, you'll create 2 clusters, one for ingesting source data and the 
        cluster   | replica |  size   | ready
     -------------+---------+---------+-------
      compute_qck | r1      | 2xsmall | t
+     ingest_qck  | r1      | 2xsmall | t
     (2 rows)
     ```
 
-    Once the `r1` replica is ready (`ready=t`), move on to the next step.
+    Once both replicas are ready (`ready=t`), move on to the next step.
 
 ## Step 3. Ingest streaming data
 
 Materialize supports streaming data from multiple external sources, including [Kafka](/sql/create-source/kafka/) and [PostgreSQL](/sql/create-source/postgres/). The process for integrating a source typically involves configuring the source's network and creating connection objects in Materialize.
 
 For this guide, you'll use a [built-in load generator](/sql/create-source/load-generator/#auction) that simulates an auction house, where users bid on an ongoing series of auctions.
+
+1. Aside from clusters and replicas, sources and most other objects in Materialize are [namespaced](/sql/namespaces/) by database and schema, so start by creating a unique schema within the default `materialize` database:
+
+    ```sql
+    CREATE SCHEMA qck;
+    ```
+
+    ```sql
+    SET search_path = qck;
+    ```
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/load-generator/) command to create the auction house source:
 
@@ -147,15 +158,15 @@ For this guide, you'll use a [built-in load generator](/sql/create-source/load-g
     <p></p>
 
     ```nofmt
-              name          |      type      | size
-    ------------------------+----------------+------
-     accounts               | subsource      |
-     auction_house          | load-generator |
-     auction_house_progress | subsource      |
-     auctions               | subsource      |
-     bids                   | subsource      |
-     organizations          | subsource      |
-     users                  | subsource      |
+                name            |      type      | size
+    ----------------------------+----------------+------
+     accounts                   | subsource      |
+     auction_house_qck          | load-generator |
+     auction_house_qck_progress | subsource      |
+     auctions                   | subsource      |
+     bids                       | subsource      |
+     organizations              | subsource      |
+     users                      | subsource      |
     (7 rows)
     ```
 
@@ -519,11 +530,23 @@ In addition to using replicas to increase fault tolerance, you can add and remov
 Once you're done exploring the auction house source, remember to clean up your environment:
 
 ```sql
-DROP CLUSTER ingest_qck CASCADE;
+DROP SCHEMA qck CASCADE;
 ```
 
 ```sql
-DROP CLUSTER compute_qck CASCADE;
+DROP CLUSTER ingest_qck;
+```
+
+```sql
+DROP CLUSTER compute_qck;
+```
+
+```sql
+RESET search_path;
+```
+
+```sql
+RESET cluster;
 ```
 
 ## What's next?
