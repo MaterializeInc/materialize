@@ -71,7 +71,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self,
         tag: Optional[str] = None,
         release_mode: bool = True,
-        coverage_mode: bool = True,
+        coverage_mode: bool = False,
         log_filter: Optional[str] = None,
     ) -> None:
         self.tag = tag
@@ -116,6 +116,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                         name="CI_COVERAGE_ENABLED",
                         value="1",
                     ),
+                    V1EnvVar(name="MZ_ORCHESTRATOR_KUBERNETES_COVERAGE", value="1"),
                 ]
             )
 
@@ -153,8 +154,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             # only supported on newer releases, do not add it here. Add it as a
             # version-gated argument below, using `self._meets_minimum_version`.
         ]
-        if self.coverage_mode:
-            args += ["--orchestrator-kubernetes-coverage"]
         if self.log_filter:
             args += [f"--log-filter={self.log_filter}"]
         if self._meets_minimum_version("0.38.0"):

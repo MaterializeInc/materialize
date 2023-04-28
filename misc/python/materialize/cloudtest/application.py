@@ -48,10 +48,12 @@ class Application:
         for resource in self.resources:
             resource.create()
 
+    def coverage_mode(self) -> bool:
+        return ui.env_is_truthy("CI_COVERAGE_ENABLED")
+
     def acquire_images(self) -> None:
-        coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
         repo = mzbuild.Repository(
-            ROOT, release_mode=self.release_mode, coverage=coverage
+            ROOT, release_mode=self.release_mode, coverage=self.coverage_mode()
         )
         for image in self.images:
             deps = repo.resolve_dependencies([repo.images[image]])
@@ -129,7 +131,10 @@ class MaterializeApplication(Application):
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
             EnvironmentdStatefulSet(
-                release_mode=release_mode, tag=tag, log_filter=log_filter
+                release_mode=release_mode,
+                tag=tag,
+                log_filter=log_filter,
+                coverage_mode=self.coverage_mode(),
             ),
             self.environmentd,
             self.materialized_alias,
