@@ -1291,6 +1291,67 @@ fn test_explain_timestamp_json() {
     let _explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
 }
 
+// Verify that `EXPLAIN TIMESTAMP ...` within acts like a peek within a transaction.
+// That is, ensure the following:
+// 1. Consistently returns its transaction timestamp as the "query timestamp"
+// 2. Acquires read holds for all objects within the same time domain
+// 3. Errors during a write-only transaction
+// 4. Errors when an object outside the chosen time domain is referenced
+#[test]
+fn test_github_18950() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
+
+    // Verify execution during a write-only trx fails
+    client.batch_execute("BEGIN").unwrap();
+    client.batch_execute("INSERT INTO t1 VALUES (1)").unwrap();
+    let error = client
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
+        .unwrap_err();
+
+    assert!(format!("{}", error).contains("transaction in write-only mode"));
+
+    client.batch_execute("ROLLBACK").unwrap();
+
+    // Verify the transaction timestamp is returned for each select and
+    // read holds are acquired as of the transaction timestamp
+    client.batch_execute("BEGIN").unwrap();
+    let mut query_timestamp = None;
+
+    for i in 1..5 {
+        let row = client
+        .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
+        .unwrap();
+
+        let explain: String = row.get(0);
+        let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+        let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
+
+        if let Some(timestamp) = query_timestamp {
+            assert_eq!(timestamp, *explain_timestamp);
+        } else {
+            query_timestamp = Some(*explain_timestamp);
+        }
+
+        for source in &explain.sources {
+            for timestamp in &source.read_frontier {
+                assert_eq!(*timestamp, query_timestamp.unwrap());
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(5 * i));
+    }
+
+    // Errors when an object outside the chosen time domain is referenced
+    let error = client
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_views;", &[])
+        .unwrap_err();
+
+    assert!(format!("{}", error).contains("Transactions can only reference objects in the same timedomain"));
+}
+
 // Test that the since for `mz_cluster_replica_utilization` is held back by at least
 // 30 days, which is required for the frontend observability work.
 //
