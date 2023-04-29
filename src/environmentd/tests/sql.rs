@@ -1322,8 +1322,8 @@ fn test_github_18950() {
 
     for i in 1..5 {
         let row = client
-        .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
-        .unwrap();
+            .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
+            .unwrap();
 
         let explain: String = row.get(0);
         let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
@@ -1346,10 +1346,14 @@ fn test_github_18950() {
 
     // Errors when an object outside the chosen time domain is referenced
     let error = client
-        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_views;", &[])
+        .query_one(
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_views;",
+            &[],
+        )
         .unwrap_err();
 
-    assert!(format!("{}", error).contains("Transactions can only reference objects in the same timedomain"));
+    assert!(format!("{}", error)
+        .contains("Transactions can only reference objects in the same timedomain"));
 }
 
 // Test that the since for `mz_cluster_replica_utilization` is held back by at least
