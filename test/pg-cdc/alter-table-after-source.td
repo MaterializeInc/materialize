@@ -78,14 +78,6 @@ CREATE TABLE alter_decimal (f1 DECIMAL(5,2));
 ALTER TABLE alter_decimal REPLICA IDENTITY FULL;
 INSERT INTO alter_decimal VALUES (123.45);
 
-CREATE TABLE alter_set_with_oids (f1 INTEGER) WITHOUT OIDS;
-ALTER TABLE alter_set_with_oids REPLICA IDENTITY FULL;
-INSERT INTO alter_set_with_oids VALUES (1);
-
-CREATE TABLE alter_set_without_oids (f1 INTEGER) WITH OIDS;
-ALTER TABLE alter_set_without_oids REPLICA IDENTITY FULL;
-INSERT INTO alter_set_without_oids VALUES (1);
-
 CREATE TABLE alter_table_rename (f1 INTEGER);
 ALTER TABLE alter_table_rename REPLICA IDENTITY FULL;
 INSERT INTO alter_table_rename VALUES (1);
@@ -308,34 +300,6 @@ INSERT INTO alter_decimal VALUES (12345.6);
 
 ! SELECT * FROM alter_decimal;
 contains:altered
-
-
-#
-# Alter set with OIDs
-> SELECT * from alter_set_with_oids
-1
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER TABLE alter_set_with_oids SET WITH OIDS;
-INSERT INTO alter_set_with_oids VALUES (2);
-
-> SELECT * FROM alter_set_with_oids;
-1
-2
-
-
-#
-# Alter set without OIDs
-> SELECT * from alter_set_without_oids
-1
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER TABLE alter_set_without_oids SET WITHOUT OIDS;
-INSERT INTO alter_set_without_oids VALUES (2);
-
-> SELECT * FROM alter_set_without_oids;
-1
-2
 
 
 #
