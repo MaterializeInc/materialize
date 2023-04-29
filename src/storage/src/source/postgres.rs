@@ -43,6 +43,8 @@ use mz_ore::future::TimeoutError;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::Ident;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceErrorDetails;
 use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
@@ -220,6 +222,7 @@ pub struct PgOffsetCommitter {
 }
 
 /// Information about an ingested upstream table
+#[derive(Debug)]
 struct SourceTable {
     /// The source output index of this table
     output_index: usize,
@@ -1071,12 +1074,17 @@ fn produce_snapshot<'a>(
         let mut subsources_to_remove = vec![];
 
         'tables: for (id, info) in source_tables.iter() {
+            // To handle quoted/keyword names, we can use `Ident`'s AST printing, which emulate's
+            // PG's rules for name formatting.
+            let copy_cmd = format!(
+                "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
+                Ident::from(info.desc.namespace.clone()).to_ast_string(),
+                Ident::from(info.desc.name.clone()).to_ast_string()
+            );
+
             let reader = client
                 .copy_out_simple(
-                    format!(
-                        "COPY {:?}.{:?} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                        info.desc.namespace, info.desc.name
-                    )
+                    copy_cmd
                     .as_str(),
                 )
                 .await?;

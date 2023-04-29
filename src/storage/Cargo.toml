@@ -49,6 +49,7 @@ mz-repr = { path = "../repr" }
 mz-rocksdb = { path = "../rocksdb" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
+mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 mz-timely-util = { path = "../timely-util" }
 once_cell = { version = "1.16.0" }

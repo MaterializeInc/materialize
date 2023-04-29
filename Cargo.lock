@@ -4893,6 +4893,7 @@ dependencies = [
  "mz-rocksdb",
  "mz-secrets",
  "mz-service",
+ "mz-sql-parser",
  "mz-storage-client",
  "mz-timely-util",
  "num_cpus",
