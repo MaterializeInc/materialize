@@ -15,6 +15,7 @@ mz-repr = { path = "../repr", optional = true }
 mz-ssh-util = { path = "../ssh-util", optional = true }
 openssl = { version = "0.10.48", features = ["vendored"] }
 openssh = { version = "0.9.8", default-features = false, features = ["native-mux"], optional = true }
+postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"], optional = true }
 prost = { version = "0.11.3", features = ["no-recursion-limit"], optional = true }

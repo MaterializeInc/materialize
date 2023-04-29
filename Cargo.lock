@@ -4442,6 +4442,7 @@ dependencies = [
  "openssh",
  "openssl",
  "postgres-openssl",
+ "postgres_array",
  "proptest",
  "prost",
  "prost-build",
