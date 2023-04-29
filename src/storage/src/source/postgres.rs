@@ -594,24 +594,26 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
                 );
 
+                // Close the replication LSN to ensure its buffer is clear.
+                task_info
+                    .row_sender
+                    .close_lsn(task_info.replication_lsn)
+                    .await;
+
+                // Invent an LSN to send these new definite errors at.
+                let non_definite_lsn = PgLsn::from(u64::from(task_info.replication_lsn) + 1);
+
                 // Definite errors affect all subsources in a way that they should be errored out.
                 for output_index in task_info.source_tables.values().map(|t| t.output_index) {
                     // If the channel is shutting down, so is the source.
                     let _ = task_info
                         .row_sender
-                        .send_row(
-                            task_info.replication_lsn,
-                            output_index,
-                            Err(anyhow!(e.to_string())),
-                        )
+                        .send_row(non_definite_lsn, output_index, Err(anyhow!(e.to_string())))
                         .await;
                 }
 
                 // Close the LSN to "commit" the messages we just sent.
-                task_info
-                    .row_sender
-                    .close_lsn(task_info.replication_lsn)
-                    .await;
+                task_info.row_sender.close_lsn(non_definite_lsn).await;
 
                 // Drop the send error, as we have no way of communicating back to the
                 // source operator if the channel is gone.
