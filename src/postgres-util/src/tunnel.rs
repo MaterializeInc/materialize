@@ -213,4 +213,12 @@ impl Config {
             }
         }
     }
+
+    pub fn get_user(&self) -> Option<&str> {
+        self.inner.get_user()
+    }
+
+    pub fn get_dbname(&self) -> Option<&str> {
+        self.inner.get_dbname()
+    }
 }
