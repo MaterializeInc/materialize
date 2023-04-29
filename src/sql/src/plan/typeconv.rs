@@ -922,11 +922,9 @@ pub fn plan_hypothetical_cast(
     Some(
         plan_cast(&ecx, ccx, col_expr, to)
             .ok()?
+            // TODO(jkosh44) Support casts that have correlated implementations.
             .lower_uncorrelated()
-            .expect(
-                "lower_uncorrelated should not fail given that there is no correlation \
-                in the input col_expr",
-            ),
+            .ok()?,
     )
 }
 
