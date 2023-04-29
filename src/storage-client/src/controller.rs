@@ -54,7 +54,7 @@ use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
 
 use crate::client::{
@@ -1541,8 +1541,10 @@ where
                             // dropped, so that the internal task will stop.
                             self.state.introspection_tokens.insert(id, scraper_token);
                         }
-                        IntrospectionType::SourceStatusHistory
-                        | IntrospectionType::SinkStatusHistory => {
+                        IntrospectionType::SourceStatusHistory => {
+                            self.initialize_source_status_history().await;
+                        }
+                        IntrospectionType::SinkStatusHistory => {
                             // nothing to do: these collections are append only
                         }
                     }
@@ -2520,6 +2522,72 @@ where
             packer.push(Datum::from(data_shard.to_string().as_str()));
             updates.push((row_buf.clone(), 1));
         }
+
+        self.reconcile_managed_collection(id, updates).await;
+    }
+
+    /// Effectively truncates the source status history shard except for the most recent update from
+    /// each ID.
+    async fn initialize_source_status_history(&mut self) {
+        let id = self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+
+        let (occurred_at, _) = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("occurred_at"))
+            .expect("schema has not changed");
+
+        let (source_id, _) = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("source_id"))
+            .expect("schema has not changed");
+
+        let mut rows = vec![];
+
+        match self.state.collections[&id]
+            .write_frontier
+            .elements()
+            .iter()
+            .min()
+        {
+            Some(f) if f > &T::minimum() => {
+                let as_of = f.step_back().unwrap();
+
+                rows.extend(self.snapshot(id, as_of).await.unwrap());
+            }
+            // If collection is closed or the frontier is the minimum, we cannot
+            // or don't need to truncate (respectively).
+            _ => {}
+        }
+
+        let mut most_recent_status = BTreeMap::new();
+
+        for (row, diff) in rows.iter() {
+            mz_ore::soft_assert!(
+                *diff == 1,
+                "only know how to operate over consolidated data"
+            );
+
+            let d = row.unpack();
+            let source_id = d[source_id];
+            let occurred_at = d[occurred_at];
+
+            let (most_recent, unpacked_row) = most_recent_status
+                .entry(source_id)
+                .or_insert((occurred_at.clone(), d.clone()));
+
+            if occurred_at > *most_recent {
+                *most_recent = occurred_at;
+                *unpacked_row = d;
+            }
+        }
+
+        let mut row_buf = Row::default();
+        let updates = most_recent_status
+            .into_iter()
+            .map(|(_, (_, unpacked_row))| {
+                let mut packer = row_buf.packer();
+                packer.extend(unpacked_row.into_iter());
+                (row_buf.clone(), 1)
+            })
+            .collect();
 
         self.reconcile_managed_collection(id, updates).await;
     }
