@@ -407,6 +407,16 @@ pub async fn purify_create_source(
                 });
             }
 
+            // Ensure that we have select permissions on all tables; we have to do this before we
+            // start snapshotting because if we discover we cannot `COPY` from a table while
+            // snapshotting, we break the entire source.
+            let tables_to_check_permissions = validated_requested_subsources
+                .iter()
+                .map(|(UnresolvedItemName(inner), _, _)| [inner[1].as_str(), inner[2].as_str()])
+                .collect();
+
+            mz_postgres_util::check_table_privileges(&config, tables_to_check_permissions).await?;
+
             let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
 
             for name in text_columns.iter_mut() {
