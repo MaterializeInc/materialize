@@ -54,8 +54,9 @@ impl ToSql for Numeric {
     ) -> Result<IsNull, Box<dyn Error + 'static + Send + Sync>> {
         let mut d = self.0 .0.clone();
         let scale = u16::from(numeric::get_scale(&d));
+        let is_zero = d.is_zero();
         let is_nan = d.is_nan();
-        let is_neg = d.is_negative();
+        let is_neg = d.is_negative() && !is_zero;
         let is_infinite = d.is_infinite();
 
         let mut cx = numeric::cx_datum();
@@ -126,7 +127,11 @@ impl ToSql for Numeric {
         d_i -= leading_zero_units;
 
         let units = u16::try_from(UNITS_LEN - d_i).unwrap();
-        let weight = i16::try_from(units - fract_units).unwrap() - 1;
+        let weight = if is_zero {
+            0
+        } else {
+            i16::try_from(units - fract_units).unwrap() - 1
+        };
 
         out.put_u16(units);
         out.put_i16(weight);
