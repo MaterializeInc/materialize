@@ -784,7 +784,7 @@ SELECT materialize.pg_catalog.abs(1)
 ----
 1
 
-query error function mz_catalog.abs\(integer\) does not exist
+query error db error: ERROR: function "mz_catalog\.abs" does not exist
 SELECT mz_catalog.abs(1)
 
 query error unknown database 'noexist'
@@ -803,7 +803,7 @@ SELECT pg_catalog.mod(7, 4)
 ----
 3
 
-query error function mz_catalog.mod\(integer, integer\) does not exist
+query error db error: ERROR: function "mz_catalog\.mod" does not exist
 SELECT mz_catalog.mod(7, 4)
 
 query error unknown database 'noexist'

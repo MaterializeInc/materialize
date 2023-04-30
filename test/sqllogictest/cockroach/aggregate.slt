@@ -47,7 +47,7 @@ SELECT array_agg(1) FROM kv
 ----
 NULL
 
-statement error db error: ERROR: function json_agg\(integer\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(1) FROM kv
 ----
 NULL
@@ -77,7 +77,7 @@ SELECT array_agg(v) FROM kv
 ----
 NULL
 
-statement error db error: ERROR: function json_agg\(integer\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(v) FROM kv
 ----
 NULL
@@ -99,7 +99,7 @@ SELECT array_agg(1)
 ----
 {1}
 
-statement error db error: ERROR: function json_agg\(integer\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(1)
 
 query T
@@ -114,7 +114,7 @@ SELECT count(NULL)
 ----
 0
 
-statement error db error: ERROR: function json_agg\(unknown\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(NULL)
 
 query T
@@ -186,7 +186,7 @@ SELECT array_agg(1) FROM kv
 ----
 {1,1,1,1,1,1}
 
-statement error db error: ERROR: function json_agg\(integer\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(1) FROM kv
 
 query T
@@ -596,7 +596,7 @@ SELECT array_agg(s) FROM kv WHERE s IS NULL
 ----
 {NULL}
 
-query error db error: ERROR: function json_agg\(text\) does not exist
+query error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(s) FROM kv WHERE s IS NULL
 
 query T
@@ -693,13 +693,13 @@ SELECT avg(b), sum(b) FROM abc
 # ----
 # 3 years 5 mons 7 days 00:00:19
 
-query error db error: ERROR: function pg_catalog\.sum\(character varying\) does not exist
+query error db error: ERROR: function sum\(character varying\) does not exist
 SELECT avg(a) FROM abc
 
-query error db error: ERROR: function pg_catalog\.sum\(boolean\) does not exist
+query error db error: ERROR: function sum\(boolean\) does not exist
 SELECT avg(c) FROM abc
 
-query error db error: ERROR: function pg_catalog\.sum\(record\(f1: character varying,f2: boolean\?\)\) does not exist
+query error db error: ERROR: function sum\(record\(f1: character varying,f2: boolean\?\)\) does not exist
 SELECT avg((a,c)) FROM abc
 
 query error db error: ERROR: function sum\(character varying\) does not exist
@@ -903,7 +903,7 @@ false false
 query error concat_agg not yet supported
 SELECT concat_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
-query error db error: ERROR: function json_agg\(text\) does not exist
+query error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
 # This is arguably wrong--we don't respect the inner ORDER BY--because we don't
