@@ -13,7 +13,10 @@ aliases:
 
 [//]: # "TODO(morsapaes) Once #8396 lands, link the page here"
 
-Materialize is **wire-compatible** with PostgreSQL, which means it integrates with most client libraries, ORM frameworks and other third-party tools that support PostgreSQL. This page describes the status, level of support, and usage notes for commonly used and requested Materialize integrations and tools.
+Materialize is **wire-compatible** with PostgreSQL, which means it integrates
+with many SQL clients and other tools in the data ecosystem that support
+PostgreSQL. This page describes the status, level of support, and usage notes
+for commonly used and requested Materialize integrations and tools.
 
 {{< note >}}
 If there's a tool that you'd like to use with Materialize but is not listed, let us know by submitting a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)!
