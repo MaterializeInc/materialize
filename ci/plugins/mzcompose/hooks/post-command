@@ -40,7 +40,7 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
         find . -name '*.profraw' -delete
 
         ARGS=()
-        for program in clusterd environmentd sqllogictest; do
+        for program in clusterd environmentd sqllogictest testdrive; do
             if [ -f coverage/"$program" ]; then
                 export_cov coverage/"$program"
                 ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
