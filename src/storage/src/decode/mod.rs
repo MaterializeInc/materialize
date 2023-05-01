@@ -23,6 +23,7 @@ use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
+use mz_ore::error::ErrorExt;
 use regex::Regex;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::Scope;
@@ -148,6 +149,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 pub(crate) enum PreDelimitedFormat {
     Bytes,
     Text,
+    Json,
     Regex(Regex, Row),
     Protobuf(ProtobufDecoderState),
 }
@@ -156,6 +158,20 @@ impl PreDelimitedFormat {
     pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
         match self {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
+            PreDelimitedFormat::Json => {
+                let j = mz_repr::adt::jsonb::Jsonb::from_slice(bytes).map_err(|e| {
+                    DecodeErrorKind::Bytes(format!(
+                        "Failed to decode JSON: {}",
+                        // See if we can output the string that failed to be converted to JSON.
+                        match std::str::from_utf8(bytes) {
+                            Ok(str) => str.to_string(),
+                            // Otherwise produce the nominally helpful error.
+                            Err(_) => e.display_with_causes().to_string(),
+                        }
+                    ))
+                })?;
+                Ok(Some(j.into_row()))
+            }
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
                     .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
@@ -295,6 +311,7 @@ async fn get_decoder(
         }
         DataEncodingInner::Text
         | DataEncodingInner::Bytes
+        | DataEncodingInner::Json
         | DataEncodingInner::Protobuf(_)
         | DataEncodingInner::Regex(_) => {
             let after_delimiting = match encoding.inner {
@@ -308,6 +325,7 @@ async fn get_decoder(
                     ))
                 }
                 DataEncodingInner::Bytes => PreDelimitedFormat::Bytes,
+                DataEncodingInner::Json => PreDelimitedFormat::Json,
                 DataEncodingInner::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
             };

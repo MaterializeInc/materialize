@@ -332,3 +332,64 @@ SELECT round, COUNT(*) FROM (
 GROUP BY round;
 ----
 0  10
+
+## Regression test for https://github.com/MaterializeInc/materialize/issues/18759
+## Test a WMR query with a delta join.
+query III
+WITH MUTUALLY RECURSIVE
+    c1 (f1 INTEGER, f2 INTEGER, f3 INTEGER) AS (
+        SELECT * FROM (VALUES (0, 0, 0))
+        UNION ALL (
+            SELECT
+                a1.f1 + 1 AS f1,
+                a1.f2 + 1 AS f2,
+                a1.f3 + 1 AS f3
+            FROM
+                c1 AS a1,
+                (
+                    SELECT *
+                    FROM c1 AS a1
+                    LEFT JOIN c1 AS a2 USING (f2)
+                    WHERE a1.f1 < 100 AND a2.f2 IS NULL
+                ) AS a2
+            WHERE a1 . f1 < 100
+        )
+    )
+SELECT * FROM c1;
+----
+0  0  0
+
+## Regression test for https://github.com/MaterializeInc/materialize/issues/18949
+## Test the situation when a WMR cte has an inner WMR whose body ends with an arrangement.
+query I
+WITH MUTUALLY RECURSIVE
+  cnt (i int) AS (
+    (WITH MUTUALLY RECURSIVE
+       cnt (i int) AS (
+         SELECT 1 AS i
+         UNION
+         SELECT i+1 FROM cnt WHERE i < 3)
+       SELECT i FROM cnt
+    )
+    UNION
+    SELECT i+100 FROM cnt WHERE i < 500)
+SELECT i FROM cnt;
+----
+1
+2
+3
+301
+302
+303
+101
+102
+103
+401
+402
+403
+201
+202
+203
+501
+502
+503

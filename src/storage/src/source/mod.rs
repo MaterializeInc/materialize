@@ -25,11 +25,6 @@
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
 
-use differential_dataflow::Hashable;
-
-use mz_ore::cast::CastFrom;
-use mz_repr::GlobalId;
-
 use crate::source::types::SourceMessage;
 use crate::source::types::SourceReaderError;
 
@@ -50,15 +45,3 @@ pub use postgres::PostgresSourceReader;
 pub use source_reader_pipeline::create_raw_source;
 pub(crate) use source_reader_pipeline::health_operator;
 pub use source_reader_pipeline::{RawSourceCreationConfig, SourceCreationParams};
-
-/// Returns true if the given source id/worker id is responsible for handling the given
-/// partition.
-pub fn responsible_for<P: Hashable>(
-    _source_id: &GlobalId,
-    worker_id: usize,
-    worker_count: usize,
-    pid: P,
-) -> bool {
-    // Distribute partitions equally amongst workers.
-    (usize::cast_from(pid.hashed().into()) % worker_count) == worker_id
-}

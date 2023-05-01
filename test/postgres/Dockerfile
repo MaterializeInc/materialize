@@ -9,7 +9,7 @@
 
 MZFROM test-certs as certs
 
-FROM postgres:10.21-bullseye
+FROM postgres:15.2-bullseye
 
 ENV POSTGRES_PASSWORD=postgres
 

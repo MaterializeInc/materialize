@@ -432,7 +432,7 @@ impl Scope {
         }
     }
 
-    fn table_names(&self) -> BTreeSet<&PartialItemName> {
+    pub fn table_names(&self) -> BTreeSet<&PartialItemName> {
         self.items
             .iter()
             .filter_map(|name| name.table_name.as_ref())

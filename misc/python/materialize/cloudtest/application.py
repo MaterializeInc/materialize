@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from pg8000.exceptions import InterfaceError
 
-from materialize import ROOT, mzbuild
+from materialize import ROOT, mzbuild, ui
 from materialize.cloudtest.k8s import K8sResource
 from materialize.cloudtest.k8s.cockroach import COCKROACH_RESOURCES
 from materialize.cloudtest.k8s.debezium import DEBEZIUM_RESOURCES
@@ -48,10 +48,12 @@ class Application:
         for resource in self.resources:
             resource.create()
 
+    def coverage_mode(self) -> bool:
+        return ui.env_is_truthy("CI_COVERAGE_ENABLED")
+
     def acquire_images(self) -> None:
-        coverage = bool(os.getenv("CI_COVERAGE_ENABLED", False))
         repo = mzbuild.Repository(
-            ROOT, release_mode=self.release_mode, coverage=coverage
+            ROOT, release_mode=self.release_mode, coverage=self.coverage_mode()
         )
         for image in self.images:
             deps = repo.resolve_dependencies([repo.images[image]])
@@ -129,7 +131,10 @@ class MaterializeApplication(Application):
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
             EnvironmentdStatefulSet(
-                release_mode=release_mode, tag=tag, log_filter=log_filter
+                release_mode=release_mode,
+                tag=tag,
+                log_filter=log_filter,
+                coverage_mode=self.coverage_mode(),
             ),
             self.environmentd,
             self.materialized_alias,

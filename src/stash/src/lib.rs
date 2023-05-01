@@ -92,7 +92,7 @@ mod postgres;
 mod transaction;
 
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
-pub use crate::transaction::Transaction;
+pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 
 pub type Diff = i64;
 pub type Timestamp = i64;
@@ -715,6 +715,53 @@ where
                         }
                     }
 
+                    tx.append(vec![batch]).await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    /// Transactionally deletes any kv pair from `self` whose key is in `keys`.
+    ///
+    /// Note that:
+    /// - Unlike `delete`, this operation operates in time O(keys), and not
+    ///   O(set), however does so by parallelizing a number of point queries so
+    ///   is likely not performant for more than 10-or-so keys.
+    /// - This operation runs in a single transaction and cannot be combined
+    ///   with other transactions.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn delete_keys(&self, stash: &mut Stash, keys: BTreeSet<K>) -> Result<(), StashError>
+    where
+        K: Hash + Clone + 'static,
+        V: Clone,
+    {
+        use futures::StreamExt;
+
+        let name = self.name.to_string();
+        stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    let collection = tx.collection::<K, V>(&name).await?;
+                    let lower = tx.upper(collection.id).await?;
+                    let mut batch = collection.make_batch_lower(lower)?;
+
+                    let tx = &tx;
+
+                    let kv_results: Vec<(K, Result<Option<V>, StashError>)> =
+                        futures::stream::iter(keys.into_iter())
+                            .map(|key| async move {
+                                (key.clone(), tx.peek_key_one(collection.clone(), &key).await)
+                            })
+                            .buffer_unordered(10)
+                            .collect()
+                            .await;
+
+                    for (key, val) in kv_results {
+                        if let Some(v) = val? {
+                            collection.append_to_batch(&mut batch, &key, &v, -1);
+                        }
+                    }
                     tx.append(vec![batch]).await?;
                     Ok(())
                 })

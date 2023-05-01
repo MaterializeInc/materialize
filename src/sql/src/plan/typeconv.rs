@@ -563,6 +563,14 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
             Some(|e: HirScalarExpr| e.call_unary(CastArrayToString(func::CastArrayToString { ty })))
         }),
         (Array, List) => Explicit: CastArrayToListOneDim(func::CastArrayToListOneDim),
+        (Array, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
+            let inner_from_type = from_type.unwrap_array_element_type();
+            let inner_to_type = to_type.unwrap_array_element_type();
+            let cast_expr = plan_hypothetical_cast(ecx, ccx, inner_from_type, inner_to_type)?;
+            let return_ty = to_type.clone();
+
+            Some(move |e: HirScalarExpr| e.call_unary(CastArrayToArray(func::CastArrayToArray { return_ty, cast_expr: Box::new(cast_expr) })))
+        }),
 
         // INT2VECTOR
         (Int2Vector, Array) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, _to_type| {
@@ -911,15 +919,11 @@ pub fn plan_hypothetical_cast(
 
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
-    Some(
-        plan_cast(&ecx, ccx, col_expr, to)
-            .ok()?
-            .lower_uncorrelated()
-            .expect(
-                "lower_uncorrelated should not fail given that there is no correlation \
-                in the input col_expr",
-            ),
-    )
+    plan_cast(&ecx, ccx, col_expr, to)
+        .ok()?
+        // TODO(jkosh44) Support casts that have correlated implementations.
+        .lower_uncorrelated()
+        .ok()
 }
 
 /// Plans a cast between [`ScalarType`]s, specifying which types of casts are

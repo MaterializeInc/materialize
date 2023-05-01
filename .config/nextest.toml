@@ -21,3 +21,14 @@ slow-timeout = { period = "120s", terminate-after = 2 }
 junit = { path = "junit_cargo-test.xml" }
 fail-fast = false
 failure-output = "immediate-final"
+
+[profile.coverage]
+slow-timeout = { period = "480s", terminate-after = 2 }
+junit = { path = "junit_cargo-test.xml" }
+fail-fast = false
+failure-output = "immediate-final"
+
+[[profile.coverage.overrides]]
+filter = "package(mz-environmentd)"
+threads-required = 8
+slow-timeout = { period = "800s", terminate-after = 2 }

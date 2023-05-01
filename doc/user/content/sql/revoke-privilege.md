@@ -1,18 +1,19 @@
 ---
 title: "REVOKE PRIVILEGE"
-description: "`REVOK` revokes privileges on a database object."
+description: "`REVOKE` revokes privileges from a database object."
 menu:
   main:
     parent: commands
 ---
 
-`REVOKE` revokes privileges on a database object.
+`REVOKE` revokes privileges from a database object. The `PUBLIC` pseudo-role can
+be used to indicate that the privileges should be revoked from all roles
+(including roles that might not exist yet).
 
 {{< warning >}}
-Currently, roles have limited functionality in Materialize. This is part of the
+Currently, privileges have limited functionality in Materialize. This is part of the
 work to enable **Role-based access control** (RBAC) in a future release {{% gh 11579 %}}.
 {{< /warning >}}
-
 
 ## Syntax
 
@@ -24,8 +25,8 @@ work to enable **Role-based access control** (RBAC) in a future release {{% gh 1
 
 Field         | Use
 --------------|--------------------------------------------------
-_object_name_ | The object that privileges are being granted on.
-_role_name_   | The role name that is gaining privileges.
+_object_name_ | The object that privileges are being revoked from.
+_role_name_   | The role name that is losing privileges. Use the `PUBLIC` pseudo-role to revoke privileges from all roles.
 **SELECT**    | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
 **INSERT**    | Allows inserting into an object. The abbreviation for this privilege is 'a' (append).
 **UPDATE**    | Allows updating an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'w' (write).
@@ -35,33 +36,37 @@ _role_name_   | The role name that is gaining privileges.
 
 ## Details
 
-For Views, Materialized Views, and Sources, the object type of 'TABLE' must be specified. This is
-for PostgreSQL compatibility.
+The following tables describes which privileges are applicable to which objects:
 
-The following tables describes which privileges are applicable on which objects:
+{{< note >}}
+For PostgreSQL compatibility reasons, you must specify `TABLE` as the object
+type for sources, views, and materialized views, or omit the object type.
+{{</ note >}}
 
-| Object Type          | All Privileges |
-|----------------------|----------------|
-| `DATABASE`           | UC             |
-| `SCHEMA`             | UC             |
-| `TABLE`              | arwd           |
-| `VIEW`               | r              |
-| `MATERIALIZED  VIEW` | r              |
-| `INDEX`              |                |
-| `TYPE`               | U              |
-| `SOURCE`             | r              |
-| `SINK`               |                |
-| `CONNECTION`         | U              |
-| `SECRET`             | U              |
-| `CLUSTER`            | UC             |
+| Object type           | All privileges |
+|-----------------------|----------------|
+| `DATABASE`            | UC             |
+| `SCHEMA`              | UC             |
+| `TABLE`               | arwd           |
+| (`VIEW`)              | r              |
+| (`MATERIALIZED VIEW`) | r              |
+| `INDEX`               |                |
+| `TYPE`                | U              |
+| (`SOURCE`)            | r              |
+| `SINK`                |                |
+| `CONNECTION`          | U              |
+| `SECRET`              | U              |
+| `CLUSTER`             | UC             |
 
-The keyword `PUBLIC` can be used as the _role_name_. This pseudo-role indicates that these
-privileges are being revoked from all roles, even those that don't exist yet.
+### Compatibility
+
+For PostgreSQL compatibility reasons, you must specify `TABLE` as the object
+type for sources, views, and materialized views, or omit the object type.
 
 ## Examples
 
 ```sql
-REVOKE SELECT ON TABLE t FROM joe;
+REVOKE SELECT ON mv FROM joe;
 ```
 
 ```sql

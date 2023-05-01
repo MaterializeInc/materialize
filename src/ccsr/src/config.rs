@@ -8,10 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::Proxy;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -25,14 +26,25 @@ pub struct Auth {
 }
 
 /// Configuration for a `Client`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientConfig {
-    url: Url,
+    url: Arc<dyn Fn() -> Url + Send + Sync + 'static>,
     root_certs: Vec<Certificate>,
     identity: Option<Identity>,
     auth: Option<Auth>,
     dns_overrides: BTreeMap<String, Vec<SocketAddr>>,
-    proxies: Vec<Proxy>,
+}
+
+impl fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("url", &"...")
+            .field("root_certs", &self.root_certs)
+            .field("identity", &self.identity)
+            .field("auth", &self.auth)
+            .field("dns_overrides", &self.dns_overrides)
+            .finish()
+    }
 }
 
 impl ClientConfig {
@@ -40,12 +52,11 @@ impl ClientConfig {
     /// the specified URL.
     pub fn new(url: Url) -> ClientConfig {
         ClientConfig {
-            url,
+            url: Arc::new(move || url.clone()),
             root_certs: Vec::new(),
             identity: None,
             auth: None,
             dns_overrides: BTreeMap::new(),
-            proxies: vec![],
         }
     }
 
@@ -79,9 +90,15 @@ impl ClientConfig {
         self
     }
 
-    /// Adds a `Proxy` to the list of proxies that the client will use.
-    pub fn add_proxy(mut self, proxy: Proxy) -> ClientConfig {
-        self.proxies.push(proxy);
+    /// Sets a callback that will be used to dynamically override the url
+    /// the client uses.
+    // Note this this doesn't use native `reqwest` `Proxy`s because not all schema
+    // registry implementations support them.
+    pub fn dynamic_url<F: Fn() -> Url + Send + Sync + 'static>(
+        mut self,
+        callback: F,
+    ) -> ClientConfig {
+        self.url = Arc::new(callback);
         self
     }
 
@@ -99,10 +116,6 @@ impl ClientConfig {
 
         for (domain, addrs) in self.dns_overrides {
             builder = builder.resolve_to_addrs(&domain, &addrs);
-        }
-
-        for proxy in self.proxies {
-            builder = builder.proxy(proxy);
         }
 
         let inner = builder

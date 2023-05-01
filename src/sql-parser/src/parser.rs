@@ -5413,7 +5413,12 @@ impl<'a> Parser<'a> {
             Ok(JoinConstraint::On(constraint))
         } else if self.parse_keyword(USING) {
             let columns = self.parse_parenthesized_column_list(Mandatory)?;
-            Ok(JoinConstraint::Using(columns))
+            let alias = self
+                .parse_keyword(AS)
+                .then(|| self.parse_identifier())
+                .transpose()?;
+
+            Ok(JoinConstraint::Using { columns, alias })
         } else {
             self.expected(
                 self.peek_pos(),

@@ -23,9 +23,13 @@ use std::task::{ready, Context, Poll};
 
 use async_trait::async_trait;
 use hyper::server::accept::Accept;
+use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{self, TcpListener, TcpStream, UnixListener, UnixStream};
 use tonic::transport::server::{Connected, TcpConnectInfo, UdsConnectInfo};
+use tracing::warn;
+
+use crate::error::ErrorExt;
 
 /// The type of a [`SocketAddr`].
 #[derive(Debug, Clone, Copy)]
@@ -261,6 +265,9 @@ pub enum Listener {
 
 impl Listener {
     /// Creates a new listener bound to the specified socket address.
+    ///
+    /// If `addr` is a Unix domain address, this function attempts to unlink the
+    /// socket at the address, if it exists, before binding.
     pub async fn bind<A>(addr: A) -> Result<Listener, io::Error>
     where
         A: ToSocketAddrs,
@@ -287,6 +294,18 @@ impl Listener {
                 Ok(Listener::Tcp(listener))
             }
             SocketAddr::Unix(UnixSocketAddr { path: Some(path) }) => {
+                // We would ideally unlink the file only if we could prove that
+                // no process was still listening at the file, but there is no
+                // foolproof API for doing so.
+                // See: https://stackoverflow.com/q/7405932
+                if let Err(e) = fs::remove_file(path).await {
+                    if e.kind() != io::ErrorKind::NotFound {
+                        warn!(
+                            "unable to remove {path} while binding unix domain socket: {}",
+                            e.display_with_causes(),
+                        );
+                    }
+                }
                 let listener = UnixListener::bind(path)?;
                 Ok(Listener::Unix(listener))
             }

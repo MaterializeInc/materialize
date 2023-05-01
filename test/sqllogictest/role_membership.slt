@@ -306,6 +306,31 @@ query TTT
 SELECT * FROM role_members
 ----
 
+# Test pg_auth_members
+
+statement ok
+GRANT group3 TO joe, group1, group2
+
+statement ok
+GRANT group1 TO joe
+
+query I
+SELECT COUNT(*) FROM pg_auth_members
+----
+4
+
+query TTTB
+SELECT role.name, member.name, grantor.name, members.admin_option
+FROM pg_auth_members members
+LEFT JOIN mz_roles role ON members.roleid = role.oid
+LEFT JOIN mz_roles member ON members.member = member.oid
+LEFT JOIN mz_roles grantor ON members.grantor = grantor.oid
+----
+group1  joe     mz_system  false
+group3  joe     mz_system  false
+group3  group1  mz_system  false
+group3  group2  mz_system  false
+
 # Disable RBAC checks
 
 simple conn=mz_system,user=mz_system

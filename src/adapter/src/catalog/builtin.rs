@@ -1728,7 +1728,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("reason", ScalarType::String.nullable(true))
         .with_column("updated_at", ScalarType::TimestampTz.nullable(false)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 });
 
 pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1740,7 +1740,11 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
         .with_column("workers", ScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", ScalarType::UInt64.nullable(false))
         .with_column("memory_bytes", ScalarType::UInt64.nullable(false))
-        .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
+        .with_column("disk_bytes", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "credits_per_hour",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        ),
     is_retained_metrics_object: true,
 });
 
@@ -2581,11 +2585,15 @@ pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
     name: "pg_auth_members",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_auth_members AS SELECT
-    NULL::pg_catalog.oid as roleid,
-    NULL::pg_catalog.oid as member,
-    NULL::pg_catalog.oid as grantor,
-    NULL::pg_catalog.bool as admin_option
-WHERE false",
+    role.oid AS roleid,
+    member.oid AS member,
+    grantor.oid AS grantor,
+    -- Materialize hasn't implemented admin_option.
+    false as admin_option
+FROM mz_role_members membership
+JOIN mz_roles role ON membership.role_id = role.id
+JOIN mz_roles member ON membership.member = member.id
+JOIN mz_roles grantor ON membership.grantor = grantor.id",
 };
 
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
@@ -3400,6 +3408,15 @@ ON mz_internal.mz_cluster_replica_sizes (size)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_CLUSTER_REPLICA_STATUSES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_statuses_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replica_statuses_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_replica_statuses (replica_id)",
+    is_retained_metrics_object: true,
+};
+
 pub const MZ_CLUSTER_REPLICA_METRICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_metrics_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3724,6 +3741,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
     ]);
 

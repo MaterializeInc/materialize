@@ -86,8 +86,9 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
+use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterId, ReplicaId};
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
@@ -99,7 +100,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
 use mz_persist_client::usage::{ShardsUsage, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
@@ -202,8 +203,14 @@ pub enum Message<T = mz_repr::Timestamp> {
     StorageUsageUpdate(ShardsUsage),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
-        transient_revision: u64,
         real_time_recency_ts: Timestamp,
+        replan: TransientPlan,
+    },
+    /// Replans a statement because the transient revision changed while doing off-thread work.
+    Replan {
+        tx: ClientTransmitter<ExecuteResponse>,
+        session: Session,
+        replan: TransientPlan,
     },
 }
 
@@ -251,7 +258,7 @@ pub enum RealTimeRecencyContext {
         tx: ClientTransmitter<ExecuteResponse>,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
-        source: MirRelationExpr,
+        dataflow: DataflowDescription<OptimizedMirRelationExpr>,
         session: Session,
         cluster_id: ClusterId,
         when: QueryWhen,
@@ -260,8 +267,9 @@ pub enum RealTimeRecencyContext {
         index_id: GlobalId,
         timeline_context: TimelineContext,
         source_ids: BTreeSet<GlobalId>,
-        id_bundle: CollectionIdBundle,
         in_immediate_multi_stmt_txn: bool,
+        key: Vec<MirScalarExpr>,
+        typ: RelationType,
     },
 }
 
@@ -277,6 +285,7 @@ impl RealTimeRecencyContext {
 #[derive(Debug)]
 pub enum PeekStage {
     Validate(PeekStageValidate),
+    Optimize(PeekStageOptimize),
     Timestamp(PeekStageTimestamp),
     Finish(PeekStageFinish),
 }
@@ -284,10 +293,12 @@ pub enum PeekStage {
 #[derive(Debug)]
 pub struct PeekStageValidate {
     pub plan: mz_sql::plan::PeekPlan,
+    depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug)]
-pub struct PeekStageTimestamp {
+pub struct PeekStageOptimize {
+    replan: TransientPlan,
     source: MirRelationExpr,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -295,7 +306,6 @@ pub struct PeekStageTimestamp {
     index_id: GlobalId,
     source_ids: BTreeSet<GlobalId>,
     cluster_id: ClusterId,
-    id_bundle: CollectionIdBundle,
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
@@ -303,10 +313,29 @@ pub struct PeekStageTimestamp {
 }
 
 #[derive(Debug)]
+pub struct PeekStageTimestamp {
+    replan: TransientPlan,
+    dataflow: DataflowDescription<OptimizedMirRelationExpr>,
+    finishing: RowSetFinishing,
+    copy_to: Option<CopyFormat>,
+    view_id: GlobalId,
+    index_id: GlobalId,
+    source_ids: BTreeSet<GlobalId>,
+    cluster_id: ClusterId,
+    when: QueryWhen,
+    target_replica: Option<ReplicaId>,
+    timeline_context: TimelineContext,
+    in_immediate_multi_stmt_txn: bool,
+    key: Vec<MirScalarExpr>,
+    typ: RelationType,
+}
+
+#[derive(Debug)]
 pub struct PeekStageFinish {
+    replan: TransientPlan,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
-    pub source: MirRelationExpr,
+    pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     pub cluster_id: ClusterId,
     pub when: QueryWhen,
     pub target_replica: Option<ReplicaId>,
@@ -314,9 +343,19 @@ pub struct PeekStageFinish {
     pub index_id: GlobalId,
     pub timeline_context: TimelineContext,
     pub source_ids: BTreeSet<GlobalId>,
-    pub id_bundle: CollectionIdBundle,
     pub in_immediate_multi_stmt_txn: bool,
     pub real_time_recency_ts: Option<mz_repr::Timestamp>,
+    pub key: Vec<MirScalarExpr>,
+    pub typ: RelationType,
+}
+
+/// A struct to hold information on how to determine if a plan may have changed and how to re-plan
+/// it if so.
+#[derive(Debug)]
+pub struct TransientPlan {
+    transient_revision: u64,
+    plan: mz_sql::plan::Plan,
+    depends_on: Vec<GlobalId>,
 }
 
 /// Configures a coordinator.

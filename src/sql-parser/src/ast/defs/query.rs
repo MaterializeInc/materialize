@@ -647,10 +647,15 @@ impl<T: AstInfo> AstDisplay for Join<T> {
                             f.write_str(" ON ");
                             f.write_node(expr);
                         }
-                        JoinConstraint::Using(attrs) => {
+                        JoinConstraint::Using { columns, alias } => {
                             f.write_str(" USING (");
-                            f.write_node(&display::comma_separated(attrs));
+                            f.write_node(&display::comma_separated(columns));
                             f.write_str(")");
+
+                            if let Some(join_using_alias) = alias {
+                                f.write_str(" AS ");
+                                f.write_node(join_using_alias);
+                            }
                         }
                         _ => {}
                     }
@@ -708,7 +713,10 @@ pub enum JoinOperator<T: AstInfo> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum JoinConstraint<T: AstInfo> {
     On(Expr<T>),
-    Using(Vec<Ident>),
+    Using {
+        columns: Vec<Ident>,
+        alias: Option<Ident>,
+    },
     Natural,
 }
 

@@ -94,6 +94,7 @@ use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
 
 use mz_environmentd::WebSocketResponse;
+use mz_ore::cast::CastLossy;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_pgrepr::UInt8;
@@ -192,7 +193,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 
     // Sources work with an explicit size.
@@ -204,7 +205,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("ALTER SOURCE lg RESET (SIZE)");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 
     client
@@ -218,7 +219,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 
     // Sinks work with an explicit size.
@@ -228,7 +229,7 @@ fn test_source_sink_size_required() {
     let result = client.batch_execute("ALTER SINK snk RESET (SIZE)");
     assert_eq!(
         result.unwrap_err().unwrap_db_error().message(),
-        "size option is required"
+        "must specify either cluster or size option"
     );
 }
 
@@ -609,6 +610,7 @@ fn test_storage_usage_updates_between_restarts() {
 }
 
 #[test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18896
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(10);
@@ -617,38 +619,52 @@ fn test_storage_usage_doesnt_update_between_restarts() {
         .data_directory(data_dir.path());
 
     // Wait for initial storage usage collection.
-    let initial_timestamp: f64 = {
+    let initial_timestamp = {
         let server = util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
-            client
+                client
                     .query_one(
-                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_catalog.mz_storage_usage;",
+                        "SELECT DISTINCT(EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8) FROM mz_catalog.mz_storage_usage;",
                         &[],
                     )
                     .map_err(|e| e.to_string()).unwrap()
                     .try_get::<_, f64>(0)
                     .map_err(|e| e.to_string())
-        }).unwrap()
+            }).unwrap()
     };
 
     // Another storage usage collection should not be scheduled immediately.
     {
         // Give plenty of time so we don't accidentally do another collection if this test is slow.
-        let storage_usage_collection_interval = Duration::from_secs(60 * 10);
-        let config =
-            config.with_storage_usage_collection_interval(storage_usage_collection_interval);
+        let config = config.with_storage_usage_collection_interval(Duration::from_secs(60 * 1000));
         let server = util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
-        let updated_timestamp = client
-            .query_one(
-                "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::float8 FROM mz_catalog.mz_storage_usage;",
+        let collection_timestamps = client
+            .query(
+                "SELECT DISTINCT(EXTRACT(EPOCH FROM collection_timestamp)::float8) as epoch FROM mz_catalog.mz_storage_usage ORDER BY epoch DESC LIMIT 2;",
                 &[],
-            ).unwrap().get::<_, f64>(0);
+            ).unwrap();
+        match collection_timestamps.len() {
+            0 => panic!("storage usage disappeared"),
+            1 => assert_eq!(initial_timestamp, collection_timestamps[0].get::<_, f64>(0)),
+            // It's possible that after collecting the first usage timestamp but before shutting the
+            // server down, we collect another usage timestamp.
+            2 => {
+                let most_recent_timestamp = collection_timestamps[0].get::<_, f64>(0);
+                let second_most_recent_timestamp = collection_timestamps[1].get::<_, f64>(0);
 
-        assert_eq!(initial_timestamp, updated_timestamp);
+                let actual_collection_interval =
+                    most_recent_timestamp - second_most_recent_timestamp;
+                let expected_collection_interval: f64 =
+                    f64::cast_lossy(storage_usage_collection_interval.as_secs());
+
+                assert!(actual_collection_interval >= expected_collection_interval);
+            }
+            _ => unreachable!("query is limited to 2"),
+        }
     }
 }
 

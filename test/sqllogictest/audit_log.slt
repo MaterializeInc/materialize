@@ -87,7 +87,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 2  create  schema  {"database_name":"materialize","id":"3","name":"public"}  NULL
 3  create  cluster  {"id":"u1","name":"default"}  NULL
 4  create  cluster-replica  {"cluster_id":"u1","cluster_name":"default","logical_size":"1","replica_id":"1","replica_name":"r1"}  NULL
-5  create  role  {"id":"u1","name":"materialize"}  materialize
+5  create  role  {"id":"u1","name":"materialize"}  NULL
 6  create  database  {"id":"u2","name":"test"}  materialize
 7  create  schema  {"database_name":"test","id":"u6","name":"public"}  materialize
 8  create  schema  {"database_name":"test","id":"u7","name":"sc1"}  materialize

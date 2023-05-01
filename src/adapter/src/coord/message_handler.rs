@@ -13,7 +13,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use anyhow::anyhow;
 use chrono::DurationRound;
 use mz_persist_client::usage::ShardsUsage;
 use rand::{rngs, Rng, SeedableRng};
@@ -36,9 +35,9 @@ use crate::coord::{
     SinkConnectionReady,
 };
 use crate::util::ResultExt;
-use crate::{catalog, AdapterError, AdapterNotice};
+use crate::{catalog, AdapterNotice};
 
-use super::{PeekStage, PeekStageFinish};
+use super::{PeekStage, PeekStageFinish, TransientPlan};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -89,15 +88,19 @@ impl Coordinator {
             }
             Message::RealTimeRecencyTimestamp {
                 conn_id,
-                transient_revision,
                 real_time_recency_ts,
+                replan,
             } => {
-                self.message_real_time_recency_timestamp(
-                    conn_id,
-                    transient_revision,
-                    real_time_recency_ts,
-                )
-                .await;
+                self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, replan)
+                    .await;
+            }
+            Message::Replan {
+                tx,
+                session,
+                replan,
+            } => {
+                self.sequence_plan(tx, session, replan.plan, replan.depends_on)
+                    .await;
             }
         }
     }
@@ -654,8 +657,8 @@ impl Coordinator {
     async fn message_real_time_recency_timestamp(
         &mut self,
         conn_id: ConnectionId,
-        transient_revision: u64,
         real_time_recency_ts: mz_repr::Timestamp,
+        replan: TransientPlan,
     ) {
         let real_time_recency_context =
             match self.pending_real_time_recency_timestamp.remove(&conn_id) {
@@ -664,11 +667,17 @@ impl Coordinator {
                 None => return,
             };
 
-        // Re-validate that the catalog hasn't changed.
-        if transient_revision != self.catalog().transient_revision() {
-            // TODO(jkosh44) It would be preferable to re-validate the query instead of blindly failing.
+        if replan.transient_revision != self.catalog().transient_revision() {
+            // Revision change; re plan from the beginning.
             let (tx, session) = real_time_recency_context.take_tx_and_session();
-            return tx.send(Err(AdapterError::Unstructured(anyhow!("Catalog contents have changed mid-query due to concurrent DDL, please re-try query"))), session);
+            self.internal_cmd_tx
+                .send(Message::Replan {
+                    tx,
+                    session,
+                    replan,
+                })
+                .expect("coordinator must exist");
+            return;
         }
 
         match real_time_recency_context {
@@ -694,7 +703,7 @@ impl Coordinator {
                 tx,
                 finishing,
                 copy_to,
-                source,
+                dataflow,
                 session,
                 cluster_id,
                 when,
@@ -703,16 +712,18 @@ impl Coordinator {
                 index_id,
                 timeline_context,
                 source_ids,
-                id_bundle,
                 in_immediate_multi_stmt_txn,
+                key,
+                typ,
             } => {
                 self.sequence_peek_stage(
                     tx,
                     session,
                     PeekStage::Finish(PeekStageFinish {
+                        replan,
                         finishing,
                         copy_to,
-                        source,
+                        dataflow,
                         cluster_id,
                         when,
                         target_replica,
@@ -720,9 +731,10 @@ impl Coordinator {
                         index_id,
                         timeline_context,
                         source_ids,
-                        id_bundle,
                         in_immediate_multi_stmt_txn,
                         real_time_recency_ts: Some(real_time_recency_ts),
+                        key,
+                        typ,
                     }),
                 )
                 .await;

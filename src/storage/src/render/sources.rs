@@ -137,7 +137,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::Kafka(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
-                base_source_config,
+                base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
@@ -151,7 +151,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::Postgres(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
-                base_source_config,
+                base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
@@ -165,7 +165,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::LoadGenerator(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
-                base_source_config,
+                base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
@@ -179,7 +179,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         GenericSourceConnection::TestScript(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
-                base_source_config,
+                base_source_config.clone(),
                 connection,
                 storage_state.connection_context.clone(),
                 resumption_calculator,
@@ -212,6 +212,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             resume_upper.clone(),
             error_collections,
             storage_state,
+            base_source_config.clone(),
         );
         needed_tokens.extend(extra_tokens);
         outputs.push((ok, err));
@@ -230,6 +231,7 @@ fn render_source_stream<G>(
     resume_upper: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &mut crate::storage_state::StorageState,
+    base_source_config: RawSourceCreationConfig,
 ) -> (
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,
@@ -388,6 +390,7 @@ where
                         resume_upper,
                         previous,
                         previous_token,
+                        base_source_config,
                     );
 
                     let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);

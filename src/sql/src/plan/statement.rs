@@ -34,6 +34,7 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::{query, with_options};
 use crate::plan::{Params, Plan, PlanContext, PlanKind};
+use crate::session::vars::SystemVars;
 
 pub(crate) mod ddl;
 mod dml;
@@ -712,16 +713,38 @@ impl<'a> StatementContext<'a> {
 
     pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
         if !self.unsafe_mode() {
-            sql_bail!("{} is unsupported", feature_name)
+            return Err(PlanError::RequiresUnsafe {
+                feature: feature_name.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn require_var_or_unsafe_mode<F>(
+        &self,
+        feature_flag: F,
+        feature_name: &str,
+    ) -> Result<(), PlanError>
+    where
+        F: Fn(&SystemVars) -> bool,
+    {
+        if !self.unsafe_mode() && !feature_flag(self.catalog.system_vars()) {
+            return Err(PlanError::RequiresVarOrUnsafe {
+                feature: feature_name.to_string(),
+            });
         }
         Ok(())
     }
 
     pub fn require_with_mutually_recursive(&self) -> Result<(), PlanError> {
-        if !self.unsafe_mode() && !self.catalog.system_vars().enable_with_mutually_recursive() {
-            sql_bail!("`WITH MUTUALLY RECURSIVE` syntax is not enabled")
-        }
-        Ok(())
+        self.require_var_or_unsafe_mode(
+            SystemVars::enable_with_mutually_recursive,
+            "`WITH MUTUALLY RECURSIVE` syntax",
+        )
+    }
+
+    pub fn require_format_json(&self) -> Result<(), PlanError> {
+        self.require_var_or_unsafe_mode(SystemVars::enable_format_json, "`FORMAT JSON`")
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {

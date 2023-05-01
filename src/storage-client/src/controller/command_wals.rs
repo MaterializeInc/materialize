@@ -11,7 +11,7 @@
 //! or write them. This identifies shards we no longer use, but did not have the
 //! opportunity to finalize before e.g. crashing.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use differential_dataflow::lattice::Lattice;
 use timely::order::TotalOrder;
@@ -21,13 +21,13 @@ use mz_ore::now::EpochMillis;
 use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
-use mz_repr::TimestampManipulation;
+use mz_repr::{Diff, TimestampManipulation};
 use mz_stash::{self, TypedCollection};
 
 use crate::client::{StorageCommand, StorageResponse};
-use crate::controller::{ProtoStorageCommand, ProtoStorageResponse};
+use crate::controller::{DurableCollectionMetadata, ProtoStorageCommand, ProtoStorageResponse};
 
-use super::Controller;
+use super::{Controller, StorageController};
 
 pub(super) static SHARD_FINALIZATION: TypedCollection<ShardId, ()> =
     TypedCollection::new("storage-shards-to-finalize");
@@ -40,15 +40,6 @@ where
 
     Self: super::StorageController<Timestamp = T>,
 {
-    /// `true` if shard is in register for shards marked for finalization.
-    pub(super) async fn is_shard_registered_for_finalization(&mut self, shard: ShardId) -> bool {
-        SHARD_FINALIZATION
-            .peek_key_one(&mut self.state.stash, shard)
-            .await
-            .expect("must be able to connect to stash")
-            .is_some()
-    }
-
     /// Register shards for finalization. This must be called if you intend to
     /// finalize shards, before you perform any work to e.g. replace one shard
     /// with another.
@@ -79,67 +70,110 @@ where
         shards: BTreeSet<ShardId>,
     ) {
         SHARD_FINALIZATION
-            .delete(&mut self.state.stash, move |k, _v| shards.contains(k))
+            .delete_keys(&mut self.state.stash, shards)
             .await
             .expect("must be able to write to stash")
     }
 
-    /// Reconcile the state of `SHARD_FINALIZATION_WAL` with
-    /// `super::METADATA_COLLECTION` on boot.
-    pub(super) async fn reconcile_shards(&mut self) {
-        // Get all shards in the WAL.
-        let registered_shards: BTreeSet<_> = SHARD_FINALIZATION
-            .peek_one(&mut self.state.stash)
-            .await
-            .expect("must be able to read from stash")
-            .into_iter()
-            .map(|(shard_id, _)| shard_id)
-            .collect();
-
-        if registered_shards.is_empty() {
-            return;
+    pub(super) async fn reconcile_state_inner(&mut self) {
+        // Convenience method for reading from a collection in parallel.
+        async fn tx_peek<'tx, K, V>(
+            tx: &'tx mz_stash::Transaction<'tx>,
+            typed: &TypedCollection<K, V>,
+        ) -> Vec<(K, V, Diff)>
+        where
+            K: mz_stash::Data,
+            V: mz_stash::Data,
+        {
+            let collection = tx
+                .collection::<K, V>(typed.name())
+                .await
+                .expect("named collection must exist");
+            tx.peek(collection).await.expect("peek succeeds")
         }
 
-        // Get all shards we're aware of from stash.
-        let all_shard_data: BTreeMap<_, _> = super::METADATA_COLLECTION
-            .peek_one(&mut self.state.stash)
+        // Get stash metadata.
+        let (metadata, shard_finalization) = self
+            .state
+            .stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    // Query all collections in parallel.
+                    Ok(futures::join!(
+                        tx_peek(&tx, &super::METADATA_COLLECTION),
+                        tx_peek(&tx, &SHARD_FINALIZATION),
+                    ))
+                })
+            })
             .await
-            .expect("must be able to read from stash")
+            .expect("stash operation succeeds");
+
+        // Partition metadata into the collections we want to have and those we failed to drop.
+        let (in_use_collections, leaked_collections): (Vec<_>, Vec<_>) =
+            metadata.into_iter().partition(|(id, _, diff)| {
+                assert_eq!(
+                    *diff, 1,
+                    "expected METADATA_COLLECTION to contain reconciled state"
+                );
+
+                self.collection(*id).is_ok()
+            });
+
+        // Get all shard IDs
+        let shard_finalization: BTreeSet<_> = shard_finalization
             .into_iter()
-            .map(
-                |(
-                    id,
-                    // TODO(guswynn): produce the schema for each shard.
-                    super::DurableCollectionMetadata {
-                        remap_shard,
-                        data_shard,
-                    },
-                )| { [(id, [remap_shard, Some(data_shard)])] },
-            )
-            .flatten()
+            .map(|(id, _, diff)| {
+                assert_eq!(
+                    diff, 1,
+                    "expected SHARD_FINALIZATION to contain reconciled state"
+                );
+
+                id
+            })
             .collect();
 
-        // Consider shards in use if they are still attached to a collection.
-        let in_use_shards: BTreeSet<_> = all_shard_data
-            .into_iter()
-            .filter_map(|(id, shards)| self.state.collections.get(&id).map(|_| shards.to_vec()))
-            .flatten()
-            .filter_map(|shard| shard)
+        // Collect all shards from in-use collections
+        let in_use_shards: BTreeSet<_> = in_use_collections
+            .iter()
+            // n.b we do not include remap shards here because they are the data shards of their own
+            // collections.
+            .map(|(_, DurableCollectionMetadata { data_shard, .. }, _)| *data_shard)
             .collect();
 
-        // Determine all shards that were marked to drop but are still in use by
-        // some present collection.
-        let shard_ids_to_keep = registered_shards
+        // Determine if there are any shards that belong to in-use collections
+        // that we have marked for finalization. This is usually inconceivable,
+        // but could happen if we e.g. crash during a migration.
+        let in_use_shards_registered_for_finalization: BTreeSet<_> = shard_finalization
             .intersection(&in_use_shards)
             .cloned()
             .collect();
 
-        // Remove any shards that are currently in use from shard finalization register.
-        self.clear_from_shard_finalization_register(shard_ids_to_keep)
-            .await;
+        // Fixup shard finalization WAL if necessary.
+        if !in_use_shards_registered_for_finalization.is_empty() {
+            self.clear_from_shard_finalization_register(in_use_shards_registered_for_finalization)
+                .await;
+        }
 
-        // Determine all shards that are registered that are not in use.
-        self.finalize_shards(registered_shards.difference(&in_use_shards).cloned())
-            .await;
+        // If we know about collections that the adapter has forgotten about, clean that up.
+        if !leaked_collections.is_empty() {
+            let mut shards_to_finalize = Vec::with_capacity(leaked_collections.len());
+            let mut ids_to_drop = BTreeSet::new();
+
+            for (id, DurableCollectionMetadata { data_shard, .. }, _) in leaked_collections {
+                shards_to_finalize.push(data_shard);
+                ids_to_drop.insert(id);
+            }
+
+            // Note that we register the shards for finalization but do not
+            // finalize them here; this is meant to speed up startup times, as
+            // we can defer actually finalizing shards.
+            self.register_shards_for_finalization(shards_to_finalize)
+                .await;
+
+            super::METADATA_COLLECTION
+                .delete_keys(&mut self.state.stash, ids_to_drop)
+                .await
+                .expect("stash operation must succeed");
+        }
     }
 }

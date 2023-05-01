@@ -67,7 +67,7 @@ class ErrorLog:
         self.line_nr = line_nr
 
 
-def main(argv: List[str]) -> int:
+def main() -> int:
     parser = argparse.ArgumentParser(
         prog="ci-logged-errors-detect",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -218,4 +218,4 @@ def get_known_issues_from_github() -> list[KnownIssue]:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

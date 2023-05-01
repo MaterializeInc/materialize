@@ -74,7 +74,7 @@
 // END LINT CONFIG
 
 use mz_ore::metrics::HistogramVecExt;
-use mz_rocksdb::{Options, RocksDBInstance, RocksDBMetrics, UpsertResult, UpsertValue};
+use mz_rocksdb::{Options, RocksDBInstance, RocksDBMetrics};
 use prometheus::{HistogramOpts, HistogramVec};
 
 fn metrics_for_tests() -> Result<RocksDBMetrics, anyhow::Error> {
@@ -101,87 +101,44 @@ async fn basic() -> Result<(), anyhow::Error> {
     )
     .await?;
 
-    let ret = instance
-        .upsert(vec![
-            UpsertValue {
-                key: "one".to_string(),
-                val: Some("onev".to_string()),
-            },
-            UpsertValue {
-                key: "two".to_string(),
-                val: Some("twov".to_string()),
-            },
-            UpsertValue {
-                key: "already not there".to_string(),
-                val: None,
-            },
+    let mut ret = vec![None; 1];
+    instance
+        .multi_get(vec!["one".to_string()], ret.iter_mut())
+        .await?;
+
+    assert_eq!(ret.split_off(0), vec![None]);
+
+    instance
+        .multi_put(vec![
+            ("one".to_string(), Some("onev".to_string())),
+            // Deleting a non-existent key shouldn't do anything
+            ("two".to_string(), None),
         ])
         .await?;
 
-    assert_eq!(
-        ret,
-        vec![
-            UpsertResult {
-                key: "one".to_string(),
-                val: Some("onev".to_string()),
-                previous_value: None,
-            },
-            UpsertResult {
-                key: "two".to_string(),
-                val: Some("twov".to_string()),
-                previous_value: None,
-            },
-            UpsertResult {
-                key: "already not there".to_string(),
-                val: None,
-                previous_value: None,
-            },
-        ]
-    );
+    let mut ret = vec![None; 2];
+    instance
+        .multi_get(vec!["one".to_string(), "two".to_string()], ret.iter_mut())
+        .await?;
 
-    let ret = instance
-        .upsert(vec![
-            UpsertValue {
-                key: "one".to_string(),
-                val: Some("onev2".to_string()),
-            },
-            UpsertValue {
-                key: "two".to_string(),
-                val: None,
-            },
+    assert_eq!(ret.split_off(0), vec![Some("onev".to_string()), None]);
+
+    instance
+        .multi_put(vec![
+            // Double-writing a key should keep the last one.
+            ("two".to_string(), Some("twov1".to_string())),
+            ("two".to_string(), Some("twov2".to_string())),
         ])
         .await?;
 
-    assert_eq!(
-        ret,
-        vec![
-            UpsertResult {
-                key: "one".to_string(),
-                val: Some("onev2".to_string()),
-                previous_value: Some("onev".to_string()),
-            },
-            UpsertResult {
-                key: "two".to_string(),
-                val: None,
-                previous_value: Some("twov".to_string()),
-            },
-        ]
-    );
-
-    let ret = instance
-        .upsert(vec![UpsertValue {
-            key: "two".to_string(),
-            val: Some("twov2".to_string()),
-        }])
+    let mut ret = vec![None; 2];
+    instance
+        .multi_get(vec!["one".to_string(), "two".to_string()], ret.iter_mut())
         .await?;
 
     assert_eq!(
-        ret,
-        vec![UpsertResult {
-            key: "two".to_string(),
-            val: Some("twov2".to_string()),
-            previous_value: None
-        },]
+        ret.split_off(0),
+        vec![Some("onev".to_string()), Some("twov2".to_string())]
     );
 
     instance.close().await?;

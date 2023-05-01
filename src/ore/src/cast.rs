@@ -231,6 +231,13 @@ impl CastLossy<usize> for f64 {
     }
 }
 
+impl CastLossy<u64> for f64 {
+    #[allow(clippy::as_conversions)]
+    fn cast_lossy(from: u64) -> Self {
+        from as f64
+    }
+}
+
 #[test]
 fn test_try_cast_from() {
     let f64_i64_cases = vec![

@@ -43,6 +43,8 @@ use mz_ore::future::TimeoutError;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::Ident;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceErrorDetails;
 use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
@@ -220,6 +222,7 @@ pub struct PgOffsetCommitter {
 }
 
 /// Information about an ingested upstream table
+#[derive(Debug)]
 struct SourceTable {
     /// The source output index of this table
     output_index: usize,
@@ -294,14 +297,7 @@ impl SourceRender for PostgresSourceConnection {
             let mut data_capability = capabilities.pop().unwrap();
             assert!(capabilities.is_empty());
 
-            let active_read_worker = crate::source::responsible_for(
-                &config.id,
-                config.worker_id,
-                config.worker_count,
-                (),
-            );
-
-            if !active_read_worker {
+            if !config.responsible_for(()) {
                 return;
             }
 
@@ -420,6 +416,11 @@ impl SourceRender for PostgresSourceConnection {
                         );
                     }
                 }
+                // During dataflow shutdown this loop can end due to the general chaos caused by
+                // dropping tokens as a means to shutdown. This call ensures this future never ends
+                // and we instead rely on this operator being dropped altogether when *its* token
+                // is dropped.
+                std::future::pending::<()>().await;
             };
             tokio::pin!(offset_commit_loop);
 
@@ -601,24 +602,26 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     e.source().unwrap_or(anyhow::anyhow!("unknown").as_ref())
                 );
 
+                // Close the replication LSN to ensure its buffer is clear.
+                task_info
+                    .row_sender
+                    .close_lsn(task_info.replication_lsn)
+                    .await;
+
+                // Invent an LSN to send these new definite errors at.
+                let non_definite_lsn = PgLsn::from(u64::from(task_info.replication_lsn) + 1);
+
                 // Definite errors affect all subsources in a way that they should be errored out.
                 for output_index in task_info.source_tables.values().map(|t| t.output_index) {
                     // If the channel is shutting down, so is the source.
                     let _ = task_info
                         .row_sender
-                        .send_row(
-                            task_info.replication_lsn,
-                            output_index,
-                            Err(anyhow!(e.to_string())),
-                        )
+                        .send_row(non_definite_lsn, output_index, Err(anyhow!(e.to_string())))
                         .await;
                 }
 
                 // Close the LSN to "commit" the messages we just sent.
-                task_info
-                    .row_sender
-                    .close_lsn(task_info.replication_lsn)
-                    .await;
+                task_info.row_sender.close_lsn(non_definite_lsn).await;
 
                 // Drop the send error, as we have no way of communicating back to the
                 // source operator if the channel is gone.
@@ -1073,12 +1076,17 @@ fn produce_snapshot<'a>(
         let mut subsources_to_remove = vec![];
 
         'tables: for (id, info) in source_tables.iter() {
+            // To handle quoted/keyword names, we can use `Ident`'s AST printing, which emulate's
+            // PG's rules for name formatting.
+            let copy_cmd = format!(
+                "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
+                Ident::from(info.desc.namespace.clone()).to_ast_string(),
+                Ident::from(info.desc.name.clone()).to_ast_string()
+            );
+
             let reader = client
                 .copy_out_simple(
-                    format!(
-                        "COPY {:?}.{:?} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                        info.desc.namespace, info.desc.name
-                    )
+                    copy_cmd
                     .as_str(),
                 )
                 .await?;

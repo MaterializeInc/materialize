@@ -148,7 +148,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         Materialized(
             default_size=args.size or Materialized.Size.DEFAULT_SIZE,
-            options=["--log-filter=warn"],
             external_minio=True,
             external_cockroach=True,
         ),

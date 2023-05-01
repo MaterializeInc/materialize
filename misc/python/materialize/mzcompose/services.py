@@ -65,6 +65,7 @@ class Materialized(Service):
         restart: Optional[str] = None,
         use_default_volumes: bool = True,
         ports: Optional[List[str]] = None,
+        bootstrap_system_parameters: Optional[List[str]] = None,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -76,6 +77,10 @@ class Materialized(Service):
             # after v0.38 ships, since these environment variables will be
             # baked into the Docker image.
             "MZ_ORCHESTRATOR=process",
+            # The following settings can not be baked in the default image, as they
+            # are enabled for testing purposes only
+            "ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
+            "ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
@@ -84,8 +89,21 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
+            "BOOTSTRAP_ROLE=materialize",
             *environment_extra,
         ]
+
+        if bootstrap_system_parameters is None:
+            bootstrap_system_parameters = [
+                "persist_sink_minimum_batch_updates=128",
+                "enable_multi_worker_storage_persist_sink=true",
+                "storage_persist_sink_minimum_batch_updates=100",
+            ]
+
+        if len(bootstrap_system_parameters) > 0:
+            environment += [
+                "MZ_BOOTSTRAP_SYSTEM_PARAMETER=" + ";".join(bootstrap_system_parameters)
+            ]
 
         command = []
 
@@ -116,11 +134,6 @@ class Materialized(Service):
             # f"--bootstrap-builtin-cluster-replica-size={self.default_replica_size}",
             f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
             f"--default-storage-host-size={self.default_storage_size}",
-            "--bootstrap-system-parameter=persist_sink_minimum_batch_updates=128",
-            # We wish to test the new implementation as its the canonical one, but
-            # want to control the rollout to production.
-            "--bootstrap-system-parameter=enable_multi_worker_storage_persist_sink=true",
-            "--bootstrap-system-parameter=storage_persist_sink_minimum_batch_updates=100",
         ]
 
         if external_cockroach:

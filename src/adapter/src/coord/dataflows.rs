@@ -68,11 +68,20 @@ pub enum ExprPrepStyle<'a> {
     /// The expression is being prepared to run once at the specified logical
     /// time in the specified session.
     OneShot {
-        logical_time: Option<mz_repr::Timestamp>,
+        logical_time: EvalTime,
         session: &'a Session,
     },
     /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
     AsOfUpTo,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum EvalTime {
+    Time(mz_repr::Timestamp),
+    /// Skips mz_now() calls.
+    Deferred,
+    /// Errors on mz_now() calls.
+    NotAvailable,
 }
 
 impl Coordinator {
@@ -694,7 +703,7 @@ pub fn prep_scalar_expr(
 fn eval_unmaterializable_func(
     state: &CatalogState,
     f: &UnmaterializableFunc,
-    logical_time: Option<mz_repr::Timestamp>,
+    logical_time: EvalTime,
     session: &Session,
 ) -> Result<MirScalarExpr, AdapterError> {
     let pack_1d_array = |datums: Vec<Datum>| {
@@ -772,8 +781,9 @@ fn eval_unmaterializable_func(
             pack(Datum::from(&*state.config().environment_id.to_string()))
         }
         UnmaterializableFunc::MzNow => match logical_time {
-            None => coord_bail!("cannot call mz_now in this context"),
-            Some(logical_time) => pack(Datum::MzTimestamp(logical_time)),
+            EvalTime::Time(logical_time) => pack(Datum::MzTimestamp(logical_time)),
+            EvalTime::Deferred => Ok(MirScalarExpr::CallUnmaterializable(f.clone())),
+            EvalTime::NotAvailable => coord_bail!("cannot call mz_now in this context"),
         },
         UnmaterializableFunc::MzSessionId => pack(Datum::from(state.config().session_id)),
         UnmaterializableFunc::MzUptime => {

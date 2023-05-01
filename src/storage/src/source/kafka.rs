@@ -91,11 +91,7 @@ pub struct KafkaSourceReader {
 }
 
 pub struct KafkaOffsetCommiter {
-    source_id: GlobalId,
-    /// Worker ID
-    worker_id: usize,
-    /// Total count of workers
-    worker_count: usize,
+    config: RawSourceCreationConfig,
     topic_name: String,
     consumer: Arc<BaseConsumer<BrokerRewritingClientContext<GlueConsumerContext>>>,
 }
@@ -226,14 +222,7 @@ impl SourceRender for KafkaSourceConnection {
             let mut start_offsets: BTreeMap<_, i64> = self
                 .start_offsets
                 .into_iter()
-                .filter(|(pid, _offset)| {
-                    crate::source::responsible_for(
-                        &config.id,
-                        config.worker_id,
-                        config.worker_count,
-                        pid,
-                    )
-                })
+                .filter(|(pid, _offset)| config.responsible_for(pid))
                 .map(|(k, v)| (k, v))
                 .collect();
 
@@ -248,12 +237,7 @@ impl SourceRender for KafkaSourceConnection {
             for ts in resume_upper.elements() {
                 if let Some(pid) = ts.partition() {
                     max_pid = std::cmp::max(max_pid, Some(*pid));
-                    if crate::source::responsible_for(
-                        &config.id,
-                        config.worker_id,
-                        config.worker_count,
-                        pid,
-                    ) {
+                    if config.responsible_for(pid) {
                         let restored_offset = i64::try_from(ts.timestamp().offset)
                             .expect("restored kafka offsets must fit into i64");
                         if let Some(start_offset) = start_offsets.get_mut(pid) {
@@ -377,7 +361,7 @@ impl SourceRender for KafkaSourceConnection {
                 include_headers: self.include_headers.is_some(),
                 _metadata_thread_handle: metadata_thread_handle,
                 partition_metrics: KafkaPartitionMetrics::new(
-                    config.base_metrics,
+                    config.base_metrics.clone(),
                     partition_ids,
                     topic.clone(),
                     config.id,
@@ -387,9 +371,7 @@ impl SourceRender for KafkaSourceConnection {
             };
 
             let offset_committer = KafkaOffsetCommiter {
-                source_id: config.id,
-                worker_id: config.worker_id,
-                worker_count: config.worker_count,
+                config: config.clone(),
                 topic_name: topic.clone(),
                 consumer,
             };
@@ -408,6 +390,11 @@ impl SourceRender for KafkaSourceConnection {
                         );
                     }
                 }
+                // During dataflow shutdown this loop can end due to the general chaos caused by
+                // dropping tokens as a means to shutdown. This call ensures this future never ends
+                // and we instead rely on this operator being dropped altogether when *its* token
+                // is dropped.
+                std::future::pending::<()>().await;
             };
             tokio::pin!(offset_commit_loop);
 
@@ -417,13 +404,7 @@ impl SourceRender for KafkaSourceConnection {
                     let mut max_pid = None;
                     for pid in partitions {
                         max_pid = std::cmp::max(max_pid, Some(pid));
-                        let is_responsible = crate::source::responsible_for(
-                            &reader.id,
-                            reader.worker_id,
-                            reader.worker_count,
-                            pid,
-                        );
-                        if is_responsible {
+                        if config.responsible_for(pid) {
                             reader.ensure_partition(pid);
                             let part_min_ts = Partitioned::with_partition(pid, MzOffset::from(0));
                             reader
@@ -559,12 +540,7 @@ impl KafkaOffsetCommiter {
         let mut offsets = vec![];
         for ts in frontier.iter() {
             if let Some(pid) = ts.partition() {
-                if crate::source::responsible_for(
-                    &self.source_id,
-                    self.worker_id,
-                    self.worker_count,
-                    pid,
-                ) {
+                if self.config.responsible_for(pid) {
                     offsets.push((pid.clone(), *ts.timestamp()));
                 }
             }
@@ -580,7 +556,7 @@ impl KafkaOffsetCommiter {
             }
             let consumer = Arc::clone(&self.consumer);
             mz_ore::task::spawn_blocking(
-                || format!("source({}) kafka offset commit", self.source_id),
+                || format!("source({}) kafka offset commit", self.config.id),
                 move || consumer.commit(&tpl, CommitMode::Sync),
             )
             .await??;

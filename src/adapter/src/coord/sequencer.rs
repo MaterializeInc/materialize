@@ -63,7 +63,7 @@ impl Coordinator {
         tx.set_allowed(responses);
 
         let session_catalog = self.catalog.for_session(&session);
-        if let Err(e) = rbac::check_plan(&session_catalog, &session, &plan) {
+        if let Err(e) = rbac::check_plan(&session_catalog, &session, &plan, &depends_on) {
             return tx.send(Err(e), session);
         }
 
@@ -72,9 +72,7 @@ impl Coordinator {
         {
             return tx.send(Err(e), session);
         }
-        if let Err(e) =
-            introspection::check_cluster_restrictions(&session_catalog, &plan, &depends_on)
-        {
+        if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
             return tx.send(Err(e), session);
         }
 
@@ -232,7 +230,7 @@ impl Coordinator {
                 self.sequence_end_transaction(tx, session, action);
             }
             Plan::Peek(plan) => {
-                self.sequence_peek(tx, session, plan).await;
+                self.sequence_peek(tx, session, plan, depends_on).await;
             }
             Plan::Subscribe(plan) => {
                 tx.send(
@@ -241,8 +239,8 @@ impl Coordinator {
                     session,
                 );
             }
-            Plan::ShowCreate(plan) | Plan::SendRows(plan) => {
-                tx.send(Ok(send_immediate_rows(plan.rows)), session);
+            Plan::ShowCreate(plan) => {
+                tx.send(Ok(send_immediate_rows(vec![plan.row])), session);
             }
             Plan::CopyFrom(plan) => {
                 tx.send(
@@ -258,13 +256,14 @@ impl Coordinator {
                 self.sequence_copy_rows(tx, session, id, columns, rows);
             }
             Plan::Explain(plan) => {
-                self.sequence_explain(tx, session, plan);
+                self.sequence_explain(tx, session, plan, depends_on);
             }
             Plan::Insert(plan) => {
-                self.sequence_insert(tx, session, plan).await;
+                self.sequence_insert(tx, session, plan, depends_on).await;
             }
             Plan::ReadThenWrite(plan) => {
-                self.sequence_read_then_write(tx, session, plan).await;
+                self.sequence_read_then_write(tx, session, plan, depends_on)
+                    .await;
             }
             Plan::AlterNoop(plan) => {
                 tx.send(

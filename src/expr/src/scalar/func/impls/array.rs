@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use mz_repr::adt::array::ArrayDimension;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -134,5 +135,71 @@ impl LazyUnaryFunc for CastArrayToString {
 impl fmt::Display for CastArrayToString {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("arraytostr")
+    }
+}
+
+/// Casts an array of one type to an array of another type. Does so by casting
+/// each element of the first array to the desired inner type and collecting
+/// the results into a new array.
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastArrayToArray {
+    pub return_ty: ScalarType,
+    pub cast_expr: Box<MirScalarExpr>,
+}
+
+impl LazyUnaryFunc for CastArrayToArray {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let a = a.eval(datums, temp_storage)?;
+        if a.is_null() {
+            return Ok(Datum::Null);
+        }
+
+        let arr = a.unwrap_array();
+        let dims = arr.dims().into_iter().collect::<Vec<ArrayDimension>>();
+
+        let casted_datums = arr
+            .elements()
+            .iter()
+            .map(|datum| self.cast_expr.eval(&[datum], temp_storage))
+            .collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
+
+        Ok(temp_storage.make_datum(|packer| {
+            packer
+                .push_array(&dims, casted_datums)
+                .expect("failed to construct array");
+        }))
+    }
+
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        self.return_ty.clone().nullable(true)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+}
+
+impl fmt::Display for CastArrayToArray {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("arraytoarray")
     }
 }

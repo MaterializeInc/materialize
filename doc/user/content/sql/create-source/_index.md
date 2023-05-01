@@ -12,6 +12,7 @@ menu:
 ---
 
 A [source](../../overview/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
+Like other relations, sources are [namespaced](../namespaces/) by a database and schema.
 
 [//]: # "TODO(morsapaes) Add short description about what the command gets going in the background."
 
@@ -108,9 +109,9 @@ Retrieving schemas from a schema registry is not supported yet for JSON-formatte
 
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT PROTOBUF</code></p>
 
-Materialize can decode Protobuf messages by integrating with a schema registry to retrieve a `.proto` schema definition, and automatically define the columns and data types to use in the source. Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
+Materialize can decode Protobuf messages by integrating with a schema registry or parsing an inline schema to retrieve a `.proto` schema definition. It can then automatically define the columns and data types to use in the source. Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
 
-* A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with `protoc`, for example:
+* A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with [`protoc`](https://grpc.io/docs/protoc-installation/), for example:
 
   ```shell
   protoc --include_imports --descriptor_set_out=SCHEMA billing.proto

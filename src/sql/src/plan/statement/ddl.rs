@@ -93,7 +93,7 @@ use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, DatabaseId, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, ResolvedObjectName, ResolvedRoleName, SchemaId, SchemaSpecifier,
+    ResolvedItemName, ResolvedObjectName, ResolvedRoleName, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -1580,7 +1580,10 @@ fn get_encoding_inner(
                     .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
-        Format::Json => bail_unsupported!("JSON sources"),
+        Format::Json => {
+            scx.require_format_json()?;
+            DataEncodingInner::Json
+        }
         Format::Text => DataEncodingInner::Text,
     }))
 }
@@ -1630,7 +1633,7 @@ fn get_unnamed_key_envelope(key: &DataEncoding) -> Result<KeyEnvelope, PlanError
         DataEncodingInner::RowCodec(_) => {
             sql_bail!("{} sources cannot use INCLUDE KEY", key.op_name())
         }
-        DataEncodingInner::Bytes | DataEncodingInner::Text => false,
+        DataEncodingInner::Bytes | DataEncodingInner::Json | DataEncodingInner::Text => false,
         DataEncodingInner::Avro(_)
         | DataEncodingInner::Csv(_)
         | DataEncodingInner::Protobuf(_)
@@ -1735,17 +1738,22 @@ pub fn plan_create_view(
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
+            Some(id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let drop_ids = replace
+        .map(|id| {
             scx.catalog
                 .item_dependents(id)
                 .into_iter()
                 .map(|id| id.unwrap_item_id())
                 .collect()
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
+        })
+        .unwrap_or_default();
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -1763,6 +1771,7 @@ pub fn plan_create_view(
         name,
         view,
         replace,
+        drop_ids,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
@@ -1823,7 +1832,7 @@ pub fn plan_create_materialized_view(
         sql_bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
-    let mut replace = Vec::new();
+    let mut replace = None;
     let mut if_not_exists = false;
     match stmt.if_exists {
         IfExistsBehavior::Replace => {
@@ -1844,17 +1853,21 @@ pub fn plan_create_materialized_view(
                         scx.catalog.resolve_full_name(item.name())
                     );
                 }
-                replace.extend(
-                    scx.catalog
-                        .item_dependents(id)
-                        .into_iter()
-                        .map(|id| id.unwrap_item_id()),
-                );
+                replace = Some(id);
             }
         }
         IfExistsBehavior::Skip => if_not_exists = true,
         IfExistsBehavior::Error => (),
     }
+    let drop_ids = replace
+        .map(|id| {
+            scx.catalog
+                .item_dependents(id)
+                .into_iter()
+                .map(|id| id.unwrap_item_id())
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -1877,6 +1890,7 @@ pub fn plan_create_materialized_view(
             cluster_id,
         },
         replace,
+        drop_ids,
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
@@ -3379,7 +3393,7 @@ pub fn plan_drop_objects(
 ) -> Result<Plan, PlanError> {
     assert_ne!(object_type, ObjectType::Func, "rejected in parser");
 
-    let mut ids = Vec::new();
+    let mut referenced_ids = Vec::new();
     for name in names {
         let id = match name {
             UnresolvedObjectName::Cluster(name) => {
@@ -3402,12 +3416,16 @@ pub fn plan_drop_objects(
             }
         };
         if let Some(id) = id {
-            ids.push(id);
+            referenced_ids.push(id);
         }
     }
-    let ids = scx.catalog.object_dependents(ids);
+    let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
-    Ok(Plan::DropObjects(DropObjectsPlan { ids, object_type }))
+    Ok(Plan::DropObjects(DropObjectsPlan {
+        referenced_ids,
+        drop_ids,
+        object_type,
+    }))
 }
 
 fn plan_drop_schema(
@@ -3415,7 +3433,7 @@ fn plan_drop_schema(
     if_exists: bool,
     name: UnresolvedSchemaName,
     cascade: bool,
-) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaId)>, PlanError> {
+) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
     Ok(match resolve_schema(scx, name.clone(), if_exists)? {
         Some((database_spec, schema_spec)) => {
             if let ResolvedDatabaseSpecifier::Ambient = database_spec {
@@ -3423,12 +3441,9 @@ fn plan_drop_schema(
                     "cannot drop schema {name} because it is required by the database system",
                 );
             }
-            let schema_id = match schema_spec {
-                SchemaSpecifier::Temporary => {
-                    sql_bail!("cannot drop schema {name} because it is a temporary schema",)
-                }
-                SchemaSpecifier::Id(id) => id,
-            };
+            if let SchemaSpecifier::Temporary = schema_spec {
+                sql_bail!("cannot drop schema {name} because it is a temporary schema",)
+            }
             let schema = scx.get_schema(&database_spec, &schema_spec);
             if !cascade && schema.has_items() {
                 let full_schema_name = FullSchemaName {
@@ -3445,7 +3460,7 @@ fn plan_drop_schema(
                     full_schema_name
                 );
             }
-            Some((database_spec, schema_id))
+            Some((database_spec, schema_spec))
         }
         None => None,
     })
@@ -3837,14 +3852,11 @@ fn plan_alter_schema_owner(
                     "cannot alter schema {name} because it is required by the database system",
                 );
             }
-            let schema_id = match schema_spec {
-                SchemaSpecifier::Temporary => {
-                    sql_bail!("cannot alter schema {name} because it is a temporary schema",)
-                }
-                SchemaSpecifier::Id(id) => id,
-            };
+            if let SchemaSpecifier::Temporary = schema_spec {
+                sql_bail!("cannot alter schema {name} because it is a temporary schema",)
+            }
             Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::Schema((database_spec, schema_id)),
+                id: ObjectId::Schema((database_spec, schema_spec)),
                 object_type: ObjectType::Schema,
                 new_owner,
             }))

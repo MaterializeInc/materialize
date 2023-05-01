@@ -137,6 +137,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
             (PUBLICATION 'mz_source')
             FOR ALL TABLES;
+
+          > SELECT COUNT(*) > 0 FROM t1;
+          true
      """
         )
     )
@@ -175,8 +178,9 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     )[0]
     pod_name = cluster_pod_name(cluster_id, replica_id, 0)
 
-    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+    # wait for the cluster to be ready first before attempting to kill it
     wait(condition="condition=Ready", resource=f"{pod_name}")
+    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
 
     mz.testdrive.run(
         input=dedent(

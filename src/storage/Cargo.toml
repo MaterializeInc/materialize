@@ -26,6 +26,7 @@ fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 globset = { version = "0.4.9", features = ["serde1"] }
 http = "0.2.8"
+indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
 maplit = "1.0.2"
 mz-avro = { path = "../avro", features = ["snappy"] }
@@ -45,8 +46,10 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-pid-file = { path = "../pid-file" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
+mz-rocksdb = { path = "../rocksdb" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
+mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 mz-timely-util = { path = "../timely-util" }
 once_cell = { version = "1.16.0" }

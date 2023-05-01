@@ -136,7 +136,6 @@ class UpgradeEntireMzFourVersions(Scenario):
             Manipulate(self, phase=2),
             KillMz(),
             StartMz(tag=released_versions[0]),
-            Validate(self),
             KillMz(),
             StartMz(tag=None),
             Validate(self),

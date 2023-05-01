@@ -15,11 +15,11 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-aws-credential-types = { version = "0.53.0", default-features = false, features = ["hardcoded-credentials"] }
-aws-sdk-sts = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sig-auth = { version = "0.53.0", default-features = false, features = ["sign-eventstream"] }
-aws-sigv4 = { version = "0.53.0", features = ["sign-eventstream"] }
-aws-smithy-http = { git = "https://github.com/parker-timmerman/smithy-rs.git", branch = "v0.53.2", default-features = false, features = ["event-stream", "rt-tokio"] }
+aws-credential-types = { version = "0.55.1", default-features = false, features = ["hardcoded-credentials"] }
+aws-sdk-sts = { version = "0.26.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sig-auth = { version = "0.55.1", default-features = false, features = ["sign-eventstream"] }
+aws-sigv4 = { version = "0.55.1", features = ["sign-eventstream"] }
+aws-smithy-http = { version = "0.55.2", default-features = false, features = ["event-stream", "rt-tokio"] }
 axum = { version = "0.6.7", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
 bstr = { version = "0.2.14" }

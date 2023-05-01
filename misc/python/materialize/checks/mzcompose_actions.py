@@ -27,10 +27,14 @@ class MzcomposeAction(Action):
 
 class StartMz(MzcomposeAction):
     def __init__(
-        self, tag: Optional[MzVersion] = None, environment_extra: List[str] = []
+        self,
+        tag: Optional[MzVersion] = None,
+        environment_extra: List[str] = [],
+        bootstrap_system_parameters: Optional[List[str]] = None,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra
+        self.bootstrap_system_parameters = bootstrap_system_parameters
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -41,6 +45,7 @@ class StartMz(MzcomposeAction):
             image=image,
             external_cockroach=True,
             environment_extra=self.environment_extra,
+            bootstrap_system_parameters=self.bootstrap_system_parameters,
         )
 
         with c.override(mz):
@@ -78,11 +83,13 @@ class ConfigureMz(MzcomposeAction):
             ALTER SYSTEM SET max_materialized_views = 1000;
             ALTER SYSTEM SET max_objects_per_schema = 1000;
             ALTER SYSTEM SET max_secrets = 1000;
-            # Since we already test with RBAC enabled, we have to give materialize
-            # user the relevant permissions so the existing tests keep working.
-            ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;
             """
         )
+
+        if self.base_version >= MzVersion(0, 45, 0):
+            # Since we already test with RBAC enabled, we have to give materialize
+            # user the relevant permissions so the existing tests keep working.
+            input += "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;\n"
 
         if self.base_version >= MzVersion(0, 47, 0):
             input += "ALTER SYSTEM SET enable_rbac_checks TO true;\n"

@@ -105,17 +105,17 @@ You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
 brew install --cask homebrew/cask-versions/temurin11
 ```
 
-Then, download and extract the Confluent Platform tarball:
+Then, download and extract the Confluent Platform tarball (when using bash, replace `~/.zshrc` with `~/.bashrc`):
 
 ```shell
 INSTALL_DIR=$HOME/confluent  # You can choose somewhere else if you like.
 mkdir $INSTALL_DIR
 curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xzC $INSTALL_DIR --strip-components=1
-echo export CONFLUENT_HOME=$(cd $INSTALL_DIR && pwd) >> ~/.bashrc
-source ~/.bashrc
+echo export CONFLUENT_HOME=$(cd $INSTALL_DIR && pwd) >> ~/.zshrc
+source ~/.zshrc
 confluent local services start
 ```
-Note that you need to create a `.bash_profile` that sources `.bashrc` to ensure
+When using bash, note that you need to create a `.bash_profile` that sources `.bashrc` to ensure
 the above works with the Terminal app.
 
 If you have multiple JDKs installed and your current JAVA_HOME points to an incompatible version,
@@ -203,7 +203,7 @@ Still, it's reliable enough to be more convenient than managing each service
 manually.
 
 When the confluent local services are running, they can be examined via a web
-UI which defaults to `localhost:9021`.
+UI which defaults to http://localhost:9021.
 
 It might happen that the start script says that it failed to start
 zookeeper/kafka/schema-registry, but it actually starts them successfully, it
@@ -231,10 +231,10 @@ In this mode, every request for a static file will reload the file from disk.
 Changes to standalone CSS and JS files will be reflected immediately upon
 reload, without requiring a recompile!
 
-Note that `dev-web` can only hot-reload the the files in
+Note that `dev-web` can only hot-reload the files in
 `src/environmentd/src/static`. The HTML templates in
 `src/environmentd/src/templates` use a compile-time templating library called
-[`askama`], and so changes to those templates necessarily require a recompile.
+[askama], and so changes to those templates necessarily require a recompile.
 
 For details about adding a new JavaScript/CSS dependency, see the comment in
 [`src/environmentd/build/npm.rs`](/src/environmentd/build/npm.rs).
@@ -248,12 +248,12 @@ own document. See [Developer guide: testing](guide-testing.md).
 
 We use the following tools to perform automatic code style checks:
 
-Tool                  | Use                                | Run locally with
-----------------------|------------------------------------|------------------
-[Clippy]              | Rust semantic nits                 | `cargo clippy`
-[rustfmt]             | Rust code formatter                | `cargo fmt`
-Linter                | General formatting nits            | `bin/lint`
-[cargo-udeps]         | Check for unused Rust dependencies | `bin/unused-deps`
+| Tool          | Use                                | Run locally with    |
+|---------------|------------------------------------|---------------------|
+| [Clippy]      | Rust semantic nits                 | `cargo clippy`      |
+| [rustfmt]     | Rust code formatter                | `cargo fmt`         |
+| Linter        | General formatting nits            | `bin/lint`          |
+| [cargo-udeps] | Check for unused Rust dependencies | `bin/unused-deps`   |
 
 See the [style guide](style.md) for additional recommendations on code style.
 
@@ -299,8 +299,8 @@ because they are the level at which `pub` visibility operates.
 We make a best-effort attempt to document the ownership of the Rust code in this
 repository using GitHub's [CODEOWNERS](/.github/CODEOWNERS) file.
 
-You can view a relationship diagram of our crates by running the following
-command:
+You can create and view a relationship diagram of our crates by running the following
+command (this will require [graphviz]):
 
 ```shell
 bin/crate-diagram
@@ -470,6 +470,7 @@ source /path/to/materialize/misc/completions/zsh/*
 [demos]: https://github.com/MaterializeInc/demos
 [Docker Compose]: https://docs.docker.com/compose/
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
+[graphviz]: https://graphviz.org/
 [hakari documentation]: https://docs.rs/cargo-hakari/latest/cargo_hakari/about/index.html
 [Homebrew]: https://brew.sh
 [forked-cockroach-tap]: https://github.com/materializeInc/homebrew-cockroach

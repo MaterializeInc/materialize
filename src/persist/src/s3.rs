@@ -25,8 +25,9 @@ use aws_config::timeout::TimeoutConfig;
 use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::{AsyncSleep, Sleep};
-use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
-use aws_sdk_s3::types::{ByteStream, SdkError};
+use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::Client as S3Client;
 use aws_types::region::Region;
 use bytes::Bytes;
@@ -925,6 +926,7 @@ mod tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn s3_blob() -> Result<(), ExternalError> {
         mz_ore::test::init_logging();

@@ -70,6 +70,7 @@ class ManyRows(Check):
                 > INSERT INTO many_rows SELECT 'b' || generate_series FROM generate_series(1, 1000000);
                 """,
                 """
+                > SET statement_timeout = '120s';
                 > INSERT INTO many_rows SELECT * FROM many_rows;
                 """,
             ]

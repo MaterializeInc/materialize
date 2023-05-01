@@ -852,3 +852,86 @@ SELECT ARRAY[ARRAY[customer.first_name], ARRAY[customer.zip], ARRAY[customer.id:
 query error db error: ERROR: array_in not yet supported
 SELECT array_in('', 0, 0)
 ----
+
+# Array casting for column expressions
+
+statement ok
+CREATE TABLE array_t2 (
+    a int[],
+    b string[][],
+    c varchar[],
+    d int[][]
+);
+
+statement ok
+INSERT INTO array_t2 VALUES (
+    array[1, 2, 3, 4, 5],
+    array[['t1', 't2', 't3']],
+    array['test1', 'test2', 'test3', 'test4']::varchar[],
+    array[[0, 1, 2], [3, 4, 5], [6, 7, 8]]
+);
+
+query T
+SELECT pg_typeof(a::string[]::int[]::text[]::float8[]) FROM array_t2;
+----
+double precision[]
+
+query T
+SELECT pg_typeof(a::string[]) FROM array_t2;
+----
+text[]
+
+query T
+SELECT pg_typeof(a::string[]::int[]) FROM array_t2;
+----
+integer[]
+
+query error Evaluation error: invalid input syntax for type integer: invalid digit found in string: "t1"
+SELECT b::int[] FROM array_t2;
+
+query error CAST does not support casting from integer\[\] to date\[\]
+SELECT a::date[] FROM array_t2;
+
+query T
+SELECT a::string[]::int[]::text[]::float8[] FROM array_t2;
+----
+{1,2,3,4,5}
+
+query T
+SELECT b::text[] FROM array_t2;
+----
+{{t1,t2,t3}}
+
+query T
+SELECT d::text[][1][1] FROM array_t2;
+----
+{{0,1,2},{3,4,5},{6,7,8}}
+
+query T
+SELECT (d::text[])[1][1] FROM array_t2;
+----
+0
+
+query T
+SELECT (d::text[])[1] FROM array_t2;
+----
+NULL
+
+query T
+SELECT CAST(a as text[]) FROM array_t2;
+----
+{1,2,3,4,5}
+
+statement ok
+UPDATE array_t2 SET c = NULL;
+
+query T
+SELECT c::int[] FROM array_t2;
+----
+NULL
+
+query error CAST does not support casting from mz_aclitem\[\] to text\[\]
+SELECT privileges::text[] FROM mz_views;
+
+query error CAST does not support casting from regproc list to text list
+SELECT (LIST[1299::regproc]::regproc list)::text list

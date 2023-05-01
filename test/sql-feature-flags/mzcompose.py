@@ -13,9 +13,10 @@ import tempfile
 from textwrap import dedent, indent
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Testdrive
+from materialize.mzcompose.services import Materialized, Redpanda, Testdrive
 
 SERVICES = [
+    Redpanda(),
     Materialized(unsafe_mode=False),
     Testdrive(no_reset=True, seed=1),
 ]
@@ -103,6 +104,7 @@ class FeatureTestScenario:
             [
                 # Include the header.
                 header(f"{cls.__name__} (phase 1)", drop_schema=True),
+                cls.initialize(),
                 # We cannot create item #1 when the feature is turned off (default).
                 statement_error(cls.create_item(ordinal=1), cls.feature_error()),
                 # Turn the feature on.
@@ -124,6 +126,7 @@ class FeatureTestScenario:
             [
                 # Include the header.
                 header(f"{cls.__name__} (phase 2)", drop_schema=False),
+                cls.initialize(),
                 # We can query item #1 when the feature is turned on. Ensures
                 # that catalog rehydration ignores SQL-level feature flags.
                 query_ok(cls.query_item(ordinal=1)),
@@ -144,6 +147,11 @@ class FeatureTestScenario:
     def feature_error(cls) -> str:
         """The error expected when the feature is disabled."""
         assert False, "feature_error() must be overriden"
+
+    @classmethod
+    def initialize(cls) -> str:
+        """Any SQL statements that must be executed before the statement under test."""
+        return ""
 
     @classmethod
     def create_item(cls, ordinal: int) -> str:
@@ -190,8 +198,43 @@ class WithMutuallyRecursive(FeatureTestScenario):
         return f"SELECT * FROM wmr_{ordinal:02d}"
 
 
+class FormatJson(FeatureTestScenario):
+    @classmethod
+    def feature_name(cls) -> str:
+        return "enable_format_json"
+
+    @classmethod
+    def feature_error(cls) -> str:
+        return "`FORMAT JSON` is not enabled"
+
+    @classmethod
+    def initialize(cls) -> str:
+        return "> CREATE CONNECTION IF NOT EXISTS kafka_conn_for_format_json TO KAFKA (BROKER '${testdrive.kafka-addr}')"
+
+    @classmethod
+    def create_item(cls, ordinal: int) -> str:
+        return dedent(
+            f"""
+            CREATE SOURCE kafka_source_{ordinal:02d}
+                FROM KAFKA CONNECTION kafka_conn_for_format_json (TOPIC 'bar')
+                FORMAT JSON
+                WITH (SIZE '1');
+            """
+        )
+
+    @classmethod
+    def drop_item(cls, ordinal: int) -> str:
+        return f"DROP SOURCE kafka_source_{ordinal:02d};"
+
+    @classmethod
+    def query_item(cls, ordinal: int) -> str:
+        # Test cannot spin up infra for this feature to be tested, but we just want to verify it
+        # plans successfully.
+        return "SELECT true;"
+
+
 def run_test(c: Composition, args: argparse.Namespace) -> None:
-    c.up("materialized")
+    c.up("redpanda", "materialized")
     c.up("testdrive", persistent=True)
 
     scenarios = (

@@ -13,7 +13,10 @@ aliases:
 
 [//]: # "TODO(morsapaes) Once #8396 lands, link the page here"
 
-Materialize is **wire-compatible** with PostgreSQL, which means it integrates with most client libraries, ORM frameworks and other third-party tools that support PostgreSQL. This page describes the status, level of support, and usage notes for commonly used and requested Materialize integrations and tools.
+Materialize is **wire-compatible** with PostgreSQL, which means it integrates
+with many SQL clients and other tools in the data ecosystem that support
+PostgreSQL. This page describes the status, level of support, and usage notes
+for commonly used and requested Materialize integrations and tools.
 
 {{< note >}}
 If there's a tool that you'd like to use with Materialize but is not listed, let us know by submitting a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)!
@@ -146,6 +149,7 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 
 | Service      | Support level                    | Notes                                                                                                                                                                                                                                                                             |             |
 | ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| psql         | {{< supportLevel production >}}  | See [SQL Clients](/integrations/#sql-clients) for more details. Some backslash meta-commands are not yet supported {{% gh 9721 %}}.
 | DBeaver      | {{< supportLevel production >}}  | Connect using the [PostgreSQL database driver](https://hevodata.com/learn/dbeaver-postgresql/#a5).                                                                                                                                                                                |             |
 | DataGrip IDE | {{< supportLevel beta >}}        | Connect using the [PostgreSQL database driver](https://www.jetbrains.com/datagrip/features/postgresql/) with [introspection disabled](https://intellij-support.jetbrains.com/hc/en-us/community/posts/360010694760-How-to-turn-off-automatic-database-introspection-in-Datagrip). |             |
 | pgAdmin      | {{< supportLevel in-progress >}} | Not supported yet {{% gh 5874 %}}. Subscribe via "Notify Me" to register interest.                                                                                                                                                                                                | [](#notify) |

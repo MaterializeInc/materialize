@@ -18,9 +18,10 @@
 //!
 //! [`mz_introspection`]: https://materialize.com/docs/sql/show-clusters/#mz_introspection-system-cluster
 
+use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
-use mz_sql::plan::Plan;
+use mz_sql::plan::{Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
 use crate::catalog::{Catalog, Cluster};
@@ -86,7 +87,6 @@ pub fn auto_run_on_introspection<'a, 's>(
 pub fn check_cluster_restrictions(
     catalog: &impl SessionCatalog,
     plan: &Plan,
-    depends_on: &Vec<GlobalId>,
 ) -> Result<(), AdapterError> {
     // We only impose restrictions if the current cluster is the introspection cluster.
     let cluster = catalog.active_cluster();
@@ -94,16 +94,27 @@ pub fn check_cluster_restrictions(
         return Ok(());
     }
 
-    // Allows explain queries.
-    if let Plan::Explain(_) = plan {
-        return Ok(());
-    }
+    // Only continue, and check restrictions, if a Plan would run some computation on the cluster.
+    //
+    // Note: We get the dependencies from the Plans themselves, because it's only after planning
+    // that we actually know what objects we'll need to reference.
+    //
+    // Note: Creating other objects like Materialized Views is prevented elsewhere. We define the
+    // 'mz_introspection' cluster to be "read-only", which restricts these actions.
+    let depends_on: Box<dyn Iterator<Item = GlobalId>> = match plan {
+        Plan::ReadThenWrite(plan) => Box::new(plan.selection.depends_on().into_iter()),
+        Plan::Subscribe(plan) => match plan.from {
+            SubscribeFrom::Id(id) => Box::new(std::iter::once(id)),
+            SubscribeFrom::Query { ref expr, .. } => Box::new(expr.depends_on().into_iter()),
+        },
+        Plan::Peek(plan) => Box::new(plan.source.depends_on().into_iter()),
+        _ => return Ok(()),
+    };
 
     // Collect any items that are not allowed to be run on the introspection cluster.
     let unallowed_dependents: SmallVec<[String; 2]> = depends_on
-        .iter()
         .filter_map(|id| {
-            let item = catalog.get_item(id);
+            let item = catalog.get_item(&id);
             let full_name = catalog.resolve_full_name(item.name());
 
             if !catalog.is_system_schema(&full_name.schema) {
@@ -156,7 +167,6 @@ pub fn user_privilege_hack(
         Plan::Subscribe(_)
         | Plan::Peek(_)
         | Plan::CopyFrom(_)
-        | Plan::SendRows(_)
         | Plan::Explain(_)
         | Plan::ShowAllVariables
         | Plan::ShowVariable(_)

@@ -150,7 +150,6 @@ steps:
           composition: cargo-test
     agents:
       queue: builder-linux-x86_64
-    coverage: skip
 
   - id: miri-test
     label: Miri test
@@ -452,7 +451,7 @@ steps:
           args: [--consensus=mem, --blob=mem]
     agents:
       queue: linux-x86_64
-    coverage: skip # TODO(def-): Should we support coverage for persist-maelstrom?
+    coverage: skip # Randomized, shouldn't count for coverage
 
   - id: checks-drop-create-default-replica
     label: "Checks + DROP/CREATE replica"
@@ -543,7 +542,6 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
           args: [--exitfirst, -m, "not long", --aws-region=us-east-2, test/cloudtest/]
-    coverage: skip # TODO(def-): Should we support coverage for cloudtest?
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"

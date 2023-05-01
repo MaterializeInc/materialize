@@ -91,6 +91,7 @@ use mz_ore::{assert_contains, collections::CollectionExt, metrics::MetricsRegist
 
 use mz_stash::{
     Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
+    INSERT_BATCH_SPLIT_SIZE,
 };
 
 pub static C1: TypedCollection<i64, i64> = TypedCollection::new("c1");
@@ -312,6 +313,27 @@ async fn test_stash_postgres() {
             .unwrap();
         assert_eq!(raw_rows.len(), 1);
         assert_eq!(rows, BTreeMap::from([(S2 { a: 1, b: Some(3) }, 2)]));
+    }
+
+    // Test large update batches.
+    {
+        static S: TypedCollection<i64, String> = TypedCollection::new("s");
+        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
+        let _16mb = "0".repeat(1 << 24);
+        // A too large update will always fail.
+        assert_contains!(
+            S.upsert(&mut stash, vec![(1, _16mb)])
+                .await
+                .unwrap_err()
+                .to_string(),
+            "message size 16 MiB bigger than maximum allowed message size"
+        );
+        // An large but reasonable update will be split into batches.
+        let large = "0".repeat(INSERT_BATCH_SPLIT_SIZE);
+        S.upsert(&mut stash, vec![(1, large.clone()), (2, large)])
+            .await
+            .unwrap();
+        assert_eq!(S.iter(&mut stash).await.unwrap().len(), 2);
     }
     // Test readonly.
     {
