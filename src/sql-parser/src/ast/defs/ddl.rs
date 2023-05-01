@@ -460,6 +460,7 @@ pub enum SubscribeOutput<T: AstInfo> {
     Diffs,
     WithinTimestampOrderBy { order_by: Vec<OrderByExpr<T>> },
     EnvelopeUpsert { key_columns: Vec<Ident> },
+    EnvelopeDebezium { key_columns: Vec<Ident> },
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeOutput<T> {
@@ -472,6 +473,11 @@ impl<T: AstInfo> AstDisplay for SubscribeOutput<T> {
             }
             Self::EnvelopeUpsert { key_columns } => {
                 f.write_str(" ENVELOPE UPSERT (KEY (");
+                f.write_node(&display::comma_separated(key_columns));
+                f.write_str("))");
+            }
+            Self::EnvelopeDebezium { key_columns } => {
+                f.write_str(" ENVELOPE DEBEZIUM (KEY (");
                 f.write_node(&display::comma_separated(key_columns));
                 f.write_str("))");
             }

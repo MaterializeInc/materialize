@@ -767,6 +767,14 @@ pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_envelope_debezium_in_subscribe"),
+    value: &false,
+    description: "Feature flag indicating whether `ENVELOPE DEBEZIUM` can be used in `SUBSCRIBE` queries (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_within_timestamp_order_by_in_subscribe"),
     value: &false,
@@ -1870,6 +1878,11 @@ impl SystemVars {
     /// Returns the `enable_envelope_upsert_in_subscribe` configuration parameter.
     pub fn enable_envelope_upsert_in_subscribe(&self) -> bool {
         *self.expect_value(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
+    }
+
+    /// Returns the `enable_envelope_debezium_in_subscribe` configuration parameter.
+    pub fn enable_envelope_debezium_in_subscribe(&self) -> bool {
+        *self.expect_value(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
     }
 
     /// Returns the `enable_within_timestamp_order_by` configuration parameter.

@@ -36,6 +36,7 @@ You can use `SUBSCRIBE` to:
 | _object_name_                   | The name of the source, table, or view that you want to subscribe to.                                                                    |
 | _select_stmt_                   | The [`SELECT` statement](../select) whose output you want to subscribe to.
 | **ENVELOPE UPSERT**             | Use the upsert envelope, which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **ENVELOPE DEBEZIUM**           | Use the debezium envelope, which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
 | **WITHIN TIMESTAMP...ORDER BY** | Use an `ORDER BY` clause to sort the subscription output within a timestamp. For more information, see [Modifying the output format](#modifying-the-output-format). |
 
 ### `WITH` options
@@ -330,22 +331,22 @@ structure:
   _Insert_
 
   ```sql
-   -- at time 200, update key=1's value to 10
+   -- at time 200, add a new row with key=3, value=6
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
    ...
-   200          | upsert   | 1    | 10
+   200          | upsert   | 3    | 6
    ...
   ```
 
   _Update_
 
   ```sql
-   -- at time 300, add a new row with key=3, value=6
+   -- at time 300, update key=1's value to 10
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
    ...
-   300          | upsert   | 3    | 6
+   300          | upsert   | 1    | 10
    ...
   ```
 
@@ -379,6 +380,95 @@ structure:
    -------------|-----------------|------|--------
    ...
    500          | key_violation   | 1    | NULL
+   ...
+  ```
+
+* If [`PROGRESS`](#progress) is set, Materialize also returns the `mz_progressed`
+column. Each progress row will have a `NULL` key and a `NULL` value.
+
+#### `ENVELOPE DEBEZIUM`
+
+To modify the output of `SUBSCRIBE` to support debezium upserts, use `ENVELOPE DEBEZIUM`.
+This clause allows you to specify a `KEY` that Materialize uses to interpret
+the rows as a series of inserts, updates and deletes within each distinct
+timestamp. In the envelope we return the state of the values before and after this upsert.
+
+The output columns are reordered so that all the key columns come before the
+value columns. There are two copies of the value columns, the first is prefixed with
+`before_` and represents the value of the values before this upsert.
+
+* Using this modifier, the output rows will have the following
+structure:
+
+   ```sql
+   SUBSCRIBE mview ENVELOPE UPSERT (KEY (key));
+   ```
+
+   ```sql
+   mz_timestamp | mz_state | key  | before_value | value
+   -------------|----------|------|--------------|-------
+   100          | upsert   | 1    | NULL         | 2
+   100          | upsert   | 2    | NULL         | 4
+   ```
+
+* For inserts: the before values are `NULL`, the current value is the newly inserted
+  value and `mz_state` is set to `upsert`.
+
+  _Insert_
+
+  ```sql
+   -- at time 200, add a new row with key=3, value=6
+   mz_timestamp | mz_state | key  | before_value | value
+   -------------|----------|------|--------------|-------
+   ...
+   200          | insert   | 3    | NULL         | 6
+   ...
+  ```
+
+* For updates: the before values are the old values, the value columns are the resulting
+  values of the update, and `mz_state` is set to`upsert`.
+
+  _Update_
+
+  ```sql
+   -- at time 300, update key=1's value to 10
+   mz_timestamp | mz_state | key  | before_value | value
+   -------------|----------|------|--------------|-------
+   ...
+   300          | upsert   | 1    | 2            | 10
+   ...
+  ```
+
+* If only deletes occur within a timestamp, the value columns for each key are
+  set to `NULL`, the before values are set to the old value and `mz_state` is set to `delete`.
+
+  _Delete_
+
+  ```sql
+   -- at time 400, delete all rows
+   mz_timestamp | mz_state | key  | before_value | value
+   -------------|----------|------|--------------|-------
+   ...
+   400          | delete   | 1    | 10           | NULL
+   400          | delete   | 2    | 4            | NULL
+   400          | delete   | 3    | 6            | NULL
+   ...
+  ```
+
+* Like `ENVELOPE UPSERT`, Only use `ENVELOPE DEBEZIUM` when there is at most one
+  live value per key. If materialize detects that a given key has multiple values,
+  it will generate an update with `mz_state` set to `"key_violation"`, the
+  problematic key, and all the values nulled out. Materialize is not guaranteed to
+  detect this case, please don't rely on it.
+
+  _Key violation_
+
+  ```sql
+   -- at time 500, introduce a key_violation
+   mz_timestamp | mz_state        | key  | before_value | value
+   -------------|-----------------|------|--------------|-------
+   ...
+   500          | key_violation   | 1    | NULL         | NULL
    ...
   ```
 

@@ -151,5 +151,6 @@ where
         SubscribeOutput::Diffs => "diffs",
         SubscribeOutput::WithinTimestampOrderBy { .. } => "within_timestamp_order_by",
         SubscribeOutput::EnvelopeUpsert { .. } => "envelope_upsert",
+        SubscribeOutput::EnvelopeDebezium { .. } => "envelope_debezium",
     }
 }

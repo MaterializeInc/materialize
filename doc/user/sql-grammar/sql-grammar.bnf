@@ -374,6 +374,7 @@ subscribe_stmt ::=
     ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
     ( 'UP' 'TO' timestamp_expression )?
     ('ENVELOPE' 'UPSERT' '(' 'KEY' '(' col_ref ( ',' col_ref )* ')' ')' )?
+    ('ENVELOPE' 'DEBEZIUM' '(' 'KEY' '(' col_ref ( ',' col_ref )* ')' ')' )?
     ('WITHIN' 'TIMESTAMP' 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )*)?
 table_ref ::=
   (
