@@ -1,0 +1,113 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int, b int)
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t
+
+query IIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_diff a b
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t WITH (PROGRESS)
+
+query IIIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_progressed mz_diff a b
+
+statement ok
+COMMIT
+
+# ENVELOPE UPSERT
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t ENVELOPE UPSERT (KEY (a))
+
+query IIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_state a b
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t WITH (PROGRESS) ENVELOPE UPSERT (KEY (a))
+
+query IIIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_progressed mz_state a b
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t ENVELOPE UPSERT (KEY (b))
+
+query IIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_state b a
+
+statement ok
+COMMIT
+
+# WITHIN TIMESTAMP ORDER BY
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t WITHIN TIMESTAMP ORDER BY a, mz_diff
+
+query IIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_diff a b
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t WITH (PROGRESS) WITHIN TIMESTAMP ORDER BY a, mz_diff
+
+query IIIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_progressed mz_diff a b
+
+statement ok
+COMMIT
