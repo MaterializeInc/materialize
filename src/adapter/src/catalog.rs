@@ -486,7 +486,11 @@ impl CatalogState {
         }
     }
 
-    fn ensure_no_unstable_uses(&self, item: &CatalogItem) -> Result<(), AdapterError> {
+    fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), AdapterError> {
+        if self.system_config().allow_unstable_dependencies() {
+            return Ok(());
+        }
+
         let unstable_dependencies: Vec<_> = item
             .uses()
             .iter()
@@ -5414,7 +5418,7 @@ impl Catalog {
                     item,
                     owner_id,
                 } => {
-                    state.ensure_no_unstable_uses(&item)?;
+                    state.check_unstable_dependencies(&item)?;
 
                     if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
                         let cluster_name = state.clusters_by_id[&id].name.clone();
