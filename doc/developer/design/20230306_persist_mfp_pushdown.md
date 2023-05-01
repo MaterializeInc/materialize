@@ -32,11 +32,14 @@ Each column in a `RelationDesc` is mapped to a column that persist understands: 
 [parquet]: https://parquet.apache.org/docs/
 ## Part Statistics
 
-When Persist writes a batch to Blob storage, it will compute basic statistics over its columns, when possible,
-and write this data alongside existing metadata in Consensus. To start, we will collect a column's
+When Persist writes a batch to [Blob] storage, it will compute basic statistics over its columns, when possible,
+and write this data alongside existing metadata in [Consensus]. To start, we will collect a column's
 non-null min and max values and null count. We may also track the min/max Row within the part.
 
-Statistics are optional: Persist may not be able to compute min/max values for all types, and we may need to trim statistics to keep metadata from getting too big.
+Statistics are optional: Persist may not be able to compute min/max values for all types, and we may need to trim statistics to keep metadata from getting too big (more details in the Reference section below).
+
+[Blob]: https://github.com/MaterializeInc/materialize/blob/v0.52.4/doc/developer/design/20220330_persist.md#blobconsensus
+[Consensus]: https://github.com/MaterializeInc/materialize/blob/v0.52.4/doc/developer/design/20220330_persist.md#blobconsensus
 
 ## Filtering
 
@@ -112,7 +115,7 @@ Note that it is expected that the common case will be that stats do not need tri
 ## Filtering parts
 [filtering parts]: #filtering-parts
 
-Thanks to our part statistics, we know the range of possible values any particular column may have.
+Thanks to our part statistics, we might know the range of possible values any particular column may have.
 To decide whether we can filter a part or not, though, we need to know the range of possible values of _the output of the MFP's filter:_ if we can prove that the filter will never return `true` or an error value, it's safe to skip the entire part.
 
 Using the range of possible input values to compute the range of possible output values is a well-known static analysis problem, and it's commonly solved via [abstract interpretation](https://en.wikipedia.org/wiki/Abstract_interpretation). In practice, this involves:
@@ -187,11 +190,11 @@ To be conservative, we'll assume that a missing field might have any possible va
 
 Because Persist is so core to Materialize, we get a large amount of test coverage from existing tests. We can additionally write:
 * Proptests to verify that all column types that we support statistics on sort equivalently to their Datum counterparts.
-* Benchmarks to verify the new format's performance in reads and writes.
 * Tests to verify that the new expression interpreter is consistent with `eval`.
 
 Persist already has considerable metrics coverage; we should be able to verify the latency and error rate impacts of the feature from our existing metrics.
 We'll also want to track the positive impacts of the feature, reporting metrics on the number of parts or bytes that are filtered out.
+The cost of stats can be measured with metrics tracking the amount of time we spend calculating them and how big they are. The former will also be picked up in our continuous production profiling.
 
 ## Lifecycle
 [lifecycle]: #lifecycle
@@ -211,7 +214,7 @@ It should be safe to roll back any breakage just by disabling the flag.
 
 Collecting statistics and interpreting MFP expressions both require a significant amount of code, and errors could result in incorrect output.
 
-Opting in all shards to stats collection uses CPU and storage that is wasted if they are not queried in a way that allows us to push down an MFP.
+Opting in all shards to stats collection uses CPU and storage (plus added latency to the ingest side) that is wasted if they are not queried in a way that allows us to push down an MFP.
 
 # Conclusion and alternatives
 [conclusion-and-alternatives]: #conclusion-and-alternatives
