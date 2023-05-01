@@ -55,24 +55,27 @@ Below is a strawman proposal for this interface:
 ```rust
 #[async_trait]
 pub trait PersistPubSubClient {
-  type Sender: PubSubSender;
-
   /// Receive handles with which to send requests and receive diffs.
   async fn connect(
     addr: String,
   ) -> Result<(Arc<dyn PubSubSender>, Box<dyn PubSubReceiver>), anyhow::Error>;
 }
 
-#[async_trait]
+/// The send-side client to Persist PubSub.
 pub trait PubSubSender: std::fmt::Debug + Send + Sync {
   /// Push a diff to subscribers.
-  async fn push(&self, shard_id: &ShardId, diff: &VersionedData) -> Result<(), Error>;
+  fn push(&self, shard_id: &ShardId, diff: &VersionedData);
 
-  /// Informs the server which shards this subscribed should receive diffs for.
-  /// May be called at any time to update the set of subscribed shards.
-  async fn subscribe(&self, shards: Vec<ShardId>) -> Result<(), Error>;
+  /// Subscribe the corresponding [PubSubReceiver] to diffs for the given shard.
+  /// This call is idempotent and is a no-op for already subscribed shards.
+  fn subscribe(&self, shard: &ShardId);
+
+  /// Unsubscribe the corresponding [PubSubReceiver] to diffs for the given shard.
+  /// This call is idempotent and is a no-op for already unsubscribed shards.
+  fn unsubscribe(&self, shard: &ShardId);
 }
 
+/// The receive-side client to Persist PubSub.
 pub trait PubSubReceiver: Stream<Item = ProtoPubSubMessage> {}
 ```
 
@@ -82,8 +85,8 @@ When any handle to a persist shard successfully compares-and-sets a new state, i
 Publishing the diff is not required for correctness in case the process crashes, hits a network partition, or otherwise
 chooses not to publish it (e.g. feature flag).
 
-When a process receives a diff, it needs to apply it to the local copy of state and notify any readers that new data /
-progress may be visible. The mechanisms to do this have largely been built:
+When a process receives a diff via `PubSubReceiver`, it needs to apply it to the local copy of state and notify any readers
+that new data / progress may be visible. The mechanisms to do this have been built:
 
 * [#18488](https://github.com/MaterializeInc/materialize/pull/18488) gives each process a single, shared copy of persist
   state per shard. This gives us a natural entrypoint to applying the diff.
@@ -112,13 +115,18 @@ message ProtoPushDiff {
 }
 
 message ProtoSubscribe {
-  repeated string shards = 1;
+  string shard = 1;
+}
+
+message ProtoUnsubscribe {
+  string shard = 1;
 }
 
 message ProtoPubSubMessage {
   oneof message {
     ProtoPushDiff push_diff = 1;
     ProtoSubscribe subscribe = 2;
+    ProtoUnsubscribe unsubscribe = 3;
   }
 }
 
@@ -131,13 +139,59 @@ The proposed topology would have each `clusterd` connect to `environmentd`'s RPC
 updates to any shards in its `PersistClientCache` (a singleton in both `environmentd` and `clusterd`). When any `clusterd`
 commits a change to a shard, it publishes the diff to `environmentd`, which tracks which connections are subscribed to which
 shards, and broadcasts out the diff to the interested subscribers. From there, each subscriber would [apply the diff](#applying-received-updates).
+Note that a `clusterd` would only subscribe to a shard if it is actively reading it, e.g. for a materialized view, `SELECT`,
+or a `SUBSCRIBE`, so the number of broadcasted messages would be proportional to the number of ongoing read operations,
+and not the total number of shards.
 
 `environmentd` is chosen to host the RPC service as it necessarily holds a handle to each shard (and therefore is always
 interested in all diffs), and to align with the existing topology of the Controller, rather than introduce the novel
-complexity of point-to-point connections between unrelated `clusterd` processes or a net-new dedicated process.
+complexity of point-to-point connections between unrelated `clusterd` processes or a net-new dedicated process. With this
+implementation we would anticipate the end-to-end latency between a writer in one `clusterd` pushing an update to a reader
+in another `clusterd` receiving that update to be in the 1-10ms range.
 
-With this implementation we would anticipate the end-to-end latency between a writer in one `clusterd` pushing an update
-to a reader in another `clusterd` receiving that update to be in the 1-10ms range.
+### Service Discovery
+
+`clusterd` will need to know the address of the `environmentd` process in order to connect to the PubSub server. Locally,
+this will be done through a standard `127.0.0.1:6879` port and passed in to `clusterd` via command line argument.
+
+In Kubernetes, we will create a new headless `Service` in the `environment-controller` that routes to the pubsub port
+(likely 6879) of the current generation of `envd`:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    materialize.cloud/environment-name: env-name
+    materialize.cloud/organization-id: org-name
+  name: persist-pubsub-<envd-generation>
+  namespace: env-name
+spec:
+  selector:
+    materialize.cloud/app: environmentd
+    # ensure this service only routes to a specific generation of `envd`
+    materialize.cloud/envd-generation: <envd-generation>
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: pubsub
+    port: 6879
+    protocol: TCP
+    targetPort: 6879
+```
+
+`envd` will be informed of this service name via command line argument, e.g. `--persist-pubsub-service-name persist-pubsub-1`
+and pass it along to its `clusterd` param when set.
+
+We introduce this new headless service, rather than reusing the existing `environmentd` Service for a few reasons:
+
+* The `environmentd` Service is public / external-facing, while the pubsub port should be strictly internal
+* To decouple the idea the notion that `environmentd` is necessarily responsible for providing the PubSub server. In the
+future we may wish to [replace it with a different implementation](#external-pubsubmessage-bus), or route the Service to
+point towards different pods.
+
+We will create the Service per `envd` generation, so that `clusterd` will always be routed to the `envd` matching their
+generation, and that multiple generations may coexist.
 
 # Rollout
 [rollout]: #rollout
@@ -151,9 +205,11 @@ range. Given the scale of our usage today, we would expect `environmentd` to be 
 volume comfortably with minimal impact on performance.
 
 That said, we'll want to keep an eye on how much time `environmentd` spends broadcasting diffs, as it will be a new
-workload for the process. We anticipate `clusterd` to be negligibly impacted by this added RPC traffic, as each `clusterd`
-would only need to push/receive updates for the shards it is reading and writing, work is that is very similar to what
-it is doing today.
+workload for the process. If `environmentd` CPU usage spikes too high (e.g. >0.5-1 CPU), we will reconsider the approach
+entirely. Early prototyping has indicated a very small rise in CPU (0.05-0.1 range for a heavy workload).
+
+We anticipate `clusterd` to be negligibly impacted by this added RPC traffic, as each `clusterd` would only need to
+push/receive updates for the shards it is reading and writing, work is that is very similar to what it is doing today.
 
 Our existing Persist metrics dashboard, in addition to the new metrics outlined below, should be sufficient to monitor
 the change and understand its impact.
@@ -181,13 +237,27 @@ dashboards will inform our rollout process.
 # Drawbacks
 [drawbacks]: #drawbacks
 
-Looking forward, we know our polling-based discovery is not long-term sustainable and will need replacement. Given that,
-we think the main drawbacks here are around broader prioritization (should our time be spent on something else for now),
-and on the specific merits of the proposed idea (could we design it better).
+Looking forward, we know our polling-based discovery is not long-term financially sustainable and will need replacement.
+The latency incurred by polling reduces the interactive experience of the product, and polling read cost multiplies more
+quickly than write cost, scaling with the number of materialized views / subscribes and not just with shard count. An empty
+environment has write-dominant costs, but our largest and most active environments have read-dominant costs as their usage
+has grown, in a way that has outsize impact on our total CRDB usage.
 
 In terms of the implementation suggested, we will introduce another workload to `environmentd` in maintaining Persist
 PubSub connections and broadcasting messages. While we think the overhead will be low, and scalable to a large number
 of shards even with `environmentd`'s baseline resources, it does add more responsibility and load to the critical service.
+
+Additionally, while we have designed Persist PubSub to be an optimization and not required to operate each process, the
+optimization could become load-bearing if CRDB is proportionally scaled down (which realistically is what is needed to
+realize the cost-savings goal), barring us from easily toggling the feature off if problems arise. This is certainly a
+concern, and the current mitigations are that: we already run CRDB with a comfortable enough headroom to accommodate
+turning off / a failure in Persist PubSub; we can pre-scale CRDB relatively quickly to if we need to disable the feature.
+
+Lastly, in terms of cost efficiency, one of the outcomes of this work is essentially exchanging CRDB CPU time for `envd`
+resources in a way that we anticipate being advantageous, but could turn out to be misguided: e.g. perhaps we can reduce
+CRDB CPU by 30% but each `envd` suddenly requires 2 more CPUs, and our infra bill increases as a result. However, early
+prototyping here indicates that Persist PubSub is _(handwaving intensifies)_ somewhere on the order of 25x-50x more CPU
+efficient than our polling approach, when comparing the rise in `envd` CPU seconds versus the drop in CRDB.
 
 # Conclusion and alternatives
 [conclusion-and-alternatives]: #conclusion-and-alternatives
