@@ -1795,6 +1795,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 current_settings(name, missing_ok)
             }) => ScalarType::String, 3294;
         },
+        "current_timestamp" => Scalar {
+            params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, oid::FUNC_CURRENT_TIMESTAMP_OID;
+        },
         "current_user" => Scalar {
             params!() => UnmaterializableFunc::CurrentUser => String, 745;
         },
@@ -2899,9 +2902,6 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "concat_agg" => Aggregate {
             params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")) => String, oid::FUNC_CONCAT_AGG_OID;
-        },
-        "current_timestamp" => Scalar {
-            params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, oid::FUNC_CURRENT_TIMESTAMP_OID;
         },
         "list_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
