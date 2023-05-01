@@ -165,7 +165,7 @@ pub struct Config {
     /// The PostgreSQL URL for the adapter stash.
     pub adapter_stash_url: String,
 
-    // === Cloud options. ===
+    // === Bootstrap options. ===
     /// The cloud ID of this environment.
     pub environment_id: EnvironmentId,
     /// Availability zones in which storage and compute resources may be

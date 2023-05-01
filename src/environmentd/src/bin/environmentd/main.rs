@@ -402,7 +402,7 @@ pub struct Args {
     #[clap(long, env = "ADAPTER_STASH_URL", value_name = "POSTGRES_URL")]
     adapter_stash_url: String,
 
-    // === Cloud options. ===
+    // === Bootstrap options. ===
     #[clap(
         long,
         env = "ENVIRONMENT_ID",
