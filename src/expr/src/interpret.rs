@@ -98,7 +98,7 @@ fn variadic_monotonic(func: &VariadicFunc) -> Monotonic {
     use Monotonic::*;
     use VariadicFunc::*;
     match func {
-        And | Or => Yes,
+        And | Or | Coalesce => Yes,
         _ => Maybe,
     }
 }
@@ -109,9 +109,11 @@ enum Values<'a> {
     /// This range contains no values.
     Empty,
     /// An inclusive range. Invariant: the first element is always <= the second.
+    // TODO: a variant for small sets of data would avoid losing precision here.
     Within(Datum<'a>, Datum<'a>),
     /// Constraints on structured fields, useful for recursive structures like maps.
     /// Fields that are not present in the map default to Values::All.
+    // TODO: consider using this variant, or similar, for Datum::List.
     Nested(BTreeMap<Datum<'a>, ResultSpec<'a>>),
     /// This range might contain any value. Since we're overapproximating, this is often used
     /// as a "safe fallback" when we can't determine the right boundaries for a range.
@@ -255,6 +257,7 @@ impl<'a> ResultSpec<'a> {
     pub fn has_type(col: &ColumnType, fallible: bool) -> ResultSpec<'a> {
         let values = match &col.scalar_type {
             ScalarType::Bool => Values::Within(Datum::False, Datum::True),
+            // TODO: add bounds for other bounded types, like integers
             _ => Values::All,
         };
         ResultSpec {
@@ -338,8 +341,8 @@ impl<'a> ResultSpec<'a> {
     /// results.
     ///
     /// If we actually stored a set of every possible value, this could by done by passing
-    /// each datup to the function one-by-one and unioning the resulting sets. This is possible
-    /// when our values set is empty or contains a single datum, but when it contains a range,
+    /// each datum to the function one-by-one and unioning the resulting sets. This is possible
+    /// when our values set is empty or     contains a single datum, but when it contains a range,
     /// we need a little metadata about the function to be able to infer a useful result.
     fn flat_map(
         self,
@@ -383,6 +386,7 @@ impl<'a> ResultSpec<'a> {
                 }
                 Monotonic::Maybe | Monotonic::No => ResultSpec::anything(),
             },
+            // TODO: we could return a narrower result for eg. `Values::Nested` with all-`Within` fields.
             Values::Nested(_) | Values::All => ResultSpec::anything(),
         };
 
@@ -399,7 +403,7 @@ impl<'a> ResultSpec<'a> {
 /// interpretations of the expression, where we generalize about sets of possible inputs and outputs.
 /// See [Trace] and [ColumnSpecs] for how this can be useful in practice.
 pub trait Interpreter {
-    type Summary: Sized + Clone;
+    type Summary: Clone + Debug + Sized;
 
     /// A column of the input row.
     fn eval_column(&self, id: usize) -> Self::Summary;
@@ -610,7 +614,7 @@ impl Pushdownable {
         columns
     }
 
-    fn merge(mut columns: Vec<Self>, other: Vec<Self>) -> Vec<Self> {
+    fn union(mut columns: Vec<Self>, other: Vec<Self>) -> Vec<Self> {
         let new_len = columns.len().max(other.len());
         columns.resize(new_len, Pushdownable::No);
         for (my_col, other_col) in columns.iter_mut().zip(other.iter()) {
@@ -664,7 +668,7 @@ impl Interpreter for Trace {
             BinaryFunc::JsonbGetString { stringify: false } => (Monotonic::Yes, Monotonic::No),
             _ => binary_monotonic(func),
         };
-        Pushdownable::merge(
+        Pushdownable::union(
             Pushdownable::apply_fn(left, left_monotonic),
             Pushdownable::apply_fn(right, right_monotonic),
         )
@@ -673,7 +677,7 @@ impl Interpreter for Trace {
     fn eval_variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
         let is_monotonic = variadic_monotonic(func);
         exprs.into_iter().fold(Vec::default(), |acc, columns| {
-            Pushdownable::merge(acc, Pushdownable::apply_fn(columns, is_monotonic))
+            Pushdownable::union(acc, Pushdownable::apply_fn(columns, is_monotonic))
         })
     }
 
@@ -683,7 +687,7 @@ impl Interpreter for Trace {
         then: Self::Summary,
         els: Self::Summary,
     ) -> Self::Summary {
-        Pushdownable::merge(cond, Pushdownable::merge(then, els))
+        Pushdownable::union(cond, Pushdownable::union(then, els))
     }
 }
 
