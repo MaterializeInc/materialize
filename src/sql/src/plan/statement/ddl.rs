@@ -1460,7 +1460,10 @@ fn get_encoding_inner(
                     let csr_connection = match item.connection()? {
                         Connection::Csr(connection) => connection.clone(),
                         _ => {
-                            sql_bail!("{} is not a schema registry connection", item.name())
+                            sql_bail!(
+                                "{} is not a schema registry connection",
+                                scx.catalog.resolve_full_name(item.name())
+                            )
                         }
                     };
 
@@ -1515,7 +1518,10 @@ fn get_encoding_inner(
                     let _ = match item.connection()? {
                         Connection::Csr(connection) => connection,
                         _ => {
-                            sql_bail!("{} is not a schema registry connection", item.name())
+                            sql_bail!(
+                                "{} is not a schema registry connection",
+                                scx.catalog.resolve_full_name(item.name())
+                            )
                         }
                     };
 
@@ -2192,7 +2198,10 @@ fn kafka_sink_builder(
             let csr_connection = match item.connection()? {
                 Connection::Csr(connection) => connection.clone(),
                 _ => {
-                    sql_bail!("{} is not a schema registry connection", item.name())
+                    sql_bail!(
+                        "{} is not a schema registry connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    )
                 }
             };
             let CsrConfigOptionExtracted {
