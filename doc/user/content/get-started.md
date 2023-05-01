@@ -109,7 +109,7 @@ For this guide, you'll create 2 clusters, one for ingesting source data and the 
 1. Use the [`SHOW CLUSTER REPLICAS`](https://materialize.com/docs/sql/show-cluster-replicas/) command to check the status of the replicas:
 
     ```sql
-    SHOW CLUSTER REPLICAS WHERE cluster = 'compute_qck' OR cluster = 'ingest_qck';
+    SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
     ```
     <p></p>
 
@@ -129,7 +129,7 @@ Materialize supports streaming data from multiple external sources, including [K
 
 For this guide, you'll use a [built-in load generator](/sql/create-source/load-generator/#auction) that simulates an auction house, where users bid on an ongoing series of auctions.
 
-1. Aside from clusters and replicas, sources and most other objects in Materialize are [namespaced](/sql/namespaces/) by database and schema, so start by creating a unique schema within the default `materialize` database:
+1. Most objects in Materialize are [namespaced](/sql/namespaces/) by database and schema, including sources, so start by creating a unique schema within the default `materialize` database:
 
     ```sql
     CREATE SCHEMA qck;
@@ -144,7 +144,7 @@ For this guide, you'll use a [built-in load generator](/sql/create-source/load-g
     ```sql
     CREATE SOURCE auction_house
       IN CLUSTER ingest_qck
-      FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms')
+      FROM LOAD GENERATOR AUCTION
       FOR ALL TABLES;
     ```
 
@@ -158,15 +158,15 @@ For this guide, you'll use a [built-in load generator](/sql/create-source/load-g
     <p></p>
 
     ```nofmt
-                name            |      type      | size
-    ----------------------------+----------------+------
-     accounts                   | subsource      |
-     auction_house_qck          | load-generator |
-     auction_house_qck_progress | subsource      |
-     auctions                   | subsource      |
-     bids                       | subsource      |
-     organizations              | subsource      |
-     users                      | subsource      |
+            name            |      type      | size
+    ------------------------+----------------+------
+     accounts               | subsource      |
+     auction_house          | load-generator |
+     auction_house_progress | subsource      |
+     auctions               | subsource      |
+     bids                   | subsource      |
+     organizations          | subsource      |
+     users                  | subsource      |
     (7 rows)
     ```
 
