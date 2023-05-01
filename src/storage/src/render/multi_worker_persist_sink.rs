@@ -107,6 +107,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::trace;
 
+use crate::internal_control::InternalStorageCommand;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::Batch;
@@ -934,6 +935,8 @@ where
         .expect("statistics initialized")
         .clone();
 
+    let command_tx = Rc::clone(&storage_state.internal_cmd_tx);
+
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn
     // from our input frontiers that we have seen all batches for a given batch
@@ -1221,14 +1224,24 @@ where
                         for batch in batches {
                             batch.delete().await;
                         }
-                        panic!(
-                            "persist_sink({}): invalid upper! \
+
+                        {
+                            let mut sender = command_tx.borrow_mut();
+                            sender.broadcast(InternalStorageCommand::SuspendAndRestart {
+                                id: collection_id,
+                                reason: format!(
+                                    "persist_sink({}): invalid upper! \
                                 Tried to append batch ({:?} -> {:?}) but upper \
-                                is {:?}. This is not a problem, it just means \
-                                someone else was faster than us. We will try \
-                                again with a new batch description.",
-                            collection_id, batch_lower, batch_upper, mismatch.current,
-                        );
+                                is {:?}. This can happen when a dataflow is being dropped, \
+                                but should not happen regularly in normal operation.",
+                                    collection_id, batch_lower, batch_upper, mismatch.current,
+                                ),
+                            });
+                        }
+
+                        // We can't safely make progress: hang and wait for the dataflow to
+                        // be restarted.
+                        let () = std::future::pending().await;
                     }
                 }
             }
