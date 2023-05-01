@@ -127,9 +127,8 @@ s2 mz_introspection u3 r1 1
 
 > SELECT id, name
   FROM mz_databases
-  WHERE id = 'u2'
+  WHERE id = 'does_not_exist'
   ORDER BY name
-u2 materialize
 
 # ---- useMaxReplicasPerCluster.ts
 
@@ -142,21 +141,20 @@ u2 materialize
   FROM mz_schemas s
   JOIN mz_databases d
   ON s.database_id = d.id
-  WHERE CAST(database_id as text) = 'u2'
+  WHERE CAST(database_id as text) = 'does_not_exist'
   ORDER BY s.name;
-u6 public u2 materialize
 
 # ---- useSourceErrors.tsx
 
 > SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
   FROM mz_internal.mz_source_status_history h
   JOIN mz_internal.mz_object_dependencies d ON h.source_id = d.referenced_object_id
-  WHERE (d.object_id = 's390' OR source_id = 's390')
+  WHERE (d.object_id = 'does_not_exist' OR source_id = 'does_not_exist')
   AND error IS NOT NULL
   AND h.occurred_at BETWEEN '2022-01-01T00:00:00.000Z' AND '2022-12-31T11:59:59.999Z'
   GROUP BY h.error
   ORDER BY last_occurred DESC
-  LIMIT 10
+  LIMIT 1
 
 
 # ---- useSources.ts
@@ -168,21 +166,20 @@ u6 public u2 materialize
   LEFT OUTER JOIN mz_internal.mz_source_statuses st ON st.id = s.id
   WHERE s.id LIKE 'u%'
   AND s.type <> 'subsource'
-  AND d.id = 'u2'
-  AND sc.id = 'u3';
+  AND d.id = 'does_not_exist'
+  AND sc.id = 'does_not_exist';
 
 # ---- useSubsources.tsx
 
 > SELECT id, name
   FROM mz_sources s
   JOIN mz_internal.mz_object_dependencies d ON s.id = d.referenced_object_id
-  WHERE d.object_id = 's390';
+  WHERE d.object_id = 'does_not_exist';
 
 # ---- NewClusterForm.tsx
 
 > CREATE CLUSTER foo REPLICAS ( r1 (SIZE = '1') );
-> SELECT id FROM mz_clusters WHERE name = 'foo';
-u2
+> SELECT id FROM mz_clusters WHERE name = 'does_not_exist';
 
 > DROP CLUSTER foo CASCADE;
 
@@ -197,33 +194,31 @@ u2
 
 > CREATE SECRET my_secret AS 'abcd123';
 
-# useDataflowStructure.ts
-#
-# Note(parkmycar): Currently doesn't work since we restrict querying non-system objects when the
-# mz_introspection cluster is set, and here we're creating a temporary view that depends on another
-# temporary (and thus non-system) view. There queries are used on a not yet released feature, and
-# a fix is in progress.
-#
-# > CREATE TEMPORARY VIEW export_to_dataflow AS
-#   SELECT export_id, id FROM mz_internal.mz_compute_exports AS mce JOIN mz_internal.mz_dataflows AS md ON
-#   mce.dataflow_id = md.local_id;
-#
-# > CREATE TEMPORARY VIEW all_ops AS
-#   SELECT e2d.export_id, mdod.id, mda.address, mdod.name, mdop.parent_id, coalesce(mas.records, 0) AS arrangement_records, coalesce(mse.elapsed_ns, 0) AS elapsed_ns
-#   FROM export_to_dataflow AS e2d
-#   JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON e2d.id = mdod.dataflow_id
-#   LEFT JOIN mz_internal.mz_scheduling_elapsed AS mse ON mdod.id = mse.id
-#   LEFT JOIN mz_internal.mz_arrangement_sizes AS mas ON mdod.id = mas.operator_id
-#   LEFT JOIN mz_internal.mz_dataflow_operator_parents AS mdop ON mdod.id = mdop.id
-#   LEFT JOIN mz_internal.mz_dataflow_addresses AS mda ON mdod.id = mda.id;
-#
-# > BEGIN;
-# > SELECT mdco.id, from_operator_id, from_operator_address, from_port, to_operator_id, to_operator_address, to_port, COALESCE(sum(sent), 0) AS sent
-#   FROM mz_internal.mz_dataflow_channel_operators AS mdco
-#   JOIN mz_internal.mz_dataflow_channels AS mdc ON mdc.id = mdco.id
-#   LEFT JOIN mz_internal.mz_message_counts AS mmc ON mdco.id = mmc.channel_id
-#   JOIN mz_internal.mz_compute_exports mce ON mce.dataflow_id = from_operator_address[1]
-#   WHERE mce.export_id = 's421'
-#   GROUP BY mdco.id, from_operator_id, from_operator_address, to_operator_id, to_operator_address, from_port, to_port;
-# > SELECT id, address, name, parent_id, arrangement_records, elapsed_ns FROM all_ops WHERE export_id = 's421';
-# > COMMIT;
+# ---- useDataflowStructure.ts
+
+> CREATE TEMPORARY VIEW export_to_dataflow AS
+  SELECT export_id, id FROM mz_internal.mz_compute_exports AS mce JOIN mz_internal.mz_dataflows AS md ON
+  mce.dataflow_id = md.local_id;
+
+> CREATE TEMPORARY VIEW all_ops AS
+  SELECT e2d.export_id, mdod.id, mda.address, mdod.name, mdop.parent_id, coalesce(mas.records, 0) AS arrangement_records, coalesce(mse.elapsed_ns, 0) AS elapsed_ns
+  FROM export_to_dataflow AS e2d
+  JOIN mz_internal.mz_dataflow_operator_dataflows AS mdod ON e2d.id = mdod.dataflow_id
+  LEFT JOIN mz_internal.mz_scheduling_elapsed AS mse ON mdod.id = mse.id
+  LEFT JOIN mz_internal.mz_arrangement_sizes AS mas ON mdod.id = mas.operator_id
+  LEFT JOIN mz_internal.mz_dataflow_operator_parents AS mdop ON mdod.id = mdop.id
+  LEFT JOIN mz_internal.mz_dataflow_addresses AS mda ON mdod.id = mda.id;
+
+# Note(parkmycar): This suceeds on web, but fails because of pg_repr using binary encoding.
+! SELECT mdco.id, from_operator_id, from_operator_address, from_port, to_operator_id, to_operator_address, to_port, COALESCE(sum(sent), 0) AS sent
+  FROM mz_internal.mz_dataflow_channel_operators AS mdco
+  JOIN mz_internal.mz_dataflow_channels AS mdc ON mdc.id = mdco.id
+  LEFT JOIN mz_internal.mz_message_counts AS mmc ON mdco.id = mmc.channel_id
+  JOIN mz_internal.mz_compute_exports mce ON mce.dataflow_id = from_operator_address[1]
+  WHERE mce.export_id = 's421'
+  GROUP BY mdco.id, from_operator_id, from_operator_address, to_operator_id, to_operator_address, from_port, to_port;
+contains: binary encoding of list types is not implemented
+
+# Note(parkmycar): This suceeds on web, but fails because of pg_repr using binary encoding.
+! SELECT id, address, name, parent_id, arrangement_records, elapsed_ns FROM all_ops WHERE export_id = 's421';
+contains: binary encoding of list types is not implemented
