@@ -73,6 +73,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-system-table-indexes",
         "test-replica-targeted-subscribe-abort",
         "test-compute-reconciliation-reuse",
+        "test-compute-reconciliation-no-errors",
         "test-mz-subscriptions",
     ]:
         with c.test_case(name):
@@ -1266,6 +1267,90 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     # TODO(#17594): Flip these once the bug is fixed.
     assert reused == 0
     assert replaced == 4
+
+
+def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
+    """
+    Test that no errors are logged during or after compute
+    reconciliation.
+
+    This is generally useful to find unknown issues, and specifically
+    to verify that replicas don't send unexpected compute responses
+    in the process of reconciliation.
+    """
+
+    c.down(destroy_volumes=True)
+
+    c.up("materialized")
+    c.up("clusterd1")
+
+    # Set up a cluster and a number of dataflows that can be reconciled.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 1
+        ));
+        SET cluster = cluster1;
+
+        -- index on table
+        CREATE TABLE t1 (a int);
+        CREATE DEFAULT INDEX on t1;
+
+        -- index on view
+        CREATE VIEW v AS SELECT a + 1 FROM t1;
+        CREATE DEFAULT INDEX on v;
+
+        -- materialized view on table
+        CREATE TABLE t2 (a int);
+        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
+
+        -- materialized view on index
+        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
+        """
+    )
+
+    # Set up a subscribe dataflow that will be dropped during reconciliation.
+    cursor = c.sql_cursor()
+    cursor.execute("SET cluster = cluster1")
+    cursor.execute("INSERT INTO t1 VALUES (1)")
+    cursor.execute("BEGIN")
+    cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE t1")
+    cursor.execute("FETCH 1 c")
+
+    # Perform a query to ensure dataflows have been installed.
+    c.sql(
+        """
+        SET cluster = cluster1;
+        SELECT * FROM t1, v, mv1, mv2;
+        """
+    )
+
+    # We don't have much control over compute reconciliation from here. We
+    # drop a dataflow and immediately kill environmentd, in hopes of maybe
+    # provoking an interesting race that way.
+    c.sql("DROP MATERIALIZED VIEW mv2")
+
+    # Restart environmentd to trigger a reconciliation.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Perform a query to ensure reconciliation has finished.
+    c.sql(
+        """
+        SET cluster = cluster1;
+        SELECT * FROM v;
+        """
+    )
+
+    # Verify the absence of logged errors.
+    for service in ("materialized", "clusterd1"):
+        p = c.invoke("logs", service, capture=True)
+        for line in p.stdout.splitlines():
+            assert "ERROR" not in line, f"found ERROR in service {service}: {line}"
 
 
 def workflow_test_mz_subscriptions(c: Composition) -> None:

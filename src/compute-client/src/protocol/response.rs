@@ -69,13 +69,11 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///
     /// The replica must not send `FrontierUppers` responses for collections that have not
     /// been created previously by a [`CreateDataflows` command] or by a [`CreateInstance`
-    /// command]. An exception are `FrontierUppers` responses that report the empty frontier.
-    /// ([#16247])
+    /// command].
     ///
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     /// [`CreateDataflows` command]: super::command::ComputeCommand::CreateDataflows
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
-    /// [#16247]: https://github.com/MaterializeInc/materialize/issues/16247
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
 
@@ -122,16 +120,13 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///   * It must no longer read from its inputs.
     ///   * The replica must not send further `SubscribeResponse`s for that subscribe.
     ///
-    /// The replica must not send [`Batch`] responses for subscribes that have not been
-    /// created previously by a [`CreateDataflows` command]. The replica may send [`DroppedAt`]
-    /// responses for subscribes that have not been created previously by a [`CreateDataflows`
-    /// command]. ([#16247])
+    /// The replica must not send `SubscribeResponse`s for subscribes that have not been
+    /// created previously by a [`CreateDataflows` command].
     ///
     /// [`Batch`]: SubscribeResponse::Batch
     /// [`DroppedAt`]: SubscribeResponse::DroppedAt
     /// [`CreateDataflows` command]: super::command::ComputeCommand::CreateDataflows
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
-    /// [#16247]: https://github.com/MaterializeInc/materialize/issues/16247
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
 }
 

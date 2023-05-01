@@ -131,10 +131,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// the replica must produce [`SubscribeResponse`]s that report the progress and results of the
     /// subscribes.
     ///
-    /// During the [Initialization Stage], the controller must not send `CreateDataflows` commands
-    /// that instruct the creation of dataflows exporting subscribes. This is a limitation of our
-    /// current implementation that we indend to remove ([#16247]).
-    ///
     /// [`objects_to_build`]: DataflowDescription::objects_to_build
     /// [`source_imports`]: DataflowDescription::source_imports
     /// [`index_imports`]: DataflowDescription::index_imports
@@ -142,7 +138,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`FrontierUppers`]: super::response::ComputeResponse::FrontierUppers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [Initialization Stage]: super#initialization-stage
-    /// [#16247]: https://github.com/MaterializeInc/materialize/issues/16247
     CreateDataflows(Vec<DataflowDescription<crate::plan::Plan<T>, CollectionMetadata, T>>),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
