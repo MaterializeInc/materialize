@@ -7758,11 +7758,11 @@ mod tests {
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
-    use mz_sql::catalog::{CatalogDatabase, PrivilegeMap};
+    use mz_sql::catalog::{CatalogDatabase, PrivilegeMap, SessionCatalog};
     use mz_sql::names;
     use mz_sql::names::{
-        DatabaseId, ItemQualifiers, PartialItemName, QualifiedItemName, ResolvedDatabaseSpecifier,
-        SchemaId, SchemaSpecifier,
+        DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
+        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
     use mz_sql::session::vars::VarInput;
@@ -8851,6 +8851,44 @@ mod tests {
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
             privileges.get(&new_owner).expect("new_owner is grantee")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_object_type() {
+        let debug_stash_factory = DebugStashFactory::new().await;
+        let stash = debug_stash_factory.open_debug().await;
+        let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
+            .await
+            .expect("unable to open debug catalog");
+        let catalog = catalog.for_system_session();
+
+        assert_eq!(
+            mz_sql_parser::ast::ObjectType::ClusterReplica,
+            catalog.get_object_type(&ObjectId::ClusterReplica((ClusterId::User(1), 1)))
+        );
+        assert_eq!(
+            mz_sql_parser::ast::ObjectType::Role,
+            catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_privileges() {
+        let debug_stash_factory = DebugStashFactory::new().await;
+        let stash = debug_stash_factory.open_debug().await;
+        let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
+            .await
+            .expect("unable to open debug catalog");
+        let catalog = catalog.for_system_session();
+
+        assert_eq!(
+            None,
+            catalog.get_privileges(&ObjectId::ClusterReplica((ClusterId::User(1), 1)))
+        );
+        assert_eq!(
+            None,
+            catalog.get_privileges(&ObjectId::Role(RoleId::User(1)))
         );
     }
 }
