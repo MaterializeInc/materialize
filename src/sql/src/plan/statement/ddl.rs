@@ -1462,7 +1462,10 @@ fn get_encoding_inner(
                         _ => {
                             sql_bail!(
                                 "{} is not a schema registry connection",
-                                scx.catalog.resolve_full_name(item.name())
+                                scx.catalog
+                                    .resolve_full_name(item.name())
+                                    .to_string()
+                                    .quoted()
                             )
                         }
                     };
@@ -1520,7 +1523,10 @@ fn get_encoding_inner(
                         _ => {
                             sql_bail!(
                                 "{} is not a schema registry connection",
-                                scx.catalog.resolve_full_name(item.name())
+                                scx.catalog
+                                    .resolve_full_name(item.name())
+                                    .to_string()
+                                    .quoted()
                             )
                         }
                     };
@@ -2200,7 +2206,10 @@ fn kafka_sink_builder(
                 _ => {
                     sql_bail!(
                         "{} is not a schema registry connection",
-                        scx.catalog.resolve_full_name(item.name())
+                        scx.catalog
+                            .resolve_full_name(item.name())
+                            .to_string()
+                            .quoted()
                     )
                 }
             };
