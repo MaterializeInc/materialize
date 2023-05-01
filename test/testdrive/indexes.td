@@ -272,10 +272,9 @@ sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
 > SET CLUSTER TO default
 > DROP INDEX sys_ind
 
-# TODO: re-enable test once we can run testdrive tests _not_ in unsafe mode.
-# # Test that creating indexes on objects in the mz_internal schema fails
-# ! CREATE INDEX illegal_sys_ind ON mz_internal.mz_view_keys (object_id)
-# contains:cannot create index with unstable dependencies
+# Test that creating indexes on objects in the mz_internal schema fails
+! CREATE INDEX illegal_sys_ind ON mz_internal.mz_view_keys (object_id)
+contains:cannot create index with unstable dependencies
 
 > SHOW INDEXES IN CLUSTER mz_introspection
 mz_active_peeks_per_worker_s2_primary_idx                   mz_active_peeks_per_worker                   mz_introspection    {id,worker_id}

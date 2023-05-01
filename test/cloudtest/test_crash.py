@@ -144,6 +144,15 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
 
 def test_crash_clusterd(mz: MaterializeApplication) -> None:
     populate(mz, 3)
+    mz.testdrive.run(
+        input=dedent(
+            """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET allow_unstable_dependencies = true;
+            """
+        ),
+        no_reset=True,
+    )
     mz.environmentd.sql("CREATE TABLE crash_table (f1 TEXT)")
     mz.environmentd.sql(
         "CREATE MATERIALIZED VIEW crash_view AS SELECT mz_internal.mz_panic(f1) FROM crash_table"
