@@ -17,9 +17,8 @@ they consist of rows and columns where the columns are fixed when the table is
 created but rows can be added to at will via [`INSERT`](../insert) statements.
 
 {{< warning >}}
-At the moment, tables serve a niche use case. They lack some features that are
-standard in relational databases. In most situations, you should use
-[sources](/sql/create-source) instead.
+At the moment, tables have many [known limitations](#known-limitations). In most
+situations, you should use [sources](/sql/create-source) instead.
 {{< /warning >}}
 
 [//]: # "TODO(morsapaes) Bring back When to use a table? once there's more
@@ -44,18 +43,16 @@ _col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
 
 ## Details
 
-### Restrictions
+### Known limitations
 
-Additionally, tables do not currently support:
+Tables do not currently support:
+
 - Primary keys
 - Unique constraints
 - Check constraints
-- Insert statements that refer to data in other relations, e.g.:
 
-  ```sql
-  INSERT INTO t1 SELECT * FROM t2
-  ```
-- `UPDATE ...` and `DELETE` statements
+See also the known limitations for [`INSERT`](../insert#known-limitations),
+[`UPDATE`](../update#known-limitations), and [`DELETE`](../delete#known-limitations).
 
 ### Temporary tables
 
