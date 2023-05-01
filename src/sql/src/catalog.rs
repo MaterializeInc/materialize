@@ -278,7 +278,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the object type of `object_id`.
     fn get_object_type(&self, object_id: &ObjectId) -> ObjectType;
 
-    /// Returns the name of `object_id`.
+    /// Returns the name of `object_id`. For use only in error messages and notices.
     fn get_object_name(&self, object_id: &ObjectId) -> String;
 }
 

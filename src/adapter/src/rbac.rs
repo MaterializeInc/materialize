@@ -12,7 +12,7 @@ use std::fmt::Formatter;
 use std::{fmt, iter};
 
 use itertools::Itertools;
-use mz_expr::CollectionPlan;
+use mz_expr::{CollectionPlan, MirRelationExpr};
 
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -620,12 +620,10 @@ fn generate_required_privileges(
         Plan::Peek(plan) => {
             let mut privileges =
                 generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
-            // source hasn't been fully optimized yet, so it might actually be a constant,
-            // but we mistakenly think that it's not.
-            if plan.source.as_const().is_none() {
-                if let Ok(cluster) = catalog.resolve_cluster(None) {
-                    privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
-                }
+            if let Some(privilege) =
+                generate_cluster_usage_privileges(catalog, &plan.source, role_id)
+            {
+                privileges.push(privilege);
             }
             privileges
         }
@@ -656,8 +654,6 @@ fn generate_required_privileges(
                 (update_schema_id.clone(), AclMode::USAGE, role_id),
                 (plan.id.into(), AclMode::INSERT, role_id),
             ];
-            // plan.values has not been optimized yet, so it might be constant even if
-            // `plan.values.as_const().is_none()` is true.
             privileges.extend_from_slice(&generate_read_privileges_inner(
                 catalog,
                 plan.values.depends_on().into_iter(),
@@ -675,12 +671,10 @@ fn generate_required_privileges(
             privileges.extend(generate_item_usage_privileges_inner(
                 catalog, depends_on, role_id, seen,
             ));
-            // values hasn't been fully optimized yet, so it might actually be a constant,
-            // but we mistakenly think that it's not.
-            if plan.values.as_const().is_none() {
-                if let Ok(cluster) = catalog.resolve_cluster(None) {
-                    privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
-                }
+            if let Some(privilege) =
+                generate_cluster_usage_privileges(catalog, &plan.values, role_id)
+            {
+                privileges.push(privilege);
             }
             privileges
         }
@@ -715,12 +709,10 @@ fn generate_required_privileges(
             privileges.extend(generate_item_usage_privileges_inner(
                 catalog, depends_on, role_id, seen,
             ));
-            // selection hasn't been fully optimized yet, so it might actually be a constant,
-            // but we mistakenly think that it's not.
-            if plan.selection.as_const().is_none() {
-                if let Ok(cluster) = catalog.resolve_cluster(None) {
-                    privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
-                }
+            if let Some(privilege) =
+                generate_cluster_usage_privileges(catalog, &plan.selection, role_id)
+            {
+                privileges.push(privilege);
             }
             privileges
         }
@@ -917,6 +909,22 @@ fn generate_item_usage_privileges_inner<'a>(
                 | CatalogItemType::Func => None,
             }
         })
+}
+
+fn generate_cluster_usage_privileges<'a>(
+    catalog: &'a impl SessionCatalog,
+    expr: &MirRelationExpr,
+    role_id: RoleId,
+) -> Option<(ObjectId, AclMode, RoleId)> {
+    // expr hasn't been fully optimized yet, so it might actually be a constant,
+    // but we mistakenly think that it's not.
+    if expr.as_const().is_none() {
+        if let Ok(cluster) = catalog.resolve_cluster(None) {
+            return Some((cluster.id().into(), AclMode::USAGE, role_id));
+        }
+    }
+
+    None
 }
 
 fn check_object_privileges(
