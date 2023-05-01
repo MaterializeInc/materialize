@@ -848,6 +848,15 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     safe: true,
 };
 
+pub const ALLOW_UNSTABLE_DEPENDENCIES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("allow_unstable_dependencies"),
+    value: &false,
+    description:
+        "Whether to allow catalog objects to depend on unstable items, e.g. those in the `mz_internal` schema (Materialize).",
+    internal: true,
+    safe: false,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1596,6 +1605,7 @@ impl Default for SystemVars {
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+            .with_var(&ALLOW_UNSTABLE_DEPENDENCIES)
     }
 }
 
@@ -2013,6 +2023,11 @@ impl SystemVars {
 
     pub fn keep_n_source_status_history_entries(&self) -> usize {
         *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+    }
+
+    /// Returns the `enable_rbac_checks` configuration parameter.
+    pub fn allow_unstable_dependencies(&self) -> bool {
+        *self.expect_value(&ALLOW_UNSTABLE_DEPENDENCIES)
     }
 }
 
