@@ -88,7 +88,7 @@ schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.16", features = ["serde"] }
 serde = { version = "1.0.152", features = ["alloc", "derive"] }
-serde_json = { version = "1.0.96", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
+serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.6" }
 smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
 syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
@@ -111,11 +111,11 @@ zeroize = { version = "1.5.7", features = ["serde"] }
 
 [build-dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-aws-credential-types = { version = "0.53.0", default-features = false, features = ["hardcoded-credentials"] }
-aws-sdk-sts = { version = "0.23.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sig-auth = { version = "0.53.0", default-features = false, features = ["sign-eventstream"] }
-aws-sigv4 = { version = "0.53.0", features = ["sign-eventstream"] }
-aws-smithy-http = { git = "https://github.com/parker-timmerman/smithy-rs.git", branch = "v0.53.2", default-features = false, features = ["event-stream", "rt-tokio"] }
+aws-credential-types = { version = "0.55.1", default-features = false, features = ["hardcoded-credentials"] }
+aws-sdk-sts = { version = "0.26.0", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sig-auth = { version = "0.55.1", default-features = false, features = ["sign-eventstream"] }
+aws-sigv4 = { version = "0.55.1", features = ["sign-eventstream"] }
+aws-smithy-http = { version = "0.55.2", default-features = false, features = ["event-stream", "rt-tokio"] }
 axum = { version = "0.6.7", features = ["headers", "ws"] }
 base64 = { version = "0.13.1", features = ["alloc"] }
 bstr = { version = "0.2.14" }
@@ -185,7 +185,7 @@ schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.16", features = ["serde"] }
 serde = { version = "1.0.152", features = ["alloc", "derive"] }
-serde_json = { version = "1.0.96", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
+serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.6" }
 smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
 syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
