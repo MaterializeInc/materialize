@@ -21,7 +21,7 @@ s2 mz_introspection true false false false
 query TBBBB
 SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 'u%'
 ----
-materialize  true  false  false  false
+materialize  true  false  true  true
 
 # Give materialize the CREATEROLE attribute.
 simple conn=mz_system,user=mz_system
@@ -56,7 +56,7 @@ SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles
 ----
 rj  true  false  false  false
 mz_system  true  true  true  true
-materialize  true  true  false  false
+materialize  true  true  true  true
 mz_introspection  true  false  false  false
 
 # Dropping multiple roles should not have any effect if one of the role names

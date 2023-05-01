@@ -189,6 +189,7 @@ SELECT * FROM database_privileges
 ----
 materialize  =U/mz_system
 materialize  mz_system=UC/mz_system
+materialize  materialize=C/mz_system
 
 query TT
 SELECT * FROM schema_privileges ORDER BY name
@@ -203,12 +204,14 @@ pg_catalog          =U/mz_system
 pg_catalog          mz_system=UC/mz_system
 public              =U/mz_system
 public              mz_system=UC/mz_system
+public              materialize=C/mz_system
 
 query TT
 SELECT * FROM cluster_privileges ORDER BY name
 ----
 default           =U/mz_system
 default           mz_system=UC/mz_system
+default           materialize=C/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_introspection=UC/mz_system
@@ -315,6 +318,7 @@ SELECT * FROM schema_privileges WHERE name = 'public' ORDER BY name
 public  =U/mz_system
 public  =U/materialize
 public  mz_system=UC/mz_system
+public  materialize=C/mz_system
 public  materialize=UC/materialize
 
 statement ok
