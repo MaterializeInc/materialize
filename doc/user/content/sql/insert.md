@@ -33,6 +33,7 @@ The optional `RETURNING` clause causes `INSERT` to return values based on each i
 
 ### Known limitations
 
+* `INSERT ... SELECT` can reference [user-created tables](../create-table) but not [sources](../create-source).
 * **Low performance.** While processing an `INSERT ... SELECT` statement,
   Materialize cannot process other `INSERT`, `UPDATE`, or `DELETE` statements.
 
