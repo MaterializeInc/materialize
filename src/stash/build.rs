@@ -138,8 +138,10 @@ fn main() -> anyhow::Result<()> {
         })
         .collect();
 
-    // After validating our hashes we'll re-write the file.
+    // After validating our hashes we'll re-write the file if any new protos
+    // have been added.
     let mut to_persist: Vec<ProtoHash> = Vec::new();
+    let mut any_new = false;
 
     // Check the persisted hashes against what we just read in from disk.
     for (name, hash) in protos {
@@ -149,7 +151,10 @@ fn main() -> anyhow::Result<()> {
                 anyhow::bail!(error_message(og_hash, hash, name));
             }
             // Found a proto file on disk that we didn't have persisted, we'll just persist it.
-            None => to_persist.push(ProtoHash { name, md5: hash }),
+            None => {
+                to_persist.push(ProtoHash { name, md5: hash });
+                any_new = true;
+            }
             // We match!
             Some(_) => to_persist.push(ProtoHash { name, md5: hash }),
         }
@@ -160,14 +165,20 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("Have persisted hashes, but no files on disk? {persisted:#?}");
     }
 
-    // Write the hashes back out to disk.
-    let mut file = fs::File::options()
-        .write(true)
-        .truncate(true)
-        .open(PROTO_HASHES)
-        .context("opening hashes file to write")?;
-    serde_json::to_writer_pretty(&mut file, &to_persist).context("persisting hashes")?;
-    write!(&mut file, "\n").context("writing newline")?;
+    // Write the hashes back out to disk if and only if there are new protos. We
+    // don't do this unconditionally or we'll get stuck in a rebuild loop:
+    // executing this build script will change the mtime on the hashes file,
+    // which will force the next compile to rebuild the crate, even if nothing
+    // else has changed.
+    if any_new {
+        let mut file = fs::File::options()
+            .write(true)
+            .truncate(true)
+            .open(PROTO_HASHES)
+            .context("opening hashes file to write")?;
+        serde_json::to_writer_pretty(&mut file, &to_persist).context("persisting hashes")?;
+        write!(&mut file, "\n").context("writing newline")?;
+    }
 
     // Generate protos!
     let paths: Vec<_> = to_persist

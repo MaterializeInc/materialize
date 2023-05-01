@@ -79,6 +79,14 @@ CREATE TABLE "таблица" ("колона" TEXT);
 ALTER TABLE "таблица" REPLICA IDENTITY FULL;
 INSERT INTO "таблица" VALUES ('стойност');
 
+CREATE TABLE """literal_quotes""" (a TEXT);
+ALTER TABLE """literal_quotes""" REPLICA IDENTITY FULL;
+INSERT INTO """literal_quotes""" VALUES ('v');
+
+CREATE TABLE "select" (a TEXT);
+ALTER TABLE "select" REPLICA IDENTITY FULL;
+INSERT INTO "select" VALUES ('v');
+
 CREATE TABLE escaped_text_table (f1 TEXT, f2 TEXt);
 ALTER TABLE escaped_text_table REPLICA IDENTITY FULL;
 INSERT INTO escaped_text_table VALUES ('escaped\ntext\twith\nnewlines\tand\ntabs', 'more\tescaped\ntext');
@@ -246,7 +254,9 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
     "таблица",
     "escaped_text_table",
     conflict_schema.conflict_table AS public.conflict_table,
-    "space table"
+    "space table",
+    """literal_quotes""",
+    "select"
   );
 
 $ set-regex match=\d+ replacement=<NUMBER>
@@ -263,9 +273,11 @@ no_replica_identity   subsource <null>
 nonpk_table           subsource <null>
 nulls_table           subsource <null>
 pk_table              subsource <null>
+select                subsource <null>
 "space table"         subsource <null>
 trailing_space_nopk   subsource <null>
 trailing_space_pk     subsource <null>
+"\"literal_quotes\""  subsource <null>
 types_table           subsource <null>
 utf<NUMBER>_table     subsource <null>
 таблица               subsource <null>
@@ -350,6 +362,12 @@ contains: SOURCE materialize.public.conflict_table is a subsource and cannot be 
 
 > SELECT * FROM conflict_table;
 234
+
+> SELECT * FROM """literal_quotes"""
+v
+
+> SELECT * FROM "select"
+v
 
 #
 # Confirm that the new sources can be used to build upon

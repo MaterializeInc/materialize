@@ -165,7 +165,7 @@ pub struct Config {
     /// The PostgreSQL URL for the adapter stash.
     pub adapter_stash_url: String,
 
-    // === Cloud options. ===
+    // === Bootstrap options. ===
     /// The cloud ID of this environment.
     pub environment_id: EnvironmentId,
     /// Availability zones in which storage and compute resources may be
@@ -203,6 +203,8 @@ pub struct Config {
     /// An invertible map from system parameter names to LaunchDarkly feature
     /// keys to use when propagating values from the latter to the former.
     pub launchdarkly_key_map: BTreeMap<String, String>,
+    /// What role, if any, should be initially created with elevated privileges.
+    pub bootstrap_role: Option<String>,
 
     // === Tracing options. ===
     /// The metrics registry to use.
@@ -316,6 +318,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 .choose(&mut rand::thread_rng())
                 .cloned()
                 .unwrap_or_else(|| mz_adapter::DUMMY_AVAILABILITY_ZONE.into()),
+            bootstrap_role: config.bootstrap_role,
         },
     )
     .await?;

@@ -919,15 +919,11 @@ pub fn plan_hypothetical_cast(
 
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
-    Some(
-        plan_cast(&ecx, ccx, col_expr, to)
-            .ok()?
-            .lower_uncorrelated()
-            .expect(
-                "lower_uncorrelated should not fail given that there is no correlation \
-                in the input col_expr",
-            ),
-    )
+    plan_cast(&ecx, ccx, col_expr, to)
+        .ok()?
+        // TODO(jkosh44) Support casts that have correlated implementations.
+        .lower_uncorrelated()
+        .ok()
 }
 
 /// Plans a cast between [`ScalarType`]s, specifying which types of casts are

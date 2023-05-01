@@ -929,3 +929,9 @@ query T
 SELECT c::int[] FROM array_t2;
 ----
 NULL
+
+query error CAST does not support casting from mz_aclitem\[\] to text\[\]
+SELECT privileges::text[] FROM mz_views;
+
+query error CAST does not support casting from regproc list to text list
+SELECT (LIST[1299::regproc]::regproc list)::text list

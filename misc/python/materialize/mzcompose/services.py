@@ -89,6 +89,7 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
+            "BOOTSTRAP_ROLE=materialize",
             *environment_extra,
         ]
 

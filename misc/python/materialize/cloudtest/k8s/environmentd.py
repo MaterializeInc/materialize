@@ -180,6 +180,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                     release_mode=self.release_mode,
                 ),
             ]
+        if self._meets_minimum_version("0.53.0"):
+            args += [
+                "--bootstrap-role",
+                "materialize",
+            ]
         container = V1Container(
             name="environmentd",
             image=self.image(
