@@ -210,7 +210,7 @@ impl Coordinator {
         if !session.user().is_superuser() {
             match self.validate_resource_limit(
                 self.active_conns.len(),
-                i64::try_from(self.active_conns.len() + 1).unwrap(),
+                i64::try_from(self.active_conns.len() + 1).expect("safe unless the map is too big"),
                 SystemVars::max_connections,
                 "a connection",
                 "max connections",
