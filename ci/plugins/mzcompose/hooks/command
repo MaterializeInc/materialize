@@ -60,6 +60,7 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose cp materialized:/usr/local/bin/environmentd coverage/ || true
     mzcompose cp materialized:/usr/local/bin/clusterd coverage/ || true
     mzcompose cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
+    mzcompose cp testdrive:/usr/local/bin/testdrive coverage/ || true
 fi
 
 ci_uncollapsed_heading ":docker: Running \`mzcompose run ${run_args[*]}\`"
