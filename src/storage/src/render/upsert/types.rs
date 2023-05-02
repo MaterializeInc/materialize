@@ -17,8 +17,6 @@ use mz_ore::collections::HashMap;
 
 use super::{UpsertKey, UpsertValue};
 use crate::source::metrics::UpsertSharedMetrics;
-use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
-use mz_storage_client::client::SourceStatisticsUpdate;
 
 /// A trait that defines the fundamental primitives required by a state-backing of
 /// the `upsert` operator.
@@ -90,44 +88,29 @@ impl UpsertState for InMemoryHashMap {
         Ok(size)
     }
 }
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct Stats {
-    count: u64,
-    diff_records: i64,
-    diff_bytes: i64,
-}
 
 /// An `UpsertState` wrapper that reports basic metrics about the usage of the `UpsertState`.
 pub struct StatsState<S> {
     inner: S,
     metrics: Arc<UpsertSharedMetrics>,
-    source_metrics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
 }
 
 impl<S> StatsState<S> {
-    pub(crate) fn new(
-        inner: S,
-        metrics: Arc<UpsertSharedMetrics>,
-        source_metrics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
-    ) -> Self {
-        Self {
-            inner,
-            metrics,
-            source_metrics,
-        }
+    pub(crate) fn new(inner: S, metrics: Arc<UpsertSharedMetrics>) -> Self {
+        Self { inner, metrics }
     }
 }
 
-impl<S> StatsState<S>
+#[async_trait::async_trait(?Send)]
+impl<S> UpsertState for StatsState<S>
 where
     S: UpsertState,
 {
-    pub(crate) async fn multi_put<'r, P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
+    async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, Option<UpsertValue>)>,
     {
         let now = Instant::now();
-
         let size = self.inner.multi_put(puts).await?;
 
         self.metrics
@@ -138,11 +121,7 @@ where
         Ok(size)
     }
 
-    pub(crate) async fn multi_get<'r, G, R>(
-        &mut self,
-        gets: G,
-        results_out: R,
-    ) -> Result<u64, anyhow::Error>
+    async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
         R: IntoIterator<Item = &'r mut Option<UpsertValue>>,

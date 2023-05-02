@@ -36,7 +36,7 @@ use mz_storage_client::types::instances::StorageInstanceContext;
 use mz_storage_client::types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 
-use self::types::{InMemoryHashMap, StatsState};
+use self::types::{InMemoryHashMap, StatsState, UpsertState};
 
 mod rocksdb;
 mod types;
@@ -283,11 +283,7 @@ where
         consolidation::consolidate(&mut snapshot);
 
         // The main key->value used to store previous values.
-        let mut state = StatsState::new(
-            state().await,
-            upsert_shared_metrics,
-            source_config.source_statistics.clone(),
-        );
+        let mut state = StatsState::new(state().await, upsert_shared_metrics);
 
         // A re-usable buffer of changes, per key. This is
         // an `IndexMap` because it has to be `drain`-able
