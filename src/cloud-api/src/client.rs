@@ -22,6 +22,7 @@ use serde::{de::DeserializeOwned, Deserialize};
 use crate::error::{ApiError, Error};
 
 /// Represents the structure for the client.
+#[allow(dead_code)]
 pub struct Client {
     pub(crate) inner: reqwest::Client,
     pub(crate) auth_client: mz_frontegg_client::client::Client,

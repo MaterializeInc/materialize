@@ -96,7 +96,7 @@ impl Client {
             .build_request(Method::POST, ["api", "environmentassignment"], &subdomain)
             .await?;
         let req = req.json(&body);
-        Ok(self.send_request(req).await?)
+        self.send_request(req).await
     }
 
     /// Deletes an environment in a particular region for the current user
@@ -105,6 +105,6 @@ impl Client {
         let req = self
             .build_request(Method::DELETE, ["api", "environmentassignment"], &subdomain)
             .await?;
-        Ok(self.send_request(req).await?)
+        self.send_request(req).await
     }
 }
