@@ -30,8 +30,8 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope,
-    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    Expr, Format, Ident, KeyConstraint, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput,
+    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
     UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
@@ -2089,6 +2089,7 @@ pub struct SubscribeStatement<T: AstInfo> {
     pub options: Vec<SubscribeOption<T>>,
     pub as_of: Option<AsOf<T>>,
     pub up_to: Option<Expr<T>>,
+    pub output: SubscribeOutput<T>,
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
@@ -2108,6 +2109,7 @@ impl<T: AstInfo> AstDisplay for SubscribeStatement<T> {
             f.write_str(" UP TO ");
             f.write_node(up_to);
         }
+        f.write_str(&self.output);
     }
 }
 impl_display_t!(SubscribeStatement);

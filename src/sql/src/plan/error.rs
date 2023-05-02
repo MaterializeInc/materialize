@@ -178,6 +178,8 @@ pub enum PlanError {
     PostgresDatabaseMissingFilteredSchemas {
         schemas: Vec<String>,
     },
+    InvalidKeysInSubscribeEnvelopeUpsert,
+    InvalidOrderByInSubscribeWithinTimestampOrderBy,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -269,6 +271,12 @@ impl PlanError {
             }
             Self::DuplicateSubsourceReference { .. } => {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
+            }
+            Self::InvalidKeysInSubscribeEnvelopeUpsert => {
+                Some("All keys must be columns on the underlying relation.".into())
+            }
+            Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
+                Some("All order bys must be output columns.".into())
             }
             _ => None,
         }
@@ -450,6 +458,12 @@ impl fmt::Display for PlanError {
             },
             Self::PostgresDatabaseMissingFilteredSchemas { schemas} => {
                 write!(f, "FOR SCHEMAS (..) included {}, but PostgreSQL database has no schema with that name", itertools::join(schemas.iter(), ", "))
+            }
+            Self::InvalidKeysInSubscribeEnvelopeUpsert => {
+                write!(f, "invalid keys in SUBSCRIBE ENVELOPE UPSERT (KEY (..))")
+            }
+            Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
+                write!(f, "invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY")
             }
         }
     }

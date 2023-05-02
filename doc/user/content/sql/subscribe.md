@@ -1,6 +1,6 @@
 ---
 title: "SUBSCRIBE"
-description: "`SUBSCRIBE` streams updates from a source, table, or view as they occur."
+description: "`SUBSCRIBE` streams updates from a source, table, view, or materialized view as they occur."
 menu:
   main:
     parent: commands
@@ -8,7 +8,8 @@ aliases:
   - /sql/tail
 ---
 
-`SUBSCRIBE` streams updates from a source, table, or view as they occur.
+`SUBSCRIBE` streams updates from a source, table, view, or materialized view as
+they occur.
 
 ## Conceptual framework
 
@@ -30,10 +31,12 @@ You can use `SUBSCRIBE` to:
 
 {{< diagram "subscribe-stmt.svg" >}}
 
-| Field                  | Use                                                                                                                                      |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| _object_name_          | The name of the source, table, or view that you want to subscribe to.                                                                            |
-| _select_stmt_          | The [`SELECT` statement](../select) whose output you want to subscribe to.                                                                       |
+| Field                           | Use                                                                                                                                      |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| _object_name_                   | The name of the source, table, or view that you want to subscribe to.                                                                    |
+| _select_stmt_                   | The [`SELECT` statement](../select) whose output you want to subscribe to.
+| **ENVELOPE UPSERT**             | Use the upsert envelope, which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **WITHIN TIMESTAMP...ORDER BY** | Use an `ORDER BY` clause to sort the subscription output within a timestamp. For more information, see [Modifying the output format](#modifying-the-output-format). |
 
 ### `WITH` options
 
@@ -287,6 +290,124 @@ After all the rows from the [`SNAPSHOT`](#snapshot) have been transmitted, the u
 If your row has a unique column key, it is possible to map the update to its corresponding origin row; if the key is unknown, you can use the output of `hash(columns_values)` instead.
 
 In the example above, `Column 1` acts as the column key that uniquely identifies the origin row the update refers to; in case this was unknown, hashing the values from `Column 1` to `Column N` would identify the origin row.
+
+[//]: # "TODO(morsapaes) This page is now complex enough that we should
+restructure it using the same feature-oriented approach as CREATE SOURCE/SINK.
+See #18829 for the design doc."
+
+### Modifying the output format
+
+{{< alpha />}}
+
+#### `ENVELOPE UPSERT`
+
+To modify the output of `SUBSCRIBE` to support upserts, use `ENVELOPE UPSERT`.
+This clause allows you to specify a `KEY` that Materialize uses to interpret
+the rows as a series of inserts, updates and deletes within each distinct
+timestamp.
+
+The output columns are reordered so that all the key columns come before the
+value columns.
+
+* Using this modifier, the output rows will have the following
+structure:
+
+   ```sql
+   SUBSCRIBE mview ENVELOPE UPSERT (KEY (key));
+   ```
+
+   ```sql
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   100          | upsert   | 1    | 2
+   100          | upsert   | 2    | 4
+   ```
+
+* For inserts and updates, the value columns for each key are set to the
+  resulting value of the series of operations, and `mz_state` is set to
+  `upsert`.
+
+  _Insert_
+
+  ```sql
+   -- at time 200, update key=1's value to 10
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   ...
+   200          | upsert   | 1    | 10
+   ...
+  ```
+
+  _Update_
+
+  ```sql
+   -- at time 300, add a new row with key=3, value=6
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   ...
+   300          | upsert   | 3    | 6
+   ...
+  ```
+
+* If only deletes occur within a timestamp, the value columns for each key are
+  set to `NULL`, and `mz_state` is set to `delete`.
+
+  _Delete_
+
+  ```sql
+   -- at time 400, delete all rows
+   mz_timestamp | mz_state | key  | value
+   -------------|----------|------|--------
+   ...
+   400          | delete   | 1    | NULL
+   400          | delete   | 2    | NULL
+   400          | delete   | 3    | NULL
+   ...
+  ```
+
+* Only use `ENVELOPE UPSERT` when there is at most one live value per key.
+  If materialize detects that a given key has multiple values, it will generate
+  an update with `mz_state` set to `"key_violation"`, the problematic key, and all
+  the values nulled out. Materialize is not guaranteed to detect this case,
+  please don't rely on it.
+
+  _Key violation_
+
+  ```sql
+   -- at time 500, introduce a key_violation
+   mz_timestamp | mz_state        | key  | value
+   -------------|-----------------|------|--------
+   ...
+   500          | key_violation   | 1    | NULL
+   ...
+  ```
+
+* If [`PROGRESS`](#progress) is set, Materialize also returns the `mz_progressed`
+column. Each progress row will have a `NULL` key and a `NULL` value.
+
+#### `WITHIN TIMESTAMP ORDER BY`
+
+To modify the ordering of the output of `SUBSCRIBE`, use `WITHIN TIMESTAMP ORDER
+BY`. This clause allows you to specify an `ORDER BY` expression which is used
+to sort the rows within each distinct timestamp.
+
+* The `ORDER BY` expression can take any column in the underlying object or
+  query, including `mz_diff`.
+
+   ```sql
+   SUBSCRIBE mview WITHIN TIMESTAMP ORDER BY c1, c2 DESC NULLS LAST, mz_diff;
+
+   mz_timestamp | mz_diff | c1            | c2   | c3
+   -------------|---------|---------------|------|-----
+   100          | +1      | 1             | 20   | foo
+   100          | -1      | 1             | 2    | bar
+   100          | +1      | 1             | 2    | boo
+   100          | +1      | 1             | 0    | data
+   100          | -1      | 2             | 0    | old
+   100          | +1      | 2             | 0    | new
+   ```
+
+* If [`PROGRESS`](#progress) is set, progress messages are unaffected.
 
 ### Dropping the `counter` load generator source
 

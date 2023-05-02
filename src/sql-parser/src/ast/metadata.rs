@@ -41,7 +41,8 @@ use crate::ast::{
 pub trait AstInfo: Clone {
     /// The type used for nested statements.
     type NestedStatement: AstDisplay + Clone + Hash + Debug + Eq;
-    /// The type used for table references.
+    /// The type used for item references. Items are the subset of objects that are namespaced by a
+    /// database and schema.
     type ItemName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for schema names.
     type SchemaName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
@@ -55,7 +56,7 @@ pub trait AstInfo: Clone {
     type CteId: Clone + Hash + Debug + Eq + Ord;
     /// The type used for role references.
     type RoleName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
-    /// They type used for any object names.
+    /// They type used for any object names. Objects are the superset of all objects in Materialize.
     type ObjectName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
 }
 

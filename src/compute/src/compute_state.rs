@@ -391,8 +391,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
 
             match reported_frontier {
                 ReportedFrontier::Reported(old_frontier) => {
-                    assert!(PartialOrder::less_equal(old_frontier, new_frontier));
-                    if old_frontier == new_frontier {
+                    // In steady state it is not expected for `old_frontier` to be beyond
+                    // `new_frontier`. However, during reconcilation this can happen as we
+                    // artificially advance the frontiers of to-be-dropped collections to disable
+                    // frontier reporting for them.
+                    if !PartialOrder::less_than(old_frontier, new_frontier) {
                         return; // nothing new to report
                     }
                 }
@@ -437,19 +440,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     pub fn report_dropped_collections(&mut self) {
         let dropped_collections = std::mem::take(&mut self.compute_state.dropped_collections);
 
-        // TODO(teske): It is, in fact, wrong to report the dropping of a collection before it has
+        // TODO(#16275): It is, in fact, wrong to report the dropping of a collection before it has
         // advanced to the empty frontier by announcing that it has advanced to the empty
         // frontier. We should introduce a new compute response variant that has the right
         // semantics.
-        let new_uppers: Vec<_> = dropped_collections
-            .into_iter()
-            .filter(|id| {
-                // The collection might have been temporarily dropped and re-created during
-                // reconciliation. In this case, announcing its removal would confuse the controller.
-                !self.compute_state.collection_exists(*id)
-            })
-            .map(|id| (id, Antichain::new()))
-            .collect();
+        let mut new_uppers = Vec::with_capacity(dropped_collections.len());
+        for id in dropped_collections {
+            // Sanity check: A collection that was dropped should not exist.
+            assert!(
+                !self.compute_state.collection_exists(id),
+                "tried to report a dropped collection that still exists: {id}"
+            );
+            new_uppers.push((id, Antichain::new()));
+        }
 
         if !new_uppers.is_empty() {
             self.send_compute_response(ComputeResponse::FrontierUppers(new_uppers));

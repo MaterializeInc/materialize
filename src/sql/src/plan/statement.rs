@@ -747,6 +747,30 @@ impl<'a> StatementContext<'a> {
         self.require_var_or_unsafe_mode(SystemVars::enable_format_json, "`FORMAT JSON`")
     }
 
+    pub fn require_envelope_upsert_in_subscribe(&self) -> Result<(), PlanError> {
+        if !self.unsafe_mode()
+            && !self
+                .catalog
+                .system_vars()
+                .enable_envelope_upsert_in_subscribe()
+        {
+            sql_bail!("`ENVELOPE UPSERT (KEY (..))` is not enabled")
+        }
+        Ok(())
+    }
+
+    pub fn require_within_timestamp_order_by_in_subscribe(&self) -> Result<(), PlanError> {
+        if !self.unsafe_mode()
+            && !self
+                .catalog
+                .system_vars()
+                .enable_within_timestamp_order_by()
+        {
+            sql_bail!("`WITHIN TIMESTAMP ORDER BY ..` is not enabled")
+        }
+        Ok(())
+    }
+
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {
         let param_types = self.param_types.into_inner();
         let mut out = vec![];

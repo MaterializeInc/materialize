@@ -91,6 +91,7 @@ pub struct PlannedQuery<E> {
     pub expr: E,
     pub desc: RelationDesc,
     pub finishing: RowSetFinishing,
+    pub scope: Scope,
 }
 
 /// Plans a top-level query, returning the `HirRelationExpr` describing the query
@@ -132,6 +133,7 @@ pub fn plan_root_query(
         expr,
         desc,
         finishing,
+        scope,
     })
 }
 
@@ -363,6 +365,7 @@ pub fn plan_insert_query(
                 offset: 0,
                 project: (0..desc_arity).collect(),
             },
+            scope,
         }
     };
 
@@ -2199,7 +2202,7 @@ fn plan_group_by_expr<'a>(
 ///
 /// Returns the determined column orderings and a list of scalar expressions
 /// that must be mapped onto the underlying relation expression.
-fn plan_order_by_exprs(
+pub(crate) fn plan_order_by_exprs(
     ecx: &ExprContext,
     order_by_exprs: &[OrderByExpr<Aug>],
     output_columns: &[(usize, &ColumnName)],
@@ -4120,7 +4123,10 @@ pub fn coerce_homogeneous_exprs(
 
 /// Creates a `ColumnOrder` from an `OrderByExpr` and column index.
 /// Column index is specified by the caller, but `desc` and `nulls_last` is figured out here.
-fn resolve_desc_and_nulls_last<T: AstInfo>(obe: &OrderByExpr<T>, column: usize) -> ColumnOrder {
+pub(crate) fn resolve_desc_and_nulls_last<T: AstInfo>(
+    obe: &OrderByExpr<T>,
+    column: usize,
+) -> ColumnOrder {
     let desc = !obe.asc.unwrap_or(true);
     ColumnOrder {
         column,
