@@ -736,6 +736,13 @@ impl<'a> StatementContext<'a> {
         Ok(())
     }
 
+    pub fn require_upsert_source_disk_available(&self) -> Result<(), PlanError> {
+        self.require_var_or_unsafe_mode(
+            SystemVars::upsert_source_disk_available,
+            "`WITH (DISK)` syntax",
+        )
+    }
+
     pub fn require_with_mutually_recursive(&self) -> Result<(), PlanError> {
         self.require_var_or_unsafe_mode(
             SystemVars::enable_with_mutually_recursive,

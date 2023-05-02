@@ -520,6 +520,24 @@ const ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// The default for the `DISK` option in `UPSERT` sources.
+const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("upsert_source_disk_default"),
+    value: &false,
+    description: "The default for the `DISK` option in `UPSERT` sources.",
+    internal: true,
+    safe: true,
+};
+
+/// Whether or not the `DISK` option in available `UPSERT` sources.
+const UPSERT_SOURCE_DISK_AVAILABLE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("upsert_source_disk_available"),
+    value: &false,
+    description: "Whether or not the `DISK` option in available `UPSERT` sources.",
+    internal: true,
+    safe: true,
+};
+
 /// Controls the connect_timeout setting when connecting to PG via replication.
 const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_connect_timeout"),
@@ -1489,6 +1507,8 @@ impl Default for SystemVars {
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
+            .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
+            .with_var(&UPSERT_SOURCE_DISK_AVAILABLE)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
@@ -1732,6 +1752,16 @@ impl SystemVars {
     /// Returns the `enable_multi_worker_storage_persist_sink` configuration parameter.
     pub fn enable_multi_worker_storage_persist_sink(&self) -> bool {
         *self.expect_value(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
+    }
+
+    /// Returns the `upsert_source_disk_default` configuration parameter.
+    pub fn upsert_source_disk_default(&self) -> bool {
+        *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
+    }
+
+    /// Returns the `upsert_source_disk_available` configuration parameter.
+    pub fn upsert_source_disk_available(&self) -> bool {
+        *self.expect_value(&UPSERT_SOURCE_DISK_AVAILABLE)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
