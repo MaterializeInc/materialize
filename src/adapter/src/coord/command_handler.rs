@@ -22,7 +22,9 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
-use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
+use mz_sql::ast::{
+    CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
+};
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
@@ -316,6 +318,22 @@ impl Coordinator {
             .query_total
             .with_label_values(&[session_type, stmt_type])
             .inc();
+        match &stmt {
+            Statement::Subscribe(SubscribeStatement { output, .. })
+            | Statement::Copy(CopyStatement {
+                relation: CopyRelation::Subscribe(SubscribeStatement { output, .. }),
+                ..
+            }) => {
+                self.metrics
+                    .subscribe_outputs
+                    .with_label_values(&[
+                        session_type,
+                        metrics::subscribe_output_label_value(output),
+                    ])
+                    .inc();
+            }
+            _ => {}
+        }
 
         let params = portal.parameters.clone();
         self.handle_execute_inner(stmt, params, session, tx).await
