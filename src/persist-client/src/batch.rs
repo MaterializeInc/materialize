@@ -734,12 +734,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     index,
                 };
 
-                let start = Instant::now();
-                let (stats, buf) = cpu_heavy_runtime
+                let (stats, (buf, encode_time)) = cpu_heavy_runtime
                     .spawn_named(|| "batch::encode_part", async move {
-                        // TODO(mfp): Step-breakdown timing metrics for batch
-                        // construction (a la compaction and gc).
                         let stats = if stats_collection_enabled {
+                            let stats_start = Instant::now();
                             // TODO(mfp): For now, if stats collections fails,
                             // log it with `error!` so it shows up in Sentry,
                             // but don't crash the process. Turn this into a
@@ -756,7 +754,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                 Ok(x) if x.is_empty() => None,
                                 Ok(mut x) => {
                                     x.key.trim_to_budget(stats_budget, force_keep_stats_col);
-                                    Some(Arc::new(x))
+                                    Some((Arc::new(x), stats_start.elapsed()))
                                 }
                                 Err(err) => {
                                     error!("failed to construct part stats: {}", err);
@@ -767,12 +765,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             None
                         };
 
+                        let encode_start = Instant::now();
                         let mut buf = Vec::new();
                         batch.encode(&mut buf);
 
                         // Drop batch as soon as we can to reclaim its memory.
                         drop(batch);
-                        (stats, Bytes::from(buf))
+                        (stats, (Bytes::from(buf), encode_start.elapsed()))
                     })
                     .instrument(debug_span!("batch::encode_part"))
                     .await
@@ -783,7 +782,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     .codecs
                     .batch
                     .encode_seconds
-                    .inc_by(start.elapsed().as_secs_f64());
+                    .inc_by(encode_time.as_secs_f64());
 
                 let start = Instant::now();
                 let payload_len = buf.len();
@@ -796,6 +795,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
                 batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
                 batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
+                let stats = stats.map(|(stats, stats_step_timing)| {
+                    batch_metrics
+                        .step_stats
+                        .inc_by(stats_step_timing.as_secs_f64());
+                    stats
+                });
                 (payload_len, stats)
             }
             .instrument(write_span),

@@ -644,6 +644,7 @@ pub struct BatchWriteMetrics {
 
     pub(crate) step_consolidation: Counter,
     pub(crate) step_columnar_encoding: Counter,
+    pub(crate) step_stats: Counter,
     pub(crate) step_part_writing: Counter,
 }
 
@@ -676,6 +677,10 @@ impl BatchWriteMetrics {
             step_columnar_encoding: registry.register(metric!(
                 name: format!("mz_persist_{}_step_columnar_encoding", name),
                 help: format!("time spent columnar encoding {} updates", name),
+            )),
+            step_stats: registry.register(metric!(
+                name: format!("mz_persist_{}_step_stats", name),
+                help: format!("time spent computing {} update stats", name),
             )),
             step_part_writing: registry.register(metric!(
                 name: format!("mz_persist_{}_step_part_writing", name),
