@@ -26,7 +26,7 @@ use crate::{
 /// This should likely be moved to a function annotation in the future.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum Monotonic {
-    /// Monotonic in this argument.
+    /// Monotonic in this argument. (Either increasing or decreasing, non-strict.)
     Yes,
     /// We haven't classified this one yet. (Conservatively treated as "no", but a distinct
     /// enum so it's easy to tell whether someone's thought about a particular function yet.)
@@ -75,6 +75,12 @@ fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
     }
 }
 
+/// Describes the pointwise behaviour of each of the two arguments of the function.
+/// (ie. the first element of the tuple is `Monotonic::Yes` if, for any value of the second argument
+/// increasing the first argument causes the result of the function to either monotonically
+/// increase or decrease.) For example, subtraction is considered monotonic in both arguments:
+/// in the first because `a - C` increases monotonically as `a` increases, and in the second because
+/// `C - b` decreases monotonically as `b` increases.
 fn binary_monotonic(func: &BinaryFunc) -> (Monotonic, Monotonic) {
     use BinaryFunc::*;
     use Monotonic::*;
@@ -94,6 +100,9 @@ fn binary_monotonic(func: &BinaryFunc) -> (Monotonic, Monotonic) {
     }
 }
 
+/// Describes the pointwise behaviour of each of the arguments to our variadic function.
+/// (ie. returns `Monotonic::Yes` if, for each argument of the function, increasing that argument
+/// causes the result of the function to either monotonically increase or decrease.)
 fn variadic_monotonic(func: &VariadicFunc) -> Monotonic {
     use Monotonic::*;
     use VariadicFunc::*;
