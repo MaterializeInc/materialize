@@ -95,6 +95,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropHistogram;
 
 /// An error using this RocksDB wrapper.
@@ -265,7 +266,14 @@ where
 
         let instance_path = instance_path.to_owned();
 
-        std::thread::spawn(move || rocksdb_core_loop(options, instance_path, rx, metrics));
+        let (creation_error_tx, creation_error_rx) = oneshot::channel();
+        std::thread::spawn(move || {
+            rocksdb_core_loop(options, instance_path, rx, metrics, creation_error_tx)
+        });
+
+        if let Ok(creation_error) = creation_error_rx.await {
+            return Err(creation_error);
+        }
 
         Ok(Self {
             tx,
@@ -385,12 +393,23 @@ fn rocksdb_core_loop<K, V, M>(
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     metrics: M,
+    creation_error_tx: oneshot::Sender<Error>,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
 {
-    let db: DB = DB::open(&options.as_rocksdb_options(), &instance_path).unwrap();
+    let db: DB = match DB::open(&options.as_rocksdb_options(), &instance_path) {
+        Ok(db) => {
+            drop(creation_error_tx);
+            db
+        }
+        Err(e) => {
+            // Communicate the error back to `new`.
+            let _ = creation_error_tx.send(Error::RocksDB(e));
+            return;
+        }
+    };
     let wo = options.as_rocksdb_write_options();
 
     while let Some(cmd) = cmd_rx.blocking_recv() {
@@ -489,6 +508,12 @@ fn rocksdb_core_loop<K, V, M>(
     db.cancel_all_background_work(true);
     drop(db);
 
-    // TODO(guswynn): retry if there is a failure
-    DB::destroy(&RocksDBOptions::default(), instance_path).unwrap();
+    // Note that we don't retry, as we already may race here with a source being restarted.
+    if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path) {
+        tracing::error!(
+            "failed to cleanup rocksdb dir at {}: {}",
+            instance_path.display(),
+            e.display_with_causes(),
+        );
+    }
 }
