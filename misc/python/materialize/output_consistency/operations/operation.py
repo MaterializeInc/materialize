@@ -14,6 +14,8 @@ from materialize.output_consistency.operations.operation_args_validator import (
 )
 from materialize.output_consistency.operations.operation_param import OperationParam
 
+EXPRESSION_PLACEHOLDER = "$"
+
 
 class OperationWithNParams:
     def __init__(
@@ -33,6 +35,11 @@ class OperationWithNParams:
         self.return_type_group = return_type_group
         self.commutative = commutative
         self.args_validators: set[OperationArgsValidator] = args_validators
+
+        if self.param_count != self.pattern.count(EXPRESSION_PLACEHOLDER):
+            raise RuntimeError(
+                f"Operation has pattern {self.pattern} but has only  {self.param_count} parameters"
+            )
 
 
 class OperationWithOneParam(OperationWithNParams):

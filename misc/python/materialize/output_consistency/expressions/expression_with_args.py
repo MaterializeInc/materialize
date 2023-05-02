@@ -8,7 +8,10 @@
 # by the Apache License, Version 2.0.
 from materialize.output_consistency.data_type.data_type_group import DataTypeGroup
 from materialize.output_consistency.expressions.expression import Expression
-from materialize.output_consistency.operations.operation import OperationWithNParams
+from materialize.output_consistency.operations.operation import (
+    EXPRESSION_PLACEHOLDER,
+    OperationWithNParams,
+)
 
 
 class ExpressionWithNArgs(Expression):
@@ -32,7 +35,12 @@ class ExpressionWithNArgs(Expression):
         sql: str = self.pattern
 
         for arg in self.args:
-            sql = sql.replace("$", arg.to_sql(), 1)
+            sql = sql.replace(EXPRESSION_PLACEHOLDER, arg.to_sql(), 1)
+
+        if len(self.args) != self.pattern.count(EXPRESSION_PLACEHOLDER):
+            raise RuntimeError(
+                f"Not enough arguments to fill all placeholders in pattern {self.pattern}"
+            )
 
         return sql
 
