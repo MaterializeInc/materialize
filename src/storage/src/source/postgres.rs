@@ -39,7 +39,6 @@ use tracing::{info, warn};
 
 use mz_expr::MirScalarExpr;
 use mz_ore::error::ErrorExt;
-use mz_ore::future::TimeoutError;
 use mz_ore::task;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
@@ -185,27 +184,28 @@ impl<T, E: Into<anyhow::Error>> ResultExt<T, E> for Result<T, E> {
 #[derive(Debug)]
 enum InternalMessage {
     /// A definite error for the source, i.e. not a subsource error.
-    Err(SourceReaderError),
-    Status(HealthStatusUpdate),
+    Err(usize, SourceReaderError),
+    Status(usize, HealthStatusUpdate),
     /// A value meant for a subsource.
     Value {
-        lsn: PgLsn,
+        output: usize,
+        lsn: MzOffset,
         /// Errors sent here are meant to express a subsource error that occurred in the process of
         /// decoding values, i.e. it is in lieu of a value. This contrasts with
         /// `InternalEssage::Err`, which signals an error in the source itself, e.g. a programming
         /// error.
         value: Result<(Row, Diff), anyhow::Error>,
-        end: bool,
     },
+    Progress(MzOffset),
 }
 
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
-    receiver_stream: Receiver<(usize, InternalMessage)>,
+    receiver_stream: Receiver<InternalMessage>,
 
     /// The lsn we last emitted data at. Used to fabricate timestamps for errors. This should
     /// ideally go away and only emit errors that we can associate with source timestamps
-    last_lsn: PgLsn,
+    last_lsn: MzOffset,
 
     /// Capabilities used to produce messages
     data_capability: Capability<MzOffset>,
@@ -254,7 +254,7 @@ struct PostgresTaskInfo {
     /// we have a durable signal that it should never produce any data.
     source_tables: BTreeMap<u32, SourceTable>,
     row_sender: RowSender,
-    sender: Sender<(usize, InternalMessage)>,
+    sender: Sender<InternalMessage>,
     resume_lsn: Arc<AtomicU64>,
 }
 
@@ -419,13 +419,13 @@ impl SourceRender for PostgresSourceConnection {
             loop {
                 tokio::select! {
                     message = reader.receiver_stream.recv() => match message {
-                        Some((output_index, InternalMessage::Value {
+                        Some(InternalMessage::Value {
+                            output,
                             lsn,
                             value,
-                            end,
-                        })) => {
+                        }) => {
                             mz_ore::soft_assert!(
-                                output_index != 0,
+                                output != 0,
                                 "InternalMessage::Value is meant only for subsources"
                             );
 
@@ -443,32 +443,31 @@ impl SourceRender for PostgresSourceConnection {
                                 Err(err) => (Err(SourceReaderError::other_definite(err)), 1),
                             };
 
-                            let ts = lsn.into();
-                            let cap = reader.data_capability.delayed(&ts);
-                            let next_ts = ts + 1;
+                            let next_ts = lsn + 1;
                             reader.upper_capability.downgrade(&next_ts);
-                            if end {
-                                reader.data_capability.downgrade(&next_ts);
-                            }
-                            data_output.give(&cap, ((output_index, msg), *cap.time(), diff)).await;
+                            data_output.give(&reader.data_capability, ((output, msg), lsn, diff)).await;
                         }
-                        Some((output_index, InternalMessage::Status(update))) => {
-                            health_output.give(&health_capability, (output_index, update)).await;
+                        Some(InternalMessage::Progress(lsn)) => {
+                            reader.data_capability.downgrade(&lsn);
+                            reader.upper_capability.downgrade(&lsn);
                         }
-                        Some((output_index, InternalMessage::Err(err))) => {
+                        Some(InternalMessage::Status(output, update)) => {
+                            health_output.give(&health_capability, (output, update)).await;
+                        }
+                        Some(InternalMessage::Err(output, err)) => {
                             mz_ore::soft_assert!(
-                                output_index == 0,
+                                output == 0,
                                 "InternalMessage::Err is meant only for the primary source"
                             );
 
                             // XXX(petrosagg): we are fabricating a timestamp here!!
-                            let non_definite_ts = MzOffset::from(reader.last_lsn) + 1;
+                            let non_definite_ts = reader.last_lsn + 1;
 
                             let cap = reader.data_capability.delayed(&non_definite_ts);
                             let next_ts = non_definite_ts + 1;
                             reader.data_capability.downgrade(&next_ts);
                             reader.upper_capability.downgrade(&next_ts);
-                            data_output.give(&cap, ((output_index, Err(err)), *cap.time(), 1)).await;
+                            data_output.give(&cap, ((output, Err(err)), *cap.time(), 1)).await;
                         }
                         None => return,
                     },
@@ -511,12 +510,12 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
         // Signal that the primary source is running.
         let _ = task_info
             .sender
-            .send((
+            .send(InternalMessage::Status(
                 0,
-                InternalMessage::Status(HealthStatusUpdate {
+                HealthStatusUpdate {
                     update: HealthStatus::Running,
                     should_halt: false,
-                }),
+                },
             ))
             .await;
 
@@ -534,15 +533,15 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     // If the channel is shutting down, so is the source.
                     let _ = task_info
                         .sender
-                        .send((
+                        .send(InternalMessage::Status(
                             output_index,
-                            InternalMessage::Status(HealthStatusUpdate {
+                            HealthStatusUpdate {
                                 update: HealthStatus::StalledWithError {
                                     error: e.to_string_with_causes(),
                                     hint: None,
                                 },
                                 should_halt: false,
-                            }),
+                            },
                         ))
                         .await;
                 }
@@ -561,9 +560,9 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                     // If the channel is shutting down, so is the source.
                     let _ = task_info
                         .sender
-                        .send((
+                        .send(InternalMessage::Status(
                             output_index,
-                            InternalMessage::Status(HealthStatusUpdate {
+                            HealthStatusUpdate {
                                 update: HealthStatus::StalledWithError {
                                     error: e.to_string_with_causes(),
                                     hint: None,
@@ -579,7 +578,7 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                                 // Note that only the primary source halts, though all of them
                                 // error.
                                 should_halt: output_index == 0,
-                            }),
+                            },
                         ))
                         .await;
                 }
@@ -618,11 +617,11 @@ async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
                 let _ = task_info
                     .row_sender
                     .sender
-                    .send((
+                    .send(InternalMessage::Err(
                         0,
-                        InternalMessage::Err(SourceReaderError {
+                        SourceReaderError {
                             inner: SourceErrorDetails::Initialization(e.to_string()),
-                        }),
+                        },
                     ))
                     .await;
                 return;
@@ -767,6 +766,13 @@ async fn postgres_replication_loop_inner_snapshot(
     drop(stream);
     drop(client);
 
+    let client = task_info
+        .connection_config
+        .clone()
+        .connect_replication()
+        .await
+        .err_indefinite()?;
+
     assert!(slot_lsn <= snapshot_lsn);
 
     // We only need to rewind values from the WAL if there are any values between the `slot_lsn`
@@ -774,16 +780,17 @@ async fn postgres_replication_loop_inner_snapshot(
     // would just sit there dumbly waiting for a timeout.
     if slot_lsn < snapshot_lsn
         && peek_wal_lsns(
-            task_info.connection_config.clone(),
+            &client,
             &task_info.slot,
             &task_info.publication,
-            Some(snapshot_lsn),
+            snapshot_lsn,
         )
         .await
         .err_irrecoverable()?
         .count()
             > 0
     {
+        drop(client);
         tracing::info!(
             "postgres snapshot was at {snapshot_lsn:?} but we need it at {slot_lsn:?}. Rewinding"
         );
@@ -891,7 +898,7 @@ async fn postgres_replication_loop_inner(
 }
 
 struct RowMessage {
-    lsn: PgLsn,
+    lsn: MzOffset,
     output_index: usize,
     value: Result<(Row, Diff), anyhow::Error>,
 }
@@ -903,13 +910,13 @@ struct RowMessage {
 /// before dropping the `RowSender` or moving onto a new lsn.
 /// Internally, this type uses asserts to uphold the first requirement.
 struct RowSender {
-    sender: Sender<(usize, InternalMessage)>,
+    sender: Sender<InternalMessage>,
     buffered_message: Option<RowMessage>,
 }
 
 impl RowSender {
     /// Create a new `RowSender`.
-    pub fn new(sender: Sender<(usize, InternalMessage)>) -> Self {
+    pub fn new(sender: Sender<InternalMessage>) -> Self {
         Self {
             sender,
             buffered_message: None,
@@ -923,9 +930,10 @@ impl RowSender {
         output_index: usize,
         value: Result<(Row, Diff), anyhow::Error>,
     ) {
+        let lsn = MzOffset::from(lsn);
         if let Some(buffered) = self.buffered_message.take() {
             assert_eq!(buffered.lsn, lsn);
-            self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value, false)
+            self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value)
                 .await;
         }
 
@@ -940,10 +948,11 @@ impl RowSender {
     /// last message sent is marked as closing the `lsn` (which is the messages `offset` in the
     /// rest of the source pipeline.
     pub async fn close_lsn(&mut self, lsn: PgLsn) {
+        let lsn = MzOffset::from(lsn);
         match self.buffered_message.take() {
             Some(buffered) => {
-                assert!(buffered.lsn <= lsn);
-                self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value, true)
+                assert!(buffered.lsn < lsn);
+                self.send_row_inner(buffered.lsn, buffered.output_index, buffered.value)
                     .await;
             }
             // We should still announce that we're running even if nothing else.
@@ -951,29 +960,30 @@ impl RowSender {
                 // If the channel is shutting down, so is the source.
                 let _ = self
                     .sender
-                    .send((
+                    .send(InternalMessage::Status(
                         0,
-                        InternalMessage::Status(HealthStatusUpdate {
+                        HealthStatusUpdate {
                             update: HealthStatus::Running,
                             should_halt: false,
-                        }),
+                        },
                     ))
                     .await;
             }
         }
+
+        let _ = self.sender.send(InternalMessage::Progress(lsn)).await;
     }
 
     async fn send_row_inner(
         &self,
-        lsn: PgLsn,
+        lsn: MzOffset,
         output: usize,
         value: Result<(Row, Diff), anyhow::Error>,
-        end: bool,
     ) {
-        let message = InternalMessage::Value { lsn, value, end };
+        let message = InternalMessage::Value { output, lsn, value };
         // a closed receiver means the source has been shutdown (dropped or the process is dying),
         // so just continue on without activation
-        let _ = self.sender.send((output, message)).await;
+        let _ = self.sender.send(message).await;
     }
 }
 
@@ -1199,7 +1209,6 @@ async fn produce_replication<'a>(
     use ReplicationError::*;
     use ReplicationMessage::*;
     async_stream::try_stream!({
-        //let mut last_data_message = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
         let mut errors = vec![];
@@ -1210,7 +1219,6 @@ async fn produce_replication<'a>(
         let mut datum_vec = DatumVec::new();
 
         let mut last_commit_lsn = as_of;
-        let mut observed_wal_end = as_of;
         // The outer loop alternates the client between streaming the replication slot and using
         // normal SQL queries with pg admin functions to fast-foward our cursor in the event of WAL
         // lag.
@@ -1252,15 +1260,6 @@ async fn produce_replication<'a>(
                 use LogicalReplicationMessage::*;
                 metrics.total.inc();
 
-                // Ensure no more than `FEEDBACK_INTERVAL` passes; if we exceed the deadline, we
-                // should let the upstream PG source know we're still here. This also gives us an
-                // opportunity to check that it's still alive.
-                let res = mz_ore::future::timeout(
-                    FEEDBACK_INTERVAL.saturating_sub(last_feedback.elapsed()),
-                    stream.as_mut().try_next(),
-                )
-                .await;
-
                 // The upstream will periodically request status updates by setting the keepalive's
                 // reply field to 1. However, we cannot rely on these messages arriving on time. For
                 // example, when the upstream is sending a big transaction its keepalive messages are
@@ -1288,7 +1287,7 @@ async fn produce_replication<'a>(
                     }};
                 }
 
-                match res {
+                match stream.as_mut().try_next().await {
                     Ok(Some(XLogData(xlog_data))) => match xlog_data.data() {
                         Begin(_) => {
                             last_data_message = Instant::now();
@@ -1517,32 +1516,13 @@ async fn produce_replication<'a>(
                     },
                     Ok(Some(PrimaryKeepAlive(keepalive))) => {
                         needs_status_update = needs_status_update || keepalive.reply() == 1;
-                        // Irrespective of the WAL lag, we do not want to reconnect if we have
-                        // pending writes, nor do we want to consider fast-forwarding the WAL. If
-                        // the WAL lag is intense enough, we'll receive a TCP error.
-                        if inserts.is_empty() && deletes.is_empty() && errors.is_empty() {
-                            observed_wal_end = PgLsn::from(keepalive.wal_end());
-
-                            if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD {
-                                break;
-                            }
-                        }
                     }
                     // The enum is marked non_exhaustive, better be conservative
                     Ok(Some(_)) => {
                         return Err(Definite(anyhow!("Unexpected replication message")))?
                     }
                     Ok(None) => break,
-                    Err(TimeoutError::Inner(err)) => return Err(ReplicationError::from(err))?,
-                    Err(TimeoutError::DeadlineElapsed) => {
-                        // if we did timeout, skip message handling to let us continue polling, but do
-                        // ensure we perform a status update to heartbeat the upstream PG source.
-                        mz_ore::soft_assert!(
-                            needs_status_update,
-                            "if our request timed out, it must have been at least long enough to require \
-                             a status update"
-                        );
-                    }
+                    Err(err) => return Err(ReplicationError::from(err))?,
                 }
                 if needs_status_update {
                     let ts: i64 = PG_EPOCH
@@ -1561,6 +1541,15 @@ async fn produce_replication<'a>(
                         return Err(Indefinite(err.into()))?;
                     }
                     last_feedback = Instant::now();
+
+                    // Irrespective of the WAL lag, we do not want to reconnect if we have
+                    // pending writes, nor do we want to consider fast-forwarding the WAL. If
+                    // the WAL lag is intense enough, we'll receive a TCP error.
+                    if inserts.is_empty() && deletes.is_empty() && errors.is_empty() {
+                        if last_data_message.elapsed() > WAL_LAG_GRACE_PERIOD {
+                            break;
+                        }
+                    }
                 }
             }
             // This may not be required, but as mentioned above in
@@ -1578,7 +1567,13 @@ async fn produce_replication<'a>(
             // the replication stream from there.
             let peek_binary_start_time = Instant::now();
 
-            let changes = peek_wal_lsns(client_config.clone(), slot, publication, None)
+            let client = client_config.connect_replication().await.err_indefinite()?;
+            let res = client
+                .simple_query("SELECT pg_current_wal_lsn()")
+                .await
+                .err_indefinite()?;
+            let current_lsn = parse_single_row(&res, "pg_current_wal_lsn").expect("invalid lsn");
+            let changes = peek_wal_lsns(&client, slot, publication, current_lsn)
                 .await
                 .err_indefinite()?
                 .filter(|change_lsn| change_lsn > &last_commit_lsn)
@@ -1586,10 +1581,8 @@ async fn produce_replication<'a>(
 
             // If there are no changes until the end of the WAL it's safe to fast forward
             if changes == 0 {
-                last_commit_lsn = observed_wal_end;
-                // `Progress` events are _frontiers_, so we add 1, just like when we
-                // handle data in `Commit` above.
-                yield Event::Progress([PgLsn::from(u64::from(last_commit_lsn) + 1)]);
+                last_commit_lsn = current_lsn;
+                yield Event::Progress([PgLsn::from(u64::from(last_commit_lsn))]);
             }
 
             tracing::info!(
@@ -1610,24 +1603,17 @@ async fn produce_replication<'a>(
 ///
 /// For more details, see <https://pgpedia.info/p/pg_logical_slot_peek_binary_changes.html>.
 async fn peek_wal_lsns(
-    config: mz_postgres_util::Config,
+    client: &Client,
     slot: &str,
     publication: &str,
-    up_to: Option<PgLsn>,
+    up_to: PgLsn,
 ) -> Result<impl Iterator<Item = PgLsn>, mz_postgres_util::PostgresError> {
-    let client = config.connect_replication().await?;
     let query = format!(
         "SELECT lsn FROM pg_logical_slot_peek_binary_changes(
-            '{}', {}, NULL,
+            '{slot}', '{up_to}', NULL,
             'proto_version', '1',
-            'publication_names', '{}'
+            'publication_names', '{publication}'
         )",
-        slot,
-        match up_to {
-            Some(lsn) => format!("'{lsn}'"),
-            None => "NULL".to_string(),
-        },
-        publication,
     );
 
     let rows = client.simple_query(&query).await?;
