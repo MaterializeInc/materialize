@@ -72,9 +72,17 @@ class PgCdc(Check):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'C', i, REPEAT('C', 1024 - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
-                """,
                 """
-
+                + (
+                    """
+                # Wait until Pg snapshot is complete in order to avoid #18940
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableA
+                true
+                """
+                    if self.base_version < MzVersion.parse("0.46.1")
+                    else ""
+                ),
+                """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'D', i, REPEAT('D', 1024 - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
@@ -113,7 +121,18 @@ class PgCdc(Check):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'H', i, REPEAT('X', 1024 - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
-                """,
+                """
+                + (
+                    """
+                # Wait until Pg snapshot is complete in order to avoid #18940
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableB
+                true
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableC
+                true
+                """
+                    if self.base_version < MzVersion.parse("0.46.1")
+                    else ""
+                ),
             ]
         ]
 
