@@ -105,7 +105,7 @@ users          true      false   true  true  false
 # Note that we always count 9 messages received, but can see as low as 3 updates.
 # This is because there are 3 active keys, as all the messages could be received in 1 second.
 # There could also be up to 11 updates, as updates cause inserts and deletes
-# (5 initial inserts, 2 deletes, and 2 updates).
+# (5 initial inserts, 2 deletes, and 2 updates). In total 3 records should be present in upsert state.
 # We can't control this, so have to accept the range.
 > SELECT
     s.name,
@@ -113,13 +113,15 @@ users          true      false   true  true  false
     SUM(u.messages_received),
     SUM(u.updates_staged) BETWEEN 3 AND 11,
     SUM(u.updates_committed) BETWEEN 3 AND 11,
-    SUM(u.bytes_received) > 0
+    SUM(u.bytes_received) > 0,
+    SUM(u.envelope_state_bytes) > 0,
+    SUM(u.envelope_state_count)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 9 true true true
+upsert true 9 true true true true 3
 
 # While we can't control how batching works above, we can ensure that this new, later update
 # causes 1 more messages to received, but 2 updates (1 insert and 1 delete). We use
