@@ -74,7 +74,8 @@ impl CollectionIdBundle {
 }
 
 impl Coordinator {
-    // Resolves the full name from the corresponding catalog entry for each item in `id_bundle`
+    /// Resolves the full name from the corresponding catalog entry for each item in `id_bundle`.
+    /// If an item in the bundle does not exist in the catalog, it's not included in the result.
     pub fn resolve_collection_id_bundle_names(
         &self,
         session: &Session,
@@ -82,7 +83,7 @@ impl Coordinator {
     ) -> Vec<String> {
         id_bundle
             .iter()
-            // This could filter out a view that has been replaced in another transaction.
+            // This could filter out an entry that has been replaced in another transaction.
             .filter_map(|id| self.catalog().try_get_entry(&id))
             .map(|item| {
                 self.catalog()
