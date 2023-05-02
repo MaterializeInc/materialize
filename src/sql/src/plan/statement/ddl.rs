@@ -888,6 +888,8 @@ pub fn plan_create_source(
 
     let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
 
+    let disk_default = scx.catalog.system_vars().upsert_source_disk_default();
+
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
     // choosing compatible envelopes and connections.
@@ -906,7 +908,7 @@ pub fn plan_create_source(
             match mode {
                 DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
                     style: UpsertStyle::Debezium { after_idx },
-                    disk: disk.unwrap_or(false),
+                    disk: disk.unwrap_or(disk_default),
                 },
             }
         }
@@ -924,7 +926,7 @@ pub fn plan_create_source(
             }
             UnplannedSourceEnvelope::Upsert {
                 style: UpsertStyle::Default(key_envelope),
-                disk: disk.unwrap_or(false),
+                disk: disk.unwrap_or(disk_default),
             }
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
@@ -939,7 +941,7 @@ pub fn plan_create_source(
     };
 
     if disk.is_some() {
-        scx.require_unsafe_mode("ON DISK")?;
+        scx.require_upsert_source_disk_available()?;
         match &envelope {
             UnplannedSourceEnvelope::Upsert { .. } => {}
             _ => {

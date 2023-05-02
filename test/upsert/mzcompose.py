@@ -66,7 +66,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     materialized = Materialized(
         default_size=args.default_size,
-        options=["--orchestrator-process-scratch-directory=/mzdata/source_data"],
+        options=[
+            "--orchestrator-process-scratch-directory=/mzdata/source_data"
+            "--bootstrap-system-parameter=upsert_source_disk_default=true"
+        ],
     )
 
     with c.override(testdrive, materialized):
@@ -93,7 +96,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--var=replicas={args.replicas}",
                 f"--var=default-replica-size={materialized.default_replica_size}",
                 f"--var=default-storage-size={materialized.default_storage_size}",
-                "--var=impl=WITH (DISK)",
                 *args.files,
             )
         finally:
