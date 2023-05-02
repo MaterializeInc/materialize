@@ -98,13 +98,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 ! CREATE SOURCE doin_upsert
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM ${arg.impl}
+  ENVELOPE DEBEZIUM
 contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
 
 > CREATE SOURCE doin_upsert
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM ${arg.impl}
+  ENVELOPE DEBEZIUM
 
 > SELECT * FROM doin_upsert
 id creature
@@ -160,7 +160,7 @@ moros
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET AS test_kafka_offset
-  ENVELOPE DEBEZIUM ${arg.impl}
+  ENVELOPE DEBEZIUM
 
 > SELECT * FROM doin_upsert_metadata WHERE id = 4
 id creature partition test_kafka_offset
@@ -191,7 +191,7 @@ id creature
 > CREATE SOURCE upsert_fast_forward
   FROM KAFKA CONNECTION kafka_conn (START OFFSET = [6], TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM ${arg.impl}
+  ENVELOPE DEBEZIUM
 
 > SELECT * FROM upsert_fast_forward WHERE id = 3
 id creature
@@ -203,7 +203,7 @@ id creature
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET, PARTITION
-  ENVELOPE DEBEZIUM ${arg.impl}
+  ENVELOPE DEBEZIUM
 
 > SELECT * FROM upsert_metadata
 id   creature      offset  partition
@@ -218,7 +218,7 @@ id   creature      offset  partition
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET
-  ENVELOPE DEBEZIUM ${arg.impl}
+  ENVELOPE DEBEZIUM
 
 > SELECT * FROM upsert_metadata_reordered
 id   creature      partition  offset
