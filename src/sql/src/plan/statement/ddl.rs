@@ -1691,6 +1691,7 @@ pub fn plan_view(
         mut expr,
         mut desc,
         finishing,
+        scope: _,
     } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
@@ -1827,6 +1828,7 @@ pub fn plan_create_materialized_view(
         mut expr,
         mut desc,
         finishing,
+        scope: _,
     } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
 
     expr.bind_parameters(params)?;
@@ -1990,7 +1992,7 @@ pub fn plan_create_sink(
                             .map(|(idx, _type)| idx)
                             .ok_or_else(|| sql_err!("No such column: {}", col))?;
                         if desc.get_unambiguous_name(name_idx).is_none() {
-                            anyhow::bail!("Ambiguous column: {}", col);
+                            sql_err!("Ambiguous column: {}", col);
                         }
                         Ok(name_idx)
                     })

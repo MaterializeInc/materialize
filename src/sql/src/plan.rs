@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 use mz_controller::clusters::ClusterId;
-use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::AclMode;
@@ -612,6 +612,19 @@ pub struct PeekPlan {
 }
 
 #[derive(Debug)]
+pub enum SubscribeOutput {
+    Diffs,
+    WithinTimestampOrderBy {
+        /// We pretend that mz_diff is prepended to the normal columns, making it index 0
+        order_by: Vec<ColumnOrder>,
+    },
+    EnvelopeUpsert {
+        /// Order by with just keys
+        order_by_keys: Vec<ColumnOrder>,
+    },
+}
+
+#[derive(Debug)]
 pub struct SubscribePlan {
     pub from: SubscribeFrom,
     pub with_snapshot: bool,
@@ -619,6 +632,7 @@ pub struct SubscribePlan {
     pub up_to: Option<MirScalarExpr>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
+    pub output: SubscribeOutput,
 }
 
 #[derive(Debug)]

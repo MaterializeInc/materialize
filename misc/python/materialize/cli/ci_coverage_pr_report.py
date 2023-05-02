@@ -16,7 +16,7 @@ from typing import Dict, Optional
 
 import junit_xml
 
-from materialize import ROOT, ci_util
+from materialize import ROOT, ci_util, ui
 
 # - None value indicates that this line is interesting, but we don't know yet
 #   if it can actually be covered.
@@ -138,14 +138,16 @@ def get_report(coverage: Coverage) -> str:
                         f.write(line)
                 f.truncate()
 
-        subprocess.run(
-            ["git", "config", "user.email", "coverage@materialize.com"],
-            check=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Code Coverage"],
-            check=True,
-        )
+        # Only set user for CI, not when testing this script locally
+        if ui.env_is_truthy("CI"):
+            subprocess.run(
+                ["git", "config", "user.email", "coverage@materialize.com"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Code Coverage"],
+                check=True,
+            )
         subprocess.run(
             ["git", "commit", "--allow-empty", "-a", "-m", "Covered in unit test only"],
             check=True,

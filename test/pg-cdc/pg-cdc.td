@@ -83,9 +83,9 @@ CREATE TABLE """literal_quotes""" (a TEXT);
 ALTER TABLE """literal_quotes""" REPLICA IDENTITY FULL;
 INSERT INTO """literal_quotes""" VALUES ('v');
 
-CREATE TABLE "select" (a TEXT);
-ALTER TABLE "select" REPLICA IDENTITY FULL;
-INSERT INTO "select" VALUES ('v');
+CREATE TABLE "create" (a TEXT);
+ALTER TABLE "create" REPLICA IDENTITY FULL;
+INSERT INTO "create" VALUES ('v');
 
 CREATE TABLE escaped_text_table (f1 TEXT, f2 TEXt);
 ALTER TABLE escaped_text_table REPLICA IDENTITY FULL;
@@ -256,7 +256,7 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
     conflict_schema.conflict_table AS public.conflict_table,
     "space table",
     """literal_quotes""",
-    "select"
+    "create"
   );
 
 $ set-regex match=\d+ replacement=<NUMBER>
@@ -264,6 +264,7 @@ $ set-regex match=\d+ replacement=<NUMBER>
 > SHOW SOURCES
 array_types_table     subsource <null>
 conflict_table        subsource <null>
+create                subsource <null>
 escaped_text_table    subsource <null>
 large_text            subsource <null>
 multipart_pk          subsource <null>
@@ -273,7 +274,6 @@ no_replica_identity   subsource <null>
 nonpk_table           subsource <null>
 nulls_table           subsource <null>
 pk_table              subsource <null>
-select                subsource <null>
 "space table"         subsource <null>
 trailing_space_nopk   subsource <null>
 trailing_space_pk     subsource <null>
@@ -366,7 +366,7 @@ contains: SOURCE materialize.public.conflict_table is a subsource and cannot be 
 > SELECT * FROM """literal_quotes"""
 v
 
-> SELECT * FROM "select"
+> SELECT * FROM "create"
 v
 
 #
