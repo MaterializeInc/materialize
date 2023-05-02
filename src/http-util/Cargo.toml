@@ -15,7 +15,7 @@ http = "0.2.8"
 hyper = { version = "0.14.23", features = ["http1", "server"] }
 include_dir = "0.7.3"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
-prometheus = { version = "0.13.3", default-features = false, features = ["process"] }
+prometheus = { version = "0.13.3", default-features = false }
 serde = "1.0.152"
 serde_json = { version = "1.0.89" }
 tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread"] }
