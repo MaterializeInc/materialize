@@ -19,6 +19,7 @@ use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use mz_compute_client::protocol::response::PeekResponse;
+use mz_ore::cast::CastFrom;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
@@ -207,6 +208,17 @@ impl Coordinator {
         cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
+        if !session.user().is_superuser()
+            && self.active_conns.len()
+                > usize::cast_from(self.catalog().system_config().max_connections())
+        {
+            let _ = tx.send(Response {
+                result: Err(AdapterError::TooManyConnections),
+                session,
+            });
+            return;
+        }
+
         if self
             .catalog()
             .try_get_role_by_name(&session.user().name)
