@@ -36,7 +36,7 @@ use mz_storage_client::types::instances::StorageInstanceContext;
 use mz_storage_client::types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 
-use self::types::{InMemoryHashMap, StatsState, UpsertState};
+use self::types::{InMemoryHashMap, StatsState};
 
 mod rocksdb;
 mod types;
@@ -52,6 +52,19 @@ impl AsRef<[u8]> for UpsertKey {
         &self.0
     }
 }
+
+pub fn calculate_size(data: &Option<UpsertValue>) -> Option<i64> {
+    data.as_ref().map(|value| {
+        let bytes: i64 = match value {
+            Ok(row) => row.byte_len().try_into().unwrap(),
+            Err(_) => 0,
+        };
+        bytes
+    })
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValueWithSize(Option<UpsertValue>, Option<i64>);
 
 thread_local! {
     /// A thread-local datum cache used to calculate hashes
@@ -327,7 +340,9 @@ where
                     // along with the value with the _latest timestamp for that key_.
                     commands_state.clear();
                     for (_, key, _, _) in stash.iter().take(idx) {
-                        commands_state.entry(*key).or_insert(None);
+                        commands_state
+                            .entry(*key)
+                            .or_insert(ValueWithSize(None, None));
                     }
 
                     // These iterators iterate in the same order because `commands_state`
@@ -337,10 +352,15 @@ where
                     state
                         .multi_get(
                             multi_get_scratch.drain(..),
-                            commands_state.iter_mut().map(|(_, v)| v),
+                            commands_state.iter_mut().map(|(_, v)| &mut v.0),
                         )
                         .await
                         .expect("hashmap impl to not fail");
+
+                    // Calculate bytes for the values
+                    commands_state.iter_mut().for_each(|(_, v)| {
+                        v.1 = calculate_size(&v.0);
+                    });
 
                     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
                     // order to only process the command with the maximum order within the (ts,
@@ -358,24 +378,58 @@ where
                             .expect("key missing from commands_state");
                         match value {
                             Some(value) => {
-                                if let Some(old_value) = command_state.replace(value.clone()) {
+                                if let Some(old_value) = command_state.0.replace(value.clone()) {
                                     output_updates.push((old_value, ts.clone(), -1));
                                 }
                                 output_updates.push((value, ts, 1));
                             }
                             None => {
-                                if let Some(old_value) = command_state.take() {
+                                if let Some(old_value) = command_state.0.take() {
                                     output_updates.push((old_value, ts, -1));
                                 }
                             }
                         }
                     }
 
+                    // Calculating metrics before draining
+                    let mut diff_count = 0;
+                    let mut diff_bytes = 0;
+                    commands_state
+                        .iter()
+                        .for_each(|(_, ValueWithSize(v, prev_size))| {
+                            let new_size = calculate_size(v);
+
+                            match (prev_size, new_size) {
+                                (Some(prev_bytes), Some(new_bytes)) => {
+                                    diff_bytes = diff_bytes + new_bytes - prev_bytes;
+                                }
+                                (Some(prev_bytes), None) => {
+                                    diff_bytes = diff_bytes - prev_bytes;
+                                    diff_count = diff_count - 1;
+                                }
+                                (None, Some(new_bytes)) => {
+                                    diff_bytes = diff_bytes + new_bytes;
+                                    diff_count = diff_count + 1;
+                                }
+                                (None, None) => {
+                                    panic!("Should not happen!");
+                                }
+                            }
+                        });
+
                     // Record the changes in `state`.
                     state
-                        .multi_put(commands_state.drain(..))
+                        .multi_put(commands_state.drain(..).map(|(k, v)| (k, v.0)))
                         .await
                         .expect("hashmap impl to not fail");
+
+                    // Emitting metrics only after properly persisted
+                    source_config
+                        .source_statistics
+                        .update_envelope_state_bytes_by(diff_bytes);
+                    source_config
+                        .source_statistics
+                        .update_envelope_state_count_by(diff_count);
 
                     // Emit the _consolidated_ changes to the output.
                     output_handle

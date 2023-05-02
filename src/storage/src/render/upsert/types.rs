@@ -90,6 +90,12 @@ impl UpsertState for InMemoryHashMap {
         Ok(size)
     }
 }
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct Stats {
+    count: u64,
+    diff_records: i64,
+    diff_bytes: i64,
+}
 
 /// An `UpsertState` wrapper that reports basic metrics about the usage of the `UpsertState`.
 pub struct StatsState<S> {
@@ -112,16 +118,16 @@ impl<S> StatsState<S> {
     }
 }
 
-#[async_trait::async_trait(?Send)]
-impl<S> UpsertState for StatsState<S>
+impl<S> StatsState<S>
 where
     S: UpsertState,
 {
-    async fn multi_put<P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
+    pub(crate) async fn multi_put<'r, P>(&mut self, puts: P) -> Result<u64, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, Option<UpsertValue>)>,
     {
         let now = Instant::now();
+
         let size = self.inner.multi_put(puts).await?;
 
         self.metrics
@@ -132,7 +138,11 @@ where
         Ok(size)
     }
 
-    async fn multi_get<'r, G, R>(&mut self, gets: G, results_out: R) -> Result<u64, anyhow::Error>
+    pub(crate) async fn multi_get<'r, G, R>(
+        &mut self,
+        gets: G,
+        results_out: R,
+    ) -> Result<u64, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
         R: IntoIterator<Item = &'r mut Option<UpsertValue>>,
