@@ -396,6 +396,7 @@ pub struct ReplicaMetadata {
 }
 
 /// Metadata about an active connection.
+#[derive(Debug)]
 struct ConnMeta {
     /// A watch channel shared with the client to inform the client of
     /// cancellation requests. The coordinator sets the contained value to
@@ -487,8 +488,11 @@ impl PendingReadTxn {
 }
 
 /// Glues the external world to the Timely workers.
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Coordinator {
     /// The controller for the storage and compute layers.
+    #[derivative(Debug = "ignore")]
     controller: mz_controller::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
@@ -596,6 +600,7 @@ pub struct Coordinator {
     storage_usage_collection_interval: Duration,
 
     /// Segment analytics client.
+    #[derivative(Debug = "ignore")]
     segment_client: Option<mz_segment::Client>,
 
     /// Coordinator metrics.
