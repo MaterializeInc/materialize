@@ -11,15 +11,15 @@
 # and report on key information in plans
 
 cat
-(defsource x ([int32 int64 int32] [[0] [1]]))
+(defsource x ([int64 int64 int64] [[0] [1]]))
 ----
 ok
 
 build format=types
 (map (get x) [4145])
 ----
-Map (4145) // { types: "(Int32?, Int64?, Int32?, Int64)", keys: "([0], [1])" }
-  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+Map (4145) // { types: "(Int64?, Int64?, Int64?, Int64)", keys: "([0], [1])" }
+  Get x // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }
 
 # Run tests where a transform occuring depends on the input keys.
 
@@ -29,30 +29,30 @@ Map (4145) // { types: "(Int32?, Int64?, Int32?, Int64)", keys: "([0], [1])" }
 opt format=types
 (join [(get x) (get x)] [[#0 #3]])
 ----
-Project (#0..=#2, #0..=#2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "([0], [1])" }
-  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+Project (#0..=#2, #0..=#2) // { types: "(Int64?, Int64?, Int64?, Int64?, Int64?, Int64?)", keys: "([0], [1])" }
+  Get x // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }
 
 steps format=types
 (join [(get x) (get x)] [[#0 #3] [#2 #5]])
 ----
 ----
-Join on=(#0 = #3 AND #2 = #5) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "([0], [1])" }
-  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
-  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+Join on=(#0 = #3 AND #2 = #5) // { types: "(Int64?, Int64?, Int64?, Int64?, Int64?, Int64?)", keys: "([0], [1])" }
+  Get x // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }
+  Get x // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }
 
 ====
-No change: Fixpoint { name: "normalize", transforms: [NormalizeLets { inline_mfp: false }, NormalizeOps], limit: 100 }, NonNullRequirements { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
+No change: Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: false, strict_join_equivalences: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fixpoint { name: "normalize", transforms: [NormalizeLets { inline_mfp: false }, NormalizeOps], limit: 100 }, NonNullRequirements { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
 ====
 Applied Fixpoint { name: "fixpoint", transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegateFusion, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }:
-Project (#0..=#2, #0..=#2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "([0], [1])" }
-  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+Project (#0..=#2, #0..=#2) // { types: "(Int64?, Int64?, Int64?, Int64?, Int64?, Int64?)", keys: "([0], [1])" }
+  Get x // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }
 
 ====
-No change: ThresholdElision, Fixpoint { name: "fixpoint", transforms: [PredicatePushdown { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, NonNullable, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegateFusion, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { name: "fixpoint", transforms: [SemijoinIdempotence, ReductionPushdown, ReduceElision, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegateFusion, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, ProjectionPushdown, NormalizeLets { inline_mfp: false }, Fusion, Fixpoint { name: "fixpoint", transforms: [CanonicalizeMfp, ThresholdElision, Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, UnionNegateFusion, UnionBranchCancellation, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: true } }, FoldConstants { limit: Some(10000) }], limit: 100 }, Fixpoint { name: "fixpoint", transforms: [ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }, LiteralConstraints, Fixpoint { name: "fix_joins", transforms: [JoinImplementation { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }, CanonicalizeMfp, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }, FoldConstants { limit: Some(10000) }, ThresholdElision
+No change: ThresholdElision, Fixpoint { name: "fixpoint", transforms: [PredicatePushdown { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, NonNullable, ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegateFusion, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Fixpoint { name: "fixpoint", transforms: [SemijoinIdempotence, ReductionPushdown, ReduceElision, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, FlatMapToMap, Join, NormalizeLets { inline_mfp: false }, Reduce, UnionNegateFusion, UnionBranchCancellation, NormalizeLets { inline_mfp: false }, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }] }], limit: 100 }, Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: true, strict_join_equivalences: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, ProjectionPushdown, NormalizeLets { inline_mfp: false }, Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: true, strict_join_equivalences: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, Fixpoint { name: "fixpoint", transforms: [CanonicalizeMfp, ThresholdElision, Join, RedundantJoin { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fusion, UnionNegateFusion, UnionBranchCancellation, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: true } }, FoldConstants { limit: Some(10000) }], limit: 100 }, Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: true, strict_join_equivalences: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: true, strict_join_equivalences: true, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, Fixpoint { name: "fixpoint", transforms: [ColumnKnowledge { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, FoldConstants { limit: Some(10000) }, Demand { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }, LiteralLifting { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }, LiteralConstraints, Fixpoint { name: "fix_joins", transforms: [JoinImplementation { recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }], limit: 100 }, CanonicalizeMfp, RelationCSE { normalize_lets: NormalizeLets { inline_mfp: false } }, FoldConstants { limit: Some(10000) }, ThresholdElision, Typecheck { ctx: RefCell { value: {} }, disallow_new_globals: true, strict_join_equivalences: false, recursion_guard: RecursionGuard { depth: RefCell { value: 0 }, limit: 2048 } }
 ====
 Final:
-Project (#0..=#2, #0..=#2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "([0], [1])" }
-  Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+Project (#0..=#2, #0..=#2) // { types: "(Int64?, Int64?, Int64?, Int64?, Int64?, Int64?)", keys: "([0], [1])" }
+  Get x // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }
 
 ====
 ----
@@ -61,14 +61,14 @@ Project (#0..=#2, #0..=#2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?,
 opt format=types
 (join [(get x) (get x)] [[#2 #5]])
 ----
-Return // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "()" }
-  Project (#0..=#4, #2) // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "()" }
-    Join on=(#2 = #5) type=differential // { types: "(Int32?, Int64?, Int32?, Int32?, Int64?, Int32?)", keys: "()" }
+Return // { types: "(Int64?, Int64?, Int64?, Int64?, Int64?, Int64?)", keys: "()" }
+  Project (#0..=#4, #2) // { types: "(Int64?, Int64?, Int64?, Int64?, Int64?, Int64?)", keys: "()" }
+    Join on=(#2 = #5) type=differential // { types: "(Int64?, Int64?, Int64?, Int64?, Int64?, Int64?)", keys: "()" }
       implementation
         %0:l0[#2]K » %1:l0[#2]K
-      Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
-      Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+      Get l0 // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }
+      Get l0 // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }
 With
   cte l0 =
-    ArrangeBy keys=[[#2]] // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
-      Get x // { types: "(Int32?, Int64?, Int32?)", keys: "([0], [1])" }
+    ArrangeBy keys=[[#2]] // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }
+      Get x // { types: "(Int64?, Int64?, Int64?)", keys: "([0], [1])" }

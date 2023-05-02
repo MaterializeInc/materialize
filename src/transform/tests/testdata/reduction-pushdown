@@ -10,8 +10,8 @@
 # Reduction pushdown tests
 
 cat
-(defsource w [int16 int32])
-(defsource x [int32 string])
+(defsource w [int16 int16])
+(defsource x [int16 string])
 (defsource y ([int16 string] [[1]]))
 (defsource z [int16 string])
 ----
@@ -253,7 +253,7 @@ Project (#0)
 # Pushdown agg(distinct <single-input-expression>)
 
 build apply=ReductionPushdown
-(reduce (join [(get x) (get y)] [[#1 #3]]) [#1] [(sum_int32 #0 true)])
+(reduce (join [(get x) (get y)] [[#1 #3]]) [#1] [(sum_int16 #0 true)])
 ----
 Project (#0, #1)
   Join on=(#0 = #2)
@@ -278,7 +278,7 @@ build apply=ReductionPushdown
 (reduce
     (join [(get x) (get y) (get z)] [[#1 #3 #5]])
     [#3]
-    [(sum_int32 (call_unary neg_int32 #0) true) (sum_int16 #2 true)])
+    [(sum_int16 (call_unary neg_int16 #0) true) (sum_int16 #2 true)])
 ----
 Project (#2, #1, #3)
   Join on=(eq(#0, #2, #4))
@@ -295,12 +295,12 @@ build apply=ReductionPushdown
 (reduce
     (join [(get x) (get y) (get z) (get w)] [[#1 #3 #5] [#4 #6]])
     [#6]
-    [(sum_int32 (call_binary add_int32 #0 (call_unary cast_int16_to_int32 #2)) true)
+    [(sum_int16 (call_binary add_int16 #0 #2) true)
      (sum_int16 (call_binary mul_int16 #2 #4) true)])
 ----
 Project (#3, #1, #2)
   Join on=(#0 = #3)
-    Reduce group_by=[#4] aggregates=[sum(distinct (#0 + smallint_to_integer(#2))), sum(distinct (#2 * #4))]
+    Reduce group_by=[#4] aggregates=[sum(distinct (#0 + #2)), sum(distinct (#2 * #4))]
       Join on=(eq(#1, #3, #5))
         Get x
         Get y
@@ -311,7 +311,7 @@ Project (#3, #1, #2)
 # Empty group by key tests
 
 build apply=ReductionPushdown
-(reduce (join [(get x) (get y)] []) [] [(sum_int32 #0 true)])
+(reduce (join [(get x) (get y)] []) [] [(sum_int16 #0 true)])
 ----
 Project (#0)
   CrossJoin
@@ -321,7 +321,7 @@ Project (#0)
       Get y
 
 build apply=ReductionPushdown
-(reduce (join [(get x) (get y)] [[#1 #3]]) [] [(sum_int32 #0 true)])
+(reduce (join [(get x) (get y)] [[#1 #3]]) [] [(sum_int16 #0 true)])
 ----
 Reduce aggregates=[sum(distinct #0)]
   Join on=(#1 = #3)
