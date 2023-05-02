@@ -124,6 +124,10 @@ pub struct Options {
     /// path before starting.
     pub cleanup_on_new: bool,
 
+    /// Whether or not to clear state at the instance
+    /// after the client is dropped.
+    pub cleanup_on_drop: bool,
+
     /// Whether or not to write writes
     /// to the wal.
     pub use_wal: bool,
@@ -153,6 +157,7 @@ impl Options {
     pub fn new_with_defaults() -> Result<Self, RocksDBError> {
         Ok(Options {
             cleanup_on_new: true,
+            cleanup_on_drop: true,
             use_wal: false,
             compression_type: DBCompressionType::Snappy,
             env: rocksdb::Env::new()?,
@@ -242,7 +247,12 @@ where
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
             mz_ore::task::spawn_blocking(
-                || format!("RocksDB instance at {}: cleanup", instance_path.display()),
+                || {
+                    format!(
+                        "RocksDB instance at {}: cleanup on creation",
+                        instance_path.display()
+                    )
+                },
                 move || {
                     DB::destroy(&RocksDBOptions::default(), instance_path_owned).unwrap();
                 },
@@ -475,8 +485,10 @@ fn rocksdb_core_loop<K, V, M>(
             }
         }
     }
-
     // Gracefully cleanup if the `RocksDBInstance` has gone away.
     db.cancel_all_background_work(true);
     drop(db);
+
+    // TODO(guswynn): retry if there is a failure
+    DB::destroy(&RocksDBOptions::default(), instance_path).unwrap();
 }
