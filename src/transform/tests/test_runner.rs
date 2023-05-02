@@ -341,7 +341,7 @@ mod tests {
                 mz_transform::literal_lifting::LiteralLifting::default(),
             )),
             "NonNullRequirements" => Ok(Box::new(
-                mz_transform::nonnull_requirements::NonNullRequirements::default(),
+                mz_transform::non_null_requirements::NonNullRequirements::default(),
             )),
             "PredicatePushdown" => Ok(Box::new(
                 mz_transform::predicate_pushdown::PredicatePushdown::default(),

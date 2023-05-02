@@ -111,7 +111,7 @@ pub mod literal_constraints;
 pub mod literal_lifting;
 pub mod monotonic;
 pub mod movement;
-pub mod nonnull_requirements;
+pub mod non_null_requirements;
 pub mod nonnullable;
 pub mod normalize_lets;
 pub mod normalize_ops;
@@ -439,7 +439,7 @@ impl Optimizer {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
-            Box::new(crate::nonnull_requirements::NonNullRequirements::default()),
+            Box::new(crate::non_null_requirements::NonNullRequirements::default()),
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
