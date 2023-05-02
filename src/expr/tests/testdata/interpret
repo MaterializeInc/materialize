@@ -26,62 +26,62 @@ interpret
 may contain: [5]
 
 # A temporal-style filter: compare a value to some function of the column.
+# Expression: (2100 >= 300 + insert_ms)
 interpret
 [string numeric]
 [
   [("hello" string) ("goodbye" string)]
   [(2000.0 numeric) (2050.0 numeric)]
 ]
-# Expression: (2100 >= 300 + insert_ms)
 (call_binary gte (2100.0 numeric) (call_binary add_numeric (300.0 numeric) #1))
 [true false null]
 ----
 may contain: [false]
 
 # The same, but the filter matches.
+# Expression: (2900 >= 300 + insert_ms)
 interpret
 [string numeric]
 [
   [("hello" string) ("goodbye" string)]
   [(2000.0 numeric) (2050.0 numeric)]
 ]
-# Expression: (2900 >= 300 + insert_ms)
 (call_binary gte (2900.0 numeric) (call_binary add_numeric (300.0 numeric) #1))
 [true false null]
 ----
 may contain: [true]
 
 # JSONB ->
+# Expression: (json_col -> "created_ms")
 interpret
 [jsonb]
 [
   [("{\"created_ms\": 1000}" jsonb) ("{\"created_ms\": 2000}" jsonb) ("{\"created_ms\": 3000}" jsonb)]
 ]
-# Expression: (json_col -> "created_ms")
 (call_binary (jsonb_get_string false) #0 ("created_ms" string))
 [(0 numeric) (2050 numeric) (4000 numeric) null]
 ----
 may contain: [2050]
 
 # JSONB ->> (string column)
+# Expression: (json_col ->> "code")
 interpret
 [jsonb]
 [
   [("{\"code\": \"00135\"}" jsonb) ("{\"code\": \"22122\"}" jsonb) ("{\"code\": \"34153\"}" jsonb)]
 ]
-# Expression: (json_col ->> "code")
 (call_binary (jsonb_get_string true) #0 ("code" string))
 ["00000" "20000" "2" "80000"]
 ----
 may contain: ["20000" "2"]
 
 # JSONB ->> (numeric column... unsupported)
+# Expression: (json_col ->> "created_ms")
 interpret
 [jsonb]
 [
   [("{\"created_ms\": 1000}" jsonb) ("{\"created_ms\": 2000}" jsonb) ("{\"created_ms\": 3000}" jsonb)]
 ]
-# Expression: (json_col ->> "created_ms")
 (call_binary (jsonb_get_string true) #0 ("code" string))
 ["00000" "20000" "2" "80000"]
 ----
