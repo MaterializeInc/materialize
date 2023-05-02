@@ -15,12 +15,14 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
+use mz_sql_parser::ast::{Expr, OrderByExpr, SubscribeOutput};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -32,13 +34,15 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedItemName};
-use crate::plan::query::{plan_up_to, QueryLifetime};
+use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
+use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
 };
+use crate::{normalize, plan};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -321,6 +325,7 @@ pub fn plan_explain(
         mut expr,
         desc,
         finishing,
+        scope: _,
     } = query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
     let finishing = if is_view {
         // views don't use a separate finishing
@@ -372,12 +377,14 @@ pub fn plan_query(
         mut expr,
         desc,
         finishing,
+        scope,
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(params)?;
     Ok(query::PlannedQuery {
         expr: expr.optimize_and_lower(&scx.into())?,
         desc,
         finishing,
+        scope,
     })
 }
 
@@ -411,12 +418,34 @@ pub fn describe_subscribe(
     if progress {
         desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
     }
-    desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
-    for (name, mut ty) in relation_desc.into_iter() {
-        if progress {
-            ty.nullable = true;
+
+    if let SubscribeOutput::EnvelopeUpsert { key_columns } = stmt.output {
+        desc = desc.with_column("mz_state", ScalarType::String.nullable(true));
+        let key_columns = key_columns
+            .into_iter()
+            .map(normalize::column_name)
+            .collect_vec();
+        let mut values_desc = RelationDesc::empty();
+        for (name, mut ty) in relation_desc.into_iter() {
+            if key_columns.contains(&name) {
+                if progress {
+                    ty.nullable = true;
+                }
+                desc = desc.with_column(name, ty);
+            } else {
+                ty.nullable = true;
+                values_desc = values_desc.with_column(name, ty);
+            }
         }
-        desc = desc.with_column(name, ty);
+        desc = desc.concat(values_desc);
+    } else {
+        desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
+        for (name, mut ty) in relation_desc.into_iter() {
+            if progress {
+                ty.nullable = true;
+            }
+            desc = desc.with_column(name, ty);
+        }
     }
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -428,28 +457,27 @@ pub fn plan_subscribe(
         options,
         as_of,
         up_to,
+        output,
     }: SubscribeStatement<Aug>,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
-    let from = match relation {
+    let (from, desc, scope) = match relation {
         SubscribeRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
-            match entry.item_type() {
-                CatalogItemType::Table
-                | CatalogItemType::Source
-                | CatalogItemType::View
-                | CatalogItemType::MaterializedView => SubscribeFrom::Id(entry.id()),
-                CatalogItemType::Func
-                | CatalogItemType::Index
-                | CatalogItemType::Sink
-                | CatalogItemType::Type
-                | CatalogItemType::Secret
-                | CatalogItemType::Connection => sql_bail!(
+            let desc = match entry.desc(&scx.catalog.resolve_full_name(entry.name())) {
+                Ok(desc) => desc,
+                Err(..) => sql_bail!(
                     "'{}' cannot be subscribed to because it is a {}",
                     name.full_name_str(),
                     entry.item_type(),
                 ),
-            }
+            };
+            let item_name = match name {
+                ResolvedItemName::Item { full_name, .. } => Some(full_name.into()),
+                _ => None,
+            };
+            let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
+            (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
             // There's no way to apply finishing operations to a `SUBSCRIBE`
@@ -464,15 +492,93 @@ pub fn plan_subscribe(
                 QueryLifetime::OneShot(scx.pcx()?),
             )?;
             assert!(query.finishing.is_trivial(query.desc.arity()));
-            SubscribeFrom::Query {
-                expr: query.expr,
-                desc: query.desc,
-            }
+            let desc = query.desc.clone();
+            (
+                SubscribeFrom::Query {
+                    expr: query.expr,
+                    desc: query.desc,
+                },
+                desc,
+                query.scope,
+            )
         }
     };
 
     let when = query::plan_as_of(scx, as_of)?;
     let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
+
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx()?));
+    let ecx = ExprContext {
+        qcx: &qcx,
+        name: "",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: true,
+        allow_windows: false,
+    };
+
+    let output_columns: Vec<_> = scope.column_names().enumerate().collect();
+    let output = match output {
+        SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
+        SubscribeOutput::EnvelopeUpsert { key_columns } => {
+            scx.require_envelope_upsert_in_subscribe()?;
+            let order_by = key_columns
+                .iter()
+                .map(|ident| OrderByExpr {
+                    expr: Expr::Identifier(vec![ident.clone()]),
+                    asc: None,
+                    nulls_last: None,
+                })
+                .collect_vec();
+            let (order_by, map_exprs) = query::plan_order_by_exprs(
+                &ExprContext {
+                    name: "ENVELOPE UPSERT KEY clause",
+                    ..ecx
+                },
+                &order_by[..],
+                &output_columns[..],
+            )?;
+            if !map_exprs.is_empty() {
+                return Err(PlanError::InvalidKeysInSubscribeEnvelopeUpsert);
+            }
+            plan::SubscribeOutput::EnvelopeUpsert {
+                order_by_keys: order_by,
+            }
+        }
+        SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+            scx.require_within_timestamp_order_by_in_subscribe()?;
+            let mz_diff = "mz_diff".into();
+            let output_columns = std::iter::once((0, &mz_diff))
+                .chain(output_columns.into_iter().map(|(i, c)| (i + 1, c)))
+                .collect_vec();
+            match query::plan_order_by_exprs(
+                &ExprContext {
+                    name: "WITHIN TIMESTAMP ORDER BY clause",
+                    ..ecx
+                },
+                &order_by[..],
+                &output_columns[..],
+            ) {
+                Err(PlanError::UnknownColumn {
+                    table: None,
+                    column,
+                }) if &column == &mz_diff => {
+                    // mz_diff is being used in an expression. Since mz_diff isn't part of the table
+                    // it looks like an unknown column. Instead, return a better error
+                    return Err(PlanError::InvalidOrderByInSubscribeWithinTimestampOrderBy);
+                }
+                Err(e) => return Err(e),
+                Ok((order_by, map_exprs)) => {
+                    if !map_exprs.is_empty() {
+                        return Err(PlanError::InvalidOrderByInSubscribeWithinTimestampOrderBy);
+                    }
+
+                    plan::SubscribeOutput::WithinTimestampOrderBy { order_by }
+                }
+            }
+        }
+    };
 
     let SubscribeOptionExtracted {
         progress, snapshot, ..
@@ -484,6 +590,7 @@ pub fn plan_subscribe(
         with_snapshot: snapshot.unwrap_or(true),
         copy_to,
         emit_progress: progress.unwrap_or(false),
+        output,
     }))
 }
 

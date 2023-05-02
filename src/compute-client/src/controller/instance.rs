@@ -595,13 +595,6 @@ where
 
             // Initialize tracking of subscribes.
             for subscribe_id in dataflow.subscribe_ids() {
-                // Creating subscribes during initialization is known to be defunct (#16247).
-                // We still do our best to handle this scenario gracefully, so we only log an error
-                // here.
-                if !self.compute.initialized {
-                    tracing::error!("creating subscribes during initialization is not supported");
-                }
-
                 self.compute
                     .subscribes
                     .insert(subscribe_id, ActiveSubscribe::new());
@@ -1085,10 +1078,12 @@ where
         let mut updates = Vec::with_capacity(list.len());
         for (id, new_frontier) in list {
             let Ok(coll) = self.compute.collection(id) else {
-                // We should not receive updates for collections we don't track. It is possible
-                // that we currently do due to a bug where replicas send `FrontierUppers` for
-                // collections they drop during reconciliation.
-                // TODO(teskje): Revisit this after #16247 is resolved.
+                tracing::warn!(
+                    ?replica_id,
+                    "Frontier update for unknown collection {id}: {:?}",
+                    new_frontier.elements(),
+                );
+                tracing::error!("Replica reported an untracked collection frontier");
                 continue;
             };
 
@@ -1164,11 +1159,9 @@ where
         response: SubscribeResponse<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
-        // We should not receive updates for collections we don't track. It is possible that we
-        // currently do due to a bug where replicas send `DroppedAt` responses for subscribes they
-        // drop during reconciliation.
-        // TODO(teskje): Revisit this after #16247 is resolved.
         if !self.compute.collections.contains_key(&subscribe_id) {
+            tracing::warn!(?replica_id, "Response for unknown subscribe {subscribe_id}",);
+            tracing::error!("Replica sent a response for an unknown subscibe");
             return None;
         }
 

@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 
 use crate::columnar::Data;
 use crate::part::DynColumnRef;
+use crate::stats::private::StatsCost;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));
 
@@ -50,7 +51,7 @@ pub trait ColumnStats<T: Data>: DynStats {
 ///
 /// TODO(mfp): It feels like we haven't hit a global maximum here, both with
 /// this `DynStats` trait and also with ProtoOptionStats.
-pub trait DynStats: std::fmt::Debug + Send + Sync + 'static {
+pub trait DynStats: StatsCost + std::fmt::Debug + Send + Sync + 'static {
     /// Returns self as a `dyn Any` for downcasting.
     fn as_any(&self) -> &dyn Any;
     /// Returns the name of the erased type for use in error messages.
@@ -61,7 +62,28 @@ pub trait DynStats: std::fmt::Debug + Send + Sync + 'static {
     fn into_proto(&self) -> ProtoDynStats;
 }
 
+mod private {
+    /// Statistics serialization costs
+    pub trait StatsCost {
+        /// A proxy for the cost to serialize these stats, in bytes.
+        ///
+        /// TODO(mfp): Should we tie this to some specific meaning: e.g. the
+        /// size of the serialized proto representation? That would make it much
+        /// easier to make assertions about this in tests (particularly
+        /// randomized tests), but OTOH it would be fiddly and a
+        /// high-maintenance.
+        fn cost(&self) -> usize;
+        /// Attempts to reduce the serialization costs of these stats.
+        ///
+        /// This is lossy (might increase the false positive rate) and so should
+        /// be avoided if the full fidelity stats are within an acceptable cost
+        /// threshold.
+        fn trim(&mut self);
+    }
+}
+
 /// Statistics about a column of some non-optional parquet type.
+#[cfg_attr(any(test), derive(Clone))]
 pub struct PrimitiveStats<T> {
     /// An inclusive lower bound on the data contained in the column.
     ///
@@ -131,6 +153,51 @@ impl StructStats {
             )),
         }
     }
+
+    /// Trims the included column status until they fit within a budget.
+    ///
+    /// This might remove stats for a column entirely, unless `force_keep_col`
+    /// returns true for that column. The resulting StructStats object is
+    /// guaranteed to fit within the passed budget, except when the columns that
+    /// are force-kept are collectively larger than the budget.
+    pub fn trim_to_budget<F: Fn(&str) -> bool>(&mut self, budget: usize, force_keep_col: F) {
+        // Not trimming necessary should be the overwhelming common case in
+        // practice.
+        if self.cost() <= budget {
+            return;
+        }
+
+        // First try any lossy trimming that doesn't lose an entire column.
+        self.trim();
+        if self.cost() <= budget {
+            return;
+        }
+
+        // That wasn't enough. Sort the columns in order of ascending size and
+        // keep however many fit within the budget. This strategy both keeps the
+        // largest total number of columns and also optimizes for the sort of
+        // columns we expect to need stats in practice (timestamps are numbers
+        // or small strings).
+        //
+        // This could recurse down into json map stats, but the complexity
+        // doesn't seem worth it to start.
+        let mut col_costs = self
+            .cols
+            .iter()
+            .map(|(name, stats)| (name.to_owned(), stats.cost()))
+            .collect::<Vec<_>>();
+        col_costs.sort_unstable_by_key(|(_, c)| std::cmp::Reverse(*c));
+        let mut total_cost = 0;
+        for (key, cost) in col_costs {
+            total_cost += cost;
+            if force_keep_col(&key) {
+                continue;
+            }
+            if total_cost > budget {
+                self.cols.remove(&key);
+            }
+        }
+    }
 }
 
 // Aggregate statistics about a column of Json elements.
@@ -138,6 +205,7 @@ impl StructStats {
 // Each element could be any of a JsonNull, a bool, a string, a numeric, a list,
 // or a map/object. The column might be a single type but could also be a
 // mixture of any subset of these types.
+#[cfg_attr(any(test), derive(Clone))]
 pub enum JsonStats {
     /// A sentinel that indicates there were no elements.
     None,
@@ -302,6 +370,7 @@ mod impls {
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
     use crate::columnar::Data;
+    use crate::stats::private::StatsCost;
     use crate::stats::{
         proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
         truncate_bytes, truncate_string, BytesStats, ColumnStats, DynStats, JsonStats, OptionStats,
@@ -310,9 +379,144 @@ mod impls {
         TRUNCATE_LEN,
     };
 
+    impl<T: StatsCost> StatsCost for OptionStats<T> {
+        fn cost(&self) -> usize {
+            std::mem::size_of::<usize>() + self.some.cost()
+        }
+        fn trim(&mut self) {
+            self.some.trim()
+        }
+    }
+
+    macro_rules! stats_cost {
+        ($data:ty) => {
+            impl StatsCost for PrimitiveStats<$data> {
+                fn cost(&self) -> usize {
+                    std::mem::size_of::<$data>() * 2
+                }
+                fn trim(&mut self) {
+                    // No-op
+                }
+            }
+        };
+    }
+
+    stats_cost!(bool);
+    stats_cost!(u8);
+    stats_cost!(u16);
+    stats_cost!(u32);
+    stats_cost!(u64);
+    stats_cost!(i8);
+    stats_cost!(i16);
+    stats_cost!(i32);
+    stats_cost!(i64);
+    stats_cost!(f32);
+    stats_cost!(f64);
+
+    impl StatsCost for PrimitiveStats<Vec<u8>> {
+        fn cost(&self) -> usize {
+            self.lower.len() + self.upper.len()
+        }
+        fn trim(&mut self) {
+            let common_prefix = self
+                .lower
+                .iter()
+                .zip(self.upper.iter())
+                .take_while(|(x, y)| x == y)
+                .count();
+            self.lower = truncate_bytes(&self.lower, common_prefix + 1, TruncateBound::Lower)
+                .expect("lower bound should always truncate");
+            if let Some(upper) =
+                truncate_bytes(&self.upper, common_prefix + 1, TruncateBound::Upper)
+            {
+                self.upper = upper;
+            }
+        }
+    }
+
+    impl StatsCost for PrimitiveStats<String> {
+        fn cost(&self) -> usize {
+            self.lower.len() + self.upper.len()
+        }
+        fn trim(&mut self) {
+            let common_prefix = self
+                .lower
+                .char_indices()
+                .zip(self.upper.chars())
+                .take_while(|((_, x), y)| x == y)
+                .last();
+            if let Some(((o, x), y)) = common_prefix {
+                let new_len = o + std::cmp::max(x.len_utf8(), y.len_utf8());
+                self.lower = truncate_string(&self.lower, new_len, TruncateBound::Lower)
+                    .expect("lower bound should always truncate");
+                if let Some(upper) = truncate_string(&self.upper, new_len, TruncateBound::Upper) {
+                    self.upper = upper;
+                }
+            }
+        }
+    }
+
+    impl StatsCost for StructStats {
+        fn cost(&self) -> usize {
+            self.cols.values().map(|x| x.cost()).sum()
+        }
+        fn trim(&mut self) {
+            for x in self.cols.values_mut() {
+                x.trim();
+            }
+        }
+    }
+
+    impl StatsCost for BytesStats {
+        fn cost(&self) -> usize {
+            match self {
+                BytesStats::Primitive(x) => x.cost(),
+                BytesStats::Json(x) => x.cost(),
+            }
+        }
+        fn trim(&mut self) {
+            match self {
+                BytesStats::Primitive(x) => x.trim(),
+                BytesStats::Json(x) => x.trim(),
+            }
+        }
+    }
+
+    impl StatsCost for JsonStats {
+        fn cost(&self) -> usize {
+            match self {
+                JsonStats::None => 0,
+                JsonStats::Mixed => 0,
+                JsonStats::JsonNulls => 0,
+                JsonStats::Bools(x) => x.cost(),
+                JsonStats::Strings(x) => x.cost(),
+                JsonStats::Numerics(x) => x.cost(),
+                JsonStats::Lists => 0,
+                JsonStats::Maps(x) => x.values().map(|x| x.cost()).sum(),
+            }
+        }
+        fn trim(&mut self) {
+            match self {
+                JsonStats::None
+                | JsonStats::Mixed
+                | JsonStats::JsonNulls
+                | JsonStats::Bools(_)
+                | JsonStats::Numerics(_)
+                | JsonStats::Lists => {}
+                JsonStats::Strings(x) => x.trim(),
+                JsonStats::Maps(x) => {
+                    for x in x.values_mut() {
+                        x.trim()
+                    }
+                }
+            }
+        }
+    }
+
     impl<T> DynStats for PrimitiveStats<T>
     where
-        PrimitiveStats<T>: RustType<ProtoPrimitiveStats> + std::fmt::Debug + Send + Sync + 'static,
+        PrimitiveStats<T>:
+            StatsCost + RustType<ProtoPrimitiveStats> + std::fmt::Debug + Send + Sync + 'static,
     {
         fn as_any(&self) -> &dyn Any {
             self
@@ -916,7 +1120,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18901
     #[cfg_attr(miri, ignore)] // too slow
     fn test_truncate_string_proptest() {
         fn testcase(x: &str) {
@@ -940,5 +1143,109 @@ mod tests {
             // The proptest! macro interferes with rustfmt.
             testcase(x.as_str())
         });
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn primitive_cost_trim_proptest() {
+        fn testcase<T: Ord + Clone + std::fmt::Debug>(x1: T, x2: T)
+        where
+            PrimitiveStats<T>: StatsCost,
+        {
+            let mut stats = PrimitiveStats {
+                lower: std::cmp::min(&x1, &x2).clone(),
+                upper: std::cmp::max(&x1, &x2).clone(),
+            };
+            let cost_before = stats.cost();
+            stats.trim();
+            assert!(stats.cost() <= cost_before);
+            assert!(stats.lower <= x1);
+            assert!(stats.lower <= x2);
+            assert!(stats.upper >= x1);
+            assert!(stats.upper >= x2);
+        }
+
+        proptest!(|(a in any::<u64>(), b in any::<u64>())| {
+            // The proptest! macro interferes with rustfmt.
+            testcase(a, b)
+        });
+
+        // Construct strings that are "interesting" in that they have some
+        // (possibly empty) shared prefix.
+        proptest!(|(prefix in any::<String>(), a in any::<String>(), b in any::<String>())| {
+            // The proptest! macro interferes with rustfmt.
+            testcase(format!("{}{}", prefix, a), format!("{}{}", prefix, b))
+        });
+
+        // Construct strings that are "interesting" in that they have some
+        // (possibly empty) shared prefix.
+        proptest!(|(prefix in any::<Vec<u8>>(), a in any::<Vec<u8>>(), b in any::<Vec<u8>>())| {
+            // The proptest! macro interferes with rustfmt.
+            let mut sa = prefix.clone();
+            sa.extend(&a);
+            let mut sb = prefix;
+            sb.extend(&b);
+            testcase(sa, sb);
+        });
+    }
+
+    #[test]
+    fn struct_trim_to_budget() {
+        #[track_caller]
+        fn testcase(cols: &[(&str, usize)], required: Option<&str>) {
+            let cols = cols
+                .iter()
+                .map(|(key, cost)| {
+                    let stats: Box<dyn DynStats> = Box::new(PrimitiveStats {
+                        lower: vec![],
+                        upper: vec![0u8; *cost],
+                    });
+                    ((*key).to_owned(), stats)
+                })
+                .collect();
+            let mut stats = StructStats { len: 0, cols };
+            let mut budget = stats.cost().next_power_of_two();
+            while budget > 0 {
+                let cost_before = stats.cost();
+                stats.trim_to_budget(budget, |col| Some(col) == required);
+                let cost_after = stats.cost();
+                assert!(cost_before >= cost_after);
+                if let Some(required) = required {
+                    assert!(stats.cols.contains_key(required));
+                } else {
+                    assert!(cost_after <= budget);
+                }
+                budget = budget / 2;
+            }
+        }
+
+        testcase(&[], None);
+        testcase(&[("a", 100)], None);
+        testcase(&[("a", 1), ("b", 2), ("c", 4)], None);
+        testcase(&[("a", 1), ("b", 2), ("c", 4)], Some("b"));
+    }
+
+    // Regression test for a bug found during code review of initial stats
+    // trimming PR.
+    #[test]
+    fn stats_trim_regression_json() {
+        // Make sure we recursively trim json string and map stats by asserting
+        // that the goes down after trimming.
+        #[track_caller]
+        fn testcase(mut stats: JsonStats) {
+            let before = stats.cost();
+            stats.trim();
+            let after = stats.cost();
+            assert!(after < before, "{} vs {}: {:?}", after, before, stats);
+        }
+
+        let col = JsonStats::Strings(PrimitiveStats {
+            lower: "foobar".into(),
+            upper: "foobaz".into(),
+        });
+        testcase(col.clone());
+        let mut cols = BTreeMap::new();
+        cols.insert("col".into(), col);
+        testcase(JsonStats::Maps(cols));
     }
 }

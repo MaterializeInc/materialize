@@ -3957,6 +3957,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-frontegg-client"
+version = "0.0.0"
+dependencies = [
+ "jsonwebtoken",
+ "mz-frontegg-auth",
+ "mz-ore",
+ "once_cell",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "url",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-http-util"
 version = "0.0.0"
 dependencies = [

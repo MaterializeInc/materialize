@@ -21,7 +21,7 @@ use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::source;
 use timely::dataflow::operators::Operator;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
@@ -393,9 +393,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.timely_worker.index(),
                     ),
                     sink_tokens: BTreeMap::new(),
-                    subscribe_response_buffer: std::rc::Rc::new(
-                        std::cell::RefCell::new(Vec::new()),
-                    ),
+                    subscribe_response_buffer: Rc::new(RefCell::new(Vec::new())),
                     sink_write_frontiers: BTreeMap::new(),
                     flow_control_probes: BTreeMap::new(),
                     pending_peeks: BTreeMap::new(),
@@ -525,8 +523,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
             let mut old_compaction = BTreeMap::default();
             // Exported identifiers from dataflows we retain.
             let mut retain_ids = BTreeSet::default();
-            // `as_of` frontiers of collections exported from requested dataflows.
-            let mut new_as_ofs = BTreeMap::default();
 
             // Traverse new commands, sorting out what remediation we can do.
             for command in new_commands.iter() {
@@ -539,7 +535,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         for dataflow in dataflows.iter() {
                             let as_of = dataflow.as_of.as_ref().unwrap();
                             let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
-                            new_as_ofs.extend(export_ids.iter().map(|id| (*id, as_of.clone())));
 
                             if let Some(old_dataflow) = old_dataflows.get(&export_ids) {
                                 let compatible = old_dataflow.compatible_with(dataflow);
@@ -606,16 +601,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 for id in dataflow.export_ids() {
                     // We want to drop anything that has not yet been dropped,
                     // and nothing that has already been dropped.
-                    if old_frontiers.get(&id) != Some(&&timely::progress::Antichain::default()) {
-                        old_compaction.insert(id, timely::progress::Antichain::default());
+                    if old_frontiers.get(&id) != Some(&&Antichain::new()) {
+                        old_compaction.insert(id, Antichain::new());
                     }
                 }
             }
             if !old_compaction.is_empty() {
-                todo_commands.insert(
-                    0,
-                    ComputeCommand::AllowCompaction(old_compaction.into_iter().collect::<Vec<_>>()),
-                );
+                let compactions = old_compaction
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect();
+                todo_commands.insert(0, ComputeCommand::AllowCompaction(compactions));
             }
 
             // Clean up worker-local state.
@@ -633,14 +629,37 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     logger.log(ComputeEvent::Peek(peek.as_log_event(), false));
                 }
             }
-            // We compact away removed frontiers, and so only need to reset ids we continue to use.
-            // We must remember, though, to compensate what already was sent to logging sources.
+
+            // Clear the list of dropped collections.
+            // We intended to report their dropping, but the controller does not expect to hear
+            // about them anymore.
+            compute_state.dropped_collections = Default::default();
+
+            // Adjust reported frontiers:
+            //  * For dataflows we continue to use, reset to ensure we report something not before
+            //    the new `as_of` next.
+            //  * For dataflows we drop, set to the empty frontier, to ensure we don't report
+            //    anything for them. This is only needed until we implement #16275.
             for (&id, reported_frontier) in compute_state.reported_frontiers.iter_mut() {
-                let new_reported_frontier = match new_as_ofs.remove(&id) {
-                    Some(lower) => ReportedFrontier::NotReported { lower },
-                    None => ReportedFrontier::new(),
+                let retained = retain_ids.contains(&id);
+                let compaction = old_compaction.remove(&id);
+                let new_reported_frontier = match (retained, compaction) {
+                    (true, Some(new_as_of)) => ReportedFrontier::NotReported { lower: new_as_of },
+                    (true, None) => {
+                        unreachable!("retained dataflows are compacted to the new as_of")
+                    }
+                    (false, Some(new_frontier)) => {
+                        assert!(new_frontier.is_empty());
+                        ReportedFrontier::Reported(new_frontier)
+                    }
+                    (false, None) => {
+                        // Logging dataflows are implicitly retained and don't have a new as_of.
+                        // Reset them to the minimal frontier.
+                        ReportedFrontier::new()
+                    }
                 };
 
+                // Compensate what already was sent to logging sources.
                 if let Some(logger) = &compute_state.compute_logger {
                     if let Some(time) = reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
@@ -652,14 +671,20 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                 *reported_frontier = new_reported_frontier;
             }
+
             // Sink tokens should be retained for retained dataflows, and dropped for dropped dataflows.
+            //
+            // Dropping the tokens of active subscribes makes them place `DroppedAt` responses into
+            // the subscribe response buffer. We drop that buffer in the next step, which ensures
+            // that we don't send out `DroppedAt` responses for subscribes dropped during
+            // reconciliation.
             compute_state
                 .sink_tokens
                 .retain(|id, _| retain_ids.contains(id));
+
             // We must drop the subscribe response buffer as it is global across all subscribes.
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
-            compute_state.subscribe_response_buffer =
-                std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            compute_state.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
         } else {
             todo_commands = new_commands.clone();
         }
