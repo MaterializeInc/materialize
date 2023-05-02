@@ -36,7 +36,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
-use tracing::{info, trace};
+use tracing::{debug, trace};
 
 use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
@@ -430,8 +430,7 @@ where
                                             if should_audit {
                                                 part_desc.request_filter_pushdown_audit();
                                             } else {
-                                                // TODO(mfp): Downgrade this to debug! at some point.
-                                                info!("skipping part because of stats filter {:?}", part_desc.stats);
+                                                debug!("skipping part because of stats filter {:?}", part_desc.stats);
                                                 lease_returner.return_leased_part(part_desc);
                                                 continue;
                                             }
