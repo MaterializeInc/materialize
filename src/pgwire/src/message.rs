@@ -393,7 +393,6 @@ impl ErrorResponse {
                 VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
                 VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
             },
-            AdapterError::TooManyConnections => SqlState::INSUFFICIENT_RESOURCES,
         };
         ErrorResponse {
             severity,

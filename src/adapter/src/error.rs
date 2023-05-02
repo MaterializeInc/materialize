@@ -204,8 +204,6 @@ pub enum AdapterError {
     ///
     /// The map keys are role names and values are detailed error messages.
     DependentObject(BTreeMap<String, Vec<String>>),
-    /// There are too many active connections to materialize.
-    TooManyConnections,
 }
 
 impl AdapterError {
@@ -531,7 +529,6 @@ impl fmt::Display for AdapterError {
                     dependent_objects.keys().join(", ")
                 )
             }
-            AdapterError::TooManyConnections => write!(f, "there are too many active connections"),
         }
     }
 }
