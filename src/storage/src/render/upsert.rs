@@ -408,7 +408,7 @@ where
                                     diff_count = diff_count + 1;
                                 }
                                 (None, None) => {
-                                    panic!("Should not happen!");
+                                    println!("Why why why!!! {:?}", v);
                                 }
                             }
                         });
