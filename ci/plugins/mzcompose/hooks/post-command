@@ -30,11 +30,12 @@ export_cov() {
 
 if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     ci_unimportant_heading "Generate coverage information"
+    run --mz-quiet down --volumes
 
     if [ -n "$(find . -name '*.profraw')" ]; then
         # Workaround for "invalid instrumentation profile data (file header is corrupt)"
         find . -name '*.profraw' | while read -r i; do
-            bin/ci-builder run stable rust-profdata show "$i" > /dev/null || rm "$i" || true
+            bin/ci-builder run stable rust-profdata show "$i" > /dev/null || rm "$i"
         done
         find . -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
         find . -name '*.profraw' -delete
