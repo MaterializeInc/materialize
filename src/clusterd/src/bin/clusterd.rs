@@ -375,6 +375,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
         ComputeInstanceContext {
             scratch_directory: args.scratch_directory,
+            worker_core_affinity: args.worker_core_affinity,
         },
     )?;
     info!(
