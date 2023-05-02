@@ -315,8 +315,8 @@ pub struct SourceStatisticsUpdate {
     pub updates_staged: u64,
     pub updates_committed: u64,
     pub bytes_received: u64,
-    pub envelope_state_bytes: u64,
-    pub envelope_state_count: u64,
+    pub envelope_state_bytes: i64,
+    pub envelope_state_count: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
