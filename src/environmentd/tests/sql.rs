@@ -1316,11 +1316,15 @@ fn test_github_18950() {
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
-    client_writes.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
+    client_writes
+        .batch_execute("CREATE TABLE t1 (i1 int)")
+        .unwrap();
 
     // Verify execution during a write-only txn fails
     client_writes.batch_execute("BEGIN").unwrap();
-    client_writes.batch_execute("INSERT INTO t1 VALUES (1)").unwrap();
+    client_writes
+        .batch_execute("INSERT INTO t1 VALUES (1)")
+        .unwrap();
     let error = client_writes
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap_err();
@@ -1350,7 +1354,13 @@ fn test_github_18950() {
             query_timestamp = Some(*explain_timestamp);
         }
 
-        let explain_t1_read_frontier = explain.sources.first().unwrap().read_frontier.first().unwrap();
+        let explain_t1_read_frontier = explain
+            .sources
+            .first()
+            .unwrap()
+            .read_frontier
+            .first()
+            .unwrap();
 
         // Ensure `t1` does not undergo compaction
         if let Some(timestamp) = t1_read_frontier {
@@ -1364,7 +1374,9 @@ fn test_github_18950() {
         // Inserting tends to cause sources to compact, so this should ideally
         // strengthen the assertion above that `t1`'s read frontier should
         // not advance during the txn
-        client_writes.batch_execute("INSERT INTO t1 VALUES (1)").unwrap();
+        client_writes
+            .batch_execute("INSERT INTO t1 VALUES (1)")
+            .unwrap();
     }
 
     // Errors when an object outside the chosen time domain is referenced
@@ -1380,6 +1392,27 @@ fn test_github_18950() {
 
     client_reads.batch_execute("COMMIT").unwrap();
 
+    client_reads.query_one("SELECT mz_now();", &[]).unwrap();
+
+    // Ensure behavior is same when starting txn with `SELECT`
+    client_reads.batch_execute("BEGIN").unwrap();
+
+    client_reads.query("SELECT * FROM t1;", &[]).unwrap();
+
+    let row = client_reads.query_one("SELECT mz_now()::text;", &[]).unwrap();
+
+    let mz_now_ts_raw: String = row.get(0);
+    let mz_now_timestamp = Timestamp::new(mz_now_ts_raw.parse().unwrap());
+
+    let row = client_reads
+            .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
+            .unwrap();
+
+    let explain: String = row.get(0);
+    let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
+
+    assert_eq!(*explain_timestamp, mz_now_timestamp);
 }
 
 // Test that the since for `mz_cluster_replica_utilization` is held back by at least
