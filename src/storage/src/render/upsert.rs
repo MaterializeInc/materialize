@@ -53,67 +53,6 @@ impl AsRef<[u8]> for UpsertKey {
     }
 }
 
-/// Struct to keep a row value along with its calculated size in bytes and updates
-/// This will be used to keep track of the initial size and diffs when we get new data
-/// and emit source envelope metrics
-#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
-struct ValueData {
-    // hold the row value state
-    value: Option<UpsertValue>,
-    // size of the initial row value when populated from state
-    initial_bytes: Option<i64>,
-    // fields to keep track of metric diffs as the value is updated with incoming data
-    diff_bytes: i64,
-    diff_record: i64,
-}
-
-impl ValueData {
-    fn new() -> Self {
-        ValueData {
-            value: None,
-            initial_bytes: None,
-            diff_bytes: 0,
-            diff_record: 0,
-        }
-    }
-
-    fn populate_state(&mut self) {
-        self.initial_bytes = self.value.as_ref().map(|v| Self::calculate_size(v));
-    }
-
-    fn update_value(&mut self, new_value: UpsertValue) -> Option<UpsertValue> {
-        let new_bytes = Self::calculate_size(&new_value);
-        let old_value = self.value.replace(new_value);
-
-        let initial_bytes = self.initial_bytes.unwrap_or(0);
-        self.diff_bytes = new_bytes - initial_bytes;
-        // diff_record here will be either 0, i.e. value was replaced
-        // or 1 if value was inserted
-        self.diff_record = if initial_bytes > 0 { 0 } else { 1 };
-        old_value
-    }
-
-    fn remove_value(&mut self) -> Option<UpsertValue> {
-        let old_value = self.value.take();
-        let initial_bytes = self.initial_bytes.unwrap_or(0);
-        // diff_bytes is negative since we are reducing size of state
-        self.diff_bytes = -initial_bytes;
-        self.diff_record = if initial_bytes > 0 { -1 } else { 0 };
-        old_value
-    }
-
-    fn calculate_size(value: &UpsertValue) -> i64 {
-        let bytes: i64 = match value {
-            Ok(row) => row
-                .byte_len()
-                .try_into()
-                .expect("Unexpected error while converting usize to i64"),
-            Err(_) => 0,
-        };
-        bytes
-    }
-}
-
 thread_local! {
     /// A thread-local datum cache used to calculate hashes
     pub static KEY_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
@@ -182,6 +121,76 @@ impl<H: Digest> Hasher for DigestHasher<H> {
 
     fn finish(&self) -> u64 {
         panic!("digest wrapper used to produce a hash");
+    }
+}
+
+/// Struct to keep a row value along with its calculated size in bytes and updates.
+/// This will be used to keep track of the initial size and diffs when we get new data
+/// and eventually emit source envelope metrics.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+struct ValueData {
+    // This will hold the row value state corresponding to an UpsertKey
+    value: Option<UpsertValue>,
+    // This is the size of the initial row value when populated from state.
+    // `initial_bytes` will be `None` if `value` is None.
+    initial_bytes: Option<i64>,
+    // `diff_bytes` will contain the diff in bytes between incoming and existing data.
+    // It will be positive, if new data size is greater than old data and vice versa.
+    diff_bytes: i64,
+    // `diff_record` will hold only the following values
+    // - -1 for a removed record,
+    // - 0 for when a record is updated with no change in count, and
+    // - 1 for when a record is added.
+    diff_record: i64,
+}
+
+impl ValueData {
+    fn new() -> Self {
+        ValueData {
+            value: None,
+            initial_bytes: None,
+            diff_bytes: 0,
+            diff_record: 0,
+        }
+    }
+
+    fn populate_initial_size(&mut self) {
+        self.initial_bytes = self.value.as_ref().map(Self::calculate_size);
+    }
+
+    // Updates the value and sets corresponding values for `diff_bytes` and `diff_records`.
+    fn update_value(&mut self, new_value: UpsertValue) -> Option<UpsertValue> {
+        let new_bytes = Self::calculate_size(&new_value);
+        let old_value = self.value.replace(new_value);
+
+        let initial_bytes = self.initial_bytes.unwrap_or(0);
+        self.diff_bytes = new_bytes - initial_bytes;
+        // diff_record here will be either 0, i.e. value was replaced
+        // or 1 if value was inserted
+        self.diff_record = if initial_bytes > 0 { 0 } else { 1 };
+        old_value
+    }
+
+    // Removes the value and sets corresponding values for `diff_bytes` and `diff_records`
+    fn remove_value(&mut self) -> Option<UpsertValue> {
+        let old_value = self.value.take();
+        let initial_bytes = self.initial_bytes.unwrap_or(0);
+        // diff_bytes is negative since we are reducing size of state
+        self.diff_bytes = -initial_bytes;
+        self.diff_record = if initial_bytes > 0 { -1 } else { 0 };
+        old_value
+    }
+
+    // Utility method to calculate bytes for a given `UpsertValue`
+    fn calculate_size(value: &UpsertValue) -> i64 {
+        let bytes: i64 = match value {
+            Ok(row) => row
+                .byte_len()
+                .try_into()
+                .expect("Unexpected error while converting usize to i64"),
+            Err(_) => 0, // TODO(mouli): fix this calculation
+        };
+        bytes
     }
 }
 
@@ -407,15 +416,15 @@ where
                     state
                         .multi_get(
                             multi_get_scratch.drain(..),
-                            commands_state.iter_mut().map(|(_, v)| &mut v.value),
+                            commands_state.values_mut().map(|v| &mut v.value),
                         )
                         .await
                         .expect("hashmap impl to not fail");
 
                     // Update state with calculated sizes in bytes
                     commands_state
-                        .iter_mut()
-                        .for_each(|(_, v)| v.populate_state());
+                        .values_mut()
+                        .for_each(|v| v.populate_initial_size());
 
                     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
                     // order to only process the command with the maximum order within the (ts,

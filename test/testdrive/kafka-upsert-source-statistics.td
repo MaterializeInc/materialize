@@ -62,4 +62,3 @@ flower        flower_1
   GROUP BY s.name
   ORDER BY s.name
 upsert true 9 true true 3
-
