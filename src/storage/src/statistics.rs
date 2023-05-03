@@ -362,12 +362,26 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
         cur.2.envelope_state_bytes.add(value);
     }
 
+    /// Set the `envelope_state_bytes` to the given value
+    pub fn set_envelope_state_bytes(&self, value: i64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.envelope_state_bytes = value;
+        cur.2.envelope_state_bytes.set(value);
+    }
+
     /// Update the `envelope_state_count` stat.
     /// A positive value will add and a negative value will subtract.
     pub fn update_envelope_state_count_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         cur.1.envelope_state_count = cur.1.envelope_state_count + value;
         cur.2.envelope_state_count.add(value);
+    }
+
+    /// Set the `envelope_state_count` to the given value
+    pub fn set_envelope_state_count(&self, value: i64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.1.envelope_state_count = value;
+        cur.2.envelope_state_count.set(value);
     }
 }
 

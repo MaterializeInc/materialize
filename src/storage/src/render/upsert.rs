@@ -53,18 +53,69 @@ impl AsRef<[u8]> for UpsertKey {
     }
 }
 
-pub fn calculate_size(data: &Option<UpsertValue>) -> Option<i64> {
-    data.as_ref().map(|value| {
+/// Struct to keep a row value along with its calculated size in bytes and updates
+/// This will be used to keep track of the initial size and diffs when we get new data
+/// and emit source envelope metrics
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+struct ValueData {
+    // hold the row value state
+    value: Option<UpsertValue>,
+    // size of the initial row value when populated from state
+    initial_bytes: Option<i64>,
+    // fields to keep track of metric diffs as the value is updated with incoming data
+    diff_bytes: i64,
+    diff_record: i64,
+}
+
+impl ValueData {
+    fn new() -> Self {
+        ValueData {
+            value: None,
+            initial_bytes: None,
+            diff_bytes: 0,
+            diff_record: 0,
+        }
+    }
+
+    fn populate_state(&mut self) {
+        self.initial_bytes = self.value.as_ref().map(|v| Self::calculate_size(v));
+    }
+
+    fn update_value(&mut self, new_value: UpsertValue) -> Option<UpsertValue> {
+        let new_bytes = Self::calculate_size(&new_value);
+        let old_value = self.value.replace(new_value);
+
+        let initial_bytes = self.initial_bytes.unwrap_or(0);
+        self.diff_bytes = new_bytes - initial_bytes;
+        // diff_record here will be either 0, i.e. value was replaced
+        // or 1 i.e. value was inserted
+        self.diff_record = 1 - &old_value.as_ref().map(|_| 1).unwrap_or(0);
+
+        old_value
+    }
+
+    fn remove_value(&mut self) -> Option<UpsertValue> {
+        let old_value = self.value.take();
+
+        let initial_bytes = self.initial_bytes.unwrap_or(0);
+        // following values are negative since we are reducing size of state
+        self.diff_bytes = -initial_bytes;
+        self.diff_record = -1;
+
+        old_value
+    }
+
+    fn calculate_size(value: &UpsertValue) -> i64 {
         let bytes: i64 = match value {
-            Ok(row) => row.byte_len().try_into().unwrap(),
+            Ok(row) => row
+                .byte_len()
+                .try_into()
+                .expect("Unexpected error while converting usize to i64"),
             Err(_) => 0,
         };
         bytes
-    })
+    }
 }
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ValueWithSize(Option<UpsertValue>, Option<i64>);
 
 thread_local! {
     /// A thread-local datum cache used to calculate hashes
@@ -291,9 +342,15 @@ where
         let mut commands_state = indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
+        let mut initial_state_bytes = 0;
+        let mut initial_state_records = 0;
+
         // Rehydrate the upsert state (and bump some stats), even if the snapshot is empty.
         let snapshot = snapshot.into_iter().map(|((key, value), diff)| {
             assert_eq!(diff, 1, "invalid upsert state");
+            initial_state_bytes = initial_state_bytes + ValueData::calculate_size(&value);
+            initial_state_records = initial_state_records + 1;
+
             (key, Some(value))
         });
 
@@ -309,6 +366,13 @@ where
         upsert_metrics
             .rehydration_total
             .set(u64::cast_from(snapshot_size));
+
+        source_config
+            .source_statistics
+            .set_envelope_state_bytes(initial_state_bytes);
+        source_config
+            .source_statistics
+            .set_envelope_state_count(initial_state_records);
 
         // Now can can resume consuming the collection
         let mut stash = vec![];
@@ -336,9 +400,7 @@ where
                     // along with the value with the _latest timestamp for that key_.
                     commands_state.clear();
                     for (_, key, _, _) in stash.iter().take(idx) {
-                        commands_state
-                            .entry(*key)
-                            .or_insert(ValueWithSize(None, None));
+                        commands_state.entry(*key).or_insert(ValueData::new());
                     }
 
                     // These iterators iterate in the same order because `commands_state`
@@ -348,15 +410,15 @@ where
                     state
                         .multi_get(
                             multi_get_scratch.drain(..),
-                            commands_state.iter_mut().map(|(_, v)| &mut v.0),
+                            commands_state.iter_mut().map(|(_, v)| &mut v.value),
                         )
                         .await
                         .expect("hashmap impl to not fail");
 
-                    // Calculate bytes for the values
-                    commands_state.iter_mut().for_each(|(_, v)| {
-                        v.1 = calculate_size(&v.0);
-                    });
+                    // Update state with calculated sizes in bytes
+                    commands_state
+                        .iter_mut()
+                        .for_each(|(_, v)| v.populate_state());
 
                     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
                     // order to only process the command with the maximum order within the (ts,
@@ -374,58 +436,36 @@ where
                             .expect("key missing from commands_state");
                         match value {
                             Some(value) => {
-                                if let Some(old_value) = command_state.0.replace(value.clone()) {
+                                if let Some(old_value) = command_state.update_value(value.clone()) {
                                     output_updates.push((old_value, ts.clone(), -1));
                                 }
                                 output_updates.push((value, ts, 1));
                             }
                             None => {
-                                if let Some(old_value) = command_state.0.take() {
+                                if let Some(old_value) = command_state.remove_value() {
                                     output_updates.push((old_value, ts, -1));
                                 }
                             }
                         }
                     }
 
-                    // Calculating metrics before draining
-                    let mut diff_count = 0;
-                    let mut diff_bytes = 0;
-                    commands_state
-                        .iter()
-                        .for_each(|(_, ValueWithSize(v, prev_size))| {
-                            let new_size = calculate_size(v);
-
-                            match (prev_size, new_size) {
-                                (Some(prev_bytes), Some(new_bytes)) => {
-                                    diff_bytes = diff_bytes + new_bytes - prev_bytes;
-                                }
-                                (Some(prev_bytes), None) => {
-                                    diff_bytes = diff_bytes - prev_bytes;
-                                    diff_count = diff_count - 1;
-                                }
-                                (None, Some(new_bytes)) => {
-                                    diff_bytes = diff_bytes + new_bytes;
-                                    diff_count = diff_count + 1;
-                                }
-                                (None, None) => {
-                                    println!("Why why why!!! {:?}", v);
-                                }
-                            }
-                        });
+                    // Accumulating metrics before draining
+                    let total_diff_records = commands_state.values().map(|v| v.diff_record).sum();
+                    let total_diff_bytes = commands_state.values().map(|v| v.diff_bytes).sum();
 
                     // Record the changes in `state`.
                     state
-                        .multi_put(commands_state.drain(..).map(|(k, v)| (k, v.0)))
+                        .multi_put(commands_state.drain(..).map(|(k, v)| (k, v.value)))
                         .await
                         .expect("hashmap impl to not fail");
 
-                    // Emitting metrics only after properly persisted
+                    // Emitting metrics only after updating state
                     source_config
                         .source_statistics
-                        .update_envelope_state_bytes_by(diff_bytes);
+                        .update_envelope_state_bytes_by(total_diff_bytes);
                     source_config
                         .source_statistics
-                        .update_envelope_state_count_by(diff_count);
+                        .update_envelope_state_count_by(total_diff_records);
 
                     // Emit the _consolidated_ changes to the output.
                     output_handle
