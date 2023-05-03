@@ -70,7 +70,7 @@ REVOKE SELECT ON mv FROM joe;
 ```
 
 ```sql
-REVOKE USAGE, CREATE ON DATABASE materialize TO joe;
+REVOKE USAGE, CREATE ON DATABASE materialize FROM joe;
 ```
 
 ## Related pages
