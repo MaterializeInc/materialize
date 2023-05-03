@@ -518,14 +518,15 @@ fn generate_required_privileges(
         Plan::CreateSink(plan) => {
             let schema_id: ObjectId = plan.name.qualifiers.clone().into();
             let mut privileges = vec![(schema_id.clone(), AclMode::CREATE, role_id)];
-            privileges.extend_from_slice(&generate_read_privileges_inner(
+            privileges.extend_from_slice(&generate_read_privileges(
                 catalog,
                 iter::once(plan.sink.from),
                 role_id,
-                &mut BTreeSet::from([(schema_id, role_id)]),
             ));
             if let Some(id) = plan.cluster_config.cluster_id() {
                 privileges.push((id.into(), AclMode::CREATE, role_id));
+            } else if let Ok(cluster) = catalog.resolve_cluster(None) {
+                privileges.push((cluster.id().into(), AclMode::CREATE, role_id));
             }
             privileges
         }
