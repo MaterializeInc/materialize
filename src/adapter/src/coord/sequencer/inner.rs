@@ -2251,8 +2251,8 @@ impl Coordinator {
             let timedomain_id_bundle =
                 self.timedomain_for(source_ids, &timeline_context, session.conn_id(), cluster_id)?;
 
-            if !timedomain_id_bundle.is_empty() && !self.txn_reads.contains_key(&session.conn_id())
-            {
+            // If we've already acquired read holds for the txn, we can skip doing so again
+            if !self.txn_reads.contains_key(&session.conn_id()) {
                 if let Some(timestamp) = determination.timestamp_context.timestamp() {
                     let read_holds =
                         self.acquire_read_holds(timestamp.clone(), &timedomain_id_bundle);
