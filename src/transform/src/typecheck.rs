@@ -22,8 +22,6 @@ use mz_repr::{
     ColumnName, ColumnType, RelationType, Row, ScalarBaseType, ScalarType,
 };
 
-use crate::TransformError;
-
 /// Typechecking contexts as shared by various typechecking passes.
 ///
 /// We use a `RefCell` to ensure that contexts are shared by multiple typechecker passes.
@@ -1143,16 +1141,20 @@ impl Typecheck {
     }
 }
 
-// Detailed type error logging as a warning, with failures in CI (SOFT_ASSERTIONS) and a logged error in production
+/// Detailed type error logging as a warning, with failures in CI (SOFT_ASSERTIONS) and a logged error in production
+///
+/// type_error(severity, ...) logs a type warning; if `severity` is `true`, it will also log an error (visible in Sentry)
 macro_rules! type_error {
-    ($($arg:tt)+) => {{
+    ($severity:expr, $($arg:tt)+) => {{
         ::tracing::warn!($($arg)+);
 
-        if mz_ore::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
-            return Err(TransformError::Internal("type error in MIR optimization (details in warning)".to_string()));
-        } else {
-            ::tracing::error!("type error in MIR optimization (details in warning)");
+//        if mz_ore::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
+//            return Err(TransformError::Internal("type error in MIR optimization (details in warning)".to_string()));
+//        } else {
+        if $severity {
+          ::tracing::error!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue #19101 <https://github.com/MaterializeInc/materialize/issues/19101>)");
         }
+//        }
     }}
 }
 
@@ -1175,7 +1177,8 @@ impl crate::Transform for Typecheck {
                 && !id.is_transient()
             {
                 type_error!(
-                    "FOUND NEW NON-TRANSIENT TOP LEVEL QUERY BOUND TO {id}:\n{}",
+                    false, // not severe
+                    "TYPE WARNING: NEW NON-TRANSIENT GLOBAL ID {id}\n{}",
                     relation.pretty()
                 );
             }
@@ -1185,26 +1188,27 @@ impl crate::Transform for Typecheck {
 
         let humanizer = mz_repr::explain::DummyHumanizer;
 
-        if let Err(err) = self.typecheck(relation, &ctx) {
-            type_error!(
-                "TYPE ERROR: {err}\nIN UNKNOWN QUERY:\n{}",
-                relation.pretty()
-            );
-        }
-
         match (got, expected) {
             (Ok(got), Some(expected)) => {
                 let id = args.global_id.unwrap();
 
                 // contravariant: global types can be updated
-                if !is_subtype_of(expected, &got) {
-                    let got = columns_pretty(&got, &humanizer);
-                    let expected = columns_pretty(expected, &humanizer);
+                let diffs = relation_subtype_difference(expected, &got);
+                if !diffs.is_empty() {
+                    // SEVERE only if got and expected have true differences, not just nullability
+                    let severity = diffs
+                        .iter()
+                        .any(|diff| diff.clone().ignore_nullability().is_some());
 
-                    type_error!(
-                        "TYPE ERROR: GLOBAL ID TYPE CHANGED\n     got {got}\nexpected {expected} \nIN KNOWN QUERY BOUND TO {id}:\n{}",
-                        relation.pretty()
-                    );
+                    let err = TypeError::MismatchColumns {
+                        source: relation,
+                        got: got,
+                        expected: expected.clone(),
+                        diffs: diffs,
+                        message: format!("a global id {id}'s type changed (was `expected` which should be a subtype of `got`) "),
+                    };
+
+                    type_error!(severity, "TYPE ERROR IN KNOWN GLOBAL ID {id}:\n{err}");
                 }
             }
             (Ok(got), None) => {
@@ -1213,21 +1217,20 @@ impl crate::Transform for Typecheck {
                 }
             }
             (Err(err), _) => {
-                let binding = match args.global_id {
-                    Some(id) => format!("QUERY BOUND TO {id}"),
-                    None => "TRANSIENT QUERY".to_string(),
-                };
-
-                let (expected, known) = match expected {
-                    Some(expected) => (
-                        format!("expected type {}", columns_pretty(expected, &humanizer)),
-                        "KNOWN".to_string(),
-                    ),
-                    None => ("no expected type".to_string(), "NEW".to_string()),
+                let (expected, binding) = match expected {
+                    Some(expected) => {
+                        let id = args.global_id.unwrap();
+                        (
+                            format!("expected type {}\n", columns_pretty(expected, &humanizer)),
+                            format!("KNOWN GLOBAL ID {id}"),
+                        )
+                    }
+                    None => ("".to_string(), "TRANSIENT QUERY".to_string()),
                 };
 
                 type_error!(
-                    "TYPE ERROR:\n{err}\n{expected}\nIN {known} {binding}:\n{}",
+                    true, // SEVERE: the transformed code is inconsistent
+                    "TYPE ERROR IN {binding}:\n{err}\n{expected}{}",
                     relation.pretty()
                 );
             }
