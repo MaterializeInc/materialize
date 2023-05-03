@@ -4234,7 +4234,10 @@ fn plan_aggregate(
             if args.is_empty() {
                 sql_bail!(
                     "{}(*) must be used to call a parameterless aggregate function",
-                    name
+                    ecx.qcx
+                        .scx
+                        .humanize_resolved_name(name)
+                        .expect("name actually resolved")
                 );
             }
             let args = plan_exprs(ecx, args)?;
