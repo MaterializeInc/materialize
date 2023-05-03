@@ -208,21 +208,18 @@ impl Coordinator {
         tx: oneshot::Sender<Response<StartupResponse>>,
     ) {
         if !session.user().is_superuser() {
-            match self.validate_resource_limit(
+            if let Err(e) = self.validate_resource_limit(
                 self.active_conns.len(),
                 i64::try_from(self.active_conns.len() + 1).expect("safe unless the map is too big"),
                 SystemVars::max_connections,
                 "a connection",
                 "max connections",
             ) {
-                Ok(()) => {}
-                Err(e) => {
-                    let _ = tx.send(Response {
-                        result: Err(e),
-                        session,
-                    });
-                    return;
-                }
+                let _ = tx.send(Response {
+                    result: Err(e),
+                    session,
+                });
+                return;
             }
         }
 
