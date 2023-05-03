@@ -516,8 +516,11 @@ fn generate_required_privileges(
             role_id,
         )],
         Plan::CreateSink(plan) => {
-            let schema_id: ObjectId = plan.name.qualifiers.clone().into();
-            let mut privileges = vec![(schema_id.clone(), AclMode::CREATE, role_id)];
+            let mut privileges = vec![(
+                plan.name.qualifiers.clone().into(),
+                AclMode::CREATE,
+                role_id,
+            )];
             privileges.extend_from_slice(&generate_read_privileges(
                 catalog,
                 iter::once(plan.sink.from),
