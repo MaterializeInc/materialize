@@ -166,7 +166,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN SHOW CLUSTERS
+EXPLAIN SELECT name FROM (SHOW CLUSTERS)
 ----
 Explained Query (fast path):
   Project (#0)

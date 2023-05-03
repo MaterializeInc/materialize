@@ -93,17 +93,17 @@ u1  default
 u4  foo
 u7  bar
 
-query T rowsort
-SHOW CLUSTERS
+query TT rowsort
+SELECT name, replicas::text FROM (SHOW CLUSTERS)
 ----
-mz_system
-mz_introspection
-bar
-default
-foo
+bar  {"(r1,1)","(r2,1)"}
+default  {"(r1,1)"}
+foo  {"(r1,)"}
+mz_introspection  {"(r1,1)"}
+mz_system  {"(r1,1)"}
 
 query T rowsort
-SHOW CLUSTERS LIKE 'd%'
+SELECT name FROM (SHOW CLUSTERS LIKE 'd%')
 ----
 default
 

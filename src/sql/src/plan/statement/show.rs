@@ -599,8 +599,15 @@ pub fn show_clusters<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT mz_clusters.name FROM mz_catalog.mz_clusters".to_string();
-
+    let query = "
+SELECT
+    mz_clusters.name,
+    pg_catalog.array_agg(ROW(mz_cluster_replicas.name, mz_cluster_replicas.size) ORDER BY mz_cluster_replicas.name)
+        AS replicas
+FROM
+    mz_catalog.mz_clusters
+        JOIN mz_catalog.mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
+GROUP BY mz_clusters.name".to_string();
     ShowSelect::new(scx, query, filter, None, Some(&["name"]))
 }
 
