@@ -5393,21 +5393,20 @@ impl<'a> Parser<'a> {
             Ok(self.parse_rows_from()?)
         } else {
             let name = self.parse_raw_name()?;
-            match name {
-                name @ RawItemName::Name(..) if self.consume_token(&Token::LParen) => {
-                    let args = self.parse_optional_args(false)?;
-                    let alias = self.parse_optional_table_alias()?;
-                    let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
-                    Ok(TableFactor::Function {
-                        function: TableFunction { name, args },
-                        alias,
-                        with_ordinality,
-                    })
-                }
-                _ => Ok(TableFactor::Table {
+            if self.consume_token(&Token::LParen) {
+                let args = self.parse_optional_args(false)?;
+                let alias = self.parse_optional_table_alias()?;
+                let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
+                Ok(TableFactor::Function {
+                    function: TableFunction { name, args },
+                    alias,
+                    with_ordinality,
+                })
+            } else {
+                Ok(TableFactor::Table {
                     name,
                     alias: self.parse_optional_table_alias()?,
-                }),
+                })
             }
         }
     }

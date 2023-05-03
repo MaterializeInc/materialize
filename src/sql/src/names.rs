@@ -1118,7 +1118,8 @@ impl<'a> NameResolver<'a> {
                     }
                 }
             }
-            _ => unreachable!(),
+            // We don't want to hit this code path, but immaterial if we do
+            name @ RawItemName::Id(..) => self.fold_item_name(name),
         }
     }
 }
@@ -1701,7 +1702,10 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         node: mz_sql_parser::ast::TableFunction<Raw>,
     ) -> mz_sql_parser::ast::TableFunction<Aug> {
         mz_sql_parser::ast::TableFunction {
-            name: self.fold_raw_object_name_name_internal(node.name, true),
+            name: match &node.name {
+                RawItemName::Name(..) => self.fold_raw_object_name_name_internal(node.name, true),
+                RawItemName::Id(..) => self.fold_item_name(node.name),
+            },
             args: self.fold_function_args(node.args),
         }
     }
