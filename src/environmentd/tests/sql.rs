@@ -1299,29 +1299,44 @@ fn test_explain_timestamp_json() {
 // 4. Errors when an object outside the chosen time domain is referenced
 #[test]
 fn test_github_18950() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
-    let mut client = server.connect(postgres::NoTls).unwrap();
-    client.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
+    // Set the timestamp to zero for deterministic initial timestamps.
+    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
+    let now = {
+        let nowfn = Arc::clone(&nowfn);
+        NowFn::from(move || (nowfn.lock().unwrap())())
+    };
 
-    // Verify execution during a write-only trx fails
-    client.batch_execute("BEGIN").unwrap();
-    client.batch_execute("INSERT INTO t1 VALUES (1)").unwrap();
-    let error = client
+    let config = util::Config::default()
+        .workers(2)
+        .with_now(now)
+        .unsafe_mode();
+
+    let server = util::start_server(config).unwrap();
+
+    let mut client_writes = server.connect(postgres::NoTls).unwrap();
+    let mut client_reads = server.connect(postgres::NoTls).unwrap();
+
+    client_writes.batch_execute("CREATE TABLE t1 (i1 int)").unwrap();
+
+    // Verify execution during a write-only txn fails
+    client_writes.batch_execute("BEGIN").unwrap();
+    client_writes.batch_execute("INSERT INTO t1 VALUES (1)").unwrap();
+    let error = client_writes
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap_err();
 
     assert!(format!("{}", error).contains("transaction in write-only mode"));
 
-    client.batch_execute("ROLLBACK").unwrap();
+    client_writes.batch_execute("ROLLBACK").unwrap();
 
     // Verify the transaction timestamp is returned for each select and
     // read holds are acquired as of the transaction timestamp
-    client.batch_execute("BEGIN").unwrap();
+    client_reads.batch_execute("BEGIN").unwrap();
     let mut query_timestamp = None;
+    let mut t1_read_frontier = None;
 
     for i in 1..5 {
-        let row = client
+        let row = client_reads
             .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
             .unwrap();
 
@@ -1335,17 +1350,25 @@ fn test_github_18950() {
             query_timestamp = Some(*explain_timestamp);
         }
 
-        for source in &explain.sources {
-            for timestamp in &source.read_frontier {
-                assert_eq!(*timestamp, query_timestamp.unwrap());
-            }
+        let explain_t1_read_frontier = explain.sources.first().unwrap().read_frontier.first().unwrap();
+
+        // Ensure `t1` does not undergo compaction
+        if let Some(timestamp) = t1_read_frontier {
+            assert_eq!(timestamp, *explain_t1_read_frontier);
+        } else {
+            t1_read_frontier = Some(explain_t1_read_frontier.clone());
         }
 
-        std::thread::sleep(Duration::from_millis(5 * i));
+        // Increase now by 2s each iteration
+        *nowfn.lock().unwrap() = NowFn::from(move || 2000 * i);
+        // Inserting tends to cause sources to compact, so this should ideally
+        // strengthen the assertion above that `t1`'s read frontier should
+        // not advance during the txn
+        client_writes.batch_execute("INSERT INTO t1 VALUES (1)").unwrap();
     }
 
     // Errors when an object outside the chosen time domain is referenced
-    let error = client
+    let error = client_reads
         .query_one(
             "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_views;",
             &[],
@@ -1354,6 +1377,9 @@ fn test_github_18950() {
 
     assert!(format!("{}", error)
         .contains("Transactions can only reference objects in the same timedomain"));
+
+    client_reads.batch_execute("COMMIT").unwrap();
+
 }
 
 // Test that the since for `mz_cluster_replica_utilization` is held back by at least
