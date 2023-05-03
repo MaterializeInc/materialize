@@ -1202,9 +1202,9 @@ impl crate::Transform for Typecheck {
 
                     let err = TypeError::MismatchColumns {
                         source: relation,
-                        got: got,
+                        got,
                         expected: expected.clone(),
-                        diffs: diffs,
+                        diffs,
                         message: format!("a global id {id}'s type changed (was `expected` which should be a subtype of `got`) "),
                     };
 
