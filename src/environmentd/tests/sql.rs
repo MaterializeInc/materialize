@@ -1399,14 +1399,16 @@ fn test_github_18950() {
 
     client_reads.query("SELECT * FROM t1;", &[]).unwrap();
 
-    let row = client_reads.query_one("SELECT mz_now()::text;", &[]).unwrap();
+    let row = client_reads
+        .query_one("SELECT mz_now()::text;", &[])
+        .unwrap();
 
     let mz_now_ts_raw: String = row.get(0);
     let mz_now_timestamp = Timestamp::new(mz_now_ts_raw.parse().unwrap());
 
     let row = client_reads
-            .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
-            .unwrap();
+        .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
+        .unwrap();
 
     let explain: String = row.get(0);
     let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
