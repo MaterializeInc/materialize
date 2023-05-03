@@ -778,7 +778,7 @@ pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = Serve
 pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_connections"),
     value: &1000,
-    description: "Maximum number of concurrent connections (Materialize).",
+    description: "The maximum number of concurrent connections (Materialize).",
     internal: false,
     safe: true,
 };
