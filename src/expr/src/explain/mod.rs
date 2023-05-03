@@ -98,7 +98,7 @@ impl<'a> ExplainSource<'a> {
     ) -> ExplainSource<'a> {
         let pushdown_info = if context.config.mfp_pushdown {
             Some(PushdownInfo {
-                trace: Trace.eval_mfp(op),
+                trace: Trace.mfp_filter(op),
             })
         } else {
             None

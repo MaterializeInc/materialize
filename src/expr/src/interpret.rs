@@ -415,105 +415,95 @@ pub trait Interpreter {
     type Summary: Clone + Debug + Sized;
 
     /// A column of the input row.
-    fn eval_column(&self, id: usize) -> Self::Summary;
+    fn column(&self, id: usize) -> Self::Summary;
 
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum.)
-    fn eval_literal(&self, result: &Result<Row, EvalError>, col_type: &ColumnType)
-        -> Self::Summary;
+    fn literal(&self, result: &Result<Row, EvalError>, col_type: &ColumnType) -> Self::Summary;
 
     /// A call to an unmaterializable function.
     ///
     /// These functions cannot be evaluated by `MirScalarExpr::eval`. They must
     /// be transformed away by a higher layer.
-    fn eval_unmaterializable(&self, func: &UnmaterializableFunc) -> Self::Summary;
+    fn unmaterializable(&self, func: &UnmaterializableFunc) -> Self::Summary;
 
     /// A function call that takes one expression as an argument.
-    fn eval_unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary;
+    fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary;
 
     /// A function call that takes two expressions as arguments.
-    fn eval_binary(
-        &self,
-        func: &BinaryFunc,
-        left: Self::Summary,
-        right: Self::Summary,
-    ) -> Self::Summary;
+    fn binary(&self, func: &BinaryFunc, left: Self::Summary, right: Self::Summary)
+        -> Self::Summary;
 
     /// A function call that takes an arbitrary number of arguments.
-    fn eval_variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary;
+    fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary;
 
     /// Conditionally evaluated expressions.
-    fn eval_if(
-        &self,
-        cond: Self::Summary,
-        then: Self::Summary,
-        els: Self::Summary,
-    ) -> Self::Summary;
+    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary;
 
     /// Evaluate an entire expression, by delegating to the fine-grained methods on [Interpreter].
-    fn eval_expr(&self, expr: &MirScalarExpr) -> Self::Summary {
+    fn expr(&self, expr: &MirScalarExpr) -> Self::Summary {
         match expr {
-            MirScalarExpr::Column(id) => self.eval_column(*id),
-            MirScalarExpr::Literal(value, col_type) => self.eval_literal(value, col_type),
-            MirScalarExpr::CallUnmaterializable(func) => self.eval_unmaterializable(func),
+            MirScalarExpr::Column(id) => self.column(*id),
+            MirScalarExpr::Literal(value, col_type) => self.literal(value, col_type),
+            MirScalarExpr::CallUnmaterializable(func) => self.unmaterializable(func),
             MirScalarExpr::CallUnary { func, expr } => {
-                let expr_range = self.eval_expr(expr);
-                self.eval_unary(func, expr_range)
+                let expr_range = self.expr(expr);
+                self.unary(func, expr_range)
             }
             MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let expr1_range = self.eval_expr(expr1);
-                let expr2_range = self.eval_expr(expr2);
-                self.eval_binary(func, expr1_range, expr2_range)
+                let expr1_range = self.expr(expr1);
+                let expr2_range = self.expr(expr2);
+                self.binary(func, expr1_range, expr2_range)
             }
             MirScalarExpr::CallVariadic { func, exprs } => {
-                let exprs: Vec<_> = exprs.into_iter().map(|e| self.eval_expr(e)).collect();
-                self.eval_variadic(func, exprs)
+                let exprs: Vec<_> = exprs.into_iter().map(|e| self.expr(e)).collect();
+                self.variadic(func, exprs)
             }
             MirScalarExpr::If { cond, then, els } => {
-                let cond_range = self.eval_expr(cond);
-                let then_range = self.eval_expr(then);
-                let els_range = self.eval_expr(els);
-                self.eval_if(cond_range, then_range, els_range)
+                let cond_range = self.expr(cond);
+                let then_range = self.expr(then);
+                let els_range = self.expr(els);
+                self.cond(cond_range, then_range, els_range)
             }
         }
     }
 
     /// Specifically, this evaluates the map and filters stages of an MFP: summarize each of the
     /// map expressions, then `and` together all of the filters.
-    fn eval_mfp(&self, mfp: &MapFilterProject) -> Self::Summary {
+    fn mfp_filter(&self, mfp: &MapFilterProject) -> Self::Summary {
         let mfp_eval = MfpEval::new(self, mfp.input_arity, &mfp.expressions);
         // NB: self should not be used after this point!
         let predicates = mfp
             .predicates
             .iter()
-            .map(|(_, e)| mfp_eval.eval_expr(e))
+            .map(|(_, e)| mfp_eval.expr(e))
             .collect();
-        mfp_eval.eval_variadic(&VariadicFunc::And, predicates)
+        mfp_eval.variadic(&VariadicFunc::And, predicates)
     }
 
-    /// Similar to [Self::eval_mfp], but includes the additional temporal filters that have been
+    /// Similar to [Self::mfp_filter], but includes the additional temporal filters that have been
     /// broken out.
-    fn eval_mfp_plan(&self, plan: &MfpPlan) -> Self::Summary {
+    fn mfp_plan_filter(&self, plan: &MfpPlan) -> Self::Summary {
         let mfp_eval = MfpEval::new(self, plan.mfp.input_arity, &plan.mfp.expressions);
         // NB: self should not be used after this point!
         let mut results: Vec<_> = plan
             .mfp
             .predicates
             .iter()
-            .map(|(_, e)| mfp_eval.eval_expr(e))
+            .map(|(_, e)| mfp_eval.expr(e))
             .collect();
-        let mz_now = mfp_eval.eval_unmaterializable(&UnmaterializableFunc::MzNow);
+        let mz_now = mfp_eval.unmaterializable(&UnmaterializableFunc::MzNow);
         for bound in &plan.lower_bounds {
-            let bound_range = mfp_eval.eval_expr(bound);
-            let result = mfp_eval.eval_binary(&BinaryFunc::Lte, bound_range, mz_now.clone());
+            let bound_range = mfp_eval.expr(bound);
+            let result = mfp_eval.binary(&BinaryFunc::Lte, bound_range, mz_now.clone());
             results.push(result);
         }
         for bound in &plan.upper_bounds {
-            let bound_range = mfp_eval.eval_expr(bound);
-            let result = mfp_eval.eval_binary(&BinaryFunc::Gte, bound_range, mz_now.clone());
+            let bound_range = mfp_eval.expr(bound);
+            let result = mfp_eval.binary(&BinaryFunc::Gte, bound_range, mz_now.clone());
             results.push(result);
         }
-        self.eval_variadic(&VariadicFunc::And, results)
+        self.variadic(&VariadicFunc::And, results)
     }
 }
 
@@ -533,7 +523,7 @@ impl<'a, E: Interpreter + ?Sized> MfpEval<'a, E> {
             expressions: vec![],
         };
         for expr in expressions {
-            let result = mfp_eval.eval_expr(expr);
+            let result = mfp_eval.expr(expr);
             mfp_eval.expressions.push(result);
         }
         mfp_eval
@@ -543,50 +533,41 @@ impl<'a, E: Interpreter + ?Sized> MfpEval<'a, E> {
 impl<'a, E: Interpreter + ?Sized> Interpreter for MfpEval<'a, E> {
     type Summary = E::Summary;
 
-    fn eval_column(&self, id: usize) -> Self::Summary {
+    fn column(&self, id: usize) -> Self::Summary {
         if id < self.input_arity {
-            self.evaluator.eval_column(id)
+            self.evaluator.column(id)
         } else {
             self.expressions[id - self.input_arity].clone()
         }
     }
 
-    fn eval_literal(
-        &self,
-        result: &Result<Row, EvalError>,
-        col_type: &ColumnType,
-    ) -> Self::Summary {
-        self.evaluator.eval_literal(result, col_type)
+    fn literal(&self, result: &Result<Row, EvalError>, col_type: &ColumnType) -> Self::Summary {
+        self.evaluator.literal(result, col_type)
     }
 
-    fn eval_unmaterializable(&self, func: &UnmaterializableFunc) -> Self::Summary {
-        self.evaluator.eval_unmaterializable(func)
+    fn unmaterializable(&self, func: &UnmaterializableFunc) -> Self::Summary {
+        self.evaluator.unmaterializable(func)
     }
 
-    fn eval_unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-        self.evaluator.eval_unary(func, expr)
+    fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
+        self.evaluator.unary(func, expr)
     }
 
-    fn eval_binary(
+    fn binary(
         &self,
         func: &BinaryFunc,
         left: Self::Summary,
         right: Self::Summary,
     ) -> Self::Summary {
-        self.evaluator.eval_binary(func, left, right)
+        self.evaluator.binary(func, left, right)
     }
 
-    fn eval_variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
-        self.evaluator.eval_variadic(func, exprs)
+    fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
+        self.evaluator.variadic(func, exprs)
     }
 
-    fn eval_if(
-        &self,
-        cond: Self::Summary,
-        then: Self::Summary,
-        els: Self::Summary,
-    ) -> Self::Summary {
-        self.evaluator.eval_if(cond, then, els)
+    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
+        self.evaluator.cond(cond, then, els)
     }
 }
 
@@ -670,29 +651,25 @@ impl Interpreter for Trace {
     /// (If the column is not present in the summary, we default to `false`.
     type Summary = RelationTrace;
 
-    fn eval_column(&self, id: usize) -> Self::Summary {
+    fn column(&self, id: usize) -> Self::Summary {
         let mut trace = RelationTrace::new();
         trace.set(id, Pushdownable::Yes);
         trace
     }
 
-    fn eval_literal(
-        &self,
-        _result: &Result<Row, EvalError>,
-        _col_type: &ColumnType,
-    ) -> Self::Summary {
+    fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
         RelationTrace::new()
     }
 
-    fn eval_unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
+    fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
         RelationTrace::new()
     }
 
-    fn eval_unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
+    fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
         expr.apply_fn(unary_monotonic(func))
     }
 
-    fn eval_binary(
+    fn binary(
         &self,
         func: &BinaryFunc,
         left: Self::Summary,
@@ -708,7 +685,7 @@ impl Interpreter for Trace {
             .union(right.apply_fn(right_monotonic))
     }
 
-    fn eval_variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
+    fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
         let is_monotonic = variadic_monotonic(func);
         exprs
             .into_iter()
@@ -717,12 +694,7 @@ impl Interpreter for Trace {
             })
     }
 
-    fn eval_if(
-        &self,
-        cond: Self::Summary,
-        then: Self::Summary,
-        els: Self::Summary,
-    ) -> Self::Summary {
+    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
         cond.union(then.union(els))
     }
 }
@@ -801,15 +773,11 @@ impl<'a> ColumnSpecs<'a> {
 impl<'a> Interpreter for ColumnSpecs<'a> {
     type Summary = ColumnSpec<'a>;
 
-    fn eval_column(&self, id: usize) -> Self::Summary {
+    fn column(&self, id: usize) -> Self::Summary {
         self.columns[id].clone()
     }
 
-    fn eval_literal(
-        &self,
-        result: &Result<Row, EvalError>,
-        col_type: &ColumnType,
-    ) -> Self::Summary {
+    fn literal(&self, result: &Result<Row, EvalError>, col_type: &ColumnType) -> Self::Summary {
         let col_type = col_type.clone();
         let range = self.eval_result(result.as_ref().map(|row| {
             self.arena
@@ -818,7 +786,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         ColumnSpec { col_type, range }
     }
 
-    fn eval_unmaterializable(&self, func: &UnmaterializableFunc) -> Self::Summary {
+    fn unmaterializable(&self, func: &UnmaterializableFunc) -> Self::Summary {
         let col_type = func.output_type();
         let range = self
             .unmaterializables
@@ -828,7 +796,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         ColumnSpec { col_type, range }
     }
 
-    fn eval_unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
+    fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
         let is_monotonic = unary_monotonic(func);
         let expr = MirScalarExpr::CallUnary {
             func: func.clone(),
@@ -845,7 +813,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         ColumnSpec { col_type, range }
     }
 
-    fn eval_binary(
+    fn binary(
         &self,
         func: &BinaryFunc,
         left: Self::Summary,
@@ -913,7 +881,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         ColumnSpec { col_type, range }
     }
 
-    fn eval_variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
+    fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
         fn eval_loop<'a>(
             is_monotonic: Monotonic,
             stack: &mut Vec<Datum<'a>>,
@@ -956,12 +924,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         ColumnSpec { col_type, range }
     }
 
-    fn eval_if(
-        &self,
-        cond: Self::Summary,
-        then: Self::Summary,
-        els: Self::Summary,
-    ) -> Self::Summary {
+    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
         let col_type = ColumnType {
             scalar_type: then.col_type.scalar_type,
             nullable: then.col_type.nullable || els.col_type.nullable,
@@ -1064,7 +1027,7 @@ mod tests {
             for (id, datum) in datums.iter().enumerate() {
                 interpreter.push_column(id, ResultSpec::value(*datum));
             }
-            let spec = interpreter.eval_expr(&expr);
+            let spec = interpreter.expr(&expr);
 
             match eval_result {
                 Ok(value) => {
@@ -1119,7 +1082,7 @@ mod tests {
             );
             interpreter.push_column(0, ResultSpec::value_between(30i64.into(), 40i64.into()));
 
-            let range_out = interpreter.eval_expr(&expr).range;
+            let range_out = interpreter.expr(&expr).range;
             assert!(range_out.may_contain(Datum::False));
             assert!(!range_out.may_contain(Datum::True));
             assert!(!range_out.may_contain(Datum::Null));
@@ -1139,7 +1102,7 @@ mod tests {
             );
             interpreter.push_column(0, ResultSpec::value_between(30i64.into(), 40i64.into()));
 
-            let range_out = interpreter.eval_expr(&expr).range;
+            let range_out = interpreter.expr(&expr).range;
             assert!(range_out.may_contain(Datum::False));
             assert!(range_out.may_contain(Datum::True));
             assert!(!range_out.may_contain(Datum::Null));
@@ -1183,7 +1146,7 @@ mod tests {
             ),
         );
 
-        let range_out = interpreter.eval_expr(&expr).range;
+        let range_out = interpreter.expr(&expr).range;
         assert!(!range_out.may_contain(Datum::Numeric(0.into())));
         assert!(range_out.may_contain(Datum::Numeric(200.into())));
         assert!(!range_out.may_contain(Datum::Numeric(400.into())));
@@ -1206,7 +1169,7 @@ mod tests {
                 }),
             }),
         };
-        let trace = Trace.eval_expr(&expr);
+        let trace = Trace.expr(&expr);
         assert_eq!(
             trace,
             RelationTrace(vec![

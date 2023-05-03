@@ -197,7 +197,7 @@ mod test {
             .map(|col_exprs| {
                 col_exprs
                     .into_iter()
-                    .map(|expr| interpreter.eval_expr(&expr).range)
+                    .map(|expr| interpreter.expr(&expr).range)
                     .reduce(|a, b| a.union(b))
                     .expect("at least one literal")
             })
@@ -206,7 +206,7 @@ mod test {
         for (id, spec) in specs.into_iter().enumerate() {
             interpreter.push_column(id, spec);
         }
-        let output = interpreter.eval_expr(&expr);
+        let output = interpreter.expr(&expr);
 
         let mut may_contain: Vec<_> = tests
             .iter()
