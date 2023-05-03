@@ -101,11 +101,20 @@ pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<
 // references, too.
 fn check_applier_version(build_version: &Version, applier_version: &Version) {
     if build_version < applier_version {
-        halt!(
-            "{} received persist state from the future {}",
-            build_version,
-            applier_version,
-        );
+        // We can't catch halts, so panic in test, so we can get unit test
+        // coverage.
+        if cfg!(test) {
+            panic!(
+                "{} received persist state from the future {}",
+                build_version, applier_version,
+            );
+        } else {
+            halt!(
+                "{} received persist state from the future {}",
+                build_version,
+                applier_version,
+            );
+        }
     }
 }
 
@@ -1019,8 +1028,6 @@ impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnri
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
-
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_persist::location::SeqNo;
@@ -1063,7 +1070,6 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
         let v1_res =
             mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
         assert!(v1_res.is_err());
@@ -1094,7 +1100,6 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
         let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
         assert!(v1_res.is_err());
     }
