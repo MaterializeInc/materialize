@@ -88,20 +88,17 @@ impl ValueData {
         let initial_bytes = self.initial_bytes.unwrap_or(0);
         self.diff_bytes = new_bytes - initial_bytes;
         // diff_record here will be either 0, i.e. value was replaced
-        // or 1 i.e. value was inserted
-        self.diff_record = 1 - &old_value.as_ref().map(|_| 1).unwrap_or(0);
-
+        // or 1 if value was inserted
+        self.diff_record = if initial_bytes > 0 { 0 } else { 1 };
         old_value
     }
 
     fn remove_value(&mut self) -> Option<UpsertValue> {
         let old_value = self.value.take();
-
         let initial_bytes = self.initial_bytes.unwrap_or(0);
-        // following values are negative since we are reducing size of state
+        // diff_bytes is negative since we are reducing size of state
         self.diff_bytes = -initial_bytes;
-        self.diff_record = -1;
-
+        self.diff_record = if initial_bytes > 0 { -1 } else { 0 };
         old_value
     }
 

@@ -61,5 +61,5 @@ flower        flower_1
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 9 true true true true 3
+upsert true 9 true true 3
 
