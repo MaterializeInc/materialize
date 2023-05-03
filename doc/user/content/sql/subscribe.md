@@ -395,7 +395,8 @@ timestamp. In the envelope we return the state of the values before and after th
 
 The output columns are reordered so that all the key columns come before the
 value columns. There are two copies of the value columns, the first is prefixed with
-`before_` and represents the value of the values before this upsert.
+`before_` and represents the value of the values before this upsert. The current values
+are all prefixed with `after_`.
 
 * Using this modifier, the output rows will have the following
 structure:
@@ -405,7 +406,7 @@ structure:
    ```
 
    ```sql
-   mz_timestamp | mz_state | key  | before_value | value
+   mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
    100          | upsert   | 1    | NULL         | 2
    100          | upsert   | 2    | NULL         | 4
@@ -418,7 +419,7 @@ structure:
 
   ```sql
    -- at time 200, add a new row with key=3, value=6
-   mz_timestamp | mz_state | key  | before_value | value
+   mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
    ...
    200          | insert   | 3    | NULL         | 6
@@ -432,7 +433,7 @@ structure:
 
   ```sql
    -- at time 300, update key=1's value to 10
-   mz_timestamp | mz_state | key  | before_value | value
+   mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
    ...
    300          | upsert   | 1    | 2            | 10
@@ -446,7 +447,7 @@ structure:
 
   ```sql
    -- at time 400, delete all rows
-   mz_timestamp | mz_state | key  | before_value | value
+   mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
    ...
    400          | delete   | 1    | 10           | NULL
@@ -465,7 +466,7 @@ structure:
 
   ```sql
    -- at time 500, introduce a key_violation
-   mz_timestamp | mz_state        | key  | before_value | value
+   mz_timestamp | mz_state        | key  | before_value | after_value
    -------------|-----------------|------|--------------|-------
    ...
    500          | key_violation   | 1    | NULL         | NULL

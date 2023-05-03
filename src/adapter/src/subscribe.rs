@@ -132,7 +132,6 @@ impl ActiveSubscribe {
                             }
                             SubscribeOutput::EnvelopeUpsert { order_by_keys }
                             | SubscribeOutput::EnvelopeDebezium { order_by_keys } => {
-                                const UPSERT: Datum = Datum::String("upsert");
                                 let debezium =
                                     matches!(self.output, SubscribeOutput::EnvelopeDebezium { .. });
                                 let mut left_datum_vec = mz_repr::DatumVec::new();
@@ -176,7 +175,7 @@ impl ActiveSubscribe {
                                             packer.push(if debezium {
                                                 Datum::String("insert")
                                             } else {
-                                                UPSERT
+                                                Datum::String("upsert")
                                             });
                                             let datums = datum_vec.borrow_with(row);
                                             for column_order in order_by_keys {
@@ -217,7 +216,7 @@ impl ActiveSubscribe {
                                             (start.0, row_buf.clone(), 0)
                                         }
                                         [(_, old_row, -1), (_, row, 1)] => {
-                                            packer.push(UPSERT);
+                                            packer.push(Datum::String("upsert"));
                                             let datums = datum_vec.borrow_with(row);
                                             let old_datums = old_datum_vec.borrow_with(old_row);
 

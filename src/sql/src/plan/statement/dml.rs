@@ -432,7 +432,7 @@ pub fn describe_subscribe(
                 .collect_vec();
             let mut before_values_desc = RelationDesc::empty();
             let mut after_values_desc = RelationDesc::empty();
-            for (name, mut ty) in relation_desc.into_iter() {
+            for (mut name, mut ty) in relation_desc.into_iter() {
                 if key_columns.contains(&name) {
                     if progress {
                         ty.nullable = true;
@@ -442,6 +442,9 @@ pub fn describe_subscribe(
                     ty.nullable = true;
                     before_values_desc =
                         before_values_desc.with_column(format!("before_{}", name), ty.clone());
+                    if debezium {
+                        name = format!("after_{}", name).into();
+                    }
                     after_values_desc = after_values_desc.with_column(name, ty);
                 }
             }
