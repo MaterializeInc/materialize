@@ -53,6 +53,10 @@ pub enum PlanError {
     RequiresUnsafe {
         feature: String,
     },
+    RequiresSystemVar {
+        feature: String,
+        gate: String,
+    },
     RequiresVarOrUnsafe {
         feature: String,
     },
@@ -203,6 +207,9 @@ impl PlanError {
             Self::RequiresUnsafe { .. } => {
                 Some("The requested feature is used only for internal development and testing of Materialize.".into())
             }
+            Self::RequiresSystemVar { .. } => {
+                Some("The requested feature is typically meant only for internal development and testing of Materialize.".into())
+            }
             Self::RequiresVarOrUnsafe { .. } => {
                 Some("The requested feature is not currently enabled on this account.".into())
             }
@@ -305,6 +312,9 @@ impl fmt::Display for PlanError {
             Self::RequiresUnsafe { feature} => {
                 write!(f, "{feature} is not supported",)?;
                 Ok(())
+            }
+            Self::RequiresSystemVar { feature, gate } => {
+                write!(f, "{feature} is not supported without the {gate} variable enabled",)
             }
             Self::RequiresVarOrUnsafe { feature} => {
                 write!(f, "{feature} is not enabled",)?;

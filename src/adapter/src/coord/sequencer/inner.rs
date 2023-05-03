@@ -1738,7 +1738,9 @@ impl Coordinator {
             .get(&plan.name)
             .or_else(|_| self.catalog().system_config().get(&plan.name))?;
 
-        if variable.visible(session.user()) && (variable.safe() || self.catalog().unsafe_mode()) {
+        if variable.visible(session.user())
+            && variable.allowed(self.catalog().system_config()).is_ok()
+        {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
             Ok(send_immediate_rows(vec![row]))
         } else {
@@ -1761,9 +1763,7 @@ impl Coordinator {
         };
 
         let var = vars.get(&name)?;
-        if !var.safe() {
-            self.catalog().require_unsafe_mode(var.name())?;
-        }
+        self.catalog().state().check_var_allowance(var)?;
 
         match values {
             Some(values) => {
@@ -1812,9 +1812,8 @@ impl Coordinator {
         let vars = session.vars_mut();
         let name = plan.name;
         let var = vars.get(&name)?;
-        if !var.safe() {
-            self.catalog().require_unsafe_mode(var.name())?;
-        }
+        self.catalog().state().check_var_allowance(var)?;
+
         session.vars_mut().reset(&name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
     }

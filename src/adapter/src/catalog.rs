@@ -1070,7 +1070,9 @@ impl CatalogState {
 
     /// Get system configuration `name`.
     pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, AdapterError> {
-        Ok(self.system_configuration.get(name)?)
+        let var = self.system_configuration.get(name)?;
+        self.check_var_allowance(var)?;
+        Ok(var)
     }
 
     /// Set the default value for `name`, which is the value it will be reset to.
@@ -1439,6 +1441,15 @@ impl CatalogState {
         }
     }
 
+    pub fn check_var_allowance(&self, var: &dyn Var) -> Result<(), AdapterError> {
+        var.allowed(self.system_config()).map_err(|gate| {
+            AdapterError::PlanError(PlanError::RequiresSystemVar {
+                feature: var.name().to_string(),
+                gate: gate.to_string(),
+            })
+        })
+    }
+
     /// Serializes the catalog's in-memory state.
     ///
     /// There are no guarantees about the format of the serialized state, except
@@ -1503,12 +1514,9 @@ impl CatalogState {
         details: EventDetails,
     ) -> Result<(), Error> {
         let user = session.map(|session| session.user().name.to_string());
-        let occurred_at = match (
-            self.unsafe_mode(),
-            self.system_configuration.mock_audit_event_timestamp(),
-        ) {
-            (true, Some(ts)) => ts.into(),
-            _ => oracle_write_ts.into(),
+        let occurred_at = match self.system_configuration.mock_audit_event_timestamp() {
+            Some(ts) => ts.into(),
+            None => oracle_write_ts.into(),
         };
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
@@ -6236,17 +6244,11 @@ impl Catalog {
                 Op::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, value.borrow())?;
                     let var = state.get_system_configuration(&name)?;
-                    if !var.safe() {
-                        state.require_unsafe_mode(var.name())?;
-                    }
                     tx.upsert_system_config(&name, var.value())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
-                    let var = state.get_system_configuration(&name)?;
-                    if !var.safe() {
-                        state.require_unsafe_mode(var.name())?;
-                    }
+                    state.get_system_configuration(&name)?;
                     tx.remove_system_config(&name);
                 }
                 Op::ResetAllSystemConfiguration => {
