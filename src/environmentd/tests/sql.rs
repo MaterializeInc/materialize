@@ -2994,3 +2994,41 @@ fn test_auto_run_on_introspection_per_replica_relations() {
         .unwrap();
     assert_introspection_notice(false);
 }
+
+#[test]
+fn test_max_connections() {
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections TO 2")
+        .unwrap();
+
+    // We already have one connection open (mz_system)
+    let mut client1 = server.connect(postgres::NoTls).unwrap();
+
+    let mut client2 = server.connect(postgres::NoTls).unwrap();
+    let _ = client1.batch_execute("SELECT 1").unwrap();
+    let e = client2.batch_execute("SELECT 1").expect_err("expect error");
+    let e = e.as_db_error().unwrap_or_else(|| panic!("expect db error: {}", e));
+    assert!(e.message().starts_with("creating a connection would violate max connections limit"), "e={}", e);
+
+    let mut client3 = server.connect(postgres::NoTls).unwrap();
+    let e = client3.batch_execute("SELECT 1").expect_err("expect error");
+    let e = e.as_db_error().unwrap_or_else(|| panic!("expect db error: {}", e));
+    assert!(e.message().starts_with("creating a connection would violate max connections limit"), "e={}", e);
+
+    let mut mz_client2 = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    mz_client2
+        .batch_execute("SELECT 1")
+        .expect("super users are still allowed to do queries");
+}
