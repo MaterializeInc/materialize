@@ -85,7 +85,9 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
-use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
+use crate::coord::timestamp_selection::{
+    TimestampContext, TimestampDetermination, TimestampSource,
+};
 use crate::coord::{
     introspection, peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
     PeekStageTimestamp, PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
@@ -2128,7 +2130,7 @@ impl Coordinator {
                     index_id,
                     timeline_context,
                     source_ids,
-                    in_immediate_multi_stmt_txn,
+                    id_bundle,
                     real_time_recency_ts: None,
                     key,
                     typ,
@@ -2153,7 +2155,7 @@ impl Coordinator {
             index_id,
             timeline_context,
             source_ids,
-            in_immediate_multi_stmt_txn,
+            id_bundle,
             real_time_recency_ts,
             key,
             typ,
@@ -2165,7 +2167,7 @@ impl Coordinator {
             .index_oracle(cluster_id)
             .sufficient_collections(&source_ids);
 
-        let mut peek_plan = self.plan_peek(
+        let peek_plan = self.plan_peek(
             dataflow,
             session,
             &when,
@@ -2175,29 +2177,10 @@ impl Coordinator {
             timeline_context,
             source_ids,
             id_bundle,
-            in_immediate_multi_stmt_txn,
             real_time_recency_ts,
             key,
             typ,
         )?;
-
-        if let Some(id_bundle) = peek_plan.read_holds.take() {
-            if let TimestampContext::TimelineTimestamp(_, timestamp) = peek_plan.timestamp_context {
-                let read_holds = self.acquire_read_holds(timestamp, &id_bundle);
-                self.txn_reads.insert(session.conn_id(), read_holds);
-            }
-        }
-
-        // We only track the peeks in the session if the query doesn't use AS
-        // OF or we're inside an explicit transaction. The latter case is
-        // necessary to support PG's `BEGIN` semantics, whose behavior can
-        // depend on whether or not reads have occurred in the txn.
-        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
-            || when == QueryWhen::Immediately
-        {
-            session
-                .add_transaction_ops(TransactionOps::Peeks(peek_plan.timestamp_context.clone()))?;
-        }
 
         let timestamp = peek_plan.timestamp_context.timestamp().cloned();
 
@@ -2221,10 +2204,72 @@ impl Coordinator {
         }
     }
 
+    /// Determines the query timestamp and acquires read holds on dependent sources
+    /// if necessary.
+    fn sequence_peek_timestamp(
+        &mut self,
+        session: &mut Session,
+        when: &QueryWhen,
+        cluster_id: ClusterId,
+        timeline_context: TimelineContext,
+        id_bundle: &CollectionIdBundle,
+        source_ids: &BTreeSet<GlobalId>,
+        real_time_recency_ts: Option<Timestamp>,
+    ) -> Result<TimestampDetermination<Timestamp>, AdapterError> {
+        let determination = self.determine_timestamp(
+            session,
+            id_bundle,
+            when,
+            cluster_id,
+            timeline_context.clone(),
+            real_time_recency_ts,
+        )?;
+
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
+            || when == &QueryWhen::Immediately
+        {
+            session.add_transaction_ops(TransactionOps::Peeks(
+                determination.timestamp_context.clone(),
+            ))?;
+        }
+
+        // If we are in a single statement transaction, there is no need to
+        // acquire read holds to prevent compaction as they will be released
+        // immediately following the completion of the transaction.
+        //
+        // If we're in a multi-statement transaction, acquire read holds on any sources
+        // in the current time-domain if they have not already been acquired.
+        if session.transaction().is_in_multi_statement_transaction() {
+            self.check_txn_timedomain_conflicts(
+                session,
+                &determination.timestamp_context,
+                id_bundle,
+            )?;
+
+            let timedomain_id_bundle =
+                self.timedomain_for(source_ids, &timeline_context, session.conn_id(), cluster_id)?;
+
+            if !timedomain_id_bundle.is_empty() && !self.txn_reads.contains_key(&session.conn_id())
+            {
+                if let Some(timestamp) = determination.timestamp_context.timestamp() {
+                    let read_holds =
+                        self.acquire_read_holds(timestamp.clone(), &timedomain_id_bundle);
+                    self.txn_reads.insert(session.conn_id(), read_holds);
+                }
+            }
+        }
+
+        Ok(determination)
+    }
+
     fn plan_peek(
-        &self,
+        &mut self,
         mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-        session: &Session,
+        session: &mut Session,
         when: &QueryWhen,
         cluster_id: ClusterId,
         view_id: GlobalId,
@@ -2232,59 +2277,22 @@ impl Coordinator {
         timeline_context: TimelineContext,
         source_ids: BTreeSet<GlobalId>,
         id_bundle: CollectionIdBundle,
-        in_immediate_multi_stmt_txn: bool,
         real_time_recency_ts: Option<Timestamp>,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
     ) -> Result<PlannedPeek, AdapterError> {
-        let mut read_holds = None;
         let conn_id = session.conn_id();
-        // For transactions that do not use AS OF, get the timestamp context of the
-        // in-progress transaction or create one. If this is an AS OF query, we
-        // don't care about any possible transaction timestamp context. If this is a
-        // single-statement transaction (TransactionStatus::Started), we don't
-        // need to worry about preventing compaction or choosing a valid
-        // timestamp context for future queries.
-        let timestamp_context = if in_immediate_multi_stmt_txn {
-            match session.get_transaction_timestamp_context() {
-                Some(ts_context @ TimestampContext::TimelineTimestamp(_, _)) => ts_context,
-                _ => {
-                    // Determine a timestamp that will be valid for anything in any schema
-                    // referenced by the first query.
-                    let id_bundle =
-                        self.timedomain_for(&source_ids, &timeline_context, conn_id, cluster_id)?;
-                    // We want to prevent compaction of the indexes consulted by
-                    // determine_timestamp, not the ones listed in the query.
-                    let timestamp = self.determine_timestamp(
-                        session,
-                        &id_bundle,
-                        &QueryWhen::Immediately,
-                        cluster_id,
-                        timeline_context,
-                        real_time_recency_ts,
-                    )?;
-                    // We only need read holds if the read depends on a timestamp.
-                    if timestamp.timestamp_context.contains_timestamp() {
-                        read_holds = Some(id_bundle);
-                    }
-                    timestamp.timestamp_context
-                }
-            }
-        } else {
-            self.determine_timestamp(
+        let timestamp_context = self
+            .sequence_peek_timestamp(
                 session,
-                &id_bundle,
                 when,
                 cluster_id,
                 timeline_context,
+                &id_bundle,
+                &source_ids,
                 real_time_recency_ts,
             )?
-            .timestamp_context
-        };
-
-        if in_immediate_multi_stmt_txn {
-            self.check_txn_timedomain_conflicts(session, &timestamp_context, &id_bundle)?;
-        }
+            .timestamp_context;
 
         // Now that we have a timestamp, set the as of and resolve calls to mz_now().
         dataflow.set_as_of(timestamp_context.antichain());
@@ -2314,7 +2322,6 @@ impl Coordinator {
 
         Ok(PlannedPeek {
             plan: peek_plan,
-            read_holds,
             timestamp_context,
             conn_id,
             source_arity: typ.arity(),
@@ -2874,54 +2881,18 @@ impl Coordinator {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
         };
-        let conn_id = session.conn_id();
         let source_ids = source.depends_on();
         let timeline_context = self.validate_timeline_context(source_ids.clone())?;
 
-        let mut determination = self.determine_timestamp(
+        let determination = self.sequence_peek_timestamp(
             session,
-            &id_bundle,
             &QueryWhen::Immediately,
             cluster_id,
-            timeline_context.clone(),
+            timeline_context,
+            &id_bundle,
+            &source_ids,
             real_time_recency_ts,
         )?;
-
-        if session.transaction().is_in_multi_statement_transaction() {
-            if let Some(ts_context @ TimestampContext::TimelineTimestamp(_, _)) =
-                session.get_transaction_timestamp_context()
-            {
-                // In this case, `timestamp_context` should be updated to reflect the one
-                // chosen as a result of the transaction's initial peek.
-                determination.timestamp_context = ts_context;
-            } else {
-                if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
-                    session.add_transaction_ops(TransactionOps::Peeks(
-                        determination.timestamp_context.clone(),
-                    ))?;
-                }
-            }
-
-            self.check_txn_timedomain_conflicts(
-                session,
-                &determination.timestamp_context,
-                &id_bundle,
-            )?;
-
-            // If we're in a transaction, acquire read holds on any sources in the current time-domain
-            // if they have not already been acquired.
-            let timedomain_id_bundle =
-                self.timedomain_for(&source_ids, &timeline_context, conn_id, cluster_id)?;
-
-            if !timedomain_id_bundle.is_empty() && !self.txn_reads.contains_key(&session.conn_id())
-            {
-                if let Some(timestamp) = determination.timestamp_context.timestamp() {
-                    let read_holds =
-                        self.acquire_read_holds(timestamp.clone(), &timedomain_id_bundle);
-                    self.txn_reads.insert(session.conn_id(), read_holds);
-                }
-            }
-        }
 
         let mut sources = Vec::new();
         {

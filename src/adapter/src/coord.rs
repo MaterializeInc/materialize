@@ -345,7 +345,7 @@ pub struct PeekStageFinish {
     pub index_id: GlobalId,
     pub timeline_context: TimelineContext,
     pub source_ids: BTreeSet<GlobalId>,
-    pub in_immediate_multi_stmt_txn: bool,
+    pub id_bundle: CollectionIdBundle,
     pub real_time_recency_ts: Option<mz_repr::Timestamp>,
     pub key: Vec<MirScalarExpr>,
     pub typ: RelationType,

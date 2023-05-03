@@ -712,7 +712,8 @@ impl Coordinator {
                 index_id,
                 timeline_context,
                 source_ids,
-                in_immediate_multi_stmt_txn,
+                id_bundle,
+                in_immediate_multi_stmt_txn: _,
                 key,
                 typ,
             } => {
@@ -731,7 +732,7 @@ impl Coordinator {
                         index_id,
                         timeline_context,
                         source_ids,
-                        in_immediate_multi_stmt_txn,
+                        id_bundle,
                         real_time_recency_ts: Some(real_time_recency_ts),
                         key,
                         typ,
