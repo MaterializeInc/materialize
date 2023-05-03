@@ -51,7 +51,7 @@ impl fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-/// A custom error type containing all the possible errors in the [`super::Client`] for the Materialize cloud API.
+/// A custom error type containing all the possible errors in the crate for the Materialize cloud API.
 #[derive(Error, Debug)]
 pub enum Error {
     /// Indicates a transport error from the `reqwest`
