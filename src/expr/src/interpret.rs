@@ -595,13 +595,46 @@ impl<'a, E: Interpreter + ?Sized> Interpreter for MfpEval<'a, E> {
 /// will never return True?)
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Debug)]
 pub enum Pushdownable {
+    /// We don't have any information to push down filters on this column:
+    /// either it's not referenced at all, or we've applied some non-monotonic function that we can't
+    /// push filters through. (This is the default.)
     No,
+    /// We may or may not be able to push down filters on the given column. (The expression
+    /// includes a function we haven't classified yet.)
     Maybe,
+    /// We can definitely push down a filter on this column. (The expression references the column
+    /// in such a way that the range of possible values of the column affects the range of output
+    /// values of the expression in a particular way.)
     Yes,
 }
 
-impl Pushdownable {
-    fn apply_fn(mut columns: Vec<Self>, is_monotonic: Monotonic) -> Vec<Self> {
+/// Maps column identifiers to pushdown information. We can't tell how many columns are in the
+/// relation just from inspecting the expression, so the `Vec` may not include every column; an entry
+/// of `No` is treated the same as the entry not being present.
+#[derive(Eq, PartialEq, Clone, Debug)]
+pub struct RelationTrace(pub Vec<Pushdownable>);
+
+/// An interpreter that traces how information about the source columns flows through the expression.
+#[derive(Debug)]
+pub struct Trace;
+
+impl RelationTrace {
+    pub fn new() -> RelationTrace {
+        RelationTrace(vec![])
+    }
+
+    pub fn get(&mut self, id: usize) -> Pushdownable {
+        self.0.get(id).copied().unwrap_or(Pushdownable::No)
+    }
+
+    pub fn set(&mut self, id: usize, value: Pushdownable) {
+        if self.0.len() <= id {
+            self.0.resize(id + 1, Pushdownable::No);
+        }
+        self.0[id] = value;
+    }
+
+    fn apply_fn(mut self, is_monotonic: Monotonic) -> Self {
         match is_monotonic {
             Monotonic::Yes => {
                 // Still correlated, nothing to do.
@@ -609,44 +642,38 @@ impl Pushdownable {
             Monotonic::No => {
                 // A function that we know we can't see through. No reason to expect the range
                 // of the columns to affect the range of the expression.
-                for col in &mut columns {
+                for col in &mut self.0 {
                     *col = Pushdownable::No;
                 }
             }
             Monotonic::Maybe => {
                 // A function that we may or may not be able to see through.
-                for col in &mut columns {
+                for col in &mut self.0 {
                     *col = Pushdownable::Maybe.min(*col);
                 }
             }
         }
-        columns
+        self
     }
 
-    fn union(mut columns: Vec<Self>, other: Vec<Self>) -> Vec<Self> {
-        let new_len = columns.len().max(other.len());
-        columns.resize(new_len, Pushdownable::No);
-        for (my_col, other_col) in columns.iter_mut().zip(other.iter()) {
-            *my_col = (*other_col).max(*my_col);
+    fn union(mut self, other: RelationTrace) -> RelationTrace {
+        for (id, pushdownable) in other.0.into_iter().enumerate() {
+            let pushdownable = self.get(id).max(pushdownable);
+            self.set(id, pushdownable);
         }
-        columns
+        self
     }
 }
-
-/// An interpreter that traces how information about the source columns flows through the expression.
-///
-#[derive(Debug)]
-pub struct Trace;
 
 impl Interpreter for Trace {
     /// For every column in the data, we track whether or not that column is "pusdownable".
     /// (If the column is not present in the summary, we default to `false`.
-    type Summary = Vec<Pushdownable>;
+    type Summary = RelationTrace;
 
     fn eval_column(&self, id: usize) -> Self::Summary {
-        let mut columns = vec![Pushdownable::No; id];
-        columns.push(Pushdownable::Yes);
-        columns
+        let mut trace = RelationTrace::new();
+        trace.set(id, Pushdownable::Yes);
+        trace
     }
 
     fn eval_literal(
@@ -654,15 +681,15 @@ impl Interpreter for Trace {
         _result: &Result<Row, EvalError>,
         _col_type: &ColumnType,
     ) -> Self::Summary {
-        Vec::default()
+        RelationTrace::new()
     }
 
     fn eval_unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
-        Vec::default()
+        RelationTrace::new()
     }
 
     fn eval_unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-        Pushdownable::apply_fn(expr, unary_monotonic(func))
+        expr.apply_fn(unary_monotonic(func))
     }
 
     fn eval_binary(
@@ -677,17 +704,17 @@ impl Interpreter for Trace {
             BinaryFunc::JsonbGetString { stringify: false } => (Monotonic::Yes, Monotonic::No),
             _ => binary_monotonic(func),
         };
-        Pushdownable::union(
-            Pushdownable::apply_fn(left, left_monotonic),
-            Pushdownable::apply_fn(right, right_monotonic),
-        )
+        left.apply_fn(left_monotonic)
+            .union(right.apply_fn(right_monotonic))
     }
 
     fn eval_variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
         let is_monotonic = variadic_monotonic(func);
-        exprs.into_iter().fold(Vec::default(), |acc, columns| {
-            Pushdownable::union(acc, Pushdownable::apply_fn(columns, is_monotonic))
-        })
+        exprs
+            .into_iter()
+            .fold(RelationTrace::new(), |acc, columns| {
+                acc.union(columns.apply_fn(is_monotonic))
+            })
     }
 
     fn eval_if(
@@ -696,7 +723,7 @@ impl Interpreter for Trace {
         then: Self::Summary,
         els: Self::Summary,
     ) -> Self::Summary {
-        Pushdownable::union(cond, Pushdownable::union(then, els))
+        cond.union(then.union(els))
     }
 }
 
@@ -1182,12 +1209,12 @@ mod tests {
         let trace = Trace.eval_expr(&expr);
         assert_eq!(
             trace,
-            vec![
+            RelationTrace(vec![
                 Pushdownable::Yes, // one side of a conditional
                 Pushdownable::Yes, // other side of the conditional, nested in +
                 Pushdownable::No,  // not referenced!
                 Pushdownable::No   // referenced, but we can't see through abs()
-            ]
+            ])
         )
     }
 }

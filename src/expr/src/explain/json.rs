@@ -57,6 +57,7 @@ where
 
                     if let Some(PushdownInfo { trace }) = pushdown_info {
                         let pushdownable: Vec<_> = trace
+                            .0
                             .iter()
                             .enumerate()
                             .filter(|(_, p)| **p == Pushdownable::Yes)

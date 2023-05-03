@@ -23,7 +23,7 @@ use mz_repr::explain::{
     UnsupportedFormat, UsedIndexes,
 };
 
-use crate::interpret::{Interpreter, Pushdownable, Trace};
+use crate::interpret::{Interpreter, Pushdownable, RelationTrace, Trace};
 use crate::{
     visit::Visit, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
@@ -57,17 +57,18 @@ pub struct ExplainSinglePlan<'a, T> {
 #[allow(missing_debug_implementations)]
 pub struct PushdownInfo {
     /// Pushdown-able columns in the source.
-    pub trace: Vec<Pushdownable>,
+    pub trace: RelationTrace,
 }
 
 impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo {
     fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        if !self.trace.is_empty() {
+        if !self.trace.0.is_empty() {
             writeln!(
                 f,
                 "{}pushdown=({})",
                 ctx.as_mut(),
                 self.trace
+                    .0
                     .iter()
                     .enumerate()
                     .filter_map(|(id, p)| match p {
