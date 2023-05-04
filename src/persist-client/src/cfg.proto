@@ -20,6 +20,7 @@ message ProtoPersistParameters {
     optional uint64 sink_minimum_batch_updates = 4;
     optional uint64 storage_sink_minimum_batch_updates = 8;
     optional ProtoRetryParameters next_listen_batch_retryer = 5;
+    optional uint64 stats_audit_percent = 9;
     optional bool stats_collection_enabled = 6;
     optional bool stats_filter_enabled = 7;
 }

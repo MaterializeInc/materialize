@@ -10,8 +10,10 @@
 //! A source that reads from a persist shard.
 
 use std::any::Any;
+use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -420,13 +422,11 @@ where
                                         } else {
                                             metrics.pushdown.parts_filtered_count.inc();
                                             metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-                                            // TODO(mfp): We'll want to run this auditing in prod
-                                            // for e.g. some random fraction of parts. For now, turn
-                                            // it on for every part in CI via soft assert. We'll
-                                            // have to back that out once we want to bake in filter
-                                            // pushdown speedups in feature bench, but for now it's
-                                            // good to get maximal correctness coverage.
-                                            let should_audit = SOFT_ASSERTIONS.load(Ordering::Relaxed);
+                                            let should_audit = SOFT_ASSERTIONS.load(Ordering::Relaxed) || {
+                                                let mut h = DefaultHasher::new();
+                                                part_desc.key.hash(&mut h);
+                                                usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
+                                            };
                                             if should_audit {
                                                 part_desc.request_filter_pushdown_audit();
                                             } else {
