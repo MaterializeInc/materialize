@@ -163,7 +163,7 @@ impl Client {
 
     /// Authenticates with the server, if not already authenticated,
     /// and returns the authentication token.
-    async fn auth(&self) -> Result<String, Error> {
+    async pub fn auth(&self) -> Result<String, Error> {
         let mut auth = self.auth.lock().await;
         let mut req;
 
