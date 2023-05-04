@@ -441,7 +441,7 @@ impl PersistSourceDataStatsImpl<'_> {
                     ResultSpec::map_spec(
                         maps.into_iter()
                             .map(|(k, v)| {
-                                // NB: we can't prove that a field is always present based on the stats
+                                // TODO(mfp): we can't prove that a field is always present based on the stats
                                 // we keep, so we assume that accessing any field might return null.
                                 (k.as_str().into(), json_spec(v).union(ResultSpec::null()))
                             })
