@@ -163,6 +163,11 @@ where
                     desc: &fake_desc,
                     stats,
                 };
+                if stats.err_count().into_iter().any(|count| count > 0) {
+                    // If the error collection is nonempty, we always keep the part.
+                    return true;
+                }
+
                 let total_count = stats.len();
                 for (id, _) in desc.iter().enumerate() {
                     let min = stats.col_min(id, &arena);
