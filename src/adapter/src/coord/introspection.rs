@@ -23,7 +23,6 @@ use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Plan, SubscribeFrom};
 use smallvec::SmallVec;
-use std::collections::BTreeSet;
 
 use crate::catalog::Catalog;
 use crate::notice::AdapterNotice;

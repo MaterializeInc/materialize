@@ -26,7 +26,7 @@ use mz_sql::plan::{
 
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::{Coordinator, Message, TargetCluster};
+use crate::coord::{Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::rbac;
