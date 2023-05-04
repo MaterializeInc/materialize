@@ -14,9 +14,10 @@
 # limitations under the License.
 
 import pytest
-
 from dbt.tests.adapter.simple_seed.test_seed import SeedConfigBase
-from dbt.tests.adapter.simple_seed.test_seed_type_override import BaseSimpleSeedColumnOverride
+from dbt.tests.adapter.simple_seed.test_seed_type_override import (
+    BaseSimpleSeedColumnOverride,
+)
 from dbt.tests.util import run_dbt
 
 _SCHEMA_YML = """
@@ -97,7 +98,7 @@ class TestSimpleSeedColumnOverride(BaseSimpleSeedColumnOverride):
             "birthday": "text",
             "seed_id": "integer",
         }
-    
+
     def test_materialize_simple_seed_with_column_override_materialize(self, project):
         seed_results = run_dbt(["seed"])
         assert len(seed_results) == 2
