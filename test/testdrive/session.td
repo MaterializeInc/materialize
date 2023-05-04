@@ -34,7 +34,6 @@ is_superuser                            off                    "Reports whether 
 max_aws_privatelink_connections         0                      "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
 max_clusters                            10                     "The maximum number of clusters in the region (Materialize)."
 max_credit_consumption_rate             1024                   "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize)."
-max_connections                         1000                   "The maximum number of concurrent connections (Materialize)."
 max_databases                           1000                   "The maximum number of databases in the region (Materialize)."
 max_materialized_views                  100                    "The maximum number of materialized views in the region, across all schemas (Materialize)."
 max_objects_per_schema                  1000                   "The maximum number of objects in a schema (Materialize)."

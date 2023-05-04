@@ -1156,10 +1156,10 @@ impl Coordinator {
     }
 
     /// Validate a specific type of resource limit and return an error if that limit is exceeded.
-    pub(crate) fn validate_resource_limit<F>(
+    fn validate_resource_limit<F>(
         &self,
         current_amount: usize,
-        new_instances: i64,
+        new_amount: i32,
         resource_limit: F,
         resource_type: &str,
         limit_name: &str,
@@ -1167,11 +1167,12 @@ impl Coordinator {
     where
         F: Fn(&SystemVars) -> u32,
     {
-        if new_instances <= 0 {
+        if new_amount <= 0 {
             return Ok(());
         }
 
         let limit: i64 = resource_limit(self.catalog().system_config()).into();
+        let new_instances: i64 = new_amount.into();
         let current_amount: Option<i64> = current_amount.try_into().ok();
         let desired =
             current_amount.and_then(|current_amount| current_amount.checked_add(new_instances));
