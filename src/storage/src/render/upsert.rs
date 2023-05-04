@@ -124,9 +124,9 @@ impl<H: Digest> Hasher for DigestHasher<H> {
     }
 }
 
-/// Struct to keep a row value along with its calculated size in bytes and updates.
-/// This will be used to keep track of the initial size and diffs when we get new data
-/// and eventually emit source envelope metrics.
+/// Struct to keep a row value along with its calculated size in bytes and updates
+/// per UpsertKey. This will be used to keep track of the initial size and diffs
+/// when we get new data and eventually emit source envelope metrics.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 struct ValueData {
     // This will hold the row value state corresponding to an UpsertKey
@@ -135,13 +135,13 @@ struct ValueData {
     // `initial_bytes` will be `None` if `value` is None.
     initial_bytes: Option<i64>,
     // `diff_bytes` will contain the diff in bytes between incoming and existing data.
-    // It will be positive, if new data size is greater than old data and vice versa.
+    // It will be positive if new data size is greater than old data and vice versa.
     diff_bytes: i64,
     // `diff_record` will hold only the following values
-    // - -1 for a removed record,
-    // - 0 for when a record is updated with no change in count, and
-    // - 1 for when a record is added.
-    diff_record: i64,
+    // -1 for a removed record,
+    // 0 for when a record is updated i.e. no change in count, and
+    // 1 for when a record is added.
+    diff_record: i8,
 }
 
 impl ValueData {
@@ -165,8 +165,6 @@ impl ValueData {
 
         let initial_bytes = self.initial_bytes.unwrap_or(0);
         self.diff_bytes = new_bytes - initial_bytes;
-        // diff_record here will be either 0, i.e. value was replaced
-        // or 1 if value was inserted
         self.diff_record = if initial_bytes > 0 { 0 } else { 1 };
         old_value
     }
@@ -175,7 +173,6 @@ impl ValueData {
     fn remove_value(&mut self) -> Option<UpsertValue> {
         let old_value = self.value.take();
         let initial_bytes = self.initial_bytes.unwrap_or(0);
-        // diff_bytes is negative since we are reducing size of state
         self.diff_bytes = -initial_bytes;
         self.diff_record = if initial_bytes > 0 { -1 } else { 0 };
         old_value
@@ -456,7 +453,10 @@ where
                     }
 
                     // Accumulating metrics before draining
-                    let total_diff_records = commands_state.values().map(|v| v.diff_record).sum();
+                    let total_diff_records = commands_state
+                        .values()
+                        .map(|v| Into::<i64>::into(v.diff_record))
+                        .sum();
                     let total_diff_bytes = commands_state.values().map(|v| v.diff_bytes).sum();
 
                     // Record the changes in `state`.
