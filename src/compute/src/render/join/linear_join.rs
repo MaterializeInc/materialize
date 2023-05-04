@@ -14,7 +14,6 @@
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
-use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
@@ -30,6 +29,8 @@ use crate::render::context::{
     Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
 };
 use crate::typedefs::RowSpine;
+
+use super::dd_join::JoinCore;
 
 /// Different forms the streamed data might take.
 enum JoinedFlavor<G, T>

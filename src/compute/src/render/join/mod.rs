@@ -11,5 +11,6 @@
 //!
 //! Consult [mz_compute_client::plan::join::JoinPlan] documentation for details.
 
+mod dd_join;
 mod delta_join;
 mod linear_join;
