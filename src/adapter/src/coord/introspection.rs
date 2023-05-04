@@ -30,6 +30,7 @@ use crate::notice::AdapterNotice;
 use crate::rbac;
 use crate::session::Session;
 
+use crate::coord::TargetCluster;
 use crate::{
     catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE},
     AdapterError,
@@ -41,7 +42,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     catalog: &'a Catalog,
     session: &'s Session,
     plan: &'p Plan,
-) -> bool {
+) -> TargetCluster {
     let depends_on = match plan {
         Plan::Peek(plan) => plan.source.depends_on(),
         Plan::Subscribe(plan) => plan.from.depends_on(),
@@ -100,17 +101,17 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
         | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_) => BTreeSet::new(),
+        | Plan::RevokePrivilege(_) => return TargetCluster::Active,
     };
 
     // Bail if the user has disabled it via the SessionVar.
     if !session.vars().auto_route_introspection_queries() {
-        return false;
+        return TargetCluster::Active;
     }
 
     // We can't switch what cluster we're using, if the user has specified a replica.
     if session.vars().cluster_replica().is_some() {
-        return false;
+        return TargetCluster::Active;
     }
 
     // Check to make sure our iterator contains atleast one element, this prevents us
@@ -138,9 +139,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         if intros_cluster.name != session.vars().cluster() {
             session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
         }
-        true
+        TargetCluster::Introspection
     } else {
-        false
+        TargetCluster::Active
     }
 }
 

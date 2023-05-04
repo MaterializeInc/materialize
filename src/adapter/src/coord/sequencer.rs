@@ -79,11 +79,7 @@ impl Coordinator {
         // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
         // session var is set, then we automatically run the query on the mz_introspection cluster.
         let target_cluster =
-            if introspection::auto_run_on_introspection(&self.catalog, &session, &plan) {
-                TargetCluster::Introspection
-            } else {
-                TargetCluster::Active
-            };
+            introspection::auto_run_on_introspection(&self.catalog, &session, &plan);
 
         match plan {
             Plan::CreateSource(plan) => {

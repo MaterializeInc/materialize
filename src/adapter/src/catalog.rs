@@ -4337,7 +4337,7 @@ impl Catalog {
         self.state.resolve_builtin_cluster(cluster)
     }
 
-    /// Resolves a [`Cluster`] for a [`TargetCluster`].
+    /// Resolves a [`Cluster`] for a TargetCluster.
     pub fn resolve_target_cluster(
         &self,
         target_cluster: TargetCluster,
