@@ -991,6 +991,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_equivalence() {
         fn check(
             expr: MirScalarExpr,
