@@ -138,7 +138,6 @@ pub fn plan_read_then_write(
         mut selection,
         finishing,
         assignments,
-        contains_where_clause,
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters(params)?;
@@ -150,11 +149,6 @@ pub fn plan_read_then_write(
         assignments_outer.insert(idx, set);
     }
 
-    let contains_user_specified_read = contains_where_clause
-        || assignments_outer
-            .values()
-            .any(|expr| expr.contains_column());
-
     Ok(Plan::ReadThenWrite(ReadThenWritePlan {
         id,
         selection,
@@ -162,7 +156,6 @@ pub fn plan_read_then_write(
         assignments: assignments_outer,
         kind,
         returning: Vec::new(),
-        contains_user_specified_read,
     }))
 }
 

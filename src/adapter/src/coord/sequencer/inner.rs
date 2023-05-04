@@ -3085,7 +3085,6 @@ impl Coordinator {
                     assignments: BTreeMap::new(),
                     kind: MutationKind::Insert,
                     returning: plan.returning,
-                    contains_user_specified_read: true,
                 };
 
                 self.sequence_read_then_write(tx, session, read_then_write_plan, depends_on)
@@ -3185,7 +3184,6 @@ impl Coordinator {
             assignments,
             finishing,
             returning,
-            contains_user_specified_read: _,
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.

@@ -60,7 +60,7 @@ pub enum UnauthorizedError {
         object_name: String,
     },
     // TODO(jkosh44) When we implement parameter privileges, this can be replaced with a regular
-    // privilege error.
+    //  privilege error.
     /// The action can only be performed by the mz_system role.
     #[error("permission denied to {action}")]
     MzSystem { action: String },
@@ -652,19 +652,32 @@ fn generate_required_privileges(
             ]
         }
         Plan::Insert(plan) => {
-            let update_schema_id: ObjectId =
-                catalog.get_item(&plan.id).name().qualifiers.clone().into();
+            let schema_id: ObjectId = catalog.get_item(&plan.id).name().qualifiers.clone().into();
             let mut privileges = vec![
-                (update_schema_id.clone(), AclMode::USAGE, role_id),
+                (schema_id.clone(), AclMode::USAGE, role_id),
                 (plan.id.into(), AclMode::INSERT, role_id),
             ];
+            let mut seen = BTreeSet::from([(schema_id, role_id)]);
+
+            // We don't allow arbitrary sub-queries in `returning`. So either it
+            // contains a column reference to the outer table or it's constant.
+            if plan
+                .returning
+                .iter()
+                .any(|assignment| assignment.contains_column())
+            {
+                privileges.push((plan.id.into(), AclMode::SELECT, role_id));
+                seen.insert((plan.id.into(), role_id));
+            }
+
             privileges.extend_from_slice(&generate_read_privileges_inner(
                 catalog,
                 plan.values.depends_on().into_iter(),
                 role_id,
-                &mut BTreeSet::from([(update_schema_id, role_id)]),
+                &mut seen,
             ));
-            // Collect any USAGE privileges from the returning clause.
+
+            // Collect additional USAGE privileges, like those in the returning clause.
             let seen = privileges
                 .iter()
                 .filter_map(|(id, _, _)| match id {
@@ -675,10 +688,17 @@ fn generate_required_privileges(
             privileges.extend(generate_item_usage_privileges_inner(
                 catalog, depends_on, role_id, seen,
             ));
+
             if let Some(privilege) =
                 generate_cluster_usage_privileges(catalog, &plan.values, role_id)
             {
                 privileges.push(privilege);
+            } else if !plan.returning.is_empty() {
+                // TODO(jkosh44) returning may be a constant, but for now we are overly protective
+                //  and require cluster privileges for all returning.
+                if let Ok(cluster) = catalog.resolve_cluster(None) {
+                    privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
+                }
             }
             privileges
         }
@@ -688,21 +708,39 @@ fn generate_required_privileges(
                 MutationKind::Update => AclMode::UPDATE,
                 MutationKind::Delete => AclMode::DELETE,
             };
-            let update_schema_id: ObjectId =
-                catalog.get_item(&plan.id).name().qualifiers.clone().into();
+            let schema_id: ObjectId = catalog.get_item(&plan.id).name().qualifiers.clone().into();
             let mut privileges = vec![
-                (update_schema_id.clone(), AclMode::USAGE, role_id),
+                (schema_id.clone(), AclMode::USAGE, role_id),
                 (plan.id.into(), acl_mode, role_id),
             ];
-            if plan.contains_user_specified_read {
-                privileges.extend_from_slice(&generate_read_privileges_inner(
-                    catalog,
-                    plan.selection.depends_on().into_iter(),
-                    role_id,
-                    &mut BTreeSet::from([(update_schema_id, role_id)]),
-                ));
+            let mut seen = BTreeSet::from([(schema_id, role_id)]);
+
+            // We don't allow arbitrary sub-queries in `assignments` or `returning`. So either they
+            // contains a column reference to the outer table or it's constant.
+            if plan
+                .assignments
+                .values()
+                .chain(plan.returning.iter())
+                .any(|assignment| assignment.contains_column())
+            {
+                privileges.push((plan.id.into(), AclMode::SELECT, role_id));
+                seen.insert((plan.id.into(), role_id));
             }
-            // Collect any USAGE privileges from the returning clause.
+
+            // TODO(jkosh44) It's fairly difficult to determine what part of `selection` is from a
+            //  user specified read and what part is from the implementation of the read then write.
+            //  instead we are overly protective and always require SELECT privileges even though
+            //  PostgreSQL doesn't always do this.
+            //  As a concrete example, we require SELECT and UPDATE privileges to execute
+            //  `UPDATE t SET a = 42;`, while PostgreSQL only requires UPDATE privileges.
+            privileges.extend_from_slice(&generate_read_privileges_inner(
+                catalog,
+                plan.selection.depends_on().into_iter(),
+                role_id,
+                &mut seen,
+            ));
+
+            // Collect additional USAGE privileges, like those in the returning clause.
             let seen = privileges
                 .iter()
                 .filter_map(|(id, _, _)| match id {
@@ -713,6 +751,7 @@ fn generate_required_privileges(
             privileges.extend(generate_item_usage_privileges_inner(
                 catalog, depends_on, role_id, seen,
             ));
+
             if let Some(privilege) =
                 generate_cluster_usage_privileges(catalog, &plan.selection, role_id)
             {
@@ -920,8 +959,8 @@ fn generate_cluster_usage_privileges<'a>(
     expr: &MirRelationExpr,
     role_id: RoleId,
 ) -> Option<(ObjectId, AclMode, RoleId)> {
-    // expr hasn't been fully optimized yet, so it might actually be a constant,
-    // but we mistakenly think that it's not.
+    // TODO(jkosh44) expr hasn't been fully optimized yet, so it might actually be a constant,
+    //  but we mistakenly think that it's not. For now it's ok to be overly protective.
     if expr.as_const().is_none() {
         if let Ok(cluster) = catalog.resolve_cluster(None) {
             return Some((cluster.id().into(), AclMode::USAGE, role_id));

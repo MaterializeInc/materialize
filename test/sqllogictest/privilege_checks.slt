@@ -1175,6 +1175,89 @@ DROP TABLE t;
 ----
 COMPLETE 0
 
+# INSERT ... RETURNING
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE t (a INT);
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+INSERT INTO t VALUES (42) RETURNING a;
+----
+db error: ERROR: permission denied for SCHEMA materialize.public
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+INSERT INTO t VALUES (42) RETURNING a;
+----
+db error: ERROR: permission denied for TABLE materialize.public.t
+
+simple conn=mz_system,user=mz_system
+GRANT INSERT ON TABLE t TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+INSERT INTO t VALUES (42) RETURNING a;
+----
+db error: ERROR: permission denied for TABLE materialize.public.t
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON TABLE t TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+INSERT INTO t VALUES (42) RETURNING a;
+----
+db error: ERROR: permission denied for CLUSTER default
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER default TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+INSERT INTO t VALUES (42) RETURNING a;
+----
+42
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+REVOKE INSERT ON TABLE t FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+INSERT INTO t VALUES (42) RETURNING a;
+----
+db error: ERROR: permission denied for TABLE materialize.public.t
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON TABLE t FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON CLUSTER default FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP TABLE t;
+----
+COMPLETE 0
+
 # UPDATE (no WHERE)
 
 simple conn=mz_system,user=mz_system
@@ -1203,6 +1286,16 @@ GRANT UPDATE ON TABLE t TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
+UPDATE T SET a = 42 WHERE a > 6;
+----
+db error: ERROR: permission denied for TABLE materialize.public.t
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON TABLE t TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
 UPDATE t SET a = 42;
 ----
 db error: ERROR: permission denied for CLUSTER default
@@ -1219,6 +1312,16 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE UPDATE ON TABLE t FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+UPDATE t SET a = 42;
+----
+db error: ERROR: permission denied for TABLE materialize.public.t
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON TABLE t FROM joe;
 ----
 COMPLETE 0
 
@@ -1429,6 +1532,16 @@ GRANT DELETE ON TABLE t TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
+DELETE FROM t WHERE a > 5;
+----
+db error: ERROR: permission denied for TABLE materialize.public.t
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON TABLE t TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
 DELETE FROM t;
 ----
 db error: ERROR: permission denied for CLUSTER default
@@ -1445,6 +1558,16 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE DELETE ON TABLE t FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+DELETE FROM t;
+----
+db error: ERROR: permission denied for TABLE materialize.public.t
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON TABLE t FROM joe;
 ----
 COMPLETE 0
 

@@ -524,8 +524,6 @@ pub struct ReadThenWritePlan {
     /// Map from column index to SET expression. Empty for DELETE statements.
     pub assignments: BTreeMap<usize, HirScalarExpr>,
     pub finishing: RowSetFinishing,
-    /// Whether the original query contained a WHERE clause.
-    pub contains_where_clause: bool,
 }
 
 pub fn plan_delete_query(
@@ -598,7 +596,6 @@ pub fn plan_mutation_query_inner(
     let scope = plan_table_alias(scope, alias.as_ref())?;
     let desc = item.desc(&qcx.scx.catalog.resolve_full_name(item.name()))?;
     let relation_type = qcx.relation_type(&get);
-    let contains_where_clause = selection.is_some();
 
     if using.is_empty() {
         if let Some(expr) = selection {
@@ -659,7 +656,6 @@ pub fn plan_mutation_query_inner(
         selection: get,
         finishing,
         assignments: sets,
-        contains_where_clause,
     })
 }
 
