@@ -1522,6 +1522,7 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
+            .with_var(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
     }
 }
