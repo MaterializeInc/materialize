@@ -46,7 +46,7 @@ pub mod region;
 ///
 impl Client {
     /// Builds a request towards the `Client`'s endpoint
-    async fn build_request<P>(
+    fn build_request<P>(
         &self,
         method: Method,
         path: P,
