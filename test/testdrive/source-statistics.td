@@ -62,6 +62,25 @@ goofus,gallant
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
+> SELECT key, f1, f2 FROM upsert
+key           f1      f2
+------------------------
+fish          fish    1000
+birdmore      geese   56
+mammalmore    moose   2
+
+$ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
+{"key": "fishmore"} {"f1": "fishmore", "f2": 57}
+{"key": "fish"}
+{"key": "birdmore"} {"f1":"goose", "f2": 33}
+
+> SELECT key, f1, f2 FROM upsert
+key           f1          f2
+-----------------------------
+fishmore      fishmore    57
+birdmore      goose       33
+mammalmore    moose       2
+
 # Also test a source with multiple sub-sources.
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
