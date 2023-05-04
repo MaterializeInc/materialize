@@ -1048,6 +1048,23 @@ mod tests {
     }
 
     #[test]
+    fn test_regression() {
+        let expr = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Or,
+            exprs: vec![
+                MirScalarExpr::Literal(Err(EvalError::CharacterNotValidForEncoding(0)), ScalarType::Bool.nullable(false)),
+                MirScalarExpr::Literal(Ok(Row::pack_slice(&[Datum::True])), ScalarType::Bool.nullable(false)),
+            ],
+        };
+        let arena = RowArena::new();
+        let result = expr.eval(&[], &arena);
+        // NB: this is inconsistent with the result of the interpreter, which assumes all functions
+        // evaluate their arguments!
+        // TODO(mfp): change the interpreter to be consistent with `eval` on this.
+        assert_eq!(result, Ok(Datum::True))
+    }
+
+    #[test]
     fn test_eval_range() {
         // Example inspired by the tumbling windows temporal filter in the docs
         let period_ms = MirScalarExpr::Literal(
