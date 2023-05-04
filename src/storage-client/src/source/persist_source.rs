@@ -36,7 +36,8 @@ use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::stats::PersistSourceDataStats;
 use mz_repr::{
-    Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp,
+    Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationType, Row, RowArena,
+    Timestamp,
 };
 use mz_timely_util::buffer::ConsolidateBuffer;
 
@@ -155,47 +156,11 @@ where
         Arc::new(UnitSchema),
         move |stats| {
             if let Some(plan) = &filter_plan {
-                let arena = RowArena::new();
-                let mut ranges = ColumnSpecs::new(desc.typ().clone(), &arena);
-                // TODO: even better if we can use the lower bound of the part itself!
-                ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range.clone());
                 let stats = PersistSourceDataStatsImpl {
                     desc: &fake_desc,
                     stats,
                 };
-                if stats.err_count().into_iter().any(|count| count > 0) {
-                    // If the error collection is nonempty, we always keep the part.
-                    return true;
-                }
-
-                let total_count = stats.len();
-                for (id, _) in desc.iter().enumerate() {
-                    let min = stats.col_min(id, &arena);
-                    let max = stats.col_max(id, &arena);
-                    let nulls = stats.col_null_count(id);
-                    let json_spec = stats.col_json(id, &arena);
-
-                    let value_range = match (total_count, min, max, nulls) {
-                        (Some(total_count), _, _, Some(nulls)) if total_count == nulls => {
-                            ResultSpec::nothing()
-                        }
-                        (_, Some(min), Some(max), _) => ResultSpec::value_between(min, max),
-                        _ => ResultSpec::value_all(),
-                    };
-
-                    let value_range = match json_spec {
-                        Some(json) => value_range.intersect(json),
-                        None => value_range,
-                    };
-
-                    let null_range = match nulls {
-                        Some(0) => ResultSpec::nothing(),
-                        _ => ResultSpec::null(),
-                    };
-                    ranges.push_column(id, value_range.union(null_range));
-                }
-                let result = ranges.mfp_plan_filter(plan).range;
-                result.may_contain(Datum::True) || result.may_fail()
+                filter_may_match(desc.typ().clone(), time_range.clone(), stats, plan)
             } else {
                 true
             }
@@ -203,6 +168,51 @@ where
     );
     let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
     (rows, token)
+}
+
+fn filter_may_match(
+    relation_type: RelationType,
+    time_range: ResultSpec,
+    stats: PersistSourceDataStatsImpl,
+    plan: &MfpPlan,
+) -> bool {
+    let num_columns = relation_type.column_types.len();
+    let arena = RowArena::new();
+    let mut ranges = ColumnSpecs::new(relation_type, &arena);
+    // TODO: even better if we can use the lower bound of the part itself!
+    ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range.clone());
+
+    if stats.err_count().into_iter().any(|count| count > 0) {
+        // If the error collection is nonempty, we always keep the part.
+        return true;
+    }
+
+    let total_count = stats.len();
+    for id in 0..num_columns {
+        let min = stats.col_min(id, &arena);
+        let max = stats.col_max(id, &arena);
+        let nulls = stats.col_null_count(id);
+        let json_spec = stats.col_json(id, &arena);
+
+        let value_range = match (total_count, min, max, nulls) {
+            (Some(total_count), _, _, Some(nulls)) if total_count == nulls => ResultSpec::nothing(),
+            (_, Some(min), Some(max), _) => ResultSpec::value_between(min, max),
+            _ => ResultSpec::value_all(),
+        };
+
+        let value_range = match json_spec {
+            Some(json) => value_range.intersect(json),
+            None => value_range,
+        };
+
+        let null_range = match nulls {
+            Some(0) => ResultSpec::nothing(),
+            _ => ResultSpec::null(),
+        };
+        ranges.push_column(id, value_range.union(null_range));
+    }
+    let result = ranges.mfp_plan_filter(plan).range;
+    result.may_contain(Datum::True) || result.may_fail()
 }
 
 pub fn decode_and_mfp<G, YFn>(
