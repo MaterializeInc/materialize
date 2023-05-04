@@ -24,7 +24,7 @@ class CreateSourceParameterized(ActionFactory):
 
     @classmethod
     def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, StoragedRunning, KafkaRunning, TopicExists}
+        return {MzIsRunning, KafkaRunning, TopicExists}
 
     def __init__(self, max_sources: int = 10) -> None:
         self.max_sources = max_sources
@@ -65,7 +65,6 @@ class CreateSource(Action):
                   TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 
                 > CREATE SOURCE {self.source.name}
-                  IN CLUSTER storaged
                   FROM KAFKA CONNECTION {self.source.name}_kafka_conn
                   (TOPIC 'testdrive-{self.source.topic.name}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn

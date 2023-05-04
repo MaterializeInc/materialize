@@ -24,7 +24,7 @@ class CreateSinkParameterized(ActionFactory):
 
     @classmethod
     def requires(self) -> List[Set[Type[Capability]]]:
-        return [{MzIsRunning, StoragedRunning, ViewExists}]
+        return [{MzIsRunning, ViewExists}]
 
     def __init__(self, max_sinks: int = 10) -> None:
         self.max_sinks = max_sinks
@@ -106,7 +106,6 @@ class CreateSink(Action):
                 # Ingest the sink again in order to be able to validate its contents
 
                 > CREATE SOURCE {self.sink.name}_source
-                  IN CLUSTER storaged
                   FROM KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE
