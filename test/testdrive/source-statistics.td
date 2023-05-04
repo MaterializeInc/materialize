@@ -159,12 +159,13 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.updates_staged),
     SUM(u.updates_committed),
     SUM(u.bytes_received) > 0,
-    SUM(u.envelope_state_bytes) < ${state-bytes}
+    SUM(u.envelope_state_bytes) < ${state-bytes},
+    SUM(u.envelope_state_count)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 10 "${updates-committed}" "${updates-committed}" true true
+upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
 
 > DROP SOURCE upsert
