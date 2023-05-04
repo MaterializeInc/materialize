@@ -589,6 +589,11 @@ SELECT INTERVAL '1 day'
 statement ok
 COMMIT
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET allow_real_time_recency = true
+----
+COMPLETE 0
+
 statement ok
 SET REAL_TIME_RECENCY TO TRUE
 

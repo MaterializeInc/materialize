@@ -736,6 +736,10 @@ query error
 SELECT list_cat(LIST[1], LIST[[2]])
 
 # 🔬🔬 list_n_layers
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET list_n_layers = true
+----
+COMPLETE 0
 
 query R
 SELECT list_n_layers(LIST [1, 2, 3])
@@ -883,6 +887,10 @@ query error could not determine polymorphic type because input has type unknown
 SELECT list_length(NULL)
 
 # 🔬🔬 list_length_max
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET list_length_max = true
+----
+COMPLETE 0
 
 query R
 SELECT list_length_max(LIST [1, 2, 3], 1)
@@ -2462,6 +2470,10 @@ SELECT sum(a ORDER BY b) FROM t2
 4
 
 # list_remove
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET list_remove = true
+----
+COMPLETE 0
 
 query T
 SELECT list_remove(LIST[1,2,3,2], 2)::text

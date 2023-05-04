@@ -1445,7 +1445,7 @@ impl CatalogState {
         var.allowed(self.system_config()).map_err(|gate| {
             AdapterError::PlanError(PlanError::RequiresSystemVar {
                 feature: var.name().to_string(),
-                gate: gate.to_string(),
+                gate: Some(gate.to_string()),
             })
         })
     }

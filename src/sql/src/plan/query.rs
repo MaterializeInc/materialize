@@ -86,6 +86,7 @@ use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidIterationLimit;
 use crate::plan::{transform_ast, PlanContext, ShowCreatePlan};
 use crate::plan::{Params, QueryWhen};
+use crate::session::vars::ServerVar;
 
 use super::statement::show;
 
@@ -5407,6 +5408,30 @@ impl<'a> ExprContext<'a> {
 
     pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
         self.qcx.scx.require_unsafe_mode(feature_name)
+    }
+
+    pub fn require_feature_flag(&self, var: &ServerVar<bool>) -> Result<(), PlanError> {
+        use crate::session::vars::{Value, Var, VarInput};
+
+        let v = self
+            .qcx
+            .scx
+            .catalog
+            .system_vars()
+            .get(var.name())
+            .expect("var names must exist");
+
+        let enabled =
+            bool::parse(VarInput::Flat(&v.value())).expect("must use boolean system vars");
+
+        if enabled {
+            Ok(())
+        } else {
+            Err(PlanError::RequiresSystemVar {
+                feature: var.name().to_string(),
+                gate: None,
+            })
+        }
     }
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {

@@ -8,6 +8,10 @@
 # by the Apache License, Version 2.0.
 
 # bin_date
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET binary_date_bin = true
+----
+COMPLETE 0
 
 # Tests adapted from Postgresql
 # https://github.com/postgres/postgres/blob/master/src/test/regress/sql/timestamp.sql
@@ -198,6 +202,10 @@ query error timestamp out of range
 SELECT '99999-01-01'::TIMESTAMP + '162145 y';
 
 # date_bin_hopping
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET date_bin_hopping = true
+----
+COMPLETE 0
 
 query T
 SELECT * FROM date_bin_hopping('45s', '1m', '2001-01-01 00:01:20');

@@ -55,7 +55,7 @@ pub enum PlanError {
     },
     RequiresSystemVar {
         feature: String,
-        gate: String,
+        gate: Option<String>,
     },
     RequiresVarOrUnsafe {
         feature: String,
@@ -314,7 +314,10 @@ impl fmt::Display for PlanError {
                 Ok(())
             }
             Self::RequiresSystemVar { feature, gate } => {
-                write!(f, "{feature} is not supported without the {gate} variable enabled",)
+                write!(f, "{feature} is not supported{}",match gate {
+                    None => "".to_string(),
+                    Some(gate) => format!(" without the {gate} variable enabled")
+                })
             }
             Self::RequiresVarOrUnsafe { feature} => {
                 write!(f, "{feature} is not enabled",)?;

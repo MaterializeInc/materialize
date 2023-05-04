@@ -534,6 +534,15 @@ def workflow_test_github_15496(c: Composition) -> None:
         c.up("materialized")
         c.up("clusterd_nopanic")
 
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET repeat_row = true;
+            """
+            )
+        )
+
         # set up a test cluster and run a testdrive regression script
         c.sql(
             """
@@ -609,9 +618,13 @@ def workflow_test_github_17177(c: Composition) -> None:
             );
             """
         )
+
         c.testdrive(
             dedent(
                 """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET repeat_row = true;
+
             # Set data for test up
             > SET cluster = cluster1;
 
@@ -663,6 +676,15 @@ def workflow_test_github_17510(c: Composition) -> None:
         c.up("testdrive", persistent=True)
         c.up("materialized")
         c.up("clusterd1")
+
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET repeat_row = true;
+            """
+            )
+        )
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -824,6 +846,15 @@ def workflow_test_github_17509(c: Composition) -> None:
         c.up("testdrive", persistent=True)
         c.up("materialized")
         c.up("clusterd_nopanic")
+
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET repeat_row = true;
+            """
+            )
+        )
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
