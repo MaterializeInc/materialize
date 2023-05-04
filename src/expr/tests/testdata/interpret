@@ -1,0 +1,88 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# An interpret test case specifies, in order:
+# - The column types.
+# - Literal values for each column. Our spec for that column will be the union of the
+#   specs of the column's values.
+# - The expression. We'll interpret the expression to get an output spec.
+# - Literal values to test the output spec against.
+
+# Is this thing on? Check that basic integer ranges work as expected.
+interpret
+[int32]
+[
+  [4 6]
+]
+#0
+[3 5 7 ("test" string)]
+----
+may contain: [5]
+
+# A temporal-style filter: compare a value to some function of the column.
+# Expression: (2100 >= 300 + insert_ms)
+interpret
+[string numeric]
+[
+  [("hello" string) ("goodbye" string)]
+  [(2000.0 numeric) (2050.0 numeric)]
+]
+(call_binary gte (2100.0 numeric) (call_binary add_numeric (300.0 numeric) #1))
+[true false null]
+----
+may contain: [false]
+
+# The same, but the filter matches.
+# Expression: (2900 >= 300 + insert_ms)
+interpret
+[string numeric]
+[
+  [("hello" string) ("goodbye" string)]
+  [(2000.0 numeric) (2050.0 numeric)]
+]
+(call_binary gte (2900.0 numeric) (call_binary add_numeric (300.0 numeric) #1))
+[true false null]
+----
+may contain: [true]
+
+# JSONB ->
+# Expression: (json_col -> "created_ms")
+interpret
+[jsonb]
+[
+  [("{\"created_ms\": 1000}" jsonb) ("{\"created_ms\": 2000}" jsonb) ("{\"created_ms\": 3000}" jsonb)]
+]
+(call_binary (jsonb_get_string false) #0 ("created_ms" string))
+[(0 numeric) (2050 numeric) (4000 numeric) null]
+----
+may contain: [2050]
+
+# JSONB ->> (string column)
+# Expression: (json_col ->> "code")
+interpret
+[jsonb]
+[
+  [("{\"code\": \"00135\"}" jsonb) ("{\"code\": \"22122\"}" jsonb) ("{\"code\": \"34153\"}" jsonb)]
+]
+(call_binary (jsonb_get_string true) #0 ("code" string))
+["00000" "20000" "2" "80000"]
+----
+may contain: ["20000" "2"]
+
+# JSONB ->> (numeric column... unsupported)
+# Expression: (json_col ->> "created_ms")
+interpret
+[jsonb]
+[
+  [("{\"created_ms\": 1000}" jsonb) ("{\"created_ms\": 2000}" jsonb) ("{\"created_ms\": 3000}" jsonb)]
+]
+(call_binary (jsonb_get_string true) #0 ("code" string))
+["00000" "20000" "2" "80000"]
+----
+may contain: ["00000" "20000" "2" "80000" <err>]

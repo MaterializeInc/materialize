@@ -84,6 +84,7 @@ use proc_macro2::TokenTree;
 use mz_lowertest::deserialize_optional_generic;
 use mz_ore::str::StrExt;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::strconv::parse_jsonb;
 use mz_repr::{Datum, Row, RowArena, ScalarType};
 
 /* #endregion */
@@ -151,6 +152,9 @@ where
                         .unwrap(),
                     ))
                 }
+                ScalarType::Jsonb => parse_jsonb(&mz_lowertest::unquote(litval))
+                    .map(|jsonb| temp_storage.push_unary_row(jsonb.into_row()))
+                    .map_err(|parse| format!("Invalid JSON literal: {:?}", parse)),
                 _ => Err(format!("Unsupported literal type {:?}", littyp)),
             }
         }
