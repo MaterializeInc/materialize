@@ -296,6 +296,7 @@ pub enum PeekStage {
 pub struct PeekStageValidate {
     pub plan: mz_sql::plan::PeekPlan,
     depends_on: Vec<GlobalId>,
+    target_cluster: TargetCluster,
 }
 
 #[derive(Debug)]
@@ -349,6 +350,15 @@ pub struct PeekStageFinish {
     pub real_time_recency_ts: Option<mz_repr::Timestamp>,
     pub key: Vec<MirScalarExpr>,
     pub typ: RelationType,
+}
+
+/// An enum describing which cluster to run a statement on.
+#[derive(Debug)]
+pub enum TargetCluster {
+    /// The introspection cluster.
+    Introspection,
+    /// The current user's active cluster.
+    Active,
 }
 
 /// A struct to hold information on how to determine if a plan may have changed and how to re-plan

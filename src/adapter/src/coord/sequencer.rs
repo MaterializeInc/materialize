@@ -26,7 +26,7 @@ use mz_sql::plan::{
 
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::{Coordinator, Message};
+use crate::coord::{Coordinator, Message, TargetCluster};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::rbac;
@@ -75,6 +75,15 @@ impl Coordinator {
         if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
             return tx.send(Err(e), session);
         }
+
+        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // session var is set, then we automatically run the query on the mz_introspection cluster.
+        let target_cluster =
+            if introspection::auto_run_on_introspection(&self.catalog, &session, &plan) {
+                TargetCluster::Introspection
+            } else {
+                TargetCluster::Active
+            };
 
         match plan {
             Plan::CreateSource(plan) => {
@@ -230,11 +239,12 @@ impl Coordinator {
                 self.sequence_end_transaction(tx, session, action);
             }
             Plan::Peek(plan) => {
-                self.sequence_peek(tx, session, plan, depends_on).await;
+                self.sequence_peek(tx, session, plan, depends_on, target_cluster)
+                    .await;
             }
             Plan::Subscribe(plan) => {
                 tx.send(
-                    self.sequence_subscribe(&mut session, plan, depends_on)
+                    self.sequence_subscribe(&mut session, plan, depends_on, target_cluster)
                         .await,
                     session,
                 );

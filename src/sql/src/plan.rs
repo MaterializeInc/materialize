@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 use mz_controller::clusters::ClusterId;
-use mz_expr::{ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::AclMode;
@@ -642,6 +642,15 @@ pub enum SubscribeFrom {
         expr: MirRelationExpr,
         desc: RelationDesc,
     },
+}
+
+impl SubscribeFrom {
+    pub fn depends_on(&self) -> BTreeSet<GlobalId> {
+        match self {
+            SubscribeFrom::Id(id) => BTreeSet::from([*id]),
+            SubscribeFrom::Query { expr, .. } => expr.depends_on(),
+        }
+    }
 }
 
 #[derive(Debug)]
