@@ -198,11 +198,11 @@ impl PersistConfig {
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].
     pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
     /// Default value for [`DynamicConfig::stats_audit_percent`].
-    pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 0;
+    pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 5;
     /// Default value for [`DynamicConfig::stats_collection_enabled`].
-    pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = false;
+    pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::stats_filter_enabled`].
-    pub const DEFAULT_STATS_FILTER_ENABLED: bool = false;
+    pub const DEFAULT_STATS_FILTER_ENABLED: bool = true;
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
