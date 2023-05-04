@@ -260,7 +260,7 @@ DELETE FROM t2 WHERE key = 1
 > FETCH 1 c
 <TIMESTAMP> true <null> <null> <null>
 
-> FETCH ALL c
+> FETCH 2 FROM c
 <TIMESTAMP> false upsert 2 3
 <TIMESTAMP> true <null> <null> <null>
 

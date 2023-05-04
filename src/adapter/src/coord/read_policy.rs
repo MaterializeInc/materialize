@@ -47,6 +47,7 @@ pub(crate) const SINCE_GRANULARITY: mz_repr::Timestamp = mz_repr::Timestamp::new
 ///
 /// This type tracks both a default policy, as well as various holds that may
 /// be expressed, as by transactions to ensure collections remain readable.
+#[derive(Debug)]
 pub(crate) struct ReadCapability<T = mz_repr::Timestamp>
 where
     T: timely::progress::Timestamp,

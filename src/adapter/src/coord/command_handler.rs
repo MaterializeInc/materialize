@@ -22,7 +22,9 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::ScalarType;
-use mz_sql::ast::{InsertSource, Query, Raw, SetExpr, Statement};
+use mz_sql::ast::{
+    CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
+};
 use mz_sql::catalog::{RoleAttributes, SessionCatalog};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
@@ -316,6 +318,22 @@ impl Coordinator {
             .query_total
             .with_label_values(&[session_type, stmt_type])
             .inc();
+        match &stmt {
+            Statement::Subscribe(SubscribeStatement { output, .. })
+            | Statement::Copy(CopyStatement {
+                relation: CopyRelation::Subscribe(SubscribeStatement { output, .. }),
+                ..
+            }) => {
+                self.metrics
+                    .subscribe_outputs
+                    .with_label_values(&[
+                        session_type,
+                        metrics::subscribe_output_label_value(output),
+                    ])
+                    .inc();
+            }
+            _ => {}
+        }
 
         let params = portal.parameters.clone();
         self.handle_execute_inner(stmt, params, session, tx).await
@@ -623,6 +641,14 @@ impl Coordinator {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
+        if self.active_conns.get(&session.conn_id()).is_none() {
+            // If the session doesn't exist in `active_conns`, then this method will panic later on.
+            // Instead we explicitly panic here while dumping the entire Coord to the logs to help
+            // debug. This panic is very infrequent so we want as much information as possible.
+            // See https://github.com/MaterializeInc/materialize/issues/18996.
+            panic!("unknown session: {session:?}\n\n{self:?}")
+        }
+
         self.clear_transaction(session);
 
         self.drop_temp_items(session).await;

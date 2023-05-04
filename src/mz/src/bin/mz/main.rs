@@ -100,6 +100,7 @@ use crate::password::list_passwords;
 use crate::region::{print_environment_status, print_region_enabled};
 use crate::shell::{check_environment_health, shell};
 use crate::utils::run_loading_spinner;
+use clap_clippy_hack::*;
 
 mod login;
 mod password;
@@ -112,101 +113,114 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 
 static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_string());
 
-/// Command-line interface for Materialize.
-#[derive(Debug, clap::Parser)]
-#[clap(
+// Do not add anything but structs/enums with Clap derives in this module!
+//
+// Clap v3 sometimes triggers this warning with subcommands,
+// and its unclear if it will be fixed in v3, and not just
+// in v4. This can't be overridden at the macro level, and instead must be overridden
+// at the module level.
+//
+// TODO(guswynn): remove this when we are using Clap v4.
+#[allow(clippy::almost_swapped)]
+mod clap_clippy_hack {
+    use super::*;
+
+    /// Command-line interface for Materialize.
+    #[derive(Debug, clap::Parser)]
+    #[clap(
     long_about = None,
     version = VERSION.as_str(),
 )]
-struct Args {
-    /// The configuration profile to use.
-    #[clap(long, validator = ascii_validator)]
-    profile: Option<String>,
-    #[clap(subcommand)]
-    command: Commands,
-}
-
-#[derive(Debug, clap::Subcommand)]
-enum Commands {
-    /// Show commands to interact with passwords
-    AppPassword(AppPasswordCommand),
-    /// Open the docs
-    Docs,
-    /// Login to a profile and make it the active profile
-    Login {
-        /// Login by typing your email and password
-        #[clap(short, long)]
-        interactive: bool,
-
-        /// Force reauthentication for the profile
-        #[clap(short, long)]
-        force: bool,
-
-        #[clap(flatten)]
-        vault: Vault,
-
-        /// Override the default API endpoint.
-        #[clap(long, hide = true, default_value_t)]
-        endpoint: Endpoint,
-    },
-    /// Show commands to interact with regions
-    Region {
+    pub struct Args {
+        /// The configuration profile to use.
+        #[clap(long, validator = ascii_validator)]
+        pub profile: Option<String>,
         #[clap(subcommand)]
-        command: RegionCommand,
-    },
+        pub command: Commands,
+    }
 
-    /// Show commands to interact with secrets
-    Secret {
-        cloud_provider_region: Option<CloudProviderRegion>,
+    #[derive(Debug, clap::Subcommand)]
+    pub enum Commands {
+        /// Show commands to interact with passwords
+        AppPassword(AppPasswordCommand),
+        /// Open the docs
+        Docs,
+        /// Login to a profile and make it the active profile
+        Login {
+            /// Login by typing your email and password
+            #[clap(short, long)]
+            interactive: bool,
 
+            /// Force reauthentication for the profile
+            #[clap(short, long)]
+            force: bool,
+
+            #[clap(flatten)]
+            vault: Vault,
+
+            /// Override the default API endpoint.
+            #[clap(long, hide = true, default_value_t)]
+            endpoint: Endpoint,
+        },
+        /// Show commands to interact with regions
+        Region {
+            #[clap(subcommand)]
+            command: RegionCommand,
+        },
+
+        /// Show commands to interact with secrets
+        Secret {
+            cloud_provider_region: Option<CloudProviderRegion>,
+
+            #[clap(subcommand)]
+            command: SecretCommand,
+        },
+
+        /// Connect to a region using a SQL shell
+        Shell {
+            cloud_provider_region: Option<CloudProviderRegion>,
+        },
+    }
+
+    #[derive(Debug, clap::Args)]
+    pub struct AppPasswordCommand {
         #[clap(subcommand)]
-        command: SecretCommand,
-    },
+        pub command: AppPasswordSubcommand,
+    }
 
-    /// Connect to a region using a SQL shell
-    Shell {
-        cloud_provider_region: Option<CloudProviderRegion>,
-    },
-}
+    #[derive(Debug, clap::Subcommand)]
+    pub enum AppPasswordSubcommand {
+        /// Create a password.
+        Create {
+            /// Name for the password.
+            name: String,
+        },
+        /// List all enabled passwords.
+        List,
+    }
 
-#[derive(Debug, clap::Args)]
-struct AppPasswordCommand {
-    #[clap(subcommand)]
-    command: AppPasswordSubcommand,
-}
-
-#[derive(Debug, clap::Subcommand)]
-enum AppPasswordSubcommand {
-    /// Create a password.
-    Create {
-        /// Name for the password.
-        name: String,
-    },
-    /// List all enabled passwords.
-    List,
-}
-
-#[derive(Debug, clap::Subcommand)]
-enum RegionCommand {
-    /// Enable a region.
-    Enable {
-        cloud_provider_region: CloudProviderRegion,
-        #[clap(long, hide = true)]
-        version: Option<String>,
-        #[clap(long, hide = true)]
-        environmentd_extra_arg: Vec<String>,
-    },
-    /// Disable a region.
-    #[clap(hide = true)]
-    Disable {
-        cloud_provider_region: CloudProviderRegion,
-    },
-    /// List all enabled regions.
-    List,
-    /// Display a region's status.
-    Status {
-        cloud_provider_region: CloudProviderRegion,
-    },
+    #[derive(Debug, clap::Subcommand)]
+    pub enum RegionCommand {
+        /// Enable a region.
+        Enable {
+            cloud_provider_region: CloudProviderRegion,
+            #[clap(long, hide = true)]
+            version: Option<String>,
+            #[clap(long, hide = true)]
+            environmentd_extra_arg: Vec<String>,
+        },
+        /// Disable a region.
+        #[clap(hide = true)]
+        Disable {
+            cloud_provider_region: CloudProviderRegion,
+        },
+        /// List all enabled regions.
+        List,
+        /// Display a region's status.
+        Status {
+            cloud_provider_region: CloudProviderRegion,
+        },
+    }
 }
 
 /// Internal types, struct and enums

@@ -11,6 +11,7 @@ import os
 import subprocess
 import time
 from datetime import datetime, timedelta
+from textwrap import dedent
 from typing import List, Optional
 
 from pg8000.exceptions import InterfaceError
@@ -70,9 +71,22 @@ class Application:
                 )
 
     def kubectl(self, *args: str) -> str:
-        return subprocess.check_output(
-            ["kubectl", "--context", self.context(), *args]
-        ).decode("ascii")
+        try:
+            return subprocess.check_output(
+                ["kubectl", "--context", self.context(), *args]
+            ).decode("ascii")
+        except subprocess.CalledProcessError as e:
+            print(
+                dedent(
+                    f"""
+                    cmd: {e.cmd}
+                    returncode: {e.returncode}
+                    stdout: {e.stdout}
+                    stderr: {e.stderr}
+                    """
+                )
+            )
+            raise e
 
     def context(self) -> str:
         return "kind-cloudtest"

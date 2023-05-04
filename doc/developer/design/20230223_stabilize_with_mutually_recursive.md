@@ -105,11 +105,11 @@ transformation              | estimate | tracked in
 `join_fusion`               | &check;  | MaterializeInc/materialize#18123
 `join_implementation`       | &check;  | MaterializeInc/materialize#16561
 `literal_constraints`       | &check;  | MaterializeInc/materialize#18123
-`literal_lifting`           | L?       | MaterializeInc/materialize#18165
+`literal_lifting`           | &check;  | MaterializeInc/materialize#18165
 `map_fusion`                | &check;  | MaterializeInc/materialize#18123
 `monotonic_flag`            | L?       | MaterializeInc/materialize#18472
 `negate_fusion`             | &check;  | MaterializeInc/materialize#18123
-`non_null_requirements`     | L?       | MaterializeInc/materialize#18166
+`non_null_requirements`     | &check;  | MaterializeInc/materialize#18166
 `non_nullable`              | &check;  | MaterializeInc/materialize#18123 (somewhat restricted)
 `normalize_ops`             | &check;  | MaterializeInc/materialize#18123
 `normalize_lets`            | &check;  | MaterializeInc/materialize#16665

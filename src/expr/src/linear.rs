@@ -1442,7 +1442,7 @@ pub mod plan {
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SafeMfpPlan {
-        mfp: MapFilterProject,
+        pub(crate) mfp: MapFilterProject,
     }
 
     impl RustType<ProtoSafeMfpPlan> for SafeMfpPlan {
@@ -1566,13 +1566,13 @@ pub mod plan {
     #[derive(Arbitrary, Clone, Debug, PartialEq)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
-        mfp: SafeMfpPlan,
+        pub(crate) mfp: SafeMfpPlan,
         /// Expressions that when evaluated lower-bound `MzNow`.
         #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
-        lower_bounds: Vec<MirScalarExpr>,
+        pub(crate) lower_bounds: Vec<MirScalarExpr>,
         /// Expressions that when evaluated upper-bound `MzNow`.
         #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
-        upper_bounds: Vec<MirScalarExpr>,
+        pub(crate) upper_bounds: Vec<MirScalarExpr>,
     }
 
     impl RustType<ProtoMfpPlan> for MfpPlan {

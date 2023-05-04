@@ -70,7 +70,7 @@ With a free trial, you get 14 days of free access to Materialize resources worth
 If you already have a Materialize account, skip to the [next step](#step-2-prepare-your-environment).
 {{</ note >}}
 
-1. [Sign up for a Materialize trial](https://materialize.com/register/) using your business email address.
+1. [Sign up for a Materialize trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) using your business email address.
 
 1. Activate your Materialize account.
 

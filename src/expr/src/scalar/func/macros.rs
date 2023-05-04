@@ -130,6 +130,7 @@ macro_rules! sqlfunc {
                 }
             }
 
+            #[allow(clippy::extra_unused_lifetimes)]
             pub fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
                 $body
             }

@@ -1,0 +1,137 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Verify filter pushdown information for various temporal filters.
+# For straightforward temporal filters like these, every column mentioned in the filter
+# should be present in the pushdown list.
+
+statement ok
+CREATE TABLE events (
+    content text,
+    insert_ms numeric,
+    delete_ms numeric
+);
+
+query T multiline
+EXPLAIN WITH(mfp_pushdown)
+SELECT count(*)
+FROM events
+WHERE mz_now() >= insert_ms
+  AND mz_now() < delete_ms;
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          Filter (mz_now() < numeric_to_mz_timestamp(#2)) AND (mz_now() >= numeric_to_mz_timestamp(#1))
+            Get materialize.public.events
+
+Source materialize.public.events
+  filter=((mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp(#2)))
+  pushdown=(#1, #2)
+
+EOF
+
+query T multiline
+EXPLAIN WITH(mfp_pushdown)
+SELECT content, insert_ms
+FROM events
+-- The event should appear in only one interval of duration `10000`.
+-- The interval begins here ...
+WHERE mz_now() >= 10000 * (insert_ms / 10000)
+-- ... and ends here.
+  AND mz_now() < 10000 * (1 + insert_ms / 10000)
+----
+Explained Query:
+  Project (#0, #1)
+    Filter (mz_now() >= numeric_to_mz_timestamp((10000 * #3))) AND (mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3))))
+      Map ((#1 / 10000))
+        Get materialize.public.events
+
+Source materialize.public.events
+  filter=((mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
+  map=((#1 / 10000))
+  pushdown=(#1)
+
+EOF
+
+query T multiline
+EXPLAIN WITH(mfp_pushdown)
+SELECT content, insert_ms
+FROM events
+-- The event should appear in `6` intervals each of width `10000`.
+-- The interval begins here ...
+WHERE mz_now() >= 10000 * (insert_ms / 10000)
+-- ... and ends here.
+  AND mz_now() < 6 * (10000 + insert_ms / 10000)
+----
+Explained Query:
+  Project (#0, #1)
+    Filter (mz_now() >= numeric_to_mz_timestamp((10000 * #3))) AND (mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3))))
+      Map ((#1 / 10000))
+        Get materialize.public.events
+
+Source materialize.public.events
+  filter=((mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
+  map=((#1 / 10000))
+  pushdown=(#1)
+
+EOF
+
+query T multiline
+EXPLAIN WITH(mfp_pushdown)
+SELECT content, insert_ms
+FROM events
+-- The event should appear inside the interval that begins at
+-- `insert_ms` and ends at  `insert_ms + 30000`.
+-- The interval begins here ..
+WHERE mz_now() >= insert_ms
+-- ... and ends here.
+  AND mz_now() < insert_ms + 30000
+----
+Explained Query:
+  Project (#0, #1)
+    Filter (mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp((#1 + 30000)))
+      Get materialize.public.events
+
+Source materialize.public.events
+  filter=((mz_now() < numeric_to_mz_timestamp((#1 + 30000))) AND (mz_now() >= numeric_to_mz_timestamp(#1)))
+  pushdown=(#1)
+
+EOF
+
+query T multiline
+EXPLAIN WITH(mfp_pushdown)
+SELECT content, insert_ms, delete_ms
+FROM events
+WHERE mz_now() >= insert_ms + 60000
+  AND mz_now() < delete_ms + 60000;
+----
+Explained Query:
+  Filter (mz_now() < numeric_to_mz_timestamp((#2 + 60000))) AND (mz_now() >= numeric_to_mz_timestamp((#1 + 60000)))
+    Get materialize.public.events
+
+Source materialize.public.events
+  filter=((mz_now() >= numeric_to_mz_timestamp((#1 + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 60000))))
+  pushdown=(#1, #2)
+
+EOF

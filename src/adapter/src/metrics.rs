@@ -12,7 +12,7 @@ use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
-use mz_sql::ast::{AstInfo, Statement, StatementKind};
+use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 
 #[derive(Debug, Clone)]
@@ -24,6 +24,7 @@ pub struct Metrics {
     pub determine_timestamp: IntCounterVec,
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: HistogramVec,
+    pub subscribe_outputs: IntCounterVec,
 }
 
 impl Metrics {
@@ -63,7 +64,12 @@ impl Metrics {
                 name: "mz_storage_usage_collection_time_seconds",
                 help: "The number of seconds the coord spends collecting usage metrics from storage.",
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
-            ))
+            )),
+            subscribe_outputs: registry.register(metric!(
+                name: "mz_subscribe_outputs",
+                help: "The total number of different subscribe outputs used",
+                var_labels: ["session_type", "subscribe_output"],
+            )),
         }
     }
 }
@@ -134,5 +140,16 @@ where
         StatementKind::RevokeRole => "revoke_role",
         StatementKind::GrantPrivilege => "grant_privilege",
         StatementKind::RevokePrivilege => "revoke_privilege",
+    }
+}
+
+pub(crate) fn subscribe_output_label_value<T>(output: &SubscribeOutput<T>) -> &'static str
+where
+    T: AstInfo,
+{
+    match output {
+        SubscribeOutput::Diffs => "diffs",
+        SubscribeOutput::WithinTimestampOrderBy { .. } => "within_timestamp_order_by",
+        SubscribeOutput::EnvelopeUpsert { .. } => "envelope_upsert",
     }
 }

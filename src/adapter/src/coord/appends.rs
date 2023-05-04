@@ -31,6 +31,7 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::ExecuteResponse;
 
 /// An operation that is deferred while waiting for a lock.
+#[derive(Debug)]
 pub(crate) enum Deferred {
     Plan(DeferredPlan),
     GroupCommit,
@@ -48,7 +49,7 @@ pub(crate) struct DeferredPlan {
 }
 
 /// Describes what action triggered an update to a builtin table.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum BuiltinTableUpdateSource {
     /// Update was triggered by some DDL.
     DDL,
@@ -57,6 +58,7 @@ pub(crate) enum BuiltinTableUpdateSource {
 }
 
 /// A pending write transaction that will be committing during the next group commit.
+#[derive(Debug)]
 pub(crate) enum PendingWriteTxn {
     /// Write to a user table.
     User {
