@@ -958,7 +958,7 @@ fn generate_item_usage_privileges_inner<'a>(
         })
 }
 
-fn generate_cluster_usage_privileges<'a>(
+fn generate_cluster_usage_privileges(
     expr: &MirRelationExpr,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
