@@ -17,10 +17,10 @@ use timely::progress::Timestamp;
 
 use mz_ore::metric;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use mz_ore::metrics::{IntCounterVec, IntGaugeVec, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec};
 use mz_repr::GlobalId;
 use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
-use prometheus::core::{AtomicI64, AtomicU64};
+use prometheus::core::AtomicU64;
 
 use crate::sink::metrics::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
@@ -32,8 +32,8 @@ pub(crate) struct SourceStatisticsMetricsDefinitions {
     pub(crate) updates_staged: IntCounterVec,
     pub(crate) updates_committed: IntCounterVec,
     pub(crate) bytes_received: IntCounterVec,
-    pub(crate) envelope_state_bytes: IntGaugeVec,
-    pub(crate) envelope_state_count: IntGaugeVec,
+    pub(crate) envelope_state_bytes: UIntGaugeVec,
+    pub(crate) envelope_state_count: UIntGaugeVec,
 }
 
 impl SourceStatisticsMetricsDefinitions {
@@ -86,8 +86,8 @@ pub struct SourceStatisticsMetrics {
     pub(crate) updates_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) updates_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub(crate) envelope_state_count: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -358,13 +358,19 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     /// A positive value will add and a negative value will subtract.
     pub fn update_envelope_state_bytes_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
-        cur.1.envelope_state_bytes = cur.1.envelope_state_bytes + value;
-        cur.2.envelope_state_bytes.add(value);
+        cur.1.envelope_state_bytes = cur.1.envelope_state_bytes.saturating_add_signed(value);
+        let abs_value = value.unsigned_abs();
+        if value > 0 {
+            cur.2.envelope_state_bytes.add(abs_value);
+        } else {
+            cur.2.envelope_state_bytes.sub(abs_value);
+        }
     }
 
     /// Set the `envelope_state_bytes` to the given value
     pub fn set_envelope_state_bytes(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
+        let value = if value < 0 { 0 } else { value.unsigned_abs() };
         cur.1.envelope_state_bytes = value;
         cur.2.envelope_state_bytes.set(value);
     }
@@ -373,13 +379,19 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     /// A positive value will add and a negative value will subtract.
     pub fn update_envelope_state_count_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
-        cur.1.envelope_state_count = cur.1.envelope_state_count + value;
-        cur.2.envelope_state_count.add(value);
+        cur.1.envelope_state_count = cur.1.envelope_state_count.saturating_add_signed(value);
+        let abs_value = value.unsigned_abs();
+        if value > 0 {
+            cur.2.envelope_state_count.add(abs_value);
+        } else {
+            cur.2.envelope_state_count.sub(abs_value);
+        }
     }
 
     /// Set the `envelope_state_count` to the given value
     pub fn set_envelope_state_count(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
+        let value = if value < 0 { 0 } else { value.unsigned_abs() };
         cur.1.envelope_state_count = value;
         cur.2.envelope_state_count.set(value);
     }
