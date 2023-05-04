@@ -616,6 +616,15 @@ const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     safe: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_audit_percent`].
+const PERSIST_STATS_AUDIT_PERCENT: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_stats_audit_percent"),
+    value: &PersistConfig::DEFAULT_STATS_AUDIT_PERCENT,
+    description: "Percent of filtered data to opt in to correctness auditing (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_collection_enabled`].
 const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_stats_collection_enabled"),
@@ -1498,6 +1507,7 @@ impl Default for SystemVars {
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+            .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
             .with_var(&METRICS_RETENTION)
@@ -1802,6 +1812,11 @@ impl SystemVars {
     /// Returns the `storage_persist_sink_minimum_batch_updates` configuration parameter.
     pub fn storage_persist_sink_minimum_batch_updates(&self) -> usize {
         *self.expect_value(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+    }
+
+    /// Returns the `persist_stats_audit_percent` configuration parameter.
+    pub fn persist_stats_audit_percent(&self) -> usize {
+        *self.expect_value(&PERSIST_STATS_AUDIT_PERCENT)
     }
 
     /// Returns the `persist_stats_collection_enabled` configuration parameter.
@@ -2869,6 +2884,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+        || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
 }

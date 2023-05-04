@@ -87,7 +87,9 @@ use uuid::Uuid;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterId, ReplicaId};
+use mz_controller::clusters::{
+    ClusterConfig, ClusterEvent, ClusterId, CreateReplicaConfig, ReplicaId,
+};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
@@ -396,6 +398,7 @@ pub struct ReplicaMetadata {
 }
 
 /// Metadata about an active connection.
+#[derive(Debug)]
 struct ConnMeta {
     /// A watch channel shared with the client to inform the client of
     /// cancellation requests. The coordinator sets the contained value to
@@ -487,8 +490,11 @@ impl PendingReadTxn {
 }
 
 /// Glues the external world to the Timely workers.
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Coordinator {
     /// The controller for the storage and compute layers.
+    #[derivative(Debug = "ignore")]
     controller: mz_controller::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
@@ -596,6 +602,7 @@ pub struct Coordinator {
     storage_usage_collection_interval: Duration,
 
     /// Segment analytics client.
+    #[derivative(Debug = "ignore")]
     segment_client: Option<mz_segment::Client>,
 
     /// Coordinator metrics.
@@ -642,7 +649,12 @@ impl Coordinator {
             )?;
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 let role = instance.role();
-                replicas_to_start.push((instance.id, replica_id, role, replica.config));
+                replicas_to_start.push(CreateReplicaConfig {
+                    cluster_id: instance.id,
+                    replica_id,
+                    role,
+                    config: replica.config,
+                });
             }
         }
         self.controller.create_replicas(replicas_to_start).await?;

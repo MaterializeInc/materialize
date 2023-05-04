@@ -1,0 +1,48 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+#
+# Test various cases of literal lifting
+#
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
+
+# WITH MUTUALLY RECURSIVE support
+# -------------------------------
+
+# Simplify non-nullable trees with multiple non-recursive bindings defined under
+# a single`WITH MUTUALLY RECURSIVE` block
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH MUTUALLY RECURSIVE
+  c0(x INT, y INT, z INT) AS (
+    SELECT *, null::int FROM t1
+  ),
+  c1(x INT, y INT, z INT) AS (
+    SELECT * FROM c0 WHERE z > 0 UNION SELECT x, y, 42 FROM c1
+  ),
+  c2(x INT, y INT, z INT) AS (
+    SELECT y, x, z FROM c0
+  )
+SELECT * FROM (SELECT * FROM c1 UNION ALL SELECT * FROM c2) WHERE z > 0
+----
+Explained Query:
+  Return // { arity: 3 }
+    Get l0 // { arity: 3 }
+  With Mutually Recursive
+    cte l0 =
+      Map (42) // { arity: 3 }
+        Distinct group_by=[#0, #1] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            Get l0 // { arity: 3 }
+
+EOF

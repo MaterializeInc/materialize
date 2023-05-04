@@ -174,7 +174,7 @@ wait(condition="delete", resource="secret/some_secret")
 ## Running testdrive
 
 ```python
-mz.testdrive.run_string(
+mz.testdrive.run(
     dedent(
         """
         > SELECT 1;
@@ -190,7 +190,7 @@ test, use `no_reset=True` to prevent cleanup and `seed=N` to make sure they all
 share the same random seed:
 
 ```python
-mz.testdrive.run_string(..., no_reset=True, seed = N)
+mz.testdrive.run(..., no_reset=True, seed = N)
 ```
 
 ## Running one-off SQL statements

@@ -124,9 +124,6 @@ pub enum FrontendMessage {
 
     /// Bind an existing prepared statement to a portal.
     ///
-    /// Note that we can't actually bind parameters yet (issue#609), but that is
-    /// an important part of this command.
-    ///
     /// This command is part of the extended query flow.
     Bind {
         /// The destination portal. An empty string selects the unnamed

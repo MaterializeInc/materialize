@@ -140,6 +140,7 @@ impl PersistConfig {
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
                 ),
                 next_listen_batch_retryer: RwLock::new(Self::DEFAULT_NEXT_LISTEN_BATCH_RETRYER),
+                stats_audit_percent: AtomicUsize::new(Self::DEFAULT_STATS_AUDIT_PERCENT),
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
             }),
@@ -196,6 +197,8 @@ impl PersistConfig {
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].
     pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Default value for [`DynamicConfig::stats_audit_percent`].
+    pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 0;
     /// Default value for [`DynamicConfig::stats_collection_enabled`].
     pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = false;
     /// Default value for [`DynamicConfig::stats_filter_enabled`].
@@ -284,6 +287,7 @@ pub struct DynamicConfig {
     consensus_connect_timeout: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
     storage_sink_minimum_batch_updates: AtomicUsize,
+    stats_audit_percent: AtomicUsize,
     stats_collection_enabled: AtomicBool,
     stats_filter_enabled: AtomicBool,
 
@@ -447,6 +451,11 @@ impl DynamicConfig {
             .load(Self::LOAD_ORDERING)
     }
 
+    /// Percent of filtered data to opt in to correctness auditing.
+    pub fn stats_audit_percent(&self) -> usize {
+        self.stats_audit_percent.load(Self::LOAD_ORDERING)
+    }
+
     /// Computes and stores statistics about each batch part.
     ///
     /// These can be used at read time to entirely skip fetching a part based on
@@ -535,6 +544,8 @@ pub struct PersistParameters {
     pub sink_minimum_batch_updates: Option<usize>,
     /// Configures [`PersistConfig::storage_sink_minimum_batch_updates`].
     pub storage_sink_minimum_batch_updates: Option<usize>,
+    /// Configures [`DynamicConfig::stats_audit_percent`].
+    pub stats_audit_percent: Option<usize>,
     /// Configures [`DynamicConfig::stats_collection_enabled`].
     pub stats_collection_enabled: Option<bool>,
     /// Configures [`DynamicConfig::stats_filter_enabled`].
@@ -553,6 +564,7 @@ impl PersistParameters {
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
+            stats_audit_percent: self_stats_audit_percent,
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
         } = self;
@@ -563,6 +575,7 @@ impl PersistParameters {
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
+            stats_audit_percent: other_stats_audit_percent,
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
         } = other;
@@ -583,6 +596,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_next_listen_batch_retryer {
             *self_next_listen_batch_retryer = Some(v);
+        }
+        if let Some(v) = other_stats_audit_percent {
+            *self_stats_audit_percent = Some(v)
         }
         if let Some(v) = other_stats_collection_enabled {
             *self_stats_collection_enabled = Some(v)
@@ -605,6 +621,7 @@ impl PersistParameters {
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
+            stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
         } = self;
@@ -614,6 +631,7 @@ impl PersistParameters {
             && sink_minimum_batch_updates.is_none()
             && storage_sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
+            && stats_audit_percent.is_none()
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
     }
@@ -632,6 +650,7 @@ impl PersistParameters {
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
+            stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
         } = self;
@@ -670,6 +689,11 @@ impl PersistParameters {
                 .expect("lock poisoned");
             *retry = *retry_params;
         }
+        if let Some(stats_audit_percent) = stats_audit_percent {
+            cfg.dynamic
+                .stats_audit_percent
+                .store(*stats_audit_percent, DynamicConfig::STORE_ORDERING);
+        }
         if let Some(stats_collection_enabled) = stats_collection_enabled {
             cfg.dynamic
                 .stats_collection_enabled
@@ -694,6 +718,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
                 .storage_sink_minimum_batch_updates
                 .into_proto(),
             next_listen_batch_retryer: self.next_listen_batch_retryer.into_proto(),
+            stats_audit_percent: self.stats_audit_percent.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
         }
@@ -709,6 +734,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
                 .storage_sink_minimum_batch_updates
                 .into_rust()?,
             next_listen_batch_retryer: proto.next_listen_batch_retryer.into_rust()?,
+            stats_audit_percent: proto.stats_audit_percent.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
         })

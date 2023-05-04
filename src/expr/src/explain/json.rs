@@ -9,7 +9,8 @@
 
 //! `EXPLAIN AS JSON` support for structures defined in this crate.
 
-use crate::explain::ExplainSource;
+use crate::explain::{ExplainSource, PushdownInfo};
+use crate::interpret::Pushdownable;
 use mz_repr::explain::json::DisplayJson;
 
 use super::{ExplainMultiPlan, ExplainSinglePlan};
@@ -43,12 +44,34 @@ where
         let sources = self
             .sources
             .iter()
-            .map(|ExplainSource { id, op, .. }| {
-                serde_json::json!({
-                    "id": id,
-                    "op": op
-                })
-            })
+            .map(
+                |ExplainSource {
+                     id,
+                     op,
+                     pushdown_info,
+                 }| {
+                    let mut json = serde_json::json!({
+                        "id": id,
+                        "op": op,
+                    });
+
+                    if let Some(PushdownInfo { trace }) = pushdown_info {
+                        let pushdownable: Vec<_> = trace
+                            .0
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| **p == Pushdownable::Yes)
+                            .map(|(i, _)| i)
+                            .collect();
+
+                        json.as_object_mut()
+                            .unwrap()
+                            .insert("pushdown".to_owned(), serde_json::json!(pushdownable));
+                    }
+
+                    json
+                },
+            )
             .collect::<Vec<_>>();
 
         let result = serde_json::json!({ "plans": plans, "sources": sources });
