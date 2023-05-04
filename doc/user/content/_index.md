@@ -11,7 +11,7 @@ weight: 1
 
 Materialize is a **streaming database** powered by [Timely](https://github.com/TimelyDataflow/timely-dataflow#timely-dataflow) and [Differential Dataflow](https://github.com/timelydataflow/differential-dataflow#differential-dataflow), purpose-built for low-latency applications. It lets you ask complex questions about your data using **SQL**, and incrementally maintains the results of these SQL queries as the underlying data changes.
 
-{{< callout primary_url="https://materialize.com/materialize-cloud-access/" primary_text="Get Access">}}
+{{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Access">}}
 
 ## Cloud-native Materialize is here! 🚀
 
