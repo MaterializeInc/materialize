@@ -9,6 +9,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::convert::AsRef;
 use std::hash::{Hash, Hasher};
@@ -154,27 +155,29 @@ impl ValueData {
         }
     }
 
+    // This is used to populate the corresponding `initial_bytes`
+    // after value is fetched from the upsert state in `commands_state`
     fn populate_initial_size(&mut self) {
         self.initial_bytes = self.value.as_ref().map(Self::calculate_size);
     }
 
     // Updates the value and sets corresponding values for `diff_bytes` and `diff_records`.
-    fn update_value(&mut self, new_value: UpsertValue) -> Option<UpsertValue> {
-        let new_bytes = Self::calculate_size(&new_value);
-        let old_value = self.value.replace(new_value);
+    fn update_value(&mut self, new_value: Option<UpsertValue>) -> Option<UpsertValue> {
+        let new_bytes = &new_value.as_ref().map(Self::calculate_size).unwrap_or(0);
 
-        let initial_bytes = self.initial_bytes.unwrap_or(0);
-        self.diff_bytes = new_bytes - initial_bytes;
-        self.diff_record = if initial_bytes > 0 { 0 } else { 1 };
-        old_value
-    }
+        let old_value = match new_value {
+            Some(new_value) => self.value.replace(new_value),
+            None => self.value.take(),
+        };
 
-    // Removes the value and sets corresponding values for `diff_bytes` and `diff_records`
-    fn remove_value(&mut self) -> Option<UpsertValue> {
-        let old_value = self.value.take();
-        let initial_bytes = self.initial_bytes.unwrap_or(0);
-        self.diff_bytes = -initial_bytes;
-        self.diff_record = if initial_bytes > 0 { -1 } else { 0 };
+        let diff_bytes = new_bytes - self.initial_bytes.unwrap_or(0);
+        self.diff_bytes = diff_bytes;
+        self.diff_record = match diff_bytes.cmp(&0) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        };
+
         old_value
     }
 
@@ -437,31 +440,25 @@ where
                         let command_state = commands_state
                             .get_mut(&key)
                             .expect("key missing from commands_state");
-                        match value {
-                            Some(value) => {
-                                if let Some(old_value) = command_state.update_value(value.clone()) {
-                                    output_updates.push((old_value, ts.clone(), -1));
-                                }
-                                output_updates.push((value, ts, 1));
-                            }
-                            None => {
-                                if let Some(old_value) = command_state.remove_value() {
-                                    output_updates.push((old_value, ts, -1));
-                                }
-                            }
+
+                        if let Some(old_value) = command_state.update_value(value.clone()) {
+                            output_updates.push((old_value, ts.clone(), -1));
+                        }
+
+                        if let Some(new_value) = value {
+                            output_updates.push((new_value, ts, 1));
                         }
                     }
 
-                    // Accumulating metrics before draining
-                    let total_diff_records = commands_state
-                        .values()
-                        .map(|v| Into::<i64>::into(v.diff_record))
-                        .sum();
-                    let total_diff_bytes = commands_state.values().map(|v| v.diff_bytes).sum();
-
-                    // Record the changes in `state`.
+                    let mut total_diff_records = 0;
+                    let mut total_diff_bytes = 0;
+                    // Record the changes in `state` and accumulating metrics while draining
                     state
-                        .multi_put(commands_state.drain(..).map(|(k, v)| (k, v.value)))
+                        .multi_put(commands_state.drain(..).map(|(k, v)| {
+                            total_diff_records += Into::<i64>::into(v.diff_record);
+                            total_diff_bytes += v.diff_bytes;
+                            (k, v.value)
+                        }))
                         .await
                         .expect("hashmap impl to not fail");
 
