@@ -353,6 +353,9 @@ pub struct PeekStageFinish {
 }
 
 /// An enum describing which cluster to run a statement on.
+///
+/// One example usage would be that if a query depends only on system tables, we might
+/// automatically run it on the introspection cluster to benefit from indexes that exist there.
 #[derive(Debug)]
 pub enum TargetCluster {
     /// The introspection cluster.
