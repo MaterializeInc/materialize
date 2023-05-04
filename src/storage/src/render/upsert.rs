@@ -185,7 +185,7 @@ impl ValueData {
                 .byte_len()
                 .try_into()
                 .expect("Unexpected error while converting usize to i64"),
-            Err(_) => 0, // TODO(mouli): fix this calculation
+            Err(_) => 0, // this will be fixed when we switch to bin-coding to serialize for rocksdb
         };
         bytes
     }
