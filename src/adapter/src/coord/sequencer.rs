@@ -76,6 +76,11 @@ impl Coordinator {
             return tx.send(Err(e), session);
         }
 
+        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // session var is set, then we automatically run the query on the mz_introspection cluster.
+        let target_cluster =
+            introspection::auto_run_on_introspection(&self.catalog, &session, &plan);
+
         match plan {
             Plan::CreateSource(plan) => {
                 let source_id =
@@ -230,11 +235,12 @@ impl Coordinator {
                 self.sequence_end_transaction(tx, session, action);
             }
             Plan::Peek(plan) => {
-                self.sequence_peek(tx, session, plan, depends_on).await;
+                self.sequence_peek(tx, session, plan, depends_on, target_cluster)
+                    .await;
             }
             Plan::Subscribe(plan) => {
                 tx.send(
-                    self.sequence_subscribe(&mut session, plan, depends_on)
+                    self.sequence_subscribe(&mut session, plan, depends_on, target_cluster)
                         .await,
                     session,
                 );
