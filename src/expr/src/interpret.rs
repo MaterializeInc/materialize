@@ -839,7 +839,6 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                             Values::Nested(map_spec) => map_spec.get(&key).cloned().map_or_else(
                                 ResultSpec::anything,
                                 |field_spec| {
-                                    eprintln!("WOW {map_spec:?} {key:?}");
                                     if *stringify {
                                         // We only preserve value-range information when stringification
                                         // is a noop. (Common in real queries.)
