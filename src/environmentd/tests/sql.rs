@@ -3015,13 +3015,27 @@ fn test_max_connections() {
     let mut client2 = server.connect(postgres::NoTls).unwrap();
     let _ = client1.batch_execute("SELECT 1").unwrap();
     let e = client2.batch_execute("SELECT 1").expect_err("expect error");
-    let e = e.as_db_error().unwrap_or_else(|| panic!("expect db error: {}", e));
-    assert!(e.message().starts_with("creating a connection would violate max connections limit"), "e={}", e);
+    let e = e
+        .as_db_error()
+        .unwrap_or_else(|| panic!("expect db error: {}", e));
+    assert!(
+        e.message()
+            .starts_with("creating a connection would violate max connections limit"),
+        "e={}",
+        e
+    );
 
     let mut client3 = server.connect(postgres::NoTls).unwrap();
     let e = client3.batch_execute("SELECT 1").expect_err("expect error");
-    let e = e.as_db_error().unwrap_or_else(|| panic!("expect db error: {}", e));
-    assert!(e.message().starts_with("creating a connection would violate max connections limit"), "e={}", e);
+    let e = e
+        .as_db_error()
+        .unwrap_or_else(|| panic!("expect db error: {}", e));
+    assert!(
+        e.message()
+            .starts_with("creating a connection would violate max connections limit"),
+        "e={}",
+        e
+    );
 
     let mut mz_client2 = server
         .pg_config_internal()
