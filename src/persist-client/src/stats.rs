@@ -67,9 +67,4 @@ impl PartStats {
         let new_format = new_format.finish()?;
         Self::new(schemas, &new_format)
     }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        let Self { key } = self;
-        key.len == 0
-    }
 }

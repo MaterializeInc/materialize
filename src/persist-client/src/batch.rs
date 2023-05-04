@@ -748,15 +748,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             // but don't crash the process. Turn this into a
                             // hard error once we've shaken out any issues.
                             match PartStats::legacy_part_format(&schemas, &batch.updates) {
-                                // TODO(mfp): HACK Only keep stats if it's not
-                                // empty. This makes it easier to exactly
-                                // roundtrip through the placeholder proto
-                                // serialization, which doesn't keep the
-                                // difference between empty and unset. We could
-                                // make it keep the distinction, but at the cost
-                                // of additional complexity which I don't think
-                                // is worth it.
-                                Ok(x) if x.is_empty() => None,
                                 Ok(mut x) => {
                                     x.key.trim_to_budget(stats_budget, force_keep_stats_col);
                                     Some((Arc::new(x), stats_start.elapsed()))
