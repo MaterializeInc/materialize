@@ -12,6 +12,7 @@ use std::fmt::Formatter;
 use std::{fmt, iter};
 
 use itertools::Itertools;
+use mz_controller::clusters::ClusterId;
 use mz_expr::{CollectionPlan, MirRelationExpr};
 
 use mz_ore::str::StrExt;
@@ -134,6 +135,7 @@ pub fn check_plan(
     catalog: &impl SessionCatalog,
     session: &Session,
     plan: &Plan,
+    target_cluster_id: Option<ClusterId>,
     depends_on: &Vec<GlobalId>,
 ) -> Result<(), AdapterError> {
     let role_id = session.role_id();
@@ -187,7 +189,8 @@ pub fn check_plan(
         .collect();
     ownership_err(unheld_ownership, catalog)?;
 
-    let required_privileges = generate_required_privileges(catalog, plan, depends_on, *role_id);
+    let required_privileges =
+        generate_required_privileges(catalog, plan, target_cluster_id, depends_on, *role_id);
     let mut role_memberships = BTreeMap::new();
     role_memberships.insert(*role_id, role_membership);
     check_object_privileges(catalog, required_privileges, role_memberships)?;
@@ -466,6 +469,7 @@ fn ownership_err(
 fn generate_required_privileges(
     catalog: &impl SessionCatalog,
     plan: &Plan,
+    target_cluster_id: Option<ClusterId>,
     depends_on: &Vec<GlobalId>,
     role_id: RoleId,
 ) -> Vec<(ObjectId, AclMode, RoleId)> {
@@ -625,7 +629,7 @@ fn generate_required_privileges(
             let mut privileges =
                 generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
             if let Some(privilege) =
-                generate_cluster_usage_privileges(catalog, &plan.source, role_id)
+                generate_cluster_usage_privileges(&plan.source, target_cluster_id, role_id)
             {
                 privileges.push(privilege);
             }
@@ -634,8 +638,8 @@ fn generate_required_privileges(
         Plan::Subscribe(_) => {
             let mut privileges =
                 generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
-            if let Ok(cluster) = catalog.resolve_cluster(None) {
-                privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
+            if let Some(cluster_id) = target_cluster_id {
+                privileges.push((cluster_id.into(), AclMode::USAGE, role_id));
             }
             privileges
         }
@@ -690,14 +694,14 @@ fn generate_required_privileges(
             ));
 
             if let Some(privilege) =
-                generate_cluster_usage_privileges(catalog, &plan.values, role_id)
+                generate_cluster_usage_privileges(&plan.values, target_cluster_id, role_id)
             {
                 privileges.push(privilege);
             } else if !plan.returning.is_empty() {
                 // TODO(jkosh44) returning may be a constant, but for now we are overly protective
                 //  and require cluster privileges for all returning.
-                if let Ok(cluster) = catalog.resolve_cluster(None) {
-                    privileges.push((cluster.id().into(), AclMode::USAGE, role_id));
+                if let Some(cluster_id) = target_cluster_id {
+                    privileges.push((cluster_id.into(), AclMode::USAGE, role_id));
                 }
             }
             privileges
@@ -753,7 +757,7 @@ fn generate_required_privileges(
             ));
 
             if let Some(privilege) =
-                generate_cluster_usage_privileges(catalog, &plan.selection, role_id)
+                generate_cluster_usage_privileges(&plan.selection, target_cluster_id, role_id)
             {
                 privileges.push(privilege);
             }
@@ -955,15 +959,15 @@ fn generate_item_usage_privileges_inner<'a>(
 }
 
 fn generate_cluster_usage_privileges<'a>(
-    catalog: &'a impl SessionCatalog,
     expr: &MirRelationExpr,
+    target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> Option<(ObjectId, AclMode, RoleId)> {
     // TODO(jkosh44) expr hasn't been fully optimized yet, so it might actually be a constant,
     //  but we mistakenly think that it's not. For now it's ok to be overly protective.
     if expr.as_const().is_none() {
-        if let Ok(cluster) = catalog.resolve_cluster(None) {
-            return Some((cluster.id().into(), AclMode::USAGE, role_id));
+        if let Some(cluster_id) = target_cluster_id {
+            return Some((cluster_id.into(), AclMode::USAGE, role_id));
         }
     }
 
