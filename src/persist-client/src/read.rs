@@ -1155,18 +1155,19 @@ mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
-    use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::now::{NowFn, SYSTEM_TIME};
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::str::FromStr;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::cache::StateCache;
     use crate::internal::metrics::Metrics;
-    use crate::tests::{all_ok, new_test_client};
-    use crate::{PersistClient, PersistConfig, ShardId};
+    use crate::tests::{all_ok, new_test_client, new_test_client_cache};
+    use crate::{PersistClient, PersistConfig, PersistLocation, ShardId};
 
     use super::*;
 
@@ -1198,6 +1199,52 @@ mod tests {
             "snapshot must have batches for test to be meaningful"
         );
         drop(subscribe);
+    }
+
+    // Regression test for #17338: we could erroneously advance
+    // our seqno since past the batch we were about to emit
+    #[tokio::test]
+    async fn regression_seqno_since_with_maybe_downgrade_since() {
+        mz_ore::test::init_logging();
+
+        let now = Arc::new(AtomicU64::new(0));
+        let now_clone = Arc::clone(&now);
+        let mut cache = new_test_client_cache();
+        cache.cfg.now = NowFn::from(move || now_clone.load(Ordering::SeqCst));
+        let (mut write, read) = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
+            .await
+            .expect("client construction failed")
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+        let lease_duration_ms = u64::try_from(read.cfg.reader_lease_duration.as_millis()).unwrap();
+        write
+            .expect_compare_and_append(&[(("0".to_string(), "0".to_string()), 0, 1)], 0, 1)
+            .await;
+
+        let mut listen = read.listen(Antichain::from_elem(0)).await.expect("listen");
+        let original_seqno_since = listen.handle.machine.seqno_since();
+
+        // advance time to force any calls to `maybe_downgrade_since` to fire
+        now.fetch_add(lease_duration_ms / 4 + 1, Ordering::SeqCst);
+        let _ = listen.next().await;
+
+        // verify that `maybe_downgrade_since` ran
+        assert_eq!(listen.handle.last_heartbeat, now.load(Ordering::SeqCst));
+        // and that our lease and `seqno_since` has not advanced past the original seqno
+        let leased_seqnos = listen
+            .handle
+            .lease_returner
+            .leased_seqnos
+            .lock()
+            .expect("lock poisoned");
+        assert_eq!(*leased_seqnos, BTreeMap::from([(original_seqno_since, 1)]));
+        assert_eq!(original_seqno_since, listen.handle.machine.seqno_since());
+        // but our machine seqno has advanced
+        assert_eq!(listen.handle.machine.seqno(), original_seqno_since.next());
     }
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
