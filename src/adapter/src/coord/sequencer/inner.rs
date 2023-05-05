@@ -45,7 +45,7 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, 
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
-    CatalogTypeDetails,
+    CatalogTypeDetails, SessionCatalog,
 };
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
 use mz_sql::names::{ObjectId, QualifiedItemName};
@@ -3560,6 +3560,9 @@ impl Coordinator {
             attributes,
         }: AlterRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let catalog = self.catalog().for_session(session);
+        let role = catalog.get_role(&id);
+        let attributes = (role, attributes).into();
         let op = catalog::Op::AlterRole {
             id,
             name,

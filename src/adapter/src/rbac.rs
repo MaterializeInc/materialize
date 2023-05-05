@@ -18,12 +18,13 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogItemType, SessionCatalog};
+use mz_sql::catalog::{CatalogItemType, RoleAttributes, SessionCatalog};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterOwnerPlan,
-    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, CreateMaterializedViewPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateViewPlan, GrantPrivilegePlan, MutationKind, Plan, RevokePrivilegePlan,
+    AlterRolePlan, AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, CreateMaterializedViewPlan,
+    CreateRolePlan, CreateSinkPlan, CreateSourcePlan, CreateViewPlan, GrantPrivilegePlan,
+    MutationKind, Plan, PlannedRoleAttributes, RevokePrivilegePlan,
 };
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::{ObjectType, QualifiedReplica};
@@ -44,7 +45,7 @@ pub enum UnauthorizedError {
     #[error("permission denied to {action}")]
     Attribute {
         action: String,
-        attribute: Attribute,
+        attributes: Vec<Attribute>,
     },
     /// The action requires ownership of an object.
     #[error("must be owner of {}", objects.iter().map(|(object_type, object_name)| format!("{object_type} {object_name}")).join(", "))]
@@ -66,9 +67,11 @@ impl UnauthorizedError {
             UnauthorizedError::Superuser { action } => {
                 Some(format!("You must be a superuser to {}", action))
             }
-            UnauthorizedError::Attribute { action, attribute } => Some(format!(
-                "You must have the {} attribute to {}",
-                attribute, action
+            UnauthorizedError::Attribute { action, attributes } => Some(format!(
+                "You must have the {} attribute{} to {}",
+                attributes.iter().join(", "),
+                if attributes.len() > 1 { "s" } else { "" },
+                action
             )),
             UnauthorizedError::Privilege { action, reason } => reason
                 .as_ref()
@@ -155,13 +158,41 @@ pub fn check_plan(
 
     // Validate that the current session has the required attributes to execute the provided plan.
     // Note: role attributes are not inherited by role membership.
-    if let Some(required_attribute) = generate_required_plan_attribute(plan) {
-        if !required_attribute.check_role(role_id, catalog) {
-            return Err(AdapterError::Unauthorized(UnauthorizedError::Attribute {
-                action: plan.name().to_string(),
-                attribute: required_attribute,
-            }));
+    let required_attributes = generate_required_plan_attribute(plan);
+    let unheld_attributes: Vec<_> = required_attributes
+        .into_iter()
+        .filter(|attribute| !attribute.check_role(role_id, catalog))
+        .collect();
+    if !unheld_attributes.is_empty() {
+        let mut action = plan.name().to_string();
+        // If the plan is `CREATE ROLE` or `ALTER ROLE` then add some more details about the
+        // attributes being granted.
+        let attributes: Vec<_> = if let Plan::CreateRole(CreateRolePlan { attributes, .. }) = plan {
+            Attribute::from_role_attributes(attributes)
+                .into_iter()
+                .filter(|attribute| unheld_attributes.contains(attribute))
+                .collect()
+        } else if let Plan::AlterRole(AlterRolePlan { attributes, .. }) = plan {
+            Attribute::from_planned_role_attributes(attributes)
+                .into_iter()
+                .filter(|attribute| unheld_attributes.contains(attribute))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !attributes.is_empty() {
+            action = format!(
+                "{} with attribute{} {}",
+                action,
+                if attributes.len() > 1 { "s" } else { "" },
+                attributes.iter().join(", ")
+            );
         }
+
+        return Err(AdapterError::Unauthorized(UnauthorizedError::Attribute {
+            action,
+            attributes: unheld_attributes,
+        }));
     }
 
     // Validate that the current session has the required object ownership to execute the provided
@@ -203,22 +234,34 @@ pub fn is_rbac_enabled_for_system(system_vars: &SystemVars) -> bool {
 }
 
 /// Generates the attributes required to execute a given plan.
-fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
+fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
     match plan {
-        Plan::CreateDatabase(_) => Some(Attribute::CreateDB),
-        Plan::CreateCluster(_) => Some(Attribute::CreateCluster),
-        Plan::CreateRole(_) | Plan::AlterRole(_) | Plan::GrantRole(_) | Plan::RevokeRole(_) => {
-            Some(Attribute::CreateRole)
+        Plan::CreateDatabase(_) => vec![Attribute::CreateDB],
+        Plan::CreateCluster(_) => vec![Attribute::CreateCluster],
+        Plan::CreateRole(CreateRolePlan { attributes, .. }) => {
+            let mut attributes = Attribute::from_role_attributes(attributes);
+            if !attributes.contains(&Attribute::CreateRole) {
+                attributes.push(Attribute::CreateRole);
+            }
+            attributes
         }
+        Plan::AlterRole(AlterRolePlan { attributes, .. }) => {
+            let mut attributes = Attribute::from_planned_role_attributes(attributes);
+            if !attributes.contains(&Attribute::CreateRole) {
+                attributes.push(Attribute::CreateRole);
+            }
+            attributes
+        }
+        Plan::GrantRole(_) | Plan::RevokeRole(_) => vec![Attribute::CreateRole],
         Plan::DropObjects(plan) if plan.object_type == ObjectType::Role => {
-            Some(Attribute::CreateRole)
+            vec![Attribute::CreateRole]
         }
         Plan::CreateSource(CreateSourcePlan { cluster_config, .. })
         | Plan::CreateSink(CreateSinkPlan { cluster_config, .. }) => {
             if cluster_config.cluster_id().is_none() {
-                Some(Attribute::CreateCluster)
+                vec![Attribute::CreateCluster]
             } else {
-                None
+                Vec::new()
             }
         }
         Plan::CreateSources(plans) => {
@@ -226,9 +269,9 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
                 .iter()
                 .any(|plan| plan.plan.cluster_config.cluster_id().is_none())
             {
-                Some(Attribute::CreateCluster)
+                vec![Attribute::CreateCluster]
             } else {
-                None
+                Vec::new()
             }
         }
         Plan::CreateTable(_)
@@ -279,14 +322,14 @@ fn generate_required_plan_attribute(plan: &Plan) -> Option<Attribute> {
         | Plan::Raise(_)
         | Plan::RotateKeys(_)
         | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_) => None,
+        | Plan::RevokePrivilege(_) => Vec::new(),
     }
 }
 
 /// Attributes that allow a role to execute certain plans.
 ///
 /// Note: This is a subset of all role attributes used for privilege checks.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Attribute {
     /// Allows creating, altering, and dropping roles.
     CreateRole,
@@ -305,6 +348,34 @@ impl Attribute {
             Attribute::CreateDB => role.create_db(),
             Attribute::CreateCluster => role.create_cluster(),
         }
+    }
+
+    fn from_role_attributes(role_attributes: &RoleAttributes) -> Vec<Self> {
+        let mut attributes = Vec::new();
+        if role_attributes.create_role {
+            attributes.push(Attribute::CreateRole);
+        }
+        if role_attributes.create_db {
+            attributes.push(Attribute::CreateDB);
+        }
+        if role_attributes.create_cluster {
+            attributes.push(Attribute::CreateCluster);
+        }
+        attributes
+    }
+
+    fn from_planned_role_attributes(planned_role_attributes: &PlannedRoleAttributes) -> Vec<Self> {
+        let mut attributes = Vec::new();
+        if let Some(true) = planned_role_attributes.create_role {
+            attributes.push(Attribute::CreateRole);
+        }
+        if let Some(true) = planned_role_attributes.create_db {
+            attributes.push(Attribute::CreateDB);
+        }
+        if let Some(true) = planned_role_attributes.create_cluster {
+            attributes.push(Attribute::CreateCluster);
+        }
+        attributes
     }
 }
 

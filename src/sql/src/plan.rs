@@ -65,6 +65,7 @@ use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatab
 pub use self::expr::{
     AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
+pub use crate::plan::statement::ddl::PlannedRoleAttributes;
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -780,7 +781,7 @@ pub struct AlterSystemResetAllPlan {}
 pub struct AlterRolePlan {
     pub id: RoleId,
     pub name: String,
-    pub attributes: RoleAttributes,
+    pub attributes: PlannedRoleAttributes,
 }
 
 #[derive(Debug)]
