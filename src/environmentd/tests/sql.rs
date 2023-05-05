@@ -1334,7 +1334,7 @@ fn test_github_18950() {
     client_writes.batch_execute("ROLLBACK").unwrap();
 
     // Verify the transaction timestamp is returned for each select and
-    // read holds are acquired as of the transaction timestamp
+    // the read frontier does not advance.
     client_reads.batch_execute("BEGIN").unwrap();
     let mut query_timestamp = None;
     let mut t1_read_frontier = None;
