@@ -91,5 +91,11 @@ message ProtoBytesStats {
         // TODO(mfp): Pull bytes out of ProtoPrimitiveStats and inline it here?
         ProtoPrimitiveStats primitive = 1;
         ProtoJsonStats json = 2;
+        ProtoAtomicBytesStats atomic = 3;
     }
+}
+
+message ProtoAtomicBytesStats {
+    bytes lower = 1;
+    bytes upper = 2;
 }
