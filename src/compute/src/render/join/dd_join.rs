@@ -493,7 +493,7 @@ where
 
         let temp = &mut self.temp;
 
-        while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) && effort < *fuel {
+        'outer: while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) {
             match trace.key(trace_storage).cmp(batch.key(batch_storage)) {
                 Ordering::Less => trace.seek_key(trace_storage, batch.key(batch_storage)),
                 Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
@@ -515,20 +515,25 @@ where
                             });
                             batch.step_val(batch_storage);
                         }
+
                         batch.rewind_vals(batch_storage);
                         trace.step_val(trace_storage);
-                    }
 
-                    // TODO: This consolidation is optional, and it may not be very
-                    //       helpful. We might try harder to understand whether we
-                    //       should do this work here, or downstream at consumers.
-                    // TODO: Perhaps `thinker` should have the buffer, do smarter
-                    //       consolidation, and then deposit results in `session`.
-                    differential_dataflow::consolidation::consolidate(temp);
+                        // TODO: This consolidation is optional, and it may not be very
+                        //       helpful. We might try harder to understand whether we
+                        //       should do this work here, or downstream at consumers.
+                        // TODO: Perhaps `thinker` should have the buffer, do smarter
+                        //       consolidation, and then deposit results in `session`.
+                        differential_dataflow::consolidation::consolidate(temp);
 
-                    effort += temp.len();
-                    for ((d, t), r) in temp.drain(..) {
-                        session.give((d, t, r));
+                        effort += temp.len();
+                        for ((d, t), r) in temp.drain(..) {
+                            session.give((d, t, r));
+                        }
+
+                        if effort >= *fuel {
+                            break 'outer;
+                        }
                     }
 
                     batch.step_key(batch_storage);
