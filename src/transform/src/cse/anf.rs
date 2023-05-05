@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
-use mz_ore::cast::CastFrom;
+use mz_ore::id_gen::IdGen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 /// Transform an MirRelationExpr into an administrative normal form (ANF).
@@ -30,6 +30,10 @@ pub struct ANF;
 use crate::TransformArgs;
 
 impl crate::Transform for ANF {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -54,9 +58,8 @@ impl ANF {
         relation: &mut MirRelationExpr,
     ) -> Result<(), crate::TransformError> {
         let mut bindings = Bindings::default();
-        bindings.intern_expression(relation)?;
+        bindings.intern_expression(&mut IdGen::default(), relation)?;
         bindings.populate_expression(relation);
-        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
@@ -71,8 +74,6 @@ impl ANF {
 /// use of the expression from which they have been extracted.
 #[derive(Debug)]
 struct Bindings {
-    // An offset to be used when generating bindings values.
-    id_offset: u64,
     /// A list of let-bound expressions and their order / identifier.
     bindings: BTreeMap<MirRelationExpr, u64>,
     /// Mapping from conventional local `Get` identifiers to new ones.
@@ -90,7 +91,6 @@ impl CheckedRecursion for Bindings {
 impl Default for Bindings {
     fn default() -> Bindings {
         Bindings {
-            id_offset: 0,
             bindings: BTreeMap::new(),
             rebindings: BTreeMap::new(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
@@ -99,9 +99,8 @@ impl Default for Bindings {
 }
 
 impl Bindings {
-    fn new(id_offset: u64, rebindings: BTreeMap<LocalId, LocalId>) -> Bindings {
+    fn new(rebindings: BTreeMap<LocalId, LocalId>) -> Bindings {
         Bindings {
-            id_offset,
             rebindings,
             ..Bindings::default()
         }
@@ -119,12 +118,45 @@ impl Bindings {
     /// in a canonical representation, which is used to check for prior instances and drives re-use.
     fn intern_expression(
         &mut self,
+        id_gen: &mut IdGen,
         relation: &mut MirRelationExpr,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur_mut(|this| {
             match relation {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    body,
+                    max_iters: _,
+                } => {
+                    // Extend this.rebindings with (id, id) pairs for each
+                    // recursive ID before descending into values and body.
+                    this.rebindings.extend(ids.iter().map(|id| {
+                        let new_id = id_gen.allocate_id();
+                        (id.clone(), LocalId::new(new_id))
+                    }));
+
+                    // Descend into each value using a fresh Bindings instance.
+                    for value in values.iter_mut() {
+                        let mut anf = Bindings::new(this.rebindings.clone());
+                        anf.intern_expression(id_gen, value)?;
+                        anf.populate_expression(value);
+                    }
+
+                    // Descend into the body using a fresh Bindings instance.
+                    let mut anf = Bindings::new(this.rebindings.clone());
+                    anf.intern_expression(id_gen, body)?;
+                    anf.populate_expression(body);
+
+                    // Remove recursive ID extensions from this.rebindings and
+                    // rebind the id in the enclosing LetRec node.
+                    for id in ids.iter_mut() {
+                        let new_id = this.rebindings.remove(id).unwrap();
+                        *id = new_id;
+                    }
+                }
                 MirRelationExpr::Let { id, value, body } => {
-                    this.intern_expression(value)?;
+                    this.intern_expression(id_gen, value)?;
                     let new_id = if let MirRelationExpr::Get {
                         id: Id::Local(x), ..
                     } = **value
@@ -134,7 +166,7 @@ impl Bindings {
                         panic!("Invariant violated")
                     };
                     this.rebindings.insert(*id, new_id);
-                    this.intern_expression(body)?;
+                    this.intern_expression(id_gen, body)?;
                     let body = body.take_dangerous();
                     this.rebindings.remove(id);
                     *relation = body;
@@ -154,7 +186,7 @@ impl Bindings {
 
                 _ => {
                     // All other expressions just need to apply the logic recursively.
-                    relation.try_visit_mut_children(|expr| this.intern_expression(expr))?;
+                    relation.try_visit_mut_children(|expr| this.intern_expression(id_gen, expr))?;
                 }
             };
 
@@ -168,11 +200,10 @@ impl Bindings {
                 // Do nothing, as the expression is already a local `Get` expression.
             } else {
                 // Either find an instance of `relation` or insert this one.
-                let bindings_len = this.id_offset + u64::cast_from(this.bindings.len());
                 let id = this
                     .bindings
                     .entry(relation.take_dangerous())
-                    .or_insert(bindings_len);
+                    .or_insert_with(|| id_gen.allocate_id());
                 *relation = MirRelationExpr::Get {
                     id: Id::Local(LocalId::new(*id)),
                     typ,

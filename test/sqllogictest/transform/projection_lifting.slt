@@ -96,24 +96,24 @@ SELECT * FROM triangle_cycles;
 ----
 Explained Query:
   Return
-    Get l0
+    Get l1
   With Mutually Recursive
-    cte l0 =
+    cte l1 =
       Distinct group_by=[#0..=#2]
         Union
           Project (#2, #3, #5)
             Join on=(#0 = #5 AND #1 = #2 AND #3 = #4) type=differential
               ArrangeBy keys=[[#1]]
-                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-                  Get materialize.public.edges
+                Get l0
               ArrangeBy keys=[[#0]]
-                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-                  Get materialize.public.edges
+                Get l0
               ArrangeBy keys=[[#0, #1]]
-                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-                  Get materialize.public.edges
+                Get l0
           Project (#2, #0, #1)
-            Get l0
+            Get l1
+    cte l0 =
+      Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+        Get materialize.public.edges
 
 Source materialize.public.edges
   filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)

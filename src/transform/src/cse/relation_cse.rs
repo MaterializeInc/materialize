@@ -41,6 +41,10 @@ impl RelationCSE {
 }
 
 impl crate::Transform for RelationCSE {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

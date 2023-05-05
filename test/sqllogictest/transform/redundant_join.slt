@@ -81,10 +81,9 @@ Explained Query:
 EOF
 
 # Same query, but selecting from t1 instead of t2. The added `- IS NOT NULL`
-# filters prevent redundant join elimination. To be able to eliminate the join
-# we need to factor out the filter on top of t1 behind a common binding.
-#
-# This might be fixed by #18173 (depending on the strength of the solution).
+# filters prevent redundant join elimination at first. To be able to eliminate
+# the join we need to factor out the filter on top of t1 behind a common
+# binding (fixed by #18173).
 query T multiline
 EXPLAIN WITH(arity, join_impls)
 WITH MUTUALLY RECURSIVE
@@ -103,17 +102,9 @@ Explained Query:
       Distinct group_by=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
           Get l0 // { arity: 3 }
-          Join on=(#2 = (#0 % 2)) type=differential // { arity: 3 }
-            implementation
-              %1[#0]UKA » %0:t1[(#0 % 2)]K
-            ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
-              Filter (#0) IS NOT NULL // { arity: 2 }
-                Get materialize.public.t1 // { arity: 2 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Distinct group_by=[(#0 % 2)] // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Filter (#0) IS NOT NULL // { arity: 2 }
-                    Get materialize.public.t1 // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 3 }
+            Map ((#0 % 2)) // { arity: 3 }
+              Get materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
