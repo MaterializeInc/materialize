@@ -261,6 +261,7 @@ impl std::fmt::Debug for JsonStats {
 pub enum BytesStats {
     Primitive(PrimitiveStats<Vec<u8>>),
     Json(JsonStats),
+    Atomic(AtomicBytesStats),
 }
 
 impl std::fmt::Debug for BytesStats {
@@ -268,8 +269,19 @@ impl std::fmt::Debug for BytesStats {
         match self {
             BytesStats::Primitive(x) => std::fmt::Debug::fmt(x, f),
             BytesStats::Json(x) => std::fmt::Debug::fmt(x, f),
+            BytesStats::Atomic(x) => std::fmt::Debug::fmt(x, f),
         }
     }
+}
+
+/// `Vec<u8>` stats that cannot safely be trimmed.
+#[derive(Debug)]
+#[cfg_attr(any(test), derive(Clone))]
+pub struct AtomicBytesStats {
+    /// See [PrimitiveStats::lower]
+    pub lower: Vec<u8>,
+    /// See [PrimitiveStats::upper]
+    pub upper: Vec<u8>,
 }
 
 /// The length to truncate `Vec<u8>` and `String` stats to.
@@ -373,10 +385,10 @@ mod impls {
     use crate::stats::private::StatsCost;
     use crate::stats::{
         proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
-        truncate_bytes, truncate_string, BytesStats, ColumnStats, DynStats, JsonStats, OptionStats,
-        PrimitiveStats, ProtoBytesStats, ProtoDynStats, ProtoJsonMapStats, ProtoJsonStats,
-        ProtoOptionStats, ProtoPrimitiveStats, ProtoStructStats, StructStats, TruncateBound,
-        TRUNCATE_LEN,
+        truncate_bytes, truncate_string, AtomicBytesStats, BytesStats, ColumnStats, DynStats,
+        JsonStats, OptionStats, PrimitiveStats, ProtoAtomicBytesStats, ProtoBytesStats,
+        ProtoDynStats, ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveStats,
+        ProtoStructStats, StructStats, TruncateBound, TRUNCATE_LEN,
     };
 
     impl<T: StatsCost> StatsCost for OptionStats<T> {
@@ -472,12 +484,14 @@ mod impls {
             match self {
                 BytesStats::Primitive(x) => x.cost(),
                 BytesStats::Json(x) => x.cost(),
+                BytesStats::Atomic(x) => x.cost(),
             }
         }
         fn trim(&mut self) {
             match self {
                 BytesStats::Primitive(x) => x.trim(),
                 BytesStats::Json(x) => x.trim(),
+                BytesStats::Atomic(x) => x.trim(),
             }
         }
     }
@@ -510,6 +524,15 @@ mod impls {
                     }
                 }
             }
+        }
+    }
+
+    impl StatsCost for AtomicBytesStats {
+        fn cost(&self) -> usize {
+            self.lower.len() + self.upper.len()
+        }
+        fn trim(&mut self) {
+            // No-op
         }
     }
 
@@ -616,12 +639,14 @@ mod impls {
             match self {
                 BytesStats::Primitive(x) => x.lower(),
                 BytesStats::Json(_) => None,
+                BytesStats::Atomic(x) => Some(&x.lower),
             }
         }
         fn upper<'a>(&'a self) -> Option<<Vec<u8> as Data>::Ref<'a>> {
             match self {
                 BytesStats::Primitive(x) => x.upper(),
                 BytesStats::Json(_) => None,
+                BytesStats::Atomic(x) => Some(&x.upper),
             }
         }
         fn none_count(&self) -> usize {
@@ -851,6 +876,7 @@ mod impls {
                     proto_bytes_stats::Kind::Primitive(RustType::into_proto(x))
                 }
                 BytesStats::Json(x) => proto_bytes_stats::Kind::Json(RustType::into_proto(x)),
+                BytesStats::Atomic(x) => proto_bytes_stats::Kind::Atomic(RustType::into_proto(x)),
             };
             ProtoBytesStats { kind: Some(kind) }
         }
@@ -863,8 +889,27 @@ mod impls {
                 Some(proto_bytes_stats::Kind::Json(x)) => {
                     Ok(BytesStats::Json(JsonStats::from_proto(x)?))
                 }
+                Some(proto_bytes_stats::Kind::Atomic(x)) => {
+                    Ok(BytesStats::Atomic(AtomicBytesStats::from_proto(x)?))
+                }
                 None => Err(TryFromProtoError::missing_field("ProtoBytesStats::kind")),
             }
+        }
+    }
+
+    impl RustType<ProtoAtomicBytesStats> for AtomicBytesStats {
+        fn into_proto(&self) -> ProtoAtomicBytesStats {
+            ProtoAtomicBytesStats {
+                lower: self.lower.into_proto(),
+                upper: self.upper.into_proto(),
+            }
+        }
+
+        fn from_proto(proto: ProtoAtomicBytesStats) -> Result<Self, TryFromProtoError> {
+            Ok(AtomicBytesStats {
+                lower: proto.lower.into_rust()?,
+                upper: proto.upper.into_rust()?,
+            })
         }
     }
 

@@ -75,6 +75,11 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
         action="store_true",
         help="bind container ports to the same host ports rather than choosing random host ports",
     )
+    parser.add_argument(
+        "--project-name",
+        metavar="PROJECT_NAME",
+        help="Use a different project name than the directory name",
+    )
     mzbuild.Repository.install_arguments(parser)
 
     # Docker Compose arguments that we explicitly ban. Since we don't support
@@ -138,7 +143,10 @@ def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
     repo = mzbuild.Repository.from_arguments(ROOT, args)
     try:
         return mzcompose.Composition(
-            repo, name=args.find or Path.cwd().name, preserve_ports=args.preserve_ports
+            repo,
+            name=args.find or Path.cwd().name,
+            preserve_ports=args.preserve_ports,
+            project_name=args.project_name,
         )
     except mzcompose.UnknownCompositionError as e:
         if args.find:

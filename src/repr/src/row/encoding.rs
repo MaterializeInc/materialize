@@ -19,7 +19,7 @@ use mz_persist_types::columnar::{
     ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
 use mz_persist_types::part::{ColumnsMut, ColumnsRef, DynColumnRef};
-use mz_persist_types::stats::{BytesStats, DynStats, OptionStats, PrimitiveStats, StatsFn};
+use mz_persist_types::stats::{AtomicBytesStats, BytesStats, DynStats, OptionStats, StatsFn};
 use mz_persist_types::Codec;
 use prost::Message;
 use uuid::Uuid;
@@ -233,7 +233,7 @@ impl DatumToPersist for ProtoDatumToPersist {
         StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
             let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
             assert_eq!(null_count, 0);
-            Ok(Box::new(BytesStats::Primitive(PrimitiveStats {
+            Ok(Box::new(BytesStats::Atomic(AtomicBytesStats {
                 lower,
                 upper,
             })))
@@ -262,7 +262,7 @@ impl DatumToPersist for NullableProtoDatumToPersist {
             let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
             Ok(Box::new(OptionStats {
                 none: null_count,
-                some: BytesStats::Primitive(PrimitiveStats { lower, upper }),
+                some: BytesStats::Atomic(AtomicBytesStats { lower, upper }),
             }))
         });
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {

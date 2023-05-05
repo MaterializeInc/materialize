@@ -338,6 +338,32 @@ impl State {
             }
         }
 
+        // Grant initial privileges.
+        inner_client
+            .batch_execute("GRANT USAGE ON DATABASE materialize TO PUBLIC")
+            .await?;
+        inner_client
+            .batch_execute(&format!(
+                "GRANT CREATE ON DATABASE materialize TO {}",
+                self.materialize_user
+            ))
+            .await?;
+        inner_client
+            .batch_execute(&format!(
+                "GRANT CREATE ON SCHEMA materialize.public TO {}",
+                self.materialize_user
+            ))
+            .await?;
+        inner_client
+            .batch_execute("GRANT USAGE ON CLUSTER default TO PUBLIC")
+            .await?;
+        inner_client
+            .batch_execute(&format!(
+                "GRANT CREATE ON CLUSTER default TO {}",
+                self.materialize_user
+            ))
+            .await?;
+
         Ok(())
     }
 

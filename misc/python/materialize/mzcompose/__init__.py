@@ -84,11 +84,13 @@ class Composition:
         preserve_ports: bool = False,
         silent: bool = False,
         munge_services: bool = True,
+        project_name: Optional[str] = None,
     ):
         self.name = name
         self.description = None
         self.repo = repo
         self.preserve_ports = preserve_ports
+        self.project_name = project_name
         self.silent = silent
         self.workflows: Dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
@@ -249,6 +251,9 @@ class Composition:
         stderr = None
         if capture_stderr:
             stderr = subprocess.PIPE
+        project_name_args = (
+            ("--project-name", self.project_name) if self.project_name else ()
+        )
 
         try:
             return subprocess.run(
@@ -258,6 +263,7 @@ class Composition:
                     f"-f/dev/fd/{self.file.fileno()}",
                     "--project-directory",
                     self.path,
+                    *project_name_args,
                     *args,
                 ],
                 close_fds=False,

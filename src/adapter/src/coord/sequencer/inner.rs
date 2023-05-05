@@ -62,7 +62,6 @@ use mz_sql::plan::{
     SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
     SubscribePlan, VariableValue, View,
 };
-use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -3750,9 +3749,8 @@ impl Coordinator {
             ))
         } else {
             Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Privilege {
+                rbac::UnauthorizedError::MzSystem {
                     action: "alter system".into(),
-                    reason: Some(format!("You must be the '{}' role", SYSTEM_USER.name)),
                 },
             ))
         }
