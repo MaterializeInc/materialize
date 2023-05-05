@@ -526,7 +526,7 @@ const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
     value: &false,
     description: "The default for the `DISK` option in `UPSERT` sources.",
     internal: true,
-    safe: true,
+    system_var_gate: None,
 };
 
 /// Whether or not the `DISK` option in available `UPSERT` sources.
@@ -536,7 +536,7 @@ const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
     description: "Feature flag indicating availability of the `DISK` \
                   option in `UPSERT/DEBEZIUM` sources (Materialize).",
     internal: true,
-    safe: true,
+    system_var_gate: None,
 };
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -670,7 +670,7 @@ const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
     value: &PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED,
     description: "Whether to connect to the Persist PubSub service.",
     internal: true,
-    safe: true,
+    system_var_gate: None,
 };
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_push_diff_enabled`].
@@ -679,7 +679,7 @@ const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
     value: &PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
     description: "Whether to push state diffs to Persist PubSub.",
     internal: true,
-    safe: true,
+    system_var_gate: None,
 };
 
 /// Boolean flag indicating that the remote configuration was synchronized at
@@ -731,22 +731,13 @@ static ENABLE_FORMAT_JSON: ServerVar<bool> = ServerVar {
     system_var_gate: None,
 };
 
-/// Meta feature flag allowing real time recency to be enabled (Materialize).
-static REAL_TIME_RECENCY_ALLOWED: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("real_time_recency_allowed"),
-    value: &false,
-    description: "Meta feature flag allowing real time recency to be enabled (Materialize).",
-    internal: true,
-    system_var_gate: None,
-};
-
 /// Feature flag indicating whether real time recency is enabled.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
     value: &false,
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
     internal: true,
-    system_var_gate: Some(&REAL_TIME_RECENCY_ALLOWED),
+    system_var_gate: Some(&ALLOW_REAL_TIME_RECENCY),
 };
 
 static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
@@ -827,7 +818,7 @@ pub const ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Feature flag indicating whether `ENVELOPE DEBEZIUM` can be used in `SUBSCRIBE` queries (Materialize).",
     internal: false,
-    safe: true,
+    system_var_gate: None,
 };
 
 pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
@@ -852,8 +843,59 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     value: &5,
     description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
     internal: true,
-    safe: true,
+    system_var_gate: None,
 };
+
+// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
+// availability of features.
+macro_rules! feature_flags {
+    ($(($name:expr, $feature_desc:literal)),+) => {
+        paste::paste!{
+            $(
+                pub static [<$name:upper>]: ServerVar<bool> = ServerVar {
+                    name: UncasedStr::new(stringify!($name)),
+                    value: &false,
+                    description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
+                    internal: true,
+                    system_var_gate: None,
+                };
+            )+
+
+            impl SystemVars {
+                fn with_feature_flags(self) -> Self
+            {
+                    self
+                    $(
+                        .with_var(&[<$name:upper>])
+                    )+
+                }
+
+                $(
+                    pub fn [<$name:lower>](&self) -> bool {
+                        *self.expect_value(&[<$name:upper>])
+                    }
+                )+
+            }
+        }
+    }
+}
+
+feature_flags!(
+    (allow_unstable_dependencies, "depending on unstable objects"),
+    (
+        allow_real_time_recency,
+        "setting the real_time_recency flag"
+    ),
+    (allow_date_bin_hopping, "the date_bin_hopping function"),
+    (
+        allow_binary_date_bin,
+        "the binary version of date_bin function"
+    ),
+    (allow_list_n_layers, "the list_n_layers function"),
+    (allow_list_length_max, "the list_length_max function"),
+    (allow_list_remove, "the list_remove function"),
+    (allow_repeat_row, "the repeat_row function")
+);
 
 /// Represents the input to a variable.
 ///
@@ -1552,6 +1594,7 @@ impl Clone for SystemVars {
 impl Default for SystemVars {
     fn default() -> Self {
         SystemVars::empty()
+            .with_feature_flags()
             .with_var(&CONFIG_HAS_SYNCED_ONCE)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
