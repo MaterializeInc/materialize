@@ -28,6 +28,21 @@ CREATE ROLE joe
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
+GRANT CREATE ON DATABASE materialize TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON CLUSTER default TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
 CREATE ROLE foo
 ----
 COMPLETE 0

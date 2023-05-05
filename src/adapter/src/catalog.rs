@@ -634,6 +634,7 @@ impl CatalogState {
                 queue.extend(role.membership().keys());
             }
         }
+        membership.insert(RoleId::Public);
         membership
     }
 
@@ -7468,6 +7469,18 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
+    fn get_privileges(&self, id: &ObjectId) -> Option<&PrivilegeMap> {
+        match id {
+            ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
+            ObjectId::Database(id) => Some(self.get_database(id).privileges()),
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                Some(self.get_schema(database_spec, schema_spec).privileges())
+            }
+            ObjectId::Item(id) => Some(self.get_item(id).privileges()),
+            ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+        }
+    }
+
     fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.object_dependents(ids, self.conn_id, &mut seen)
@@ -7480,6 +7493,37 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn all_object_privileges(&self, object_type: mz_sql_parser::ast::ObjectType) -> AclMode {
         rbac::all_object_privileges(object_type)
+    }
+
+    fn get_object_type(&self, object_id: &ObjectId) -> mz_sql_parser::ast::ObjectType {
+        match object_id {
+            ObjectId::Cluster(_) => mz_sql_parser::ast::ObjectType::Cluster,
+            ObjectId::ClusterReplica(_) => mz_sql_parser::ast::ObjectType::ClusterReplica,
+            ObjectId::Database(_) => mz_sql_parser::ast::ObjectType::Database,
+            ObjectId::Schema(_) => mz_sql_parser::ast::ObjectType::Schema,
+            ObjectId::Role(_) => mz_sql_parser::ast::ObjectType::Role,
+            ObjectId::Item(item_id) => self.get_item(item_id).item_type().into(),
+        }
+    }
+
+    fn get_object_name(&self, object_id: &ObjectId) -> String {
+        match object_id {
+            ObjectId::Cluster(cluster_id) => self.get_cluster(*cluster_id).name().to_string(),
+            ObjectId::ClusterReplica((cluster_id, replica_id)) => self
+                .get_cluster_replica(*cluster_id, *replica_id)
+                .name()
+                .to_string(),
+            ObjectId::Database(database_id) => self.get_database(database_id).name().to_string(),
+            ObjectId::Schema((database_spec, schema_spec)) => {
+                let name = self.get_schema(database_spec, schema_spec).name();
+                self.resolve_full_schema_name(name).to_string()
+            }
+            ObjectId::Role(role_id) => self.get_role(role_id).name().to_string(),
+            ObjectId::Item(id) => {
+                let name = self.get_item(id).name();
+                self.resolve_full_name(name).to_string()
+            }
+        }
     }
 }
 
@@ -7730,11 +7774,11 @@ mod tests {
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
-    use mz_sql::catalog::{CatalogDatabase, PrivilegeMap};
+    use mz_sql::catalog::{CatalogDatabase, PrivilegeMap, SessionCatalog};
     use mz_sql::names;
     use mz_sql::names::{
-        DatabaseId, ItemQualifiers, PartialItemName, QualifiedItemName, ResolvedDatabaseSpecifier,
-        SchemaId, SchemaSpecifier,
+        DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
+        ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
     use mz_sql::session::vars::VarInput;
@@ -8823,6 +8867,44 @@ mod tests {
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
             privileges.get(&new_owner).expect("new_owner is grantee")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_object_type() {
+        let debug_stash_factory = DebugStashFactory::new().await;
+        let stash = debug_stash_factory.open_debug().await;
+        let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
+            .await
+            .expect("unable to open debug catalog");
+        let catalog = catalog.for_system_session();
+
+        assert_eq!(
+            mz_sql_parser::ast::ObjectType::ClusterReplica,
+            catalog.get_object_type(&ObjectId::ClusterReplica((ClusterId::User(1), 1)))
+        );
+        assert_eq!(
+            mz_sql_parser::ast::ObjectType::Role,
+            catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_privileges() {
+        let debug_stash_factory = DebugStashFactory::new().await;
+        let stash = debug_stash_factory.open_debug().await;
+        let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
+            .await
+            .expect("unable to open debug catalog");
+        let catalog = catalog.for_system_session();
+
+        assert_eq!(
+            None,
+            catalog.get_privileges(&ObjectId::ClusterReplica((ClusterId::User(1), 1)))
+        );
+        assert_eq!(
+            None,
+            catalog.get_privileges(&ObjectId::Role(RoleId::User(1)))
         );
     }
 }

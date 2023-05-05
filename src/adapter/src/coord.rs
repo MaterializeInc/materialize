@@ -356,7 +356,7 @@ pub struct PeekStageFinish {
 ///
 /// One example usage would be that if a query depends only on system tables, we might
 /// automatically run it on the introspection cluster to benefit from indexes that exist there.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum TargetCluster {
     /// The introspection cluster.
     Introspection,

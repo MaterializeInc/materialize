@@ -356,9 +356,9 @@ Here is a summary of all the privileges, attributes, and ownership needed to per
 | `DROP CLUSTER REPLICA`                | Ownership of the replica, `CLUSTER(U)`                                            |
 | `DROP ROLE`                           | `CREATEROLE`                                                                      |
 | `{INSERT INTO ... VALUES, COPY FROM}` | `OBJECT(a)`, sometimes `TYPE(U)`                                                  |
-| `INSERT INTO ... SELECT`              | `OBJECT(a)` usually `CLUSTER(U)`, `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`   |
-| `DELETE`                              | `OBJECT(d)` usually `CLUSTER(U)`, `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`   |
-| `UPDATE`                              | `OBJECT(w)` usually `CLUSTER(U)`, `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`   |
+| `INSERT INTO ... SELECT`              | `OBJECT(a)` usually, `OBJECT(r)`, `CLUSTER(U)`, `SCHEMA(U)`, sometimes `TYPE(U)`  |
+| `DELETE`                              | `OBJECT(d)`, `OBJECT(r)` usually `CLUSTER(U)`, `SCHEMA(U)`, sometimes `TYPE(U)`   |
+| `UPDATE`                              | `OBJECT(w)`, `OBJECT(r)` usually `CLUSTER(U)`, `SCHEMA(U)`, sometimes `TYPE(U)`   |
 | `{SELECT, SHOW, SUBSCRIBE}`           | usually `CLUSTER(U)`, `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`               |
 | `EXPLAIN`                             | usually `OBJECT(r)`, `SCHEMA(U)`, sometimes `TYPE(U)`                             |
 | `SHOW CREATE`                         | `SCHEMA(U)`                                                                       |
@@ -372,6 +372,9 @@ the view definition.
 When creating a sink, Materialize will check the users privileges only at the time of sink
 creation. If the user loses privileges, the sink will keep running an potentially exposes
 information that the user no longer has access to.
+
+Unlike PostgreSQL, `UPDATE` and `DELETE` always require `SELECT` privileges on the object being
+updated.
 
 We will add the following SQL commands:
 

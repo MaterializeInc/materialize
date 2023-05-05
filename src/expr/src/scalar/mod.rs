@@ -1798,6 +1798,18 @@ impl MirScalarExpr {
         contains
     }
 
+    /// True iff the expression contains a `Column`.
+    pub fn contains_column(&self) -> bool {
+        let mut contains = false;
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
+            if let MirScalarExpr::Column(_) = e {
+                contains = true;
+            }
+        });
+        contains
+    }
+
     pub fn size(&self) -> Result<usize, RecursionLimitError> {
         let mut size = 0;
         self.visit_post(&mut |_: &MirScalarExpr| {

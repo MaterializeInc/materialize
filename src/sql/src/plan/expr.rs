@@ -91,7 +91,7 @@ impl AlgExcept for Hir {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-/// Just like MirRelationExpr, except where otherwise noted below.
+/// Just like [`mz_expr::MirRelationExpr`], except where otherwise noted below.
 pub enum HirRelationExpr {
     Constant {
         rows: Vec<Row>,
@@ -183,7 +183,7 @@ pub enum HirRelationExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-/// Just like mz_expr::MirScalarExpr, except where otherwise noted below.
+/// Just like [`mz_expr::MirScalarExpr`], except where otherwise noted below.
 pub enum HirScalarExpr {
     /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
     /// variable could refer to a column of the current input, or to a column of an outer relation.

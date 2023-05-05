@@ -58,6 +58,9 @@ type for sources, views, and materialized views, or omit the object type.
 | `SECRET`              | U              |
 | `CLUSTER`             | UC             |
 
+Unlike PostgreSQL, `UPDATE` and `DELETE` always require `SELECT` privileges on the object being
+updated.
+
 ### Compatibility
 
 For PostgreSQL compatibility reasons, you must specify `TABLE` as the object
