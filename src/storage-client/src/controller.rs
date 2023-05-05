@@ -1803,14 +1803,14 @@ where
 
     fn drop_sinks_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
         for id in identifiers {
-            let export = match self.export(id) {
-                Ok(export) => export,
-                Err(_) => continue,
-            };
+            // Already removed.
+            if self.export(id).is_err() {
+                continue;
+            }
 
-            let read_capability = export.read_capability.clone();
-            let storage_dependencies = export.storage_dependencies.clone();
-            self.remove_read_capabilities(read_capability, &storage_dependencies);
+            // We don't explicitly call `remove_read_capabilities`! Downgrading the
+            // frontier of the source to `[]` (the empty Antichain), will propagate
+            // to the storage dependencies.
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
@@ -1947,8 +1947,15 @@ where
                     export.write_frontier = new_upper.clone();
                 }
 
-                let mut new_read_capability =
-                    export.read_policy.frontier(export.write_frontier.borrow());
+                // Ignore read policy for sinks whose write frontiers are closed, which identifies
+                // the sink is being dropped; we need to advance the read frontier to the empty
+                // chain to signal to the dataflow machinery that they should deprovision this
+                // object.
+                let mut new_read_capability = if export.write_frontier.is_empty() {
+                    export.write_frontier.clone()
+                } else {
+                    export.read_policy.frontier(export.write_frontier.borrow())
+                };
 
                 if timely::order::PartialOrder::less_equal(
                     &export.read_capability,
