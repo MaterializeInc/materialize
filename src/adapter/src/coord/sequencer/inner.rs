@@ -2235,13 +2235,18 @@ impl Coordinator {
             ))?;
         }
 
+        let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
+            && when == QueryWhen::Immediately;
+
         // If we are in a single statement transaction, there is no need to
         // acquire read holds to prevent compaction as they will be released
         // immediately following the completion of the transaction.
         //
-        // If we're in a multi-statement transaction, acquire read holds on any sources
-        // in the current time-domain if they have not already been acquired.
-        if session.transaction().is_in_multi_statement_transaction() {
+        // If we're in a multi-statement transaction and the query does not use `AS OF`,
+        // acquire read holds on any sources in the current time-domain if they have not
+        // already been acquired. If the query does use `AS OF`, it is not necessary to
+        // acquire read holds.
+        if in_immediate_multi_stmt_txn {
             self.check_txn_timedomain_conflicts(
                 session,
                 &determination.timestamp_context,
