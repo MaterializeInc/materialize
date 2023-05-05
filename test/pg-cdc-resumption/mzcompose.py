@@ -14,7 +14,7 @@ SERVICES = [
     Materialized(),
     Postgres(),
     Toxiproxy(),
-    Testdrive(no_reset=True),
+    Testdrive(no_reset=True, default_timeout="300s"),
 ]
 
 
