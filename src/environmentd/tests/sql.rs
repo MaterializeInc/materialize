@@ -1392,6 +1392,10 @@ fn test_github_18950() {
 
     client_reads.batch_execute("COMMIT").unwrap();
 
+    // Since mz_now() is a custom function, the postgres client will look it up in the catalog on
+    // first use. If the first use happens to be in a transaction, then we can get unexpected time
+    // domain errors. This is an annoying hack to load the information in the postgres client before
+    // we start any transactions.
     client_reads.query_one("SELECT mz_now();", &[]).unwrap();
 
     // Ensure behavior is same when starting txn with `SELECT`
