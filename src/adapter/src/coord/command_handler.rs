@@ -30,7 +30,9 @@ use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, Params, Plan,
     TransactionType,
 };
-use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput, SystemVars};
+use mz_sql::session::vars::{
+    EndTransactionAction, OwnedVarInput, SystemVars, Var, MAX_CONNECTIONS,
+};
 
 use crate::client::ConnectionId;
 use crate::command::{
@@ -212,8 +214,8 @@ impl Coordinator {
                 self.active_conns.len(),
                 1,
                 SystemVars::max_connections,
-                "a connection",
-                "max connections",
+                "connection",
+                MAX_CONNECTIONS.name(),
             ) {
                 let _ = tx.send(Response {
                     result: Err(e),

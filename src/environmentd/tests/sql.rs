@@ -3020,7 +3020,7 @@ fn test_max_connections() {
         .unwrap_or_else(|| panic!("expect db error: {}", e));
     assert!(
         e.message()
-            .starts_with("creating a connection would violate max connections limit"),
+            .starts_with("creating connection would violate max_connections limit"),
         "e={}",
         e
     );
@@ -3032,7 +3032,7 @@ fn test_max_connections() {
         .unwrap_or_else(|| panic!("expect db error: {}", e));
     assert!(
         e.message()
-            .starts_with("creating a connection would violate max connections limit"),
+            .starts_with("creating connection would violate max_connections limit"),
         "e={}",
         e
     );
