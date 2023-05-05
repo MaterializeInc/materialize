@@ -2236,7 +2236,7 @@ impl Coordinator {
         }
 
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
-            && when == QueryWhen::Immediately;
+            && when == &QueryWhen::Immediately;
 
         // If we are in a single statement transaction, there is no need to
         // acquire read holds to prevent compaction as they will be released
