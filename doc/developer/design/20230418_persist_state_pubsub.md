@@ -186,7 +186,7 @@ and pass it along to its `clusterd` param when set.
 We introduce this new headless service, rather than reusing the existing `environmentd` Service for a few reasons:
 
 * The `environmentd` Service is public / external-facing, while the pubsub port should be strictly internal
-* To decouple the idea the notion that `environmentd` is necessarily responsible for providing the PubSub server. In the
+* To decouple the notion that `environmentd` is necessarily responsible for providing the PubSub server. In the
 future we may wish to [replace it with a different implementation](#external-pubsubmessage-bus), or route the Service to
 point towards different pods.
 
