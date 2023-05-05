@@ -20,11 +20,20 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogItemType, SessionCatalog};
-use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
+use mz_sql::names::{ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{
-    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterOwnerPlan,
-    AlterSecretPlan, AlterSinkPlan, AlterSourcePlan, CreateMaterializedViewPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateViewPlan, GrantPrivilegePlan, MutationKind, Plan, RevokePrivilegePlan,
+    AbortTransactionPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
+    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, ClosePlan, CommitTransactionPlan, CopyFromPlan, CopyRowsPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, ExecutePlan,
+    ExplainPlan, FetchPlan, GrantPrivilegePlan, GrantRolePlan, InsertPlan, MutationKind, PeekPlan,
+    Plan, PreparePlan, RaisePlan, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan,
+    RevokeRolePlan, RotateKeysPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan,
+    SourceSinkClusterConfig, StartTransactionPlan, SubscribePlan,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -474,96 +483,131 @@ fn generate_required_privileges(
     role_id: RoleId,
 ) -> Vec<(ObjectId, AclMode, RoleId)> {
     match plan {
-        Plan::CreateConnection(plan) => {
-            let mut privileges = vec![(
-                plan.name.qualifiers.clone().into(),
-                AclMode::CREATE,
-                role_id,
-            )];
+        Plan::CreateConnection(CreateConnectionPlan {
+            name,
+            if_not_exists: _,
+            connection: _,
+        }) => {
+            let mut privileges = vec![(name.qualifiers.clone().into(), AclMode::CREATE, role_id)];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
-        Plan::CreateSchema(plan) => match plan.database_spec {
+        Plan::CreateSchema(CreateSchemaPlan {
+            database_spec,
+            schema_name: _,
+            if_not_exists: _,
+        }) => match database_spec {
             ResolvedDatabaseSpecifier::Ambient => Vec::new(),
             ResolvedDatabaseSpecifier::Id(database_id) => {
                 vec![(database_id.into(), AclMode::CREATE, role_id)]
             }
         },
-        Plan::CreateClusterReplica(plan) => {
-            vec![(plan.cluster_id.into(), AclMode::CREATE, role_id)]
+        Plan::CreateClusterReplica(CreateClusterReplicaPlan {
+            cluster_id,
+            name: _,
+            config: _,
+        }) => {
+            vec![(cluster_id.into(), AclMode::CREATE, role_id)]
         }
-        Plan::CreateSource(plan) => {
-            generate_required_source_privileges(catalog, plan, depends_on, role_id)
+        Plan::CreateSource(CreateSourcePlan {
+            name,
+            source: _,
+            if_not_exists: _,
+            timeline: _,
+            cluster_config,
+        }) => {
+            generate_required_source_privileges(catalog, name, cluster_config, depends_on, role_id)
         }
         Plan::CreateSources(plans) => plans
             .iter()
-            .flat_map(|plan| {
-                // Sub-sources depend on not-yet created sources, so we need to filter those out.
-                let existing_depends_on = plan
-                    .depends_on
-                    .iter()
-                    .filter(|id| catalog.try_get_item(id).is_some())
-                    .cloned()
-                    .collect();
-                generate_required_source_privileges(
-                    catalog,
-                    &plan.plan,
-                    &existing_depends_on,
-                    role_id,
-                )
-                .into_iter()
-            })
+            .flat_map(
+                |CreateSourcePlans {
+                     source_id: _,
+                     plan:
+                         CreateSourcePlan {
+                             name,
+                             source: _,
+                             if_not_exists: _,
+                             timeline: _,
+                             cluster_config,
+                         },
+                     depends_on,
+                 }| {
+                    // Sub-sources depend on not-yet created sources, so we need to filter those out.
+                    let existing_depends_on = depends_on
+                        .iter()
+                        .filter(|id| catalog.try_get_item(id).is_some())
+                        .cloned()
+                        .collect();
+                    generate_required_source_privileges(
+                        catalog,
+                        name,
+                        cluster_config,
+                        &existing_depends_on,
+                        role_id,
+                    )
+                    .into_iter()
+                },
+            )
             .collect(),
-        Plan::CreateSecret(plan) => vec![(
-            plan.name.qualifiers.clone().into(),
-            AclMode::CREATE,
-            role_id,
-        )],
-        Plan::CreateSink(plan) => {
-            let mut privileges = vec![(
-                plan.name.qualifiers.clone().into(),
-                AclMode::CREATE,
-                role_id,
-            )];
+        Plan::CreateSecret(CreateSecretPlan {
+            name,
+            secret: _,
+            if_not_exists: _,
+        }) => vec![(name.qualifiers.clone().into(), AclMode::CREATE, role_id)],
+        Plan::CreateSink(CreateSinkPlan {
+            name,
+            sink,
+            with_snapshot: _,
+            if_not_exists: _,
+            cluster_config,
+        }) => {
+            let mut privileges = vec![(name.qualifiers.clone().into(), AclMode::CREATE, role_id)];
             privileges.extend_from_slice(&generate_read_privileges(
                 catalog,
-                iter::once(plan.sink.from),
+                iter::once(sink.from),
                 role_id,
             ));
-            if let Some(id) = plan.cluster_config.cluster_id() {
+            if let Some(id) = cluster_config.cluster_id() {
                 privileges.push((id.into(), AclMode::CREATE, role_id));
             } else if let Ok(cluster) = catalog.resolve_cluster(None) {
                 privileges.push((cluster.id().into(), AclMode::CREATE, role_id));
             }
             privileges
         }
-        Plan::CreateTable(plan) => {
-            let mut privileges = vec![(
-                plan.name.qualifiers.clone().into(),
-                AclMode::CREATE,
-                role_id,
-            )];
+        Plan::CreateTable(CreateTablePlan {
+            name,
+            table: _,
+            if_not_exists: _,
+        }) => {
+            let mut privileges = vec![(name.qualifiers.clone().into(), AclMode::CREATE, role_id)];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
-        Plan::CreateView(plan) => {
-            let mut privileges = vec![(
-                plan.name.qualifiers.clone().into(),
-                AclMode::CREATE,
-                role_id,
-            )];
+        Plan::CreateView(CreateViewPlan {
+            name,
+            view: _,
+            replace: _,
+            drop_ids: _,
+            if_not_exists: _,
+            ambiguous_columns: _,
+        }) => {
+            let mut privileges = vec![(name.qualifiers.clone().into(), AclMode::CREATE, role_id)];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
-        Plan::CreateMaterializedView(plan) => {
+        Plan::CreateMaterializedView(CreateMaterializedViewPlan {
+            name,
+            materialized_view,
+            replace: _,
+            drop_ids: _,
+            if_not_exists: _,
+            ambiguous_columns: _,
+        }) => {
             let mut privileges = vec![
+                (name.qualifiers.clone().into(), AclMode::CREATE, role_id),
                 (
-                    plan.name.qualifiers.clone().into(),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-                (
-                    plan.materialized_view.cluster_id.into(),
+                    materialized_view.cluster_id.into(),
                     AclMode::CREATE,
                     role_id,
                 ),
@@ -571,29 +615,29 @@ fn generate_required_privileges(
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
-        Plan::CreateIndex(plan) => {
+        Plan::CreateIndex(CreateIndexPlan {
+            name,
+            index,
+            options: _,
+            if_not_exists: _,
+        }) => {
             let mut privileges = vec![
-                (
-                    plan.name.qualifiers.clone().into(),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-                (plan.index.cluster_id.into(), AclMode::CREATE, role_id),
+                (name.qualifiers.clone().into(), AclMode::CREATE, role_id),
+                (index.cluster_id.into(), AclMode::CREATE, role_id),
             ];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
-        Plan::CreateType(plan) => {
-            let mut privileges = vec![(
-                plan.name.qualifiers.clone().into(),
-                AclMode::CREATE,
-                role_id,
-            )];
+        Plan::CreateType(CreateTypePlan { name, typ: _ }) => {
+            let mut privileges = vec![(name.qualifiers.clone().into(), AclMode::CREATE, role_id)];
             privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
             privileges
         }
-        Plan::DropObjects(plan) => plan
-            .referenced_ids
+        Plan::DropObjects(DropObjectsPlan {
+            referenced_ids,
+            drop_ids: _,
+            object_type: _,
+        }) => referenced_ids
             .iter()
             .filter_map(|id| match id {
                 ObjectId::ClusterReplica((cluster_id, _)) => {
@@ -616,8 +660,8 @@ fn generate_required_privileges(
                 ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => None,
             })
             .collect(),
-        Plan::ShowCreate(plan) => {
-            let item = catalog.get_item(&plan.id);
+        Plan::ShowCreate(ShowCreatePlan { id, row: _ }) => {
+            let item = catalog.get_item(id);
             vec![(
                 item.name().qualifiers.clone().into(),
                 AclMode::USAGE,
@@ -625,17 +669,30 @@ fn generate_required_privileges(
             )]
         }
 
-        Plan::Peek(plan) => {
+        Plan::Peek(PeekPlan {
+            source,
+            when: _,
+            finishing: _,
+            copy_to: _,
+        }) => {
             let mut privileges =
                 generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
             if let Some(privilege) =
-                generate_cluster_usage_privileges(&plan.source, target_cluster_id, role_id)
+                generate_cluster_usage_privileges(source, target_cluster_id, role_id)
             {
                 privileges.push(privilege);
             }
             privileges
         }
-        Plan::Subscribe(_) => {
+        Plan::Subscribe(SubscribePlan {
+            from: _,
+            with_snapshot: _,
+            when: _,
+            up_to: _,
+            copy_to: _,
+            emit_progress: _,
+            output: _,
+        }) => {
             let mut privileges =
                 generate_read_privileges(catalog, depends_on.iter().cloned(), role_id);
             if let Some(cluster_id) = target_cluster_id {
@@ -643,40 +700,55 @@ fn generate_required_privileges(
             }
             privileges
         }
-        Plan::Explain(_) => generate_read_privileges(catalog, depends_on.iter().cloned(), role_id),
-        Plan::CopyFrom(plan) => {
-            let item = catalog.get_item(&plan.id);
+        Plan::Explain(ExplainPlan {
+            raw_plan: _,
+            row_set_finishing: _,
+            stage: _,
+            format: _,
+            config: _,
+            no_errors: _,
+            explainee: _,
+        }) => generate_read_privileges(catalog, depends_on.iter().cloned(), role_id),
+        Plan::CopyFrom(CopyFromPlan {
+            id,
+            columns: _,
+            params: _,
+        }) => {
+            let item = catalog.get_item(id);
             vec![
                 (
                     item.name().qualifiers.clone().into(),
                     AclMode::USAGE,
                     role_id,
                 ),
-                (plan.id.into(), AclMode::INSERT, role_id),
+                (id.into(), AclMode::INSERT, role_id),
             ]
         }
-        Plan::Insert(plan) => {
-            let schema_id: ObjectId = catalog.get_item(&plan.id).name().qualifiers.clone().into();
+        Plan::Insert(InsertPlan {
+            id,
+            values,
+            returning,
+        }) => {
+            let schema_id: ObjectId = catalog.get_item(id).name().qualifiers.clone().into();
             let mut privileges = vec![
                 (schema_id.clone(), AclMode::USAGE, role_id),
-                (plan.id.into(), AclMode::INSERT, role_id),
+                (id.into(), AclMode::INSERT, role_id),
             ];
             let mut seen = BTreeSet::from([(schema_id, role_id)]);
 
             // We don't allow arbitrary sub-queries in `returning`. So either it
             // contains a column reference to the outer table or it's constant.
-            if plan
-                .returning
+            if returning
                 .iter()
                 .any(|assignment| assignment.contains_column())
             {
-                privileges.push((plan.id.into(), AclMode::SELECT, role_id));
-                seen.insert((plan.id.into(), role_id));
+                privileges.push((id.into(), AclMode::SELECT, role_id));
+                seen.insert((id.into(), role_id));
             }
 
             privileges.extend_from_slice(&generate_read_privileges_inner(
                 catalog,
-                plan.values.depends_on().into_iter(),
+                values.depends_on().into_iter(),
                 role_id,
                 &mut seen,
             ));
@@ -694,10 +766,10 @@ fn generate_required_privileges(
             ));
 
             if let Some(privilege) =
-                generate_cluster_usage_privileges(&plan.values, target_cluster_id, role_id)
+                generate_cluster_usage_privileges(values, target_cluster_id, role_id)
             {
                 privileges.push(privilege);
-            } else if !plan.returning.is_empty() {
+            } else if !returning.is_empty() {
                 // TODO(jkosh44) returning may be a constant, but for now we are overly protective
                 //  and require cluster privileges for all returning.
                 if let Some(cluster_id) = target_cluster_id {
@@ -706,29 +778,35 @@ fn generate_required_privileges(
             }
             privileges
         }
-        Plan::ReadThenWrite(plan) => {
-            let acl_mode = match plan.kind {
+        Plan::ReadThenWrite(ReadThenWritePlan {
+            id,
+            selection,
+            finishing: _,
+            assignments,
+            kind,
+            returning,
+        }) => {
+            let acl_mode = match kind {
                 MutationKind::Insert => AclMode::INSERT,
                 MutationKind::Update => AclMode::UPDATE,
                 MutationKind::Delete => AclMode::DELETE,
             };
-            let schema_id: ObjectId = catalog.get_item(&plan.id).name().qualifiers.clone().into();
+            let schema_id: ObjectId = catalog.get_item(id).name().qualifiers.clone().into();
             let mut privileges = vec![
                 (schema_id.clone(), AclMode::USAGE, role_id),
-                (plan.id.into(), acl_mode, role_id),
+                (id.into(), acl_mode, role_id),
             ];
             let mut seen = BTreeSet::from([(schema_id, role_id)]);
 
             // We don't allow arbitrary sub-queries in `assignments` or `returning`. So either they
             // contains a column reference to the outer table or it's constant.
-            if plan
-                .assignments
+            if assignments
                 .values()
-                .chain(plan.returning.iter())
+                .chain(returning.iter())
                 .any(|assignment| assignment.contains_column())
             {
-                privileges.push((plan.id.into(), AclMode::SELECT, role_id));
-                seen.insert((plan.id.into(), role_id));
+                privileges.push((id.into(), AclMode::SELECT, role_id));
+                seen.insert((id.into(), role_id));
             }
 
             // TODO(jkosh44) It's fairly difficult to determine what part of `selection` is from a
@@ -739,7 +817,7 @@ fn generate_required_privileges(
             //  `UPDATE t SET a = 42;`, while PostgreSQL only requires UPDATE privileges.
             privileges.extend_from_slice(&generate_read_privileges_inner(
                 catalog,
-                plan.selection.depends_on().into_iter(),
+                selection.depends_on().into_iter(),
                 role_id,
                 &mut seen,
             ));
@@ -757,18 +835,24 @@ fn generate_required_privileges(
             ));
 
             if let Some(privilege) =
-                generate_cluster_usage_privileges(&plan.selection, target_cluster_id, role_id)
+                generate_cluster_usage_privileges(selection, target_cluster_id, role_id)
             {
                 privileges.push(privilege);
             }
             privileges
         }
-        Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan { id, .. })
-        | Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan { id, .. })
-        | Plan::AlterSink(AlterSinkPlan { id, .. })
-        | Plan::AlterSource(AlterSourcePlan { id, .. })
-        | Plan::AlterItemRename(AlterItemRenamePlan { id, .. })
-        | Plan::AlterSecret(AlterSecretPlan { id, .. }) => {
+        Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan { id, options: _ })
+        | Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan { id, options: _ })
+        | Plan::AlterSink(AlterSinkPlan { id, size: _ })
+        | Plan::AlterSource(AlterSourcePlan { id, size: _ })
+        | Plan::AlterItemRename(AlterItemRenamePlan {
+            id,
+            current_full_name: _,
+            to_name: _,
+            object_type: _,
+        })
+        | Plan::AlterSecret(AlterSecretPlan { id, secret_as: _ })
+        | Plan::RotateKeys(RotateKeysPlan { id }) => {
             let item = catalog.get_item(id);
             vec![(
                 item.name().qualifiers.clone().into(),
@@ -776,7 +860,11 @@ fn generate_required_privileges(
                 role_id,
             )]
         }
-        Plan::AlterOwner(AlterOwnerPlan { id, .. }) => match id {
+        Plan::AlterOwner(AlterOwnerPlan {
+            id,
+            object_type: _,
+            new_owner: _,
+        }) => match id {
             ObjectId::ClusterReplica((cluster_id, _)) => {
                 vec![(cluster_id.into(), AclMode::CREATE, role_id)]
             }
@@ -796,8 +884,18 @@ fn generate_required_privileges(
             }
             ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
         },
-        Plan::GrantPrivilege(GrantPrivilegePlan { object_id, .. })
-        | Plan::RevokePrivilege(RevokePrivilegePlan { object_id, .. }) => match object_id {
+        Plan::GrantPrivilege(GrantPrivilegePlan {
+            acl_mode: _,
+            object_id,
+            grantee: _,
+            grantor: _,
+        })
+        | Plan::RevokePrivilege(RevokePrivilegePlan {
+            acl_mode: _,
+            object_id,
+            revokee: _,
+            grantor: _,
+        }) => match object_id {
             ObjectId::ClusterReplica((cluster_id, _)) => {
                 vec![(cluster_id.into(), AclMode::USAGE, role_id)]
             }
@@ -817,50 +915,90 @@ fn generate_required_privileges(
             }
             ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
         },
-        Plan::CreateDatabase(_)
-        | Plan::CreateRole(_)
-        | Plan::CreateCluster(_)
+        Plan::CreateDatabase(CreateDatabasePlan {
+            name: _,
+            if_not_exists: _,
+        })
+        | Plan::CreateRole(CreateRolePlan {
+            name: _,
+            attributes: _,
+        })
+        | Plan::CreateCluster(CreateClusterPlan {
+            name: _,
+            replicas: _,
+        })
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
-        | Plan::ShowVariable(_)
-        | Plan::SetVariable(_)
-        | Plan::ResetVariable(_)
-        | Plan::StartTransaction(_)
-        | Plan::CommitTransaction(_)
-        | Plan::AbortTransaction(_)
-        | Plan::CopyRows(_)
-        | Plan::AlterNoop(_)
-        | Plan::AlterSystemSet(_)
-        | Plan::AlterSystemReset(_)
-        | Plan::AlterSystemResetAll(_)
-        | Plan::AlterRole(_)
-        | Plan::Declare(_)
-        | Plan::Fetch(_)
-        | Plan::Close(_)
-        | Plan::Prepare(_)
-        | Plan::Execute(_)
-        | Plan::Deallocate(_)
-        | Plan::Raise(_)
-        | Plan::RotateKeys(_)
-        | Plan::GrantRole(_)
-        | Plan::RevokeRole(_) => Vec::new(),
+        | Plan::ShowVariable(ShowVariablePlan { name: _ })
+        | Plan::SetVariable(SetVariablePlan {
+            name: _,
+            value: _,
+            local: _,
+        })
+        | Plan::ResetVariable(ResetVariablePlan { name: _ })
+        | Plan::StartTransaction(StartTransactionPlan {
+            access: _,
+            isolation_level: _,
+        })
+        | Plan::CommitTransaction(CommitTransactionPlan {
+            transaction_type: _,
+        })
+        | Plan::AbortTransaction(AbortTransactionPlan {
+            transaction_type: _,
+        })
+        | Plan::CopyRows(CopyRowsPlan {
+            id: _,
+            columns: _,
+            rows: _,
+        })
+        | Plan::AlterNoop(AlterNoopPlan { object_type: _ })
+        | Plan::AlterSystemSet(AlterSystemSetPlan { name: _, value: _ })
+        | Plan::AlterSystemReset(AlterSystemResetPlan { name: _ })
+        | Plan::AlterSystemResetAll(AlterSystemResetAllPlan {})
+        | Plan::AlterRole(AlterRolePlan {
+            id: _,
+            name: _,
+            attributes: _,
+        })
+        | Plan::Declare(DeclarePlan { name: _, stmt: _ })
+        | Plan::Fetch(FetchPlan {
+            name: _,
+            count: _,
+            timeout: _,
+        })
+        | Plan::Close(ClosePlan { name: _ })
+        | Plan::Prepare(PreparePlan {
+            name: _,
+            stmt: _,
+            desc: _,
+        })
+        | Plan::Execute(ExecutePlan { name: _, params: _ })
+        | Plan::Deallocate(DeallocatePlan { name: _ })
+        | Plan::Raise(RaisePlan { severity: _ })
+        | Plan::GrantRole(GrantRolePlan {
+            role_id: _,
+            member_ids: _,
+            grantor_id: _,
+        })
+        | Plan::RevokeRole(RevokeRolePlan {
+            role_id: _,
+            member_ids: _,
+            grantor_id: _,
+        }) => Vec::new(),
     }
 }
 
 fn generate_required_source_privileges(
     catalog: &impl SessionCatalog,
-    plan: &CreateSourcePlan,
+    name: &QualifiedItemName,
+    cluster_config: &SourceSinkClusterConfig,
     depends_on: &Vec<GlobalId>,
     role_id: RoleId,
 ) -> Vec<(ObjectId, AclMode, RoleId)> {
-    let mut privileges = vec![(
-        plan.name.qualifiers.clone().into(),
-        AclMode::CREATE,
-        role_id,
-    )];
-    if let Some(id) = plan.cluster_config.cluster_id() {
+    let mut privileges = vec![(name.qualifiers.clone().into(), AclMode::CREATE, role_id)];
+    if let Some(id) = cluster_config.cluster_id() {
         privileges.push((id.into(), AclMode::CREATE, role_id));
     }
     privileges.extend(generate_item_usage_privileges(catalog, depends_on, role_id));
