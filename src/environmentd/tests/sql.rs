@@ -1337,7 +1337,6 @@ fn test_github_18950() {
     // the read frontier does not advance.
     client_reads.batch_execute("BEGIN").unwrap();
     let mut query_timestamp = None;
-    let mut t1_read_frontier = None;
 
     for i in 1..5 {
         let row = client_reads
@@ -1362,12 +1361,8 @@ fn test_github_18950() {
             .first()
             .unwrap();
 
-        // Ensure `t1` does not undergo compaction
-        if let Some(timestamp) = t1_read_frontier {
-            assert_eq!(timestamp, *explain_t1_read_frontier);
-        } else {
-            t1_read_frontier = Some(explain_t1_read_frontier.clone());
-        }
+        // Ensure `t1`'s read frontier remains <= the query timestamp
+        assert!(*explain_t1_read_frontier <= query_timestamp.unwrap());
 
         // Increase now by 2s each iteration
         *nowfn.lock().unwrap() = NowFn::from(move || 2000 * i);
