@@ -784,6 +784,14 @@ pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = Serve
     safe: true,
 };
 
+pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_connections"),
+    value: &1000,
+    description: "The maximum number of concurrent connections (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1525,6 +1533,7 @@ impl Default for SystemVars {
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
+            .with_var(&MAX_CONNECTIONS)
     }
 }
 
@@ -1890,6 +1899,11 @@ impl SystemVars {
     /// Returns the `enable_within_timestamp_order_by` configuration parameter.
     pub fn enable_within_timestamp_order_by(&self) -> bool {
         *self.expect_value(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
+    }
+
+    /// Returns the `max_connections` configuration parameter.
+    pub fn max_connections(&self) -> u32 {
+        *self.expect_value(&MAX_CONNECTIONS)
     }
 }
 

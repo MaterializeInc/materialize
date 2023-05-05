@@ -75,6 +75,10 @@ class Generator:
 class Connections(Generator):
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        # two extra connections for mz_system and the default connection
+        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+2};")
+
         for i in cls.all():
             print(
                 f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}"
