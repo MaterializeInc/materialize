@@ -1,5 +1,5 @@
 [package]
-name = "cloud-api"
+name = "mz-cloud-api"
 description = "API interfaces to Cloud."
 version = "0.0.0"
 edition.workspace = true

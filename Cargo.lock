@@ -1127,22 +1127,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cloud-api"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "mz-frontegg-auth",
- "mz-frontegg-client",
- "once_cell",
- "reqwest",
- "serde",
- "thiserror",
- "tokio",
- "url",
- "workspace-hack",
-]
-
-[[package]]
 name = "cmake"
 version = "0.1.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3564,6 +3548,22 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "url",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-cloud-api"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-frontegg-auth",
+ "mz-frontegg-client",
+ "once_cell",
+ "reqwest",
+ "serde",
+ "thiserror",
+ "tokio",
  "url",
  "workspace-hack",
 ]

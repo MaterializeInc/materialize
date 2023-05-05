@@ -29,7 +29,7 @@ pub static DEFAULT_ENDPOINT: Lazy<Url> =
 /// Configures the required parameters of a [`Client`].
 pub struct ClientConfig {
     /// The authorization client to get the authorization token.
-    auth_client: mz_frontegg_client::client::Client,
+    pub (crate) auth_client: mz_frontegg_client::client::Client,
 }
 
 /// A builder for a [`Client`].

@@ -46,7 +46,7 @@ pub mod region;
 ///
 impl Client {
     /// Builds a request towards the `Client`'s endpoint
-    fn build_request<P>(
+    async fn build_request<P>(
         &self,
         method: Method,
         path: P,
@@ -68,8 +68,7 @@ impl Client {
             .extend(path);
 
         let req = self.inner.request(method, url);
-        // let token = self.auth_client.auth().await.unwrap();
-        let token = "";
+        let token = self.auth_client.auth().await.unwrap();
 
         Ok(req.bearer_auth(token))
     }
