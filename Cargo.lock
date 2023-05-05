@@ -8532,6 +8532,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "syn 1.0.107",
+ "syn 2.0.12",
  "textwrap",
  "tikv-jemalloc-sys",
  "time",
