@@ -92,8 +92,8 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
-    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
-    PG_CATALOG_SCHEMA,
+    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
+    MZ_INTROSPECTION_CLUSTER, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
@@ -101,7 +101,7 @@ pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
-use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
+use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, DUMMY_AVAILABILITY_ZONE};
@@ -4328,13 +4328,27 @@ impl Catalog {
         self.state.resolve_cluster(name)
     }
 
-    /// Resolves a [`Cluster`] for a [`BuiltinCluster`]
+    /// Resolves a [`Cluster`] for a [`BuiltinCluster`].
     ///
     /// # Panics
     /// * If the [`BuiltinCluster`] doesn't exist.
     ///
     pub fn resolve_builtin_cluster(&self, cluster: &BuiltinCluster) -> &Cluster {
         self.state.resolve_builtin_cluster(cluster)
+    }
+
+    /// Resolves a [`Cluster`] for a TargetCluster.
+    pub fn resolve_target_cluster(
+        &self,
+        target_cluster: TargetCluster,
+        session: &Session,
+    ) -> Result<&Cluster, AdapterError> {
+        match target_cluster {
+            TargetCluster::Introspection => {
+                Ok(self.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER))
+            }
+            TargetCluster::Active => self.active_cluster(session),
+        }
     }
 
     pub fn active_cluster(&self, session: &Session) -> Result<&Cluster, AdapterError> {
