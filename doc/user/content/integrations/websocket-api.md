@@ -4,7 +4,7 @@ description: "How to use Materialize via WebSocket"
 menu:
   main:
     parent: "integrations"
-    weight: 6
+    weight: 30
     name: "WebSocket API"
 ---
 

@@ -1,10 +1,8 @@
 ---
 title: "Arrangements"
 description: "Understand how Materialize arrangements work."
-menu:
-  main:
-    parent: advanced
-    weight: 4
+aliases:
+  - /overview/arrangements/
 ---
 
 The mechanisms that maintain materialized views for Materialize dataflows are

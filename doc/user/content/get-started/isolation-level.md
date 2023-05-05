@@ -2,12 +2,9 @@
 title: "Consistency guarantees"
 description: "Materialize supports different isolation levels that determine how it isolates the execution of transactions."
 aliases:
- - /sql/consistency
- - /sql/isolation-level
-menu:
-  main:
-    parent: 'advanced'
-    weight: 6
+  - /sql/consistency
+  - /sql/isolation-level
+  - /overview/isolation-level/
 ---
 
 The SQL standard defines four levels of transaction isolation. In order of least strict to most strict they are:

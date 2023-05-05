@@ -1,11 +1,13 @@
 ---
 title: "JOIN"
 description: "`JOIN` lets you combine two or more table expressions."
+aliases:
+  - /sql/join/
 menu:
   main:
-    parent: 'reference'
+    parent: 'transform'
     name: Joins
-    weight: 50
+    weight: 20
 ---
 
 `JOIN` lets you combine two or more table expressions into a single table
@@ -14,7 +16,7 @@ expression.
 ## Conceptual framework
 
 Much like an RDBMS, Materialize can join together any two table expressions (in
-our case, either [sources](../create-source) or [views](../create-view)) into
+our case, either [sources](/sql/create-source) or [views](/sql/create-view)) into
 a single table expression.
 
 Materialize has much broader support for `JOIN` than most streaming platforms,
@@ -37,7 +39,7 @@ expect.
 
 Field | Use
 ------|-----
-_select&lowbar;pred_ | The predicating [`SELECT`](../select) clauses you want to use, e.g. `SELECT col_ref FROM table_ref...`. The _table&lowbar;ref_ from the _select&lowbar;pred_ is the left-hand table.
+_select&lowbar;pred_ | The predicating [`SELECT`](/sql/select) clauses you want to use, e.g. `SELECT col_ref FROM table_ref...`. The _table&lowbar;ref_ from the _select&lowbar;pred_ is the left-hand table.
 **NATURAL** | Join table expressions on all columns with the same names in both tables. This is similar to the `USING` clause naming all identically named columns in both tables.
 **LATERAL** | Let the following subquery or table function call refer to columns from join's left-hand side. See [`LATERAL` subqueries](#lateral-subqueries) below.
 _join\_type_ | The type of `JOIN` you want to use _(`INNER` is implied default)_.
@@ -46,7 +48,7 @@ _table\_ref_ | The table expression you want to join, i.e. the right-hand table.
 _table\_func\_call_ | A call to a [table function](/sql/functions/#table-func).
 **USING (** _col\_ref..._ **)** | If the join condition does not require table-level qualification (i.e. joining tables on columns with the same name), the columns to join the tables on. For example, `USING (customer_id)`.
 **ON** _expression_ | The condition on which to join the tables. For example `ON purchase.customer_id = customer.id`.
-_select&lowbar;pred_ | The remaining [`SELECT`](../select) clauses you want to use, e.g. `...WHERE expr GROUP BY col_ref HAVING expr`.
+_select&lowbar;pred_ | The remaining [`SELECT`](/sql/select) clauses you want to use, e.g. `...WHERE expr GROUP BY col_ref HAVING expr`.
 
 **Note**: It's possible to join together table expressions as inner joins without using this clause whatsoever, e.g. `SELECT cols... FROM t1, t2 WHERE t1.x = t2.x GROUP BY cols...`
 
@@ -79,7 +81,7 @@ left-hand row according to the usual rules of the selected join type.
 {{< warning >}}
 `LATERAL` subqueries can be very expensive to compute. For best results, do not
 materialize a view containing a `LATERAL` subquery without first inspecting the
-plan via the [`EXPLAIN`](../explain/) statement. In many common patterns
+plan via the [`EXPLAIN`](/sql/explain/) statement. In many common patterns
 involving `LATERAL` joins, Materialize can optimize away the join entirely.
 {{< /warning >}}
 
@@ -250,5 +252,5 @@ diagram shows how cross joins form the Cartesian product.
 
 ## Related pages
 
-- [`SELECT`](../select)
-- [`CREATE VIEW`](../create-view)
+- [`SELECT`](/sql/select)
+- [`CREATE VIEW`](/sql/create-view)

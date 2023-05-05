@@ -4,9 +4,11 @@ description: "Learn more about Materialize"
 disable_list: true
 aliases:
   - /overview/what-is-materialize/
+  - /overview/
 menu:
   main:
-    parent: overview
+    parent: get-started
+    name: "What is Materialize?"
     weight: 5
 ---
 
@@ -73,5 +75,5 @@ depending on your consistency and performance requirements.
 
 ## Learn more
 
-- [Key concepts](/overview/key-concepts)
+- [Key concepts](/get-started/key-concepts)
 - [Get started with Materialize](/get-started/)

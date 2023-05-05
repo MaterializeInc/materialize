@@ -4,10 +4,11 @@ description: "Understand Materialize's architecture."
 pagerank: 30
 menu:
   main:
-    parent: 'overview'
+    parent: 'get-started'
     weight: 10
 aliases:
   - /overview/api-components/
+  - /overview/key-concepts/
 ---
 
 Materialize is a streaming database with a SQL API. However, despite the fact

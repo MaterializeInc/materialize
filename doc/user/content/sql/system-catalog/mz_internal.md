@@ -528,5 +528,5 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`uuid`]: /sql/types/uuid
 [`uint8`]: /sql/types/uint8
 [`timestamp with time zone`]: /sql/types/timestamp
-[arrangement]: /overview/arrangements/#arrangements
-[dataflow]: /overview/arrangements/#dataflows
+[arrangement]: /get-started/arrangements/#arrangements
+[dataflow]: /get-started/arrangements/#dataflows

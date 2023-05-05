@@ -1,13 +1,14 @@
 ---
-title: "dbt"
+title: "Use dbt to manage Materialize"
 description: "How to use dbt and Materialize to transform streaming data in real time."
 aliases:
   - /guides/dbt/
   - /third-party/dbt/
+  - /integrations/dbt/
 menu:
   main:
-    parent: integrations
-    name: dbt
+    parent: manage
+    name: "Use dbt to manage Materialize"
     weight: 10
 ---
 

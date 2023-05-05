@@ -2,12 +2,8 @@
 title: "Debezium"
 description: "How to propagate Change Data Capture (CDC) data from a database to Materialize using Debezium"
 aliases:
-  /third-party/debezium/
-menu:
-  main:
-    parent: "integration-guides"
-    name: "Debezium"
-    weight: 35
+  - /third-party/debezium/
+  - /integrations/debezium/
 ---
 
 You can use [Debezium](https://debezium.io/) to propagate Change Data Capture (CDC) data from a database to Materialize, for example MySQL or PostgreSQL.
@@ -27,4 +23,4 @@ For the best CDC experience, we recommend following the step-by-step guides for 
 
 ### Kafka-less setup
 
-If you need to connect Materialize to a PostgreSQL database but Kafka is not part of your stack, you can use the [PostgreSQL direct source](/sql/create-source/postgres). This source uses PostgreSQL’s native replication protocol to continuously propagate upstream changes into Materialize, bypassing the need to deploy and maintain a Kafka instance. For more details and step-by-step instructions, check the [Change Data Capture (Postgres) guide](/integrations/cdc-postgres/#direct-postgres-source).
+If you need to connect Materialize to a PostgreSQL database but Kafka is not part of your stack, you can use the [PostgreSQL direct source](/sql/create-source/postgres). This source uses PostgreSQL’s native replication protocol to continuously propagate upstream changes into Materialize, bypassing the need to deploy and maintain a Kafka instance. For more details and step-by-step instructions, check the [Change Data Capture (Postgres) guide](/connect-sources/cdc-postgres-direct/).

@@ -1,15 +1,16 @@
 ---
-title: "Get started with Materialize"
-description: "Get started with Materialize"
+title: "Quickstart with Materialize"
+description: "Quickstart with Materialize"
 menu:
   main:
-    parent: "quickstarts"
-    weight: 10
-    name: "Get started with Materialize"
+    parent: "get-started"
+    weight: 15
+    name: "Quickstart"
 aliases:
   - /katacoda/
   - /quickstarts/
   - /install/
+  - /get-started/
 ---
 
 This guide walks you through getting started with Materialize, including:
@@ -78,7 +79,7 @@ If you already have a Materialize account, skip to the [next step](#step-2-prepa
 
 ## Step 2. Prepare your environment
 
-In Materialize, a [cluster](/overview/key-concepts/#clusters) is an **isolated environment**, similar to a virtual warehouse in Snowflake. Within a cluster, you have [replicas](/overview/key-concepts/#cluster-replicas), which are the **physical resources** for doing computational work. Clusters are completely isolated from each other, so replicas can be sized based on the specific task of the cluster, whether that is ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
+In Materialize, a [cluster](/get-started/key-concepts/#clusters) is an **isolated environment**, similar to a virtual warehouse in Snowflake. Within a cluster, you have [replicas](/get-started/key-concepts/#cluster-replicas), which are the **physical resources** for doing computational work. Clusters are completely isolated from each other, so replicas can be sized based on the specific task of the cluster, whether that is ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
 
 For this guide, you'll create 2 clusters, one for ingesting source data and the other for computing and serving query results. Each cluster will contain a single replica at first (you'll explore the value of adding replicas later).
 
@@ -223,7 +224,7 @@ With auction data streaming in, you can now explore the unique value of Material
     \timing
     ```
 
-1. First, create a [**view**](/overview/key-concepts/#non-materialized-views):
+1. First, create a [**view**](/get-started/key-concepts/#non-materialized-views):
 
     ```sql
     CREATE VIEW avg_bids AS
@@ -280,7 +281,7 @@ With auction data streaming in, you can now explore the unique value of Material
 
     You'll see the average bid change as new auction data streams into Materialize. However, the view retrieves data from durable storage and computes results at query-time, so latency is high and would be much higher with a production dataset.
 
-1. Next, create an [**index**](/overview/key-concepts/#indexes) on the view:
+1. Next, create an [**index**](/get-started/key-concepts/#indexes) on the view:
 
     ```sql
     CREATE INDEX avg_bids_idx ON avg_bids (item);
@@ -336,7 +337,7 @@ With auction data streaming in, you can now explore the unique value of Material
 
     Latency is high again because the index you created on the view exists only inside the `compute_qck` cluster. In the `default` cluster, where you are currently, you don't have access to the index's pre-computed results. Instead, the view once again retrieves data from durable storage and computes the results at query-time.
 
-1. In many cases, you'll want results to be accessible from multiple clusters, however. To achieve this, you use [materialized views](/overview/key-concepts/#materialized-views).
+1. In many cases, you'll want results to be accessible from multiple clusters, however. To achieve this, you use [materialized views](/get-started/key-concepts/#materialized-views).
 
     Like an index, a materialized view incrementally computes the results of a query as new data arrives. But unlike an index, **a materialized view persists its results to durable storage** that is accessible to all clusters.
 
@@ -419,7 +420,7 @@ With auction data streaming in, you can now explore the unique value of Material
 
 ## Step 5. Survive failures
 
-Earlier, when you created your clusters, you gave each cluster one [replica](/overview/key-concepts/#cluster-replicas), that is, one physical resource. For the `ingest_qck` cluster, that's the max number of replicas allowed, as clusters for sources can have only one replica. For the `compute_qck` cluster, however, you can increase the number of replicas for greater tolerance to replica failure.
+Earlier, when you created your clusters, you gave each cluster one [replica](/get-started/key-concepts/#cluster-replicas), that is, one physical resource. For the `ingest_qck` cluster, that's the max number of replicas allowed, as clusters for sources can have only one replica. For the `compute_qck` cluster, however, you can increase the number of replicas for greater tolerance to replica failure.
 
 Each replica in a non-source cluster is a logical clone, doing the same computation and holding the same results in memory. This design provides Materialize with active replication, and so long as one replica is still reachable, the cluster continues making progress.
 
@@ -551,6 +552,6 @@ RESET cluster;
 
 ## What's next?
 
-- Learn more about the [key concepts of Materialize](/overview/key-concepts/)
+- Learn more about the [key concepts of Materialize](/get-started/key-concepts/)
 - Integrate a [streaming data source](https://materialize.com/docs/sql/create-source/)
 - Explore [when to use indexes and materialized views](https://materialize.com/blog/views-indexes/)

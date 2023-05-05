@@ -1,11 +1,12 @@
 ---
 title: "Confluent Cloud"
 description: "How to securely connect a Confluent Cloud Kafka cluster as a source to Materialize."
+aliases:
+  - /integrations/confluent-cloud/
 menu:
   main:
-    parent: "integration-guides"
+    parent: "kafka"
     name: "Confluent Cloud"
-    weight: 12
 ---
 
 This guide goes through the required steps to connect Materialize to a Confluent Cloud Kafka cluster.

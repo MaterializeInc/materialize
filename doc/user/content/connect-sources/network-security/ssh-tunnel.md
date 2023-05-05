@@ -7,6 +7,8 @@ menu:
     name: "SSH tunnel connections"
 aliases:
   - /integrations/postgres-bastion/
+  - /ops/network-security/ssh-tunnel/
+
 ---
 
 Materialize can connect to data sources like Kafka, Confluent, and PostgreSQL with a

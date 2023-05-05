@@ -1,6 +1,8 @@
 ---
 title: "AWS PrivateLink connections"
 description: "How to connect Materialize to a Kafka broker, or a PostgreSQL database using an AWS PrivateLink connection"
+aliases:
+  - /ops/network-security/privatelink/
 menu:
   main:
     parent: "network-security"
