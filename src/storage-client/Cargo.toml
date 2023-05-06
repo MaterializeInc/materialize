@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 async-stream = "0.3.3"
-async-trait = "0.1.59"
+async-trait = "0.1.68"
 aws-config = { version = "0.55", default-features = false, features = ["native-tls"] }
 aws-credential-types = { version = "0.55", features = ["hardcoded-credentials"] }
 aws-types = "0.55"

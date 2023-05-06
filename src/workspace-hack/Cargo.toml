@@ -90,7 +90,7 @@ serde = { version = "1.0.152", features = ["alloc", "derive"] }
 serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.6" }
 smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
-syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 tokio = { version = "1.27.0", features = ["full", "test-util", "tracing"] }
@@ -186,7 +186,8 @@ serde = { version = "1.0.152", features = ["alloc", "derive"] }
 serde_json = { version = "1.0.89", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.6" }
 smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
-syn = { version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.12", features = ["full", "visit-mut"] }
 textwrap = { version = "0.16.0", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
