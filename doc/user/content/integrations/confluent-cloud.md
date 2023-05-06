@@ -52,9 +52,9 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
 
     b. Click on **Overview** and select **Cluster settings**
 
-    c. Copy the URL under **Bootstrap server**. This will be your `<broker-url>` going forward
+    c. Copy the URL under **Bootstrap server**. This will be your `<confluent-broker-url>` going forward
 
-    d. From the _psql_ terminal, run the following command. Replace `<confluent_cloud>` with whatever you want to name your source. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-api-key>` and `<your-api-secret>` are from the _Create an API Key_ step.
+    d. From the _psql_ terminal, run the following command. Replace `<confluent_cloud>` with whatever you want to name your connection.  The `<source_name>` is whatever you want to name your source.  The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-api-key>` and `<your-api-secret>` are from the _Create an API Key_ step.
     ```sql
       CREATE SECRET confluent_username AS '<your-api-key>';
       CREATE SECRET confluent_password AS '<your-api-secret>';
@@ -66,7 +66,7 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
         SASL PASSWORD = SECRET confluent_password
       );
 
-      CREATE SOURCE <source-name>
+      CREATE SOURCE '<source_name>'
         FROM KAFKA CONNECTION confluent_cloud (TOPIC '<topic-name>')
         FORMAT BYTES
         WITH (SIZE = '3xsmall');
@@ -74,7 +74,7 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
 
     e. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your Confluent Cloud Kafka cluster. You can quickly test your connection by running the following statement:
     ```sql
-      SELECT convert_from(data, 'utf8') from topic_name;
+      SELECT convert_from(data, 'utf8') from '<source_name>';
     ```
 
     **Note:** The example above walked through creating a source, which is a way of connecting Materialize to an external data source. We created a connection to Confluent Cloud Kafka using SASL authentication, using credentials securely stored as secrets in Materialize's secret management system. For input formats, we used `bytes`, however, Materialize supports various other options as well. For example, you can ingest Kafka messages formatted in [JSON, Avro and Protobuf](/sql/create-source/kafka/#supported-formats). You can find more details about the various different supported formats and possible configurations [here](/sql/create-source/kafka/).
