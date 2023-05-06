@@ -2187,7 +2187,10 @@ where
             //
             // Note that while collections are dropped, the `client` may already
             // be cleared out, before we do this post-processing!
-            if cluster_id.is_some() && frontier.is_empty() {
+            if cluster_id.is_some()
+                && frontier.is_empty()
+                && self.state.collections.get(&id).is_some()
+            {
                 self.state.pending_source_drops.push(id);
             }
 
