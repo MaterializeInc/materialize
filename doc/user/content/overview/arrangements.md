@@ -91,7 +91,7 @@ The size of an arrangement, or amount of memory it requires, is roughly
 proportional to its number of distinct `(data, time)` pairs, which can be small
 even if the number of records is large. As an illustration, consider a
 histogram of taxi rides grouped by the number of riders and the fare amount.
-The number of distinct `(rider, fare)` pairs will be much smaller than the
+The number of distinct `(number_of_riders, fare)` pairs will be much smaller than the
 number of total rides that take place.
 
 The amount of memory that the arrangement requires is then further reduced by
