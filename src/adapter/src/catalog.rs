@@ -6744,6 +6744,9 @@ impl Catalog {
                 ),
                 tcp_user_timeout: Some(self.system_config().pg_replication_tcp_user_timeout()),
             },
+            keep_n_source_status_history_entries: self
+                .system_config()
+                .keep_n_source_status_history_entries(),
         }
     }
 

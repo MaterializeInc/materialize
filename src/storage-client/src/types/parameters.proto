@@ -18,6 +18,7 @@ message ProtoStorageParameters {
     mz_persist_client.cfg.ProtoPersistParameters persist = 1;
     bool enable_multi_worker_storage_persist_sink = 2;
     ProtoPgReplicationTimeouts pg_replication_timeouts = 3;
+    uint64 keep_n_source_status_history_entries = 4;
 }
 
 message ProtoPgReplicationTimeouts {
