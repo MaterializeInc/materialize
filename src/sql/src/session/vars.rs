@@ -819,6 +819,15 @@ pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     safe: true,
 };
 
+/// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_source_status_history_entries`].
+const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("keep_n_source_status_history_entries"),
+    value: &5,
+    description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1564,6 +1573,7 @@ impl Default for SystemVars {
             .with_var(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
+            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
     }
 }
 
@@ -1949,6 +1959,10 @@ impl SystemVars {
     /// Returns the `max_connections` configuration parameter.
     pub fn max_connections(&self) -> u32 {
         *self.expect_value(&MAX_CONNECTIONS)
+    }
+
+    pub fn keep_n_source_status_history_entries(&self) -> usize {
+        *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
     }
 }
 
