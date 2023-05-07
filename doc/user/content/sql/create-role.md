@@ -47,6 +47,10 @@ You may not specify redundant or conflicting sets of options. For example,
 Materialize will reject the statement `CREATE ROLE ... CREATEDB NOCREATEDB` because
 the `CREATEDB` and `NOCREATEDB` options conflict.
 
+When RBAC is enabled a role must have the `CREATEROLE` attribute to create another role.
+Additionally, no role can create another role with an attribute that the creating role doesn't
+have itself.
+
 ## Examples
 
 ```sql
