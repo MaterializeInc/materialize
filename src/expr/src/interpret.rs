@@ -355,7 +355,7 @@ impl<'a> ResultSpec<'a> {
     /// when our values set is empty or contains a single datum, but when it contains a range,
     /// we need a little metadata about the function to be able to infer a useful result.
     fn flat_map(
-        self,
+        &self,
         is_monotonic: Monotonic,
         mut result_map: impl FnMut(Result<Datum<'a>, EvalError>) -> ResultSpec<'a>,
     ) -> ResultSpec<'a> {
@@ -773,6 +773,40 @@ impl<'a> ColumnSpecs<'a> {
             },
         }
     }
+
+    fn set_literal(expr: &mut MirScalarExpr, value: Result<Datum, EvalError>) {
+        match expr {
+            MirScalarExpr::Literal(row, col_type) => {
+                *row = value.map(|d| {
+                    assert!(
+                        d.is_instance_of(col_type),
+                        "{d:?} must be an instance of {col_type:?}"
+                    );
+                    Row::pack_slice(&[d])
+                })
+            }
+            _ => panic!("not a literal"),
+        }
+    }
+
+    fn set_argument(expr: &mut MirScalarExpr, arg: usize, value: Result<Datum, EvalError>) {
+        match (expr, arg) {
+            (MirScalarExpr::CallUnary { expr, .. }, 0) => Self::set_literal(expr, value),
+            (MirScalarExpr::CallBinary { expr1, .. }, 0) => Self::set_literal(expr1, value),
+            (MirScalarExpr::CallBinary { expr2, .. }, 1) => Self::set_literal(expr2, value),
+            (MirScalarExpr::CallVariadic { exprs, .. }, n) if n < exprs.len() => {
+                Self::set_literal(&mut exprs[n], value)
+            }
+            _ => panic!("illegal argument for expression"),
+        }
+    }
+
+    /// A literal with the given type and a trivial default value. Callers should ensure that
+    /// [Self::set_literal] is called on the resulting expression to give it a meaningful value
+    /// before evaluating.
+    fn placeholder(col_type: ColumnType) -> MirScalarExpr {
+        MirScalarExpr::Literal(Err(EvalError::Internal("".to_owned())), col_type)
+    }
 }
 
 impl<'a> Interpreter for ColumnSpecs<'a> {
@@ -803,19 +837,17 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
     fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
         let is_monotonic = unary_monotonic(func);
-        let range = summary.range.flat_map(is_monotonic, |datum| {
-            let expr = MirScalarExpr::CallUnary {
-                func: func.clone(),
-                expr: Box::new(MirScalarExpr::literal(
-                    datum,
-                    summary.col_type.scalar_type.clone(),
-                )),
-            };
+        let mut expr = MirScalarExpr::CallUnary {
+            func: func.clone(),
+            expr: Box::new(Self::placeholder(summary.col_type.clone())),
+        };
+        let mapped_spec = summary.range.flat_map(is_monotonic, |datum| {
+            Self::set_argument(&mut expr, 0, datum);
             self.eval_result(expr.eval(&[], self.arena))
         });
         let col_type = func.output_type(summary.col_type);
 
-        let range = range.intersect(ResultSpec::has_type(&col_type, true));
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
 
         ColumnSpec { col_type, range }
     }
@@ -828,130 +860,103 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     ) -> Self::Summary {
         let (left_monotonic, right_monotonic) = binary_monotonic(func);
 
-        let range_special = match func {
+        let special_spec = match func {
             BinaryFunc::JsonbGetString { stringify } => {
-                right
-                    .range
-                    .clone()
-                    .flat_map(Monotonic::No, |datum| match datum {
-                        Ok(Datum::Null) => ResultSpec::null(),
-                        Ok(key) => match &left.range.values {
-                            Values::Empty => ResultSpec::nothing(),
-                            Values::Nested(map_spec) => map_spec.get(&key).cloned().map_or_else(
-                                ResultSpec::anything,
-                                |field_spec| {
-                                    if *stringify {
-                                        // We only preserve value-range information when stringification
-                                        // is a noop. (Common in real queries.)
-                                        let values = match field_spec.values {
-                                            Values::Empty => Values::Empty,
-                                            Values::Within(
-                                                min @ Datum::String(_),
-                                                max @ Datum::String(_),
-                                            ) => Values::Within(min, max),
-                                            Values::Within(_, _)
-                                            | Values::Nested(_)
-                                            | Values::All => Values::All,
-                                        };
-                                        ResultSpec {
-                                            values,
-                                            ..field_spec
+                right.range.flat_map(Monotonic::No, |datum| match datum {
+                    Ok(Datum::Null) => ResultSpec::null(),
+                    Ok(key) => match &left.range.values {
+                        Values::Empty => ResultSpec::nothing(),
+                        Values::Nested(map_spec) => map_spec.get(&key).cloned().map_or_else(
+                            ResultSpec::anything,
+                            |field_spec| {
+                                if *stringify {
+                                    // We only preserve value-range information when stringification
+                                    // is a noop. (Common in real queries.)
+                                    let values = match field_spec.values {
+                                        Values::Empty => Values::Empty,
+                                        Values::Within(
+                                            min @ Datum::String(_),
+                                            max @ Datum::String(_),
+                                        ) => Values::Within(min, max),
+                                        Values::Within(_, _) | Values::Nested(_) | Values::All => {
+                                            Values::All
                                         }
-                                    } else {
-                                        field_spec
+                                    };
+                                    ResultSpec {
+                                        values,
+                                        ..field_spec
                                     }
-                                },
-                            ),
-                            _ => ResultSpec::anything(),
-                        },
-                        Err(_) => ResultSpec::fails(),
-                    })
+                                } else {
+                                    field_spec
+                                }
+                            },
+                        ),
+                        _ => ResultSpec::anything(),
+                    },
+                    Err(_) => ResultSpec::fails(),
+                })
             }
             _ => ResultSpec::anything(),
         };
 
-        let range = left.range.flat_map(left_monotonic, |left_result| {
-            right
-                .range
-                .clone()
-                .flat_map(right_monotonic, |right_result| {
-                    let expr = MirScalarExpr::CallBinary {
-                        func: func.clone(),
-                        expr1: Box::new(MirScalarExpr::literal(
-                            left_result.clone(),
-                            left.col_type.scalar_type.clone(),
-                        )),
-                        expr2: Box::new(MirScalarExpr::literal(
-                            right_result,
-                            right.col_type.scalar_type.clone(),
-                        )),
-                    };
-                    self.eval_result(expr.eval(&[], self.arena))
-                })
+        let mut expr = MirScalarExpr::CallBinary {
+            func: func.clone(),
+            expr1: Box::new(Self::placeholder(left.col_type.clone())),
+            expr2: Box::new(Self::placeholder(right.col_type.clone())),
+        };
+        let mapped_spec = left.range.flat_map(left_monotonic, |left_result| {
+            Self::set_argument(&mut expr, 0, left_result);
+            right.range.flat_map(right_monotonic, |right_result| {
+                Self::set_argument(&mut expr, 1, right_result);
+                self.eval_result(expr.eval(&[], self.arena))
+            })
         });
 
         let col_type = func.output_type(left.col_type, right.col_type);
 
-        let range = range
+        let range = mapped_spec
             .intersect(ResultSpec::has_type(&col_type, true))
-            .intersect(range_special);
+            .intersect(special_spec);
         ColumnSpec { col_type, range }
     }
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
         fn eval_loop<'a>(
             is_monotonic: Monotonic,
-            stack: &mut Vec<MirScalarExpr>,
-            remaining: &[ResultSpec<'a>],
-            remaining_types: &[ColumnType],
-            datum_map: &mut impl FnMut(Vec<MirScalarExpr>) -> ResultSpec<'a>,
+            expr: &mut MirScalarExpr,
+            args: &[ColumnSpec<'a>],
+            index: usize,
+            datum_map: &mut impl FnMut(&MirScalarExpr) -> ResultSpec<'a>,
         ) -> ResultSpec<'a> {
-            if remaining.is_empty() {
-                datum_map(stack.clone())
+            if index >= args.len() {
+                datum_map(expr)
             } else {
-                remaining[0].clone().flat_map(is_monotonic, |datum| {
-                    let literal =
-                        MirScalarExpr::literal(datum, remaining_types[0].scalar_type.clone());
-                    stack.push(literal);
-                    let result = eval_loop(
-                        is_monotonic,
-                        stack,
-                        &remaining[1..],
-                        &remaining_types[1..],
-                        datum_map,
-                    );
-                    stack.pop();
-                    result
+                args[index].range.flat_map(is_monotonic, |datum| {
+                    ColumnSpecs::set_argument(expr, index, datum);
+                    eval_loop(is_monotonic, expr, args, index + 1, datum_map)
                 })
             }
         }
 
-        let mut col_types = vec![];
-        let mut ranges = vec![];
-        for ColumnSpec { col_type, range } in args {
-            col_types.push(col_type);
-            ranges.push(range);
-        }
-
-        let mut stack = vec![];
-        let range = eval_loop(
+        let mut fn_expr = MirScalarExpr::CallVariadic {
+            func: func.clone(),
+            exprs: args
+                .iter()
+                .map(|spec| Self::placeholder(spec.col_type.clone()))
+                .collect(),
+        };
+        let mapped_spec = eval_loop(
             variadic_monotonic(func),
-            &mut stack,
-            &ranges,
-            &col_types,
-            &mut |datums| {
-                let fn_expr = MirScalarExpr::CallVariadic {
-                    func: func.clone(),
-                    exprs: datums,
-                };
-                eprintln!("{fn_expr:?}");
-                let result = fn_expr.eval(&[], self.arena);
-                self.eval_result(result)
-            },
+            &mut fn_expr,
+            &args,
+            0,
+            &mut |expr| self.eval_result(expr.eval(&[], self.arena)),
         );
+
+        let col_types = args.into_iter().map(|spec| spec.col_type).collect();
         let col_type = func.output_type(col_types);
 
-        let range = range.intersect(ResultSpec::has_type(&col_type, true));
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
 
         ColumnSpec { col_type, range }
     }
