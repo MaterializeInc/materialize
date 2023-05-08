@@ -347,13 +347,16 @@ impl<'a> ResultSpec<'a> {
         self.fallible
     }
 
-    /// This function "maps" a function across the set of valid datums, returning the set of possible
-    /// results.
+    /// This method "maps" a function across the `ResultSpec`.
     ///
-    /// If we actually stored a set of every possible value, this could by done by passing
-    /// each datum to the function one-by-one and unioning the resulting sets. This is possible
+    /// As mentioned above, `ResultSpec` represents an approximate set of results.
+    /// If we actually stored each result in the set, `flat_map` could be implemented by passing
+    /// each result to the function one-by-one and unioning the resulting sets. This is possible
     /// when our values set is empty or contains a single datum, but when it contains a range,
-    /// we need a little metadata about the function to be able to infer a useful result.
+    /// we can't enumerate all possible values of the set. We handle this by:
+    /// - tracking whether the function is monotonic, in which case we can map the range by just
+    ///   mapping the endpoints;
+    /// - using a safe default when we can't infer a tighter bound on the set, eg. [Self::anything].
     fn flat_map(
         &self,
         is_monotonic: Monotonic,
