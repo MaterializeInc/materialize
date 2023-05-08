@@ -74,8 +74,6 @@ thinking. Err on the side of writing a design document.
 5. Gather explicit approvals from relevant stakeholders. Typically, there is a
    small set of people who have a vested interest in the area the design
    touches. If it's not clear who that is, ask a TL, EM, or in #eng-general.
-6. Keep the design doc open while working on the feature and keep it updated as
-   you're refining the design.
 
 ### Finalization
 
