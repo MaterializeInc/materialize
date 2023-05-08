@@ -11,7 +11,6 @@ from typing import List, Optional
 
 import pytest
 
-from materialize import util
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
@@ -20,9 +19,9 @@ from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
 from materialize.cloudtest.wait import wait
-from materialize.util import MzVersion
+from materialize.util import MzVersion, released_materialize_versions
 
-LAST_RELEASED_VERSION = str(util.released_materialize_versions()[0])
+LAST_RELEASED_VERSION = str(released_materialize_versions()[0])
 
 
 class ReplaceEnvironmentdStatefulSet(Action):
