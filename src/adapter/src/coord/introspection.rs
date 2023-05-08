@@ -24,11 +24,12 @@ use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
-use crate::catalog::{Catalog, Cluster};
+use crate::catalog::Catalog;
 use crate::notice::AdapterNotice;
 use crate::rbac;
 use crate::session::Session;
 
+use crate::coord::TargetCluster;
 use crate::{
     catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE},
     AdapterError,
@@ -36,19 +37,80 @@ use crate::{
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
-pub fn auto_run_on_introspection<'a, 's>(
+pub fn auto_run_on_introspection<'a, 's, 'p>(
     catalog: &'a Catalog,
-    session: &'s mut Session,
-    depends_on: impl IntoIterator<Item = GlobalId>,
-) -> Option<&'a Cluster> {
+    session: &'s Session,
+    plan: &'p Plan,
+) -> TargetCluster {
+    let depends_on = match plan {
+        Plan::Peek(plan) => plan.source.depends_on(),
+        Plan::Subscribe(plan) => plan.from.depends_on(),
+        Plan::CreateConnection(_)
+        | Plan::CreateDatabase(_)
+        | Plan::CreateSchema(_)
+        | Plan::CreateRole(_)
+        | Plan::CreateCluster(_)
+        | Plan::CreateClusterReplica(_)
+        | Plan::CreateSource(_)
+        | Plan::CreateSources(_)
+        | Plan::CreateSecret(_)
+        | Plan::CreateSink(_)
+        | Plan::CreateTable(_)
+        | Plan::CreateView(_)
+        | Plan::CreateMaterializedView(_)
+        | Plan::CreateIndex(_)
+        | Plan::CreateType(_)
+        | Plan::DiscardTemp
+        | Plan::DiscardAll
+        | Plan::DropObjects(_)
+        | Plan::EmptyQuery
+        | Plan::ShowAllVariables
+        | Plan::ShowCreate(_)
+        | Plan::ShowVariable(_)
+        | Plan::SetVariable(_)
+        | Plan::ResetVariable(_)
+        | Plan::StartTransaction(_)
+        | Plan::CommitTransaction(_)
+        | Plan::AbortTransaction(_)
+        | Plan::CopyFrom(_)
+        | Plan::CopyRows(_)
+        | Plan::Explain(_)
+        | Plan::Insert(_)
+        | Plan::AlterNoop(_)
+        | Plan::AlterIndexSetOptions(_)
+        | Plan::AlterIndexResetOptions(_)
+        | Plan::AlterSink(_)
+        | Plan::AlterSource(_)
+        | Plan::AlterItemRename(_)
+        | Plan::AlterSecret(_)
+        | Plan::AlterSystemSet(_)
+        | Plan::AlterSystemReset(_)
+        | Plan::AlterSystemResetAll(_)
+        | Plan::AlterRole(_)
+        | Plan::AlterOwner(_)
+        | Plan::Declare(_)
+        | Plan::Fetch(_)
+        | Plan::Close(_)
+        | Plan::ReadThenWrite(_)
+        | Plan::Prepare(_)
+        | Plan::Execute(_)
+        | Plan::Deallocate(_)
+        | Plan::Raise(_)
+        | Plan::RotateKeys(_)
+        | Plan::GrantRole(_)
+        | Plan::RevokeRole(_)
+        | Plan::GrantPrivilege(_)
+        | Plan::RevokePrivilege(_) => return TargetCluster::Active,
+    };
+
     // Bail if the user has disabled it via the SessionVar.
     if !session.vars().auto_route_introspection_queries() {
-        return None;
+        return TargetCluster::Active;
     }
 
     // We can't switch what cluster we're using, if the user has specified a replica.
     if session.vars().cluster_replica().is_some() {
-        return None;
+        return TargetCluster::Active;
     }
 
     // Check to make sure our iterator contains atleast one element, this prevents us
@@ -76,9 +138,9 @@ pub fn auto_run_on_introspection<'a, 's>(
         if intros_cluster.name != session.vars().cluster() {
             session.add_notice(AdapterNotice::AutoRunOnIntrospectionCluster);
         }
-        Some(intros_cluster)
+        TargetCluster::Introspection
     } else {
-        None
+        TargetCluster::Active
     }
 }
 
@@ -223,9 +285,8 @@ pub fn user_privilege_hack(
         | Plan::RevokePrivilege(_)
         | Plan::CopyRows(_) => {
             return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Privilege {
+                rbac::UnauthorizedError::MzIntrospection {
                     action: plan.name().to_string(),
-                    reason: None,
                 },
             ))
         }
@@ -237,8 +298,8 @@ pub fn user_privilege_hack(
         if !catalog.is_system_schema(&full_name.schema) {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::Privilege {
-                    action: format!("interact with object {full_name}"),
-                    reason: None,
+                    object_type: item.item_type().into(),
+                    object_name: full_name.to_string(),
                 },
             ));
         }

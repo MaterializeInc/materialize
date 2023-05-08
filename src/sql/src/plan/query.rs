@@ -513,10 +513,13 @@ pub fn plan_copy_from_rows(
     Ok(expr.map(map_exprs).project(project_key))
 }
 
-/// Common information used for DELETE and UPDATE plans.
+/// Common information used for DELETE, UPDATE, and INSERT INTO ... SELECT plans.
 pub struct ReadThenWritePlan {
     pub id: GlobalId,
-    /// WHERE filter.
+    /// Read portion of query.
+    ///
+    /// NOTE: Even if the WHERE filter is left off, we still need to perform a read to generate
+    /// retractions.
     pub selection: HirRelationExpr,
     /// Map from column index to SET expression. Empty for DELETE statements.
     pub assignments: BTreeMap<usize, HirScalarExpr>,

@@ -1,0 +1,529 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Loosely based on https://github.com/postgres/postgres/blob/master/src/test/regress/expected/privileges.out
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_ld_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_priv_user1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_priv_user2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_priv_user3;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_priv_user4;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_priv_user5;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_priv_user5; -- duplicate
+----
+db error: ERROR: role 'regress_priv_user5' already exists
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE regress_priv_user6;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON SCHEMA public TO regress_priv_user1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON SCHEMA public TO regress_priv_user3;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON SCHEMA public TO regress_priv_user4;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT regress_priv_user2 TO regress_priv_user3;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SELECT role.rolname, member.rolname, grantor.rolname, admin_option FROM pg_auth_members join pg_roles role on roleid = role.oid join pg_roles member on member = member.oid join pg_roles grantor on grantor = grantor.oid;
+----
+regress_priv_user2,regress_priv_user3,mz_system,f
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE regress_priv_user2 CREATEROLE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER ROLE regress_priv_user3 CREATEROLE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT regress_priv_user1 TO regress_priv_user5;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT regress_priv_user1 TO regress_priv_user6;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT create, usage ON cluster default TO regress_priv_user1;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+GRANT regress_priv_user2 TO regress_priv_user4;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+REVOKE regress_priv_user2 FROM regress_priv_user3;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+REVOKE regress_priv_user2 FROM regress_priv_user4;
+----
+db error: ERROR: REVOKE regress_priv_user2 FROM regress_priv_user4 cannot be run inside a transaction block
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+ROLLBACK;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+GRANT regress_priv_user2 TO regress_priv_user4;
+----
+db error: ERROR: GRANT regress_priv_user2 TO regress_priv_user4 cannot be run inside a transaction block
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+ROLLBACK;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+DROP ROLE regress_priv_user2;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+SELECT role.name, member.name from mz_role_members JOIN mz_roles role ON mz_role_members.role_id = role.id JOIN mz_roles member ON mz_role_members.member = member.id JOIN mz_roles grantor ON mz_role_members.grantor = grantor.id;
+----
+regress_priv_user1,regress_priv_user5
+regress_priv_user1,regress_priv_user6
+COMPLETE 2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+CREATE ROLE regress_priv_user2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON SCHEMA public TO regress_priv_user2;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+CREATE TABLE atest1 ( a int, b text );
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+SELECT * FROM atest1;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+INSERT INTO atest1 VALUES (1, 'one');
+----
+COMPLETE 1
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+DELETE FROM atest1;
+----
+COMPLETE 1
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+UPDATE atest1 SET a = 1 WHERE b = 'blech';
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+REVOKE SELECT, INSERT, UPDATE, DELETE ON atest1 FROM PUBLIC;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+SELECT * FROM atest1;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+GRANT SELECT, INSERT, UPDATE, DELETE ON atest1 TO regress_priv_user2;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+GRANT SELECT ON atest1 TO regress_priv_user3;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+GRANT SELECT ON atest1 TO regress_priv_user4;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+SELECT * FROM atest1;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+CREATE TABLE atest2 (col1 varchar(10), col2 boolean);
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+GRANT SELECT ON atest2 TO regress_priv_user2;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+GRANT UPDATE ON atest2 TO regress_priv_user3;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+GRANT INSERT ON atest2 TO regress_priv_user4;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+SELECT session_user, current_user;
+----
+regress_priv_user2,regress_priv_user2
+COMPLETE 1
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+SELECT * FROM atest1;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+SELECT * FROM atest2;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+INSERT INTO atest1 VALUES (2, 'two');
+----
+COMPLETE 1
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+INSERT INTO atest2 VALUES ('foo', true);
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+INSERT INTO atest1 SELECT 1, b FROM atest1;
+----
+COMPLETE 1
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+UPDATE atest1 SET a = 1 WHERE a = 2; -- ok
+----
+COMPLETE 1
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+UPDATE atest2 SET col2 = NOT col2; -- fail
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+DELETE FROM atest2;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+COPY atest2 FROM stdin;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+GRANT SELECT ON atest1 TO PUBLIC;
+----
+db error: ERROR: must be owner of TABLE materialize.public.atest1
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+SELECT * FROM atest1 WHERE ( b IN ( SELECT col1 FROM atest2 ) );
+----
+COMPLETE 0
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+SELECT * FROM atest2 WHERE ( col1 IN ( SELECT b FROM atest1 ) );
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+SELECT session_user, current_user;
+----
+regress_priv_user3,regress_priv_user3
+COMPLETE 1
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+SELECT * FROM atest1;
+----
+1,two
+1,two
+COMPLETE 2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+SELECT * FROM atest2;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+INSERT INTO atest1 VALUES (2, 'two');
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest1
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+INSERT INTO atest2 VALUES ('foo', true);
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+INSERT INTO atest1 SELECT 1, b FROM atest1;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest1
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+UPDATE atest1 SET a = 1 WHERE a = 2;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest1
+
+# Intentional (and documented) difference, we require SELECT for UPDATE
+simple conn=regress_priv_user3,user=regress_priv_user3
+UPDATE atest2 SET col2 = NULL;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+UPDATE atest2 SET col2 = NOT col2; -- fails; requires SELECT on atest2
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+DELETE FROM atest2;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+COPY atest2 FROM stdin;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+SELECT * FROM atest1 WHERE ( b IN ( SELECT col1 FROM atest2 ) );
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+SELECT * FROM atest2 WHERE ( col1 IN ( SELECT b FROM atest1 ) );
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+# Can't test COPY with SLT?
+#simple conn=regress_priv_user4,user=regress_priv_user4
+#COPY atest2 FROM stdin; -- ok
+#----
+#COMPLETE 0
+
+simple conn=regress_priv_user4,user=regress_priv_user4
+SELECT * FROM atest1; -- ok
+----
+1,two
+1,two
+COMPLETE 2
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+CREATE TABLE atest12 (a int, b int);
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+INSERT INTO atest12 SELECT x AS a, 10001 - x AS b FROM generate_series(1,10000) x;
+----
+COMPLETE 10000
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+CREATE INDEX ON atest12 (a);
+----
+COMPLETE 0
+
+simple conn=regress_priv_user1,user=regress_priv_user1
+CREATE INDEX ON atest12 (abs(a));
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+CREATE VIEW atestv1 AS SELECT * FROM atest1; -- ok
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+CREATE VIEW atestv2 AS SELECT * FROM atest2;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+SELECT * FROM atestv2;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+CREATE TABLE atest3 (one int, two int, three int);
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+CREATE VIEW atestv3 AS SELECT * FROM atest3; -- ok
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+CREATE VIEW atestv0 AS SELECT 0 as x WHERE false; -- ok
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+SELECT * FROM atestv1; -- ok
+----
+1,two
+1,two
+COMPLETE 2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+SELECT * FROM atestv2; -- fail
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+GRANT SELECT ON atestv1 TO regress_priv_user4;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+GRANT SELECT ON atestv3 TO regress_priv_user4;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user3,user=regress_priv_user3
+GRANT SELECT ON atestv2 TO regress_priv_user2;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user4,user=regress_priv_user4
+SELECT * FROM atestv1;
+----
+1,two
+1,two
+COMPLETE 2
+
+simple conn=regress_priv_user4,user=regress_priv_user4
+SELECT * FROM atestv2;
+----
+db error: ERROR: permission denied for VIEW materialize.public.atestv2
+
+simple conn=regress_priv_user4,user=regress_priv_user4
+SELECT * FROM atestv3;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user4,user=regress_priv_user4
+SELECT * FROM atestv0;
+----
+db error: ERROR: permission denied for VIEW materialize.public.atestv0
+
+simple conn=regress_priv_user4,user=regress_priv_user4
+CREATE VIEW atestv4 AS SELECT * FROM atestv3; -- nested view
+----
+COMPLETE 0
+
+simple conn=regress_priv_user4,user=regress_priv_user4
+SELECT * FROM atestv4; -- ok
+----
+COMPLETE 0
+
+simple conn=regress_priv_user4,user=regress_priv_user4
+GRANT SELECT ON atestv4 TO regress_priv_user2;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+SELECT * FROM atestv3;
+----
+db error: ERROR: permission denied for VIEW materialize.public.atestv3
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+SELECT * FROM atestv4;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+SELECT * FROM atest2;
+----
+COMPLETE 0
+
+simple conn=regress_priv_user2,user=regress_priv_user2
+SELECT * FROM atestv2;
+----
+db error: ERROR: permission denied for TABLE materialize.public.atest2

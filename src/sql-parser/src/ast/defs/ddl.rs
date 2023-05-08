@@ -1338,6 +1338,7 @@ pub enum CreateSourceOptionName {
     Size,
     Timeline,
     TimestampInterval,
+    Disk,
 }
 
 impl AstDisplay for CreateSourceOptionName {
@@ -1347,6 +1348,7 @@ impl AstDisplay for CreateSourceOptionName {
             CreateSourceOptionName::Size => "SIZE",
             CreateSourceOptionName::Timeline => "TIMELINE",
             CreateSourceOptionName::TimestampInterval => "TIMESTAMP INTERVAL",
+            CreateSourceOptionName::Disk => "DISK",
         })
     }
 }

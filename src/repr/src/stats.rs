@@ -255,15 +255,18 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{PartEncoder, Schema};
+    use mz_persist_types::columnar::{Data, PartEncoder, Schema};
     use mz_persist_types::part::PartBuilder;
-    use mz_persist_types::stats::StructStats;
+    use mz_persist_types::stats::{ColumnStats, DynStats, StructStats};
     use mz_proto::RustType;
     use proptest::prelude::*;
 
-    use crate::{Datum, RelationDesc, Row, ScalarType};
+    use crate::{Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena, ScalarType};
 
-    fn datum_stats_roundtrip<'a>(schema: &RelationDesc, datums: impl IntoIterator<Item = &'a Row>) {
+    fn datum_stats_roundtrip_trim<'a>(
+        schema: &RelationDesc,
+        datums: impl IntoIterator<Item = &'a Row>,
+    ) {
         let mut part = PartBuilder::new(schema, &UnitSchema);
         {
             let part_mut = part.get_mut();
@@ -276,43 +279,68 @@ mod tests {
         }
         let part = part.finish().unwrap();
         let expected = part.key_stats(schema).unwrap();
-        let _actual = StructStats::from_proto(expected.into_proto()).unwrap();
+        let mut actual = StructStats::from_proto(RustType::into_proto(&expected)).unwrap();
         // It's not particularly easy to give StructStats a PartialEq impl, but
         // verifying that there weren't any panics gets us pretty far.
+
+        // Sanity check that trimming the stats doesn't cause them to be invalid
+        // (regression for a bug we had that caused panic at stats usage time).
+        actual.trim_to_budget(0, |_| true);
+        for (name, typ) in schema.iter() {
+            struct ColMinMaxNulls<'a>(&'a dyn DynStats);
+            impl<'a> DatumToPersistFn<()> for ColMinMaxNulls<'a> {
+                fn call<T: DatumToPersist>(self) {
+                    let ColMinMaxNulls(stats) = self;
+                    let stats = stats
+                        .as_any()
+                        .downcast_ref::<<T::Data as Data>::Stats>()
+                        .unwrap();
+                    let arena = RowArena::default();
+                    let _ = stats
+                        .lower()
+                        .map(|val| arena.make_datum(|packer| T::decode(val, packer)));
+                    let _ = stats
+                        .upper()
+                        .map(|val| arena.make_datum(|packer| T::decode(val, packer)));
+                    let _ = stats.none_count();
+                }
+            }
+            let col_stats = actual.cols.get(name.as_str()).unwrap();
+            typ.to_persist(ColMinMaxNulls(col_stats.as_ref()))
+        }
     }
 
-    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
+    fn scalar_type_stats_roundtrip_trim(scalar_type: ScalarType) {
         let mut rows = Vec::new();
         for datum in scalar_type.interesting_datums() {
             rows.push(Row::pack(std::iter::once(datum)));
         }
 
         // Non-nullable version of the column.
-
         let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));
         for row in rows.iter() {
-            datum_stats_roundtrip(&schema, [row]);
+            datum_stats_roundtrip_trim(&schema, [row]);
         }
-        datum_stats_roundtrip(&schema, &rows[..]);
+        datum_stats_roundtrip_trim(&schema, &rows[..]);
 
         // Nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.nullable(true));
         rows.push(Row::pack(std::iter::once(Datum::Null)));
         for row in rows.iter() {
-            datum_stats_roundtrip(&schema, [row]);
+            datum_stats_roundtrip_trim(&schema, [row]);
         }
-        datum_stats_roundtrip(&schema, &rows[..]);
+        datum_stats_roundtrip_trim(&schema, &rows[..]);
     }
 
     // Ideally, this test would live in persist-types next to the stats <->
     // proto code, but it's much easier to proptest them from Datums.
     #[test]
     #[cfg_attr(miri, ignore)] // too slow
-    fn all_scalar_type_stats_roundtrip() {
+    fn all_scalar_types_stats_roundtrip_trim() {
         mz_ore::test::init_logging();
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
-            scalar_type_stats_roundtrip(scalar_type)
+            scalar_type_stats_roundtrip_trim(scalar_type)
         });
     }
 }

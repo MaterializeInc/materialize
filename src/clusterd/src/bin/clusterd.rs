@@ -102,6 +102,7 @@ use mz_service::grpc::GrpcServer;
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::instances::StorageInstanceContext;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
@@ -160,6 +161,11 @@ struct Args {
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
+
+    // === Other options. ===
+    /// A scratch directory that can be used for ephemeral storage.
+    #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
+    scratch_directory: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -274,6 +280,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.aws_external_id,
             secrets_reader,
         ),
+        StorageInstanceContext::new(args.scratch_directory).await?,
     )?;
     info!(
         "listening for storage controller connections on {}",

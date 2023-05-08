@@ -19,6 +19,7 @@ use mz_controller::clusters::ClusterId;
 use mz_expr::OptimizedMirRelationExpr;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, FetchPlan, Plan,
     PlanKind, RaisePlan, RotateKeysPlan,
@@ -63,9 +64,6 @@ impl Coordinator {
         tx.set_allowed(responses);
 
         let session_catalog = self.catalog.for_session(&session);
-        if let Err(e) = rbac::check_plan(&session_catalog, &session, &plan, &depends_on) {
-            return tx.send(Err(e), session);
-        }
 
         if let Err(e) =
             introspection::user_privilege_hack(&session_catalog, &session, &plan, &depends_on)
@@ -73,6 +71,26 @@ impl Coordinator {
             return tx.send(Err(e), session);
         }
         if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
+            return tx.send(Err(e), session);
+        }
+
+        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // session var is set, then we automatically run the query on the mz_introspection cluster.
+        let target_cluster =
+            introspection::auto_run_on_introspection(&self.catalog, &session, &plan);
+        let target_cluster_id = self
+            .catalog()
+            .resolve_target_cluster(target_cluster, &session)
+            .ok()
+            .map(|cluster| cluster.id());
+
+        if let Err(e) = rbac::check_plan(
+            &session_catalog,
+            &session,
+            &plan,
+            target_cluster_id,
+            &depends_on,
+        ) {
             return tx.send(Err(e), session);
         }
 
@@ -230,11 +248,12 @@ impl Coordinator {
                 self.sequence_end_transaction(tx, session, action);
             }
             Plan::Peek(plan) => {
-                self.sequence_peek(tx, session, plan, depends_on).await;
+                self.sequence_peek(tx, session, plan, depends_on, target_cluster)
+                    .await;
             }
             Plan::Subscribe(plan) => {
                 tx.send(
-                    self.sequence_subscribe(&mut session, plan, depends_on)
+                    self.sequence_subscribe(&mut session, plan, depends_on, target_cluster)
                         .await,
                     session,
                 );

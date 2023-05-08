@@ -791,6 +791,28 @@ impl<'a> Runner<'a> {
                 .await?;
         }
 
+        // Grant initial privileges.
+        inner
+            .system_client
+            .batch_execute("GRANT USAGE ON DATABASE materialize TO PUBLIC")
+            .await?;
+        inner
+            .system_client
+            .batch_execute("GRANT CREATE ON DATABASE materialize TO materialize")
+            .await?;
+        inner
+            .system_client
+            .batch_execute("GRANT CREATE ON SCHEMA materialize.public TO materialize")
+            .await?;
+        inner
+            .system_client
+            .batch_execute("GRANT USAGE ON CLUSTER default TO PUBLIC")
+            .await?;
+        inner
+            .system_client
+            .batch_execute("GRANT CREATE ON CLUSTER default TO materialize")
+            .await?;
+
         inner.client = connect(inner.server_addr, None).await;
         inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
         inner.clients = BTreeMap::new();
@@ -849,6 +871,7 @@ impl RunnerInner {
                 command_wrapper: vec![],
                 propagate_crashes: true,
                 tcp_proxy: None,
+                scratch_directory: None,
             })
             .await?,
         );
@@ -878,6 +901,7 @@ impl RunnerInner {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
+                scratch_directory: None,
             },
             secrets_controller,
             cloud_resource_controller: None,

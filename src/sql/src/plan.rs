@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 use mz_controller::clusters::ClusterId;
-use mz_expr::{ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::AclMode;
@@ -65,6 +65,7 @@ use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatab
 pub use self::expr::{
     AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
+pub use crate::plan::statement::ddl::PlannedRoleAttributes;
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -648,6 +649,15 @@ pub enum SubscribeFrom {
     },
 }
 
+impl SubscribeFrom {
+    pub fn depends_on(&self) -> BTreeSet<GlobalId> {
+        match self {
+            SubscribeFrom::Id(id) => BTreeSet::from([*id]),
+            SubscribeFrom::Query { expr, .. } => expr.depends_on(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ShowCreatePlan {
     pub id: GlobalId,
@@ -775,7 +785,7 @@ pub struct AlterSystemResetAllPlan {}
 pub struct AlterRolePlan {
     pub id: RoleId,
     pub name: String,
-    pub attributes: RoleAttributes,
+    pub attributes: PlannedRoleAttributes,
 }
 
 #[derive(Debug)]

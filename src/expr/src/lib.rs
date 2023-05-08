@@ -85,6 +85,7 @@ use serde::{Deserialize, Serialize};
 use mz_repr::GlobalId;
 
 mod id;
+mod interpret;
 mod linear;
 mod relation;
 mod scalar;
@@ -97,6 +98,7 @@ pub use relation::canonicalize;
 
 pub use id::{Id, LocalId, PartitionId, SourceInstanceId};
 pub use id::{ProtoId, ProtoLocalId, ProtoPartitionId};
+pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace};
 pub use linear::{
     memoize_expr,
     plan::{MfpPlan, MfpPushdown, SafeMfpPlan},

@@ -19,9 +19,6 @@ class Check:
     def __init__(self, base_version: MzVersion, rng: Optional[Random]) -> None:
         self.base_version = base_version
         self.rng = rng
-        self._initialize = self.initialize()
-        self._manipulate = self.manipulate()
-        self._validate = self.validate()
 
     def _can_run(self) -> bool:
         return True
@@ -37,6 +34,8 @@ class Check:
 
     def start_initialize(self, e: Executor) -> None:
         if self._can_run():
+            self.current_version = e.current_mz_version
+            self._initialize = self.initialize()
             self._initialize.execute(e)
 
     def join_initialize(self, e: Executor) -> None:
@@ -45,6 +44,8 @@ class Check:
 
     def start_manipulate(self, e: Executor, phase: int) -> None:
         if self._can_run():
+            self.current_version = e.current_mz_version
+            self._manipulate = self.manipulate()
             self._manipulate[phase].execute(e)
 
     def join_manipulate(self, e: Executor, phase: int) -> None:
@@ -53,6 +54,8 @@ class Check:
 
     def start_validate(self, e: Executor) -> None:
         if self._can_run():
+            self.current_version = e.current_mz_version
+            self._validate = self.validate()
             self._validate.execute(e)
 
     def join_validate(self, e: Executor) -> None:

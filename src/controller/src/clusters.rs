@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
-use futures::stream::{BoxStream, StreamExt, TryStreamExt};
+use futures::stream::{BoxStream, StreamExt};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -198,6 +198,15 @@ pub struct ClusterEvent {
     pub time: DateTime<Utc>,
 }
 
+/// A struct describing a replica that needs to be created,
+/// using `Controller::create_replicas`.
+pub struct CreateReplicaConfig {
+    pub cluster_id: ClusterId,
+    pub replica_id: ReplicaId,
+    pub role: ClusterRole,
+    pub config: ReplicaConfig,
+}
+
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice,
@@ -236,13 +245,30 @@ where
     /// always wrong to do anything but abort the process on `Err`.
     pub async fn create_replicas(
         &mut self,
-        replicas: Vec<(ClusterId, ReplicaId, ClusterRole, ReplicaConfig)>,
+        replicas: Vec<CreateReplicaConfig>,
     ) -> Result<(), anyhow::Error> {
+        /// A intermediate struct to hold info about a replica, to avoid
+        /// a large tuple.
+        struct ReplicaInfo {
+            replica_id: ReplicaId,
+            compute_config: ComputeReplicaConfig,
+            storage_location: ClusterReplicaLocation,
+            compute_location: ClusterReplicaLocation,
+            metrics_task_join_handle: Option<AbortOnDropHandle<()>>,
+        }
+
         // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
         // this stream cannot all have exclusive access.
         let this = &*self;
-        let replicas: Vec<_> = futures::stream::iter(replicas)
-            .map(|(cluster_id, replica_id, role, config)| async move {
+        let mut replica_stream = futures::stream::iter(replicas)
+            .map(|config| async move {
+                let CreateReplicaConfig {
+                    cluster_id,
+                    replica_id,
+                    role,
+                    config,
+                } = config;
+
                 match config.location {
                     // This branch doesn't do any async work, so there is a slight performance
                     // opportunity to serially process it, but it makes the code worse to read.
@@ -267,11 +293,13 @@ where
 
                         Ok::<_, anyhow::Error>((
                             cluster_id,
-                            replica_id,
-                            config.compute,
-                            storage_location,
-                            compute_location,
-                            None,
+                            ReplicaInfo {
+                                replica_id,
+                                compute_config: config.compute,
+                                storage_location,
+                                compute_location,
+                                metrics_task_join_handle: None,
+                            },
                         ))
                     }
                     ReplicaLocation::Managed(m) => {
@@ -291,42 +319,61 @@ where
                         };
                         Ok((
                             cluster_id,
-                            replica_id,
-                            config.compute,
-                            storage_location,
-                            compute_location,
-                            Some(metrics_task_join_handle),
+                            ReplicaInfo {
+                                replica_id,
+                                compute_config: config.compute,
+                                storage_location,
+                                compute_location,
+                                metrics_task_join_handle: Some(metrics_task_join_handle),
+                            },
                         ))
                     }
                 }
             })
             // TODO(guswynn): make this configurable.
-            .buffer_unordered(50)
-            // `try_collect` and `collect` are the only safe ways to process a
-            // `buffer_unordered`. See the docs in `mz_storage_client::controller` for more
-            // details.
-            .try_collect()
-            .await?;
+            .buffer_unordered(50);
 
-        for (
-            cluster_id,
-            replica_id,
-            compute_config,
-            storage_location,
-            compute_location,
-            metrics_task_join_handle,
-        ) in replicas
-        {
-            if let Some(jh) = metrics_task_join_handle {
-                self.metrics_tasks.insert(replica_id, jh);
-            }
-            self.storage.connect_replica(cluster_id, storage_location);
-            self.active_compute().add_replica_to_instance(
+        // _Usually_ `try_collect` and `collect` are the only safe ways to process a
+        // `buffer_unordered`, but if we ensure we don't do
+        // any async work in this loop, we are fine.
+        //
+        // If we do do async work in the loop, we could starve the stream itself of
+        // polls, which can cause errors.
+        // See the docs in `mz_storage_client::controller` for more info.
+        let mut replicas: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        while let Some(res) = replica_stream.next().await {
+            let (cluster_id, replica_info) = res?;
+
+            replicas.entry(cluster_id).or_default().push(replica_info);
+        }
+        drop(replica_stream);
+
+        for (cluster_id, replicas) in replicas {
+            // We only connect to the last replica (chosen arbitrarily)
+            // for storage, until we support multi-replica storage objects
+            self.storage.connect_replica(
                 cluster_id,
+                replicas.last().unwrap().storage_location.clone(),
+            );
+
+            for ReplicaInfo {
                 replica_id,
-                compute_location,
                 compute_config,
-            )?;
+                storage_location: _,
+                compute_location,
+                metrics_task_join_handle,
+            } in replicas
+            {
+                if let Some(jh) = metrics_task_join_handle {
+                    self.metrics_tasks.insert(replica_id, jh);
+                }
+                self.active_compute().add_replica_to_instance(
+                    cluster_id,
+                    replica_id,
+                    compute_location,
+                    compute_config,
+                )?;
+            }
         }
 
         Ok(())
@@ -414,7 +461,6 @@ where
 
         Box::pin(stream)
     }
-
     /// Provisions a replica with the service orchestrator.
     async fn provision_replica(
         &self,

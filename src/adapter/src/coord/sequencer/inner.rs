@@ -28,8 +28,8 @@ use mz_compute_client::types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
 use mz_controller::clusters::{
-    ClusterConfig, ClusterId, ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLogging,
-    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
+    ClusterConfig, ClusterId, CreateReplicaConfig, ReplicaAllocation, ReplicaConfig, ReplicaId,
+    ReplicaLogging, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirRelationExpr, MirScalarExpr,
@@ -45,7 +45,7 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, 
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
-    CatalogTypeDetails,
+    CatalogTypeDetails, SessionCatalog,
 };
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
 use mz_sql::names::{ObjectId, QualifiedItemName};
@@ -62,7 +62,6 @@ use mz_sql::plan::{
     SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
     SubscribePlan, VariableValue, View,
 };
-use mz_sql::session::user::SYSTEM_USER;
 use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -87,9 +86,9 @@ use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
 use crate::coord::{
-    introspection, peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
-    PeekStageTimestamp, PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
-    SinkConnectionReady, TransientPlan, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
+    PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext, SinkConnectionReady,
+    TargetCluster, TransientPlan, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -749,7 +748,12 @@ impl Coordinator {
             let role = cluster.role();
             let replica_config = cluster.replicas_by_id[&replica_id].config.clone();
 
-            replicas_to_start.push((cluster_id, replica_id, role, replica_config));
+            replicas_to_start.push(CreateReplicaConfig {
+                cluster_id,
+                replica_id,
+                role,
+                config: replica_config,
+            });
         }
 
         self.controller
@@ -1832,13 +1836,18 @@ impl Coordinator {
         session: Session,
         plan: PeekPlan,
         depends_on: Vec<GlobalId>,
+        target_cluster: TargetCluster,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
         self.sequence_peek_stage(
             tx,
             session,
-            PeekStage::Validate(PeekStageValidate { plan, depends_on }),
+            PeekStage::Validate(PeekStageValidate {
+                plan,
+                depends_on,
+                target_cluster,
+            }),
         )
         .await;
     }
@@ -1894,7 +1903,11 @@ impl Coordinator {
     fn peek_stage_validate(
         &mut self,
         session: &mut Session,
-        PeekStageValidate { plan, depends_on }: PeekStageValidate,
+        PeekStageValidate {
+            plan,
+            depends_on,
+            target_cluster,
+        }: PeekStageValidate,
     ) -> Result<PeekStageOptimize, AdapterError> {
         let PeekPlan {
             source,
@@ -1909,13 +1922,7 @@ impl Coordinator {
         let index_id = self.allocate_transient_id()?;
         let catalog = self.catalog();
 
-        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
-        // session var is set, then we automatically run the query on the mz_introspection cluster
-        let cluster =
-            match introspection::auto_run_on_introspection(catalog, session, source.depends_on()) {
-                Some(cluster) => cluster,
-                None => catalog.active_cluster(session)?,
-            };
+        let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
 
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
@@ -2388,6 +2395,7 @@ impl Coordinator {
         session: &mut Session,
         plan: SubscribePlan,
         depends_on: Vec<GlobalId>,
+        target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
         let SubscribePlan {
             from,
@@ -2399,16 +2407,9 @@ impl Coordinator {
             output,
         } = plan;
 
-        // If our query only depends on system tables, then we optionally run it on the
-        // introspection cluster.
-        let cluster = match introspection::auto_run_on_introspection(
-            self.catalog(),
-            session,
-            depends_on.iter().copied(),
-        ) {
-            Some(cluster) => cluster,
-            None => self.catalog().active_cluster(session)?,
-        };
+        let cluster = self
+            .catalog()
+            .resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
 
         let target_replica_name = session.vars().cluster_replica();
@@ -3262,6 +3263,7 @@ impl Coordinator {
                 copy_to: None,
             },
             depends_on,
+            TargetCluster::Active,
         )
         .await;
 
@@ -3557,6 +3559,9 @@ impl Coordinator {
             attributes,
         }: AlterRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let catalog = self.catalog().for_session(session);
+        let role = catalog.get_role(&id);
+        let attributes = (role, attributes).into();
         let op = catalog::Op::AlterRole {
             id,
             name,
@@ -3744,9 +3749,8 @@ impl Coordinator {
             ))
         } else {
             Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Privilege {
+                rbac::UnauthorizedError::MzSystem {
                     action: "alter system".into(),
-                    reason: Some(format!("You must be the '{}' role", SYSTEM_USER.name)),
                 },
             ))
         }

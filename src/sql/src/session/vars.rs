@@ -520,6 +520,25 @@ const ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// The default for the `DISK` option in `UPSERT` sources.
+const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("upsert_source_disk_default"),
+    value: &false,
+    description: "The default for the `DISK` option in `UPSERT` sources.",
+    internal: true,
+    safe: true,
+};
+
+/// Whether or not the `DISK` option in available `UPSERT` sources.
+const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_upsert_source_disk"),
+    value: &false,
+    description: "Feature flag indicating availability of the `DISK` \
+                  option in `UPSERT/DEBEZIUM` sources (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Controls the connect_timeout setting when connecting to PG via replication.
 const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_connect_timeout"),
@@ -612,6 +631,15 @@ const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     description: "In the storage persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_audit_percent`].
+const PERSIST_STATS_AUDIT_PERCENT: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_stats_audit_percent"),
+    value: &PersistConfig::DEFAULT_STATS_AUDIT_PERCENT,
+    description: "Percent of filtered data to opt in to correctness auditing (Materialize).",
     internal: true,
     safe: true,
 };
@@ -779,6 +807,14 @@ pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = Serve
     name: UncasedStr::new("enable_within_timestamp_order_by_in_subscribe"),
     value: &false,
     description: "Feature flag indicating whether `WITHIN TIMESTAMP ORDER BY` can be used in `SUBSCRIBE` queries (Materialize).",
+    internal: false,
+    safe: true,
+};
+
+pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("max_connections"),
+    value: &1000,
+    description: "The maximum number of concurrent connections (Materialize).",
     internal: false,
     safe: true,
 };
@@ -1497,6 +1533,8 @@ impl Default for SystemVars {
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
+            .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
+            .with_var(&ENABLE_UPSERT_SOURCE_DISK)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
@@ -1506,6 +1544,7 @@ impl Default for SystemVars {
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+            .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
             .with_var(&METRICS_RETENTION)
@@ -1524,6 +1563,7 @@ impl Default for SystemVars {
             .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
             .with_var(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
+            .with_var(&MAX_CONNECTIONS)
     }
 }
 
@@ -1743,6 +1783,16 @@ impl SystemVars {
         *self.expect_value(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
     }
 
+    /// Returns the `upsert_source_disk_default` configuration parameter.
+    pub fn upsert_source_disk_default(&self) -> bool {
+        *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
+    }
+
+    /// Returns the `enable_upsert_source_disk` configuration parameter.
+    pub fn enable_upsert_source_disk(&self) -> bool {
+        *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
+    }
+
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
@@ -1811,6 +1861,11 @@ impl SystemVars {
     /// Returns the `storage_persist_sink_minimum_batch_updates` configuration parameter.
     pub fn storage_persist_sink_minimum_batch_updates(&self) -> usize {
         *self.expect_value(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+    }
+
+    /// Returns the `persist_stats_audit_percent` configuration parameter.
+    pub fn persist_stats_audit_percent(&self) -> usize {
+        *self.expect_value(&PERSIST_STATS_AUDIT_PERCENT)
     }
 
     /// Returns the `persist_stats_collection_enabled` configuration parameter.
@@ -1889,6 +1944,11 @@ impl SystemVars {
     /// Returns the `enable_within_timestamp_order_by` configuration parameter.
     pub fn enable_within_timestamp_order_by(&self) -> bool {
         *self.expect_value(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
+    }
+
+    /// Returns the `max_connections` configuration parameter.
+    pub fn max_connections(&self) -> u32 {
+        *self.expect_value(&MAX_CONNECTIONS)
     }
 }
 
@@ -2883,6 +2943,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+        || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
 }

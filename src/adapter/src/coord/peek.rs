@@ -44,6 +44,7 @@ use crate::AdapterError;
 
 use super::id_bundle::CollectionIdBundle;
 
+#[derive(Debug)]
 pub(crate) struct PendingPeek {
     pub(crate) sender: oneshot::Sender<PeekResponse>,
     pub(crate) conn_id: ConnectionId,

@@ -58,6 +58,9 @@ The following table describes which privileges are applicable to which objects:
 | `SECRET`              | U              |
 | `CLUSTER`             | UC             |
 
+Unlike PostgreSQL, `UPDATE` and `DELETE` always require `SELECT` privileges on the object being
+updated.
+
 ### Compatibility
 
 For PostgreSQL compatibility reasons, you must specify `TABLE` as the object
