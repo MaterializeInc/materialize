@@ -225,6 +225,10 @@ mz_cluster_replica_heartbeats
 BASE TABLE
 materialize
 mz_internal
+mz_cluster_replica_history
+VIEW
+materialize
+mz_internal
 mz_cluster_replica_metrics
 BASE TABLE
 materialize
@@ -238,10 +242,6 @@ BASE TABLE
 materialize
 mz_internal
 mz_cluster_replica_utilization
-VIEW
-materialize
-mz_internal
-mz_cluster_replica_history
 VIEW
 materialize
 mz_internal
