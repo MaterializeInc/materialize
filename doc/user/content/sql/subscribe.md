@@ -402,7 +402,7 @@ are all prefixed with `after_`.
 structure:
 
    ```sql
-   SUBSCRIBE mview ENVELOPE UPSERT (KEY (key));
+   SUBSCRIBE mview ENVELOPE DEBEZIUM (KEY (key));
    ```
 
    ```sql
@@ -413,7 +413,7 @@ structure:
    ```
 
 * For inserts: the before values are `NULL`, the current value is the newly inserted
-  value and `mz_state` is set to `upsert`.
+  value and `mz_state` is set to `insert`.
 
   _Insert_
 
@@ -456,7 +456,7 @@ structure:
    ...
   ```
 
-* Like `ENVELOPE UPSERT`, Only use `ENVELOPE DEBEZIUM` when there is at most one
+* Like `ENVELOPE UPSERT`, only use `ENVELOPE DEBEZIUM` when there is at most one
   live value per key. If materialize detects that a given key has multiple values,
   it will generate an update with `mz_state` set to `"key_violation"`, the
   problematic key, and all the values nulled out. Materialize is not guaranteed to
@@ -474,7 +474,7 @@ structure:
   ```
 
 * If [`PROGRESS`](#progress) is set, Materialize also returns the `mz_progressed`
-column. Each progress row will have a `NULL` key and a `NULL` value.
+column. Each progress row will have a `NULL` key and a `NULL` befor and after value.
 
 #### `WITHIN TIMESTAMP ORDER BY`
 

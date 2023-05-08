@@ -52,7 +52,7 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM t)
-> FETCH ALL c
+> FETCH 3 c
 <TIMESTAMP> 1 1 2 3
 <TIMESTAMP> 1 4 0 -4
 <TIMESTAMP> 1 2 5 -6
@@ -134,7 +134,7 @@ UPDATE t0 SET value = 4 WHERE key = 1
 > DECLARE c CURSOR FOR SUBSCRIBE t WITH (PROGRESS, SNAPSHOT) WITHIN TIMESTAMP ORDER BY c, b, a
 > FETCH 1 c
 <TIMESTAMP> true <null> <null> <null> <null>
-> FETCH ALL c
+> FETCH 4 c
 <TIMESTAMP> false 1 2 5 -6
 <TIMESTAMP> false 1 4 0 -4
 <TIMESTAMP> false 1 1 2 3
@@ -190,43 +190,43 @@ UPDATE t1 SET value = 4 WHERE key = 1
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> delete 1 <null>
 
 $ postgres-execute connection=mz_system
 INSERT INTO t1 VALUES (1, 1), (1, 1)
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> "key_violation" 1 <null>
 
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> "key_violation" 1 <null>
 
 $ postgres-execute connection=mz_system
 INSERT INTO t1 VALUES (1, 1), (1, 2)
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> "key_violation" 1 <null>
 
 $ postgres-execute connection=mz_system
 INSERT INTO t1 VALUES (1, 3)
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> upsert 1 3
 
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1 AND value = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> delete 1 <null>
 
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> "key_violation" 1 <null>
 
 > COMMIT
@@ -249,7 +249,7 @@ UPDATE t2 SET value = 4 WHERE key = 1
 $ postgres-execute connection=mz_system
 DELETE FROM t2 WHERE key = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> delete 1 <null>
 
 > COMMIT
@@ -260,7 +260,7 @@ DELETE FROM t2 WHERE key = 1
 > FETCH 1 c
 <TIMESTAMP> true <null> <null> <null>
 
-> FETCH ALL c
+> FETCH 2 c
 <TIMESTAMP> false upsert 2 3
 <TIMESTAMP> true <null> <null> <null>
 
@@ -307,43 +307,43 @@ UPDATE t1 SET value = 4 WHERE key = 1
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> delete 1 4 <null>
 
 $ postgres-execute connection=mz_system
 INSERT INTO t1 VALUES (1, 1), (1, 1)
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> "key_violation" 1 <null> <null>
 
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> "key_violation" 1 <null> <null>
 
 $ postgres-execute connection=mz_system
 INSERT INTO t1 VALUES (1, 1), (1, 2)
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> "key_violation" 1 <null> <null>
 
 $ postgres-execute connection=mz_system
 INSERT INTO t1 VALUES (1, 3)
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> insert 1 <null> 3
 
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1 AND value = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> delete 1 1 <null>
 
 $ postgres-execute connection=mz_system
 DELETE FROM t1 WHERE key = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> "key_violation" 1 <null> <null>
 
 > COMMIT
@@ -367,7 +367,7 @@ UPDATE t2 SET value = 4 WHERE key = 1
 $ postgres-execute connection=mz_system
 DELETE FROM t2 WHERE key = 1
 
-> FETCH ALL c
+> FETCH 1 c
 <TIMESTAMP> delete 1 4 <null>
 
 > COMMIT
@@ -378,7 +378,7 @@ DELETE FROM t2 WHERE key = 1
 > FETCH 1 c
 <TIMESTAMP> true <null> <null> <null> <null>
 
-> FETCH ALL c
+> FETCH 2 c
 <TIMESTAMP> false insert 2 <null> 3
 <TIMESTAMP> true <null> <null> <null> <null>
 
