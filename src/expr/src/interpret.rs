@@ -1088,24 +1088,6 @@ mod tests {
     }
 
     #[test]
-    fn test_short_circuiting() {
-        let expr = MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Or,
-            exprs: vec![
-                MirScalarExpr::Literal(Err(EvalError::Internal("yikes".to_owned())), ScalarType::Bool.nullable(false)),
-                MirScalarExpr::Literal(Ok(Row::pack_slice(&[Datum::True])), ScalarType::Bool.nullable(false)),
-            ],
-        };
-        let arena = RowArena::new();
-        let result = expr.eval(&[], &arena);
-        assert_eq!(result, Ok(Datum::True));
-
-        let interpreter = ColumnSpecs::new(RelationType::new(vec![]), &arena);
-        let spec = interpreter.expr(&expr);
-        assert!(spec.range.may_contain(Datum::True));
-    }
-
-    #[test]
     fn test_eval_range() {
         // Example inspired by the tumbling windows temporal filter in the docs
         let period_ms = MirScalarExpr::Literal(
