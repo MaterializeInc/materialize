@@ -624,6 +624,19 @@ steps:
           args: [--scenario=KafkaUpsertUnique]
     coverage: skip
 
+  - id: deploy-website
+    label: Deploy website
+    depends_on: lint-docs
+    trigger: deploy-website
+    async: true
+    branches: main
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
+    coverage: skip
+
   - wait: ~
     continue_on_failure: true
 

@@ -13,6 +13,11 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+if [[ "$BUILDKITE_PULL_REQUEST" = false ]]; then
+    echo "Skipping docs preview on non-pull request build"
+    exit 0
+fi
+
 cd doc/user
 hugo --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
 
