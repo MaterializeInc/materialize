@@ -3624,6 +3624,7 @@ dependencies = [
  "once_cell",
  "prometheus",
  "regex",
+ "rocksdb",
  "scopeguard",
  "serde",
  "smallvec",

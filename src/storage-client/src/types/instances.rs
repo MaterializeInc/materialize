@@ -103,13 +103,18 @@ impl RustType<ProtoStorageInstanceId> for StorageInstanceId {
 /// This is extra information that is used when rendering source
 /// and sinks that is not tied to the source/connection configuration itself.
 #[derive(Debug, Clone)]
-pub struct StorageInstanceContext {
+pub struct StorageInstanceContext<Additional = ()> {
     /// A directory that can be used for scratch work.
     pub scratch_directory: Option<PathBuf>,
+    /// Additional context whose type may vary between binaries.
+    pub additional: Additional,
 }
 
-impl StorageInstanceContext {
-    pub async fn new(scratch_directory: Option<PathBuf>) -> Result<StorageInstanceContext, Error> {
+impl<Additional> StorageInstanceContext<Additional> {
+    pub async fn new(
+        scratch_directory: Option<PathBuf>,
+        additional: Additional,
+    ) -> Result<Self, Error> {
         if let Some(scratch_directory) = &scratch_directory {
             tokio::fs::create_dir_all(scratch_directory)
                 .await
@@ -120,13 +125,17 @@ impl StorageInstanceContext {
                     )
                 })?;
         }
-        Ok(Self { scratch_directory })
+        Ok(Self {
+            scratch_directory,
+            additional,
+        })
     }
 
     /// Constructs a new connection context for usage in tests.
-    pub fn for_tests() -> StorageInstanceContext {
+    pub fn for_tests(additional: Additional) -> Self {
         Self {
             scratch_directory: None,
+            additional,
         }
     }
 }

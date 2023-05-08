@@ -153,13 +153,13 @@ pub struct RocksDBMetrics {
 
 impl Options {
     /// A new `Options` object with reasonable defaults.
-    pub fn new_with_defaults() -> Result<Self, RocksDBError> {
-        Ok(Options {
+    pub fn defaults_with_env(env: rocksdb::Env) -> Self {
+        Options {
             cleanup_on_new: true,
             cleanup_on_drop: true,
             use_wal: false,
-            env: rocksdb::Env::new()?,
-        })
+            env,
+        }
     }
 
     fn as_rocksdb_options(&self) -> RocksDBOptions {

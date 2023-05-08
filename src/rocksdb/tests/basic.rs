@@ -96,7 +96,7 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     let mut instance = RocksDBInstance::<String, String>::new(
         t.path(),
-        Options::new_with_defaults()?,
+        Options::defaults_with_env(rocksdb::Env::new()?),
         metrics_for_tests()?,
     )
     .await?;
