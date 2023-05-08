@@ -89,7 +89,8 @@ thinking. Err on the side of writing a design document.
 ### Creation
 
 1. Copy the [template](./00000000_template.md) to a new date-prefixed file in
-   `doc/developer/design` and fill it in.
+   `doc/developer/design` and fill it in. There is a separate template that the
+   COMPUTE team prefers: [template_compute](./00000000_template_compute.md).
 2. Submit a pull request -- this makes it easy for others to add written
    comments.
 3. "Socialize" the design with relevant stakeholders. Typically, there is a
