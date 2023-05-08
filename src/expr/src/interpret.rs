@@ -351,7 +351,7 @@ impl<'a> ResultSpec<'a> {
     ///
     /// If we actually stored a set of every possible value, this could by done by passing
     /// each datum to the function one-by-one and unioning the resulting sets. This is possible
-    /// when our values set is empty or     contains a single datum, but when it contains a range,
+    /// when our values set is empty or contains a single datum, but when it contains a range,
     /// we need a little metadata about the function to be able to infer a useful result.
     fn flat_map(
         self,
