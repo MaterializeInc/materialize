@@ -1261,6 +1261,7 @@ where
                     .open_data_handles(
                         format!("controller data {}", id).as_str(),
                         metadata.data_shard,
+                        description.since.as_ref(),
                         metadata.relation_desc.clone(),
                         persist_client,
                     )
@@ -2373,12 +2374,16 @@ where
 
     /// Opens a write and critical since handles for the given `shard`.
     ///
-    /// This will `halt!` the process if we cannot successfully acquire a
-    /// critical handle with our current epoch.
+    /// `since` is an optional `since` that the read handle will be forwarded to if it is less than
+    /// its current since.
+    ///
+    /// This will `halt!` the process if we cannot successfully acquire a critical handle with our
+    /// current epoch.
     async fn open_data_handles(
         &self,
         purpose: &str,
         shard: ShardId,
+        since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
     ) -> (
@@ -2404,7 +2409,11 @@ where
                 .await
                 .expect("invalid persist usage");
 
-            let since = handle.since().clone();
+            // Take the join of the handle's since and the provided `since`; this lets materialized
+            // views express the since at which their read handles "start."
+            let since = handle
+                .since()
+                .join(since.unwrap_or(&Antichain::from_elem(T::minimum())));
 
             let our_epoch = self.state.envd_epoch;
 
@@ -2774,6 +2783,7 @@ where
             let data_shard = all_current_metadata[&id].data_shard;
             c.collection_metadata.data_shard = data_shard;
 
+            let collection_desc = c.description.clone();
             let relation_desc = c.collection_metadata.relation_desc.clone();
 
             // This will halt! if any of the handles cannot be acquired
@@ -2783,6 +2793,7 @@ where
                 .open_data_handles(
                     format!("controller data for {id}").as_str(),
                     data_shard,
+                    collection_desc.since.as_ref(),
                     relation_desc,
                     &persist_client,
                 )
