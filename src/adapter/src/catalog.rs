@@ -5187,8 +5187,8 @@ impl Catalog {
                     let membership = RoleMembership::new();
                     let serialized_role = SerializedRole {
                         name: name.clone(),
-                        attributes: Some(attributes.clone()),
-                        membership: Some(membership.clone()),
+                        attributes: attributes.clone(),
+                        membership: membership.clone(),
                     };
                     let id = tx.insert_user_role(serialized_role)?;
                     state.add_to_audit_log(
@@ -7070,18 +7070,16 @@ impl From<ReplicaLocation> for SerializedReplicaLocation {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SerializedRole {
     pub name: String,
-    // TODO(jkosh44): Remove Option when stash consolidation bug is fixed
-    pub attributes: Option<RoleAttributes>,
-    // TODO(jkosh44): Remove Option in v0.49.0
-    pub membership: Option<RoleMembership>,
+    pub attributes: RoleAttributes,
+    pub membership: RoleMembership,
 }
 
 impl From<Role> for SerializedRole {
     fn from(role: Role) -> Self {
         SerializedRole {
             name: role.name,
-            attributes: Some(role.attributes),
-            membership: Some(role.membership),
+            attributes: role.attributes,
+            membership: role.membership,
         }
     }
 }
@@ -7090,8 +7088,8 @@ impl From<&BuiltinRole> for SerializedRole {
     fn from(role: &BuiltinRole) -> Self {
         SerializedRole {
             name: role.name.to_string(),
-            attributes: Some(role.attributes.clone()),
-            membership: Some(RoleMembership::new()),
+            attributes: role.attributes.clone(),
+            membership: RoleMembership::new(),
         }
     }
 }
