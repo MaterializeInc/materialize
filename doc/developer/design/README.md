@@ -51,7 +51,7 @@ Some specific times when you should write a design document:
 2. If the change will take more than a week to implement or will proceed in
    phases that need clearly delimited scope.
 3. If there are multiple alternative implementations and no clear best option.
-4. If it's going to involve multiple people coordinating changes.
+4. If it's going to involve multiple people and/or teams coordinating changes.
 5. If it changes a customer-facing/public API, or a major private API (for
    example, the API for implementing new sinks).
 
@@ -66,23 +66,26 @@ thinking. Err on the side of writing a design document.
    `doc/developer/design` and fill it in.
 2. Submit a pull request -- this makes it easy for others to add written
    comments.
-3. Announce that the design doc is ready for review in #eng-announce.
-
-### Discussion
-
-4. Address comments, discuss, and iterate on the document in the PR.
-5. Gather explicit approvals from relevant stakeholders. Typically, there is a
+3. "Socialize" the design with relevant stakeholders. Typically, there is a
    small set of people who have a vested interest in the area the design
-   touches. If it's not clear who that is, ask a TL, EM, or in #eng-general.
+   touches. If it's not clear who that is, ask your TL, EM, or in #eng-general.
+4. (Optional) Announce that the design doc is ready for review in #eng-announce,
+   if you think it's helpful to surface the design to a larger set of people.
+
+### Iteration
+
+5. Address comments, discuss, and iterate on the document in the PR.
+6. Gather explicit approvals from relevant stakeholders. This should be the set
+   of people that you identified at step 3. or folks that noticed your design
+   document from the (optional) announcement.
 
 ### Finalization
 
-6. Announce the intent to close commenting on the design document in
-   #eng-announce. Tag people that should be aware of the design and ask for
-   their feedback.
-7. Allow two business days for any final comments.
-8. If no comments have raised new issues or if no one has asked for additional
-   time to review, merge the design document.
+7. If no comments have raised new issues or if no one has asked for additional
+   time to review, merge the design document. Do _not_ assume _silent
+   consensus_: if you did not hear back from important stakeholders, don't take
+   this as approval. Make sure the relevant people have in fact seen your design
+   and had a chance to object or propose changes.
 
 ## How should you push back on aspects of a design document?
 
