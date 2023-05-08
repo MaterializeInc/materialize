@@ -389,39 +389,38 @@ impl fmt::Display for Attribute {
 
 fn attribute_err(unheld_attributes: Vec<Attribute>, plan: &Plan) -> Result<(), UnauthorizedError> {
     if unheld_attributes.is_empty() {
-        return Ok(())
+        return Ok(());
     }
 
-
-        let mut action = plan.name().to_string();
-        // If the plan is `CREATE ROLE` or `ALTER ROLE` then add some more details about the
-        // attributes being granted.
-        let attributes: Vec<_> = if let Plan::CreateRole(CreateRolePlan { attributes, .. }) = plan {
-            Attribute::from_role_attributes(attributes)
-                .into_iter()
-                .filter(|attribute| unheld_attributes.contains(attribute))
-                .collect()
-        } else if let Plan::AlterRole(AlterRolePlan { attributes, .. }) = plan {
-            Attribute::from_planned_role_attributes(attributes)
-                .into_iter()
-                .filter(|attribute| unheld_attributes.contains(attribute))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        if !attributes.is_empty() {
-            action = format!(
-                "{} with attribute{} {}",
-                action,
-                if attributes.len() > 1 { "s" } else { "" },
-                attributes.iter().join(", ")
-            );
-        }
-
-        Err(UnauthorizedError::Attribute {
+    let mut action = plan.name().to_string();
+    // If the plan is `CREATE ROLE` or `ALTER ROLE` then add some more details about the
+    // attributes being granted.
+    let attributes: Vec<_> = if let Plan::CreateRole(CreateRolePlan { attributes, .. }) = plan {
+        Attribute::from_role_attributes(attributes)
+            .into_iter()
+            .filter(|attribute| unheld_attributes.contains(attribute))
+            .collect()
+    } else if let Plan::AlterRole(AlterRolePlan { attributes, .. }) = plan {
+        Attribute::from_planned_role_attributes(attributes)
+            .into_iter()
+            .filter(|attribute| unheld_attributes.contains(attribute))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if !attributes.is_empty() {
+        action = format!(
+            "{} with attribute{} {}",
             action,
-            attributes: unheld_attributes,
-        })
+            if attributes.len() > 1 { "s" } else { "" },
+            attributes.iter().join(", ")
+        );
+    }
+
+    Err(UnauthorizedError::Attribute {
+        action,
+        attributes: unheld_attributes,
+    })
 }
 
 /// Generates the ownership required to execute a given plan.
