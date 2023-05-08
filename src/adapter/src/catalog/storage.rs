@@ -523,6 +523,17 @@ async fn migrate(
                     let mut value = value.clone();
                     value.database_ns = None;
                     Some(value)
+                } else if value.database_id.is_some() && value.database_ns.is_none() {
+                    let mut value = value.clone();
+                    // There are no system databases so we can just assume user namespace.
+                    value.database_ns = Some(DatabaseNamespace::User);
+                    Some(value)
+                } else if value.database_id.is_none() && value.database_ns.is_some() {
+                    // I don't think that anything in the stash was misconfigured like this, but it
+                    // can't hurt to check.
+                    let mut value = value.clone();
+                    value.database_ns = None;
+                    Some(value)
                 } else {
                     None
                 }
