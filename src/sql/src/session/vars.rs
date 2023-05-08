@@ -97,6 +97,9 @@ pub enum VarError {
     /// The named parameter is unknown to the system.
     #[error("unrecognized configuration parameter {}", .0.quoted())]
     UnknownParameter(String),
+    /// The specified session parameter is read only unless in unsafe mode.
+    #[error("parameter {} can only be set in unsafe mode", .0.quoted())]
+    UnsafeParameter(&'static str),
 }
 
 impl VarError {
@@ -758,10 +761,10 @@ static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
     system_var_gate: None,
 };
 
-static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
-    name: UncasedStr::new("mock_audit_event_timestamp"),
+static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
+    name: UncasedStr::new("unsafe_mock_audit_event_timestamp"),
     value: &None,
-    description: "Mocked timestamp to use for audit events for testing purposes",
+    description: "UNSAFE: Mocked timestamp to use for audit events for testing purposes",
     internal: true,
     system_var_gate: None,
 };
@@ -1580,12 +1583,14 @@ impl SessionVars {
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {
+    allow_unsafe: bool,
     vars: BTreeMap<&'static UncasedStr, Box<dyn VarMut>>,
 }
 
 impl Clone for SystemVars {
     fn clone(&self) -> Self {
         SystemVars {
+            allow_unsafe: self.allow_unsafe,
             vars: self.vars.iter().map(|(k, v)| (*k, v.clone_var())).collect(),
         }
     }
@@ -1629,7 +1634,7 @@ impl Default for SystemVars {
             .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&METRICS_RETENTION)
-            .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
+            .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
             .with_var(&ENABLE_FORMAT_JSON)
@@ -1652,6 +1657,7 @@ impl Default for SystemVars {
 impl SystemVars {
     fn empty() -> Self {
         SystemVars {
+            allow_unsafe: false,
             vars: Default::default(),
         }
     }
@@ -1667,6 +1673,11 @@ impl SystemVars {
         );
 
         self.vars.insert(var.name, Box::new(SystemVar::new(var)));
+        self
+    }
+
+    pub fn set_unsafe(mut self, unsafe_allowed: bool) -> Self {
+        self.allow_unsafe = unsafe_allowed;
         self
     }
 
@@ -1767,7 +1778,13 @@ impl SystemVars {
         self.vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .and_then(|v| v.set(input))
+            .and_then(|v| {
+                if v.name().starts_with("unsafe") && !self.allow_unsafe {
+                    Err(VarError::UnsafeParameter(v.name()))
+                } else {
+                    v.set(input)
+                }
+            })
     }
 
     /// Set the default for this variable. This is the value this
@@ -1999,8 +2016,8 @@ impl SystemVars {
     }
 
     /// Returns the `mock_audit_event_timestamp` configuration parameter.
-    pub fn mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
-        *self.expect_value(&MOCK_AUDIT_EVENT_TIMESTAMP)
+    pub fn unsafe_mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
+        *self.expect_value(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
     }
 
     /// Returns the `enable_with_mutually_recursive` configuration parameter.
