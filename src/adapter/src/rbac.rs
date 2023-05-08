@@ -388,7 +388,11 @@ impl fmt::Display for Attribute {
 }
 
 fn attribute_err(unheld_attributes: Vec<Attribute>, plan: &Plan) -> Result<(), UnauthorizedError> {
-    if !unheld_attributes.is_empty() {
+    if unheld_attributes.is_empty() {
+        return Ok(())
+    }
+
+
         let mut action = plan.name().to_string();
         // If the plan is `CREATE ROLE` or `ALTER ROLE` then add some more details about the
         // attributes being granted.
@@ -418,9 +422,6 @@ fn attribute_err(unheld_attributes: Vec<Attribute>, plan: &Plan) -> Result<(), U
             action,
             attributes: unheld_attributes,
         })
-    } else {
-        Ok(())
-    }
 }
 
 /// Generates the ownership required to execute a given plan.
