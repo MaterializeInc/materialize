@@ -36,7 +36,7 @@ pub struct Config {
     /// Configuration for source and sink connection.
     pub connection_context: ConnectionContext,
     /// Other configuration for storage instances.
-    pub instance_context: StorageInstanceContext,
+    pub instance_context: StorageInstanceContext<crate::render::UpsertAdditionalContext>,
 
     /// Metrics for sources.
     pub source_metrics: SourceBaseMetrics,
@@ -58,7 +58,7 @@ pub fn serve(
     generic_config: mz_cluster::server::ClusterConfig,
     now: NowFn,
     connection_context: ConnectionContext,
-    instance_context: StorageInstanceContext,
+    instance_context: StorageInstanceContext<crate::render::UpsertAdditionalContext>,
 ) -> Result<
     (
         TimelyContainerRef<StorageCommand, StorageResponse, Thread>,

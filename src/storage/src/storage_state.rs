@@ -150,7 +150,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         sink_metrics: SinkBaseMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
-        instance_context: StorageInstanceContext,
+        instance_context: StorageInstanceContext<crate::render::UpsertAdditionalContext>,
         persist_clients: Arc<PersistClientCache>,
     ) -> Self {
         // It is very important that we only create the internal control
@@ -265,7 +265,7 @@ pub struct StorageState {
     /// Configuration for source and sink connections.
     pub connection_context: ConnectionContext,
     /// Other configuration for sources and sinks.
-    pub instance_context: StorageInstanceContext,
+    pub instance_context: StorageInstanceContext<crate::render::UpsertAdditionalContext>,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     pub persist_clients: Arc<PersistClientCache>,

@@ -41,6 +41,8 @@ use self::types::{InMemoryHashMap, StatsState, UpsertState};
 mod rocksdb;
 mod types;
 
+pub use self::rocksdb::UpsertAdditionalContext;
+
 pub type UpsertValue = Result<Row, UpsertError>;
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -201,7 +203,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,
     source_config: crate::source::RawSourceCreationConfig,
-    instance_context: &StorageInstanceContext,
+    instance_context: &StorageInstanceContext<UpsertAdditionalContext>,
 ) -> Collection<G, Result<Row, DataflowError>, Diff>
 where
     G::Timestamp: TotalOrder,
@@ -225,6 +227,9 @@ where
             .expect("instance directory to be there if rendering an ON DISK source")
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
+
+        let env = instance_context.additional.env.clone();
+
         upsert_inner(
             input,
             upsert_envelope.key_indices,
@@ -237,7 +242,7 @@ where
                 rocksdb::RocksDB::new(
                     mz_rocksdb::RocksDBInstance::new(
                         &rocksdb_dir,
-                        mz_rocksdb::Options::new_with_defaults().unwrap(),
+                        mz_rocksdb::Options::defaults_with_env(env),
                         rocksdb_metrics,
                     )
                     .await

@@ -303,7 +303,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.aws_external_id,
             secrets_reader,
         ),
-        StorageInstanceContext::new(args.scratch_directory).await?,
+        StorageInstanceContext::new(
+            args.scratch_directory,
+            mz_storage::render::UpsertAdditionalContext::new()?,
+        )
+        .await?,
     )?;
     info!(
         "listening for storage controller connections on {}",

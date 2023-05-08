@@ -347,7 +347,7 @@ where
 {
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig, envd_epoch: NonZeroI64) -> Self {
-        let instance_context = StorageInstanceContext::new(config.scratch_directory)
+        let instance_context = StorageInstanceContext::new(config.scratch_directory, ())
             .await
             .expect("failed to create instance context");
         let storage_controller = mz_storage_client::controller::Controller::new(
