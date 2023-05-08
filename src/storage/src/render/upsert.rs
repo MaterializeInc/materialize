@@ -234,6 +234,7 @@ where
             previous,
             previous_token,
             upsert_metrics,
+            source_config,
             move || async move {
                 rocksdb::RocksDB::new(
                     mz_rocksdb::RocksDBInstance::new(
@@ -259,6 +260,7 @@ where
             previous,
             previous_token,
             upsert_metrics,
+            source_config,
             || async { InMemoryHashMap::default() },
         )
     }
@@ -271,6 +273,7 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,
     upsert_metrics: UpsertMetrics,
+    source_config: crate::source::RawSourceCreationConfig,
     state: F,
 ) -> Collection<G, Result<Row, DataflowError>, Diff>
 where
