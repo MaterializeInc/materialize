@@ -10,3 +10,12 @@ ci-regexp: failed to listen on address.*Address already in use (os error 98)
 ci-regexp: unexpected peek multiplicity
 ci-regexp: Expected identifier, found operator
 ```
+
+Additionally you can use the `ci-apply-to` to limit the `ci-regexp` to a specific buildkite test case:
+
+Examples:
+
+```
+ci-apply-to: SQLsmith
+ci-apply-to: sqlsmith explain
+```
