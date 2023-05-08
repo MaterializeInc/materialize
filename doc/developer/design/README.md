@@ -28,9 +28,10 @@ critical concerns or open questions are addressed, and determining at what point
 a good decision has been reached. Not every design doc will lead to complete
 consensus.
 
-Examples:
-* [Cluster SQL API](https://github.com/MaterializeInc/materialize/pull/10680)
-* [`WITH MUTUALLY RECURSIVE`](https://github.com/MaterializeInc/materialize/pull/16445)
+Examples (some "in spirit", because the design doc template changed over time):
+* [External Introspection](./20230227_external_introspection.md)
+* [`WITH MUTUALLY RECURSIVE`](./20221204_with_mutually_recursive.md)
+* [Postgres Sources](./20210412_postgres_sources.md)
 
 ## Goals
 
