@@ -126,8 +126,8 @@ Some key principles to highlight are:
 We adhere to standards for our system catalog relations (tables, views), which includes both the stable `mz_catalog` relations and the unstable `mz_internal` relations.
 
 Modeling standards:
-* Normalize the schema. If you’re adding a table that adds detail to rows in an existing table, refer to those rows by ID, and don’t duplicate columns that already exist. E.g., the `mz_kafka_sources` table does not include the name of the source, since that information is available in the `mz_sources` table.
-  * Remember, Materialize is good at joins! We can always add syntax sugar via a `SHOW` command to spare users from typing out the joins for common queries.
+* Normalize the schema for tables. If you’re adding a table that adds detail to rows in an existing table, refer to those rows by ID, and don’t duplicate columns that already exist. E.g., the `mz_kafka_sources` table does not include the name of the source, since that information is available in the `mz_sources` table.
+  * Remember, Materialize is good at joins! We can always add syntax sugar via a `SHOW` command or a view to spare users from typing out the joins for common queries.
 
 Naming standards:
 * Catalog relation names should be consistent with the user-facing naming and messaging in our docs. The names should not reference internal-only concepts when possible.

@@ -241,6 +241,10 @@ mz_cluster_replica_utilization
 VIEW
 materialize
 mz_internal
+mz_cluster_replica_history
+VIEW
+materialize
+mz_internal
 mz_compute_delays_histogram
 VIEW
 materialize

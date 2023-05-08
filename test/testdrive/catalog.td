@@ -556,6 +556,7 @@ mz_arrangement_sharing
 mz_arrangement_sharing_per_worker
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
+mz_cluster_replica_history
 mz_cluster_replica_utilization
 mz_compute_delays_histogram
 mz_compute_delays_histogram_per_worker

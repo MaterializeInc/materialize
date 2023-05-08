@@ -158,3 +158,12 @@ query B
 SELECT occurred_at::text = '1970-01-01 00:00:00.666+00' FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
 false
+
+query TTBBBT
+SELECT replica_id, size, created_at IS NOT NULL, dropped_at IS NOT NULL, created_at < dropped_at, credits_per_hour FROM mz_internal.mz_cluster_replica_history ORDER BY created_at
+----
+1  1  true  false  NULL  1
+4  1  true  true  true  1
+5  1  true  true  true  1
+6  2  true  true  true  1
+7  1  true  false  NULL  1
