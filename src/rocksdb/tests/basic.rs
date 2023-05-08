@@ -74,7 +74,7 @@
 // END LINT CONFIG
 
 use mz_ore::metrics::HistogramVecExt;
-use mz_rocksdb::{Options, RocksDBInstance, RocksDBMetrics};
+use mz_rocksdb::{Options, RocksDBInstance, RocksDBMetrics, RocksDBTuningParameters};
 use prometheus::{HistogramOpts, HistogramVec};
 
 fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
@@ -97,6 +97,7 @@ async fn basic() -> Result<(), anyhow::Error> {
     let mut instance = RocksDBInstance::<String, String>::new(
         t.path(),
         Options::defaults_with_env(rocksdb::Env::new()?),
+        RocksDBTuningParameters::reasonable_defaults(),
         metrics_for_tests()?,
     )
     .await?;

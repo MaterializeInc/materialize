@@ -31,6 +31,9 @@ pub struct DataflowParameters {
     pub enable_multi_worker_storage_persist_sink: bool,
     /// Configured PG replication timeouts,
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+    /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
+    /// `None` means the defaults.
+    pub upsert_rocksdb_tuning_config: Option<mz_rocksdb::RocksDBTuningParameters>,
 }
 
 /// Internal commands that can be sent by individual operators/workers that will

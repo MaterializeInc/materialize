@@ -204,6 +204,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     previous_token: Option<Rc<dyn Any>>,
     source_config: crate::source::RawSourceCreationConfig,
     instance_context: &StorageInstanceContext<UpsertAdditionalContext>,
+    dataflow_paramters: &crate::internal_control::DataflowParameters,
 ) -> Collection<G, Result<Row, DataflowError>, Diff>
 where
     G::Timestamp: TotalOrder,
@@ -215,7 +216,14 @@ where
     );
 
     if upsert_envelope.disk {
+        let tuning = dataflow_paramters
+            .upsert_rocksdb_tuning_config
+            .as_ref()
+            .cloned()
+            .unwrap_or(mz_rocksdb::RocksDBTuningParameters::reasonable_defaults());
+
         tracing::info!(
+            ?tuning,
             "timely-{} rendering {} with rocksdb-backed upsert state",
             source_config.worker_id,
             source_config.id
@@ -243,6 +251,7 @@ where
                     mz_rocksdb::RocksDBInstance::new(
                         &rocksdb_dir,
                         mz_rocksdb::Options::defaults_with_env(env),
+                        tuning,
                         rocksdb_metrics,
                     )
                     .await

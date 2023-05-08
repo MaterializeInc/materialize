@@ -98,6 +98,8 @@ use mz_ore::metrics::DeleteOnDropHistogram;
 
 mod tuning;
 
+pub use tuning::RocksDBTuningParameters;
+
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -162,7 +164,7 @@ impl Options {
         }
     }
 
-    fn as_rocksdb_options(&self) -> RocksDBOptions {
+    fn as_rocksdb_options(&self, tuning_config: &RocksDBTuningParameters) -> RocksDBOptions {
         // Defaults + `create_if_missing`
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
@@ -170,8 +172,7 @@ impl Options {
         // Set the env first so tuning applies to the shared `Env`.
         options.set_env(&self.env);
 
-        let tuning_params = tuning::RocksDBTuningParameters::reasonable_defaults();
-        tuning_params.apply_to_options(&mut options);
+        tuning_config.apply_to_options(&mut options);
 
         options
     }
@@ -237,6 +238,7 @@ where
     pub async fn new<M: Deref<Target = RocksDBMetrics> + Send + 'static>(
         instance_path: &Path,
         options: Options,
+        tuning_config: RocksDBTuningParameters,
         metrics: M,
     ) -> Result<Self, Error> {
         if options.cleanup_on_new && instance_path.exists() {
@@ -262,7 +264,14 @@ where
 
         let (creation_error_tx, creation_error_rx) = oneshot::channel();
         std::thread::spawn(move || {
-            rocksdb_core_loop(options, instance_path, rx, metrics, creation_error_tx)
+            rocksdb_core_loop(
+                options,
+                tuning_config,
+                instance_path,
+                rx,
+                metrics,
+                creation_error_tx,
+            )
         });
 
         if let Ok(creation_error) = creation_error_rx.await {
@@ -384,6 +393,7 @@ where
 // TODO(guswynn): retry retryable rocksdb errors.
 fn rocksdb_core_loop<K, V, M>(
     options: Options,
+    tuning_config: RocksDBTuningParameters,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     metrics: M,
@@ -393,7 +403,7 @@ fn rocksdb_core_loop<K, V, M>(
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
 {
-    let db: DB = match DB::open(&options.as_rocksdb_options(), &instance_path) {
+    let db: DB = match DB::open(&options.as_rocksdb_options(&tuning_config), &instance_path) {
         Ok(db) => {
             drop(creation_error_tx);
             db
