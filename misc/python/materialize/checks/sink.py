@@ -96,6 +96,11 @@ class SinkUpsert(Check):
         return Testdrive(
             dedent(
                 """
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT SELECT ON sink_source_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
                 > SELECT * FROM sink_source_view;
                 I2 B 1000
                 I3 C 1000
