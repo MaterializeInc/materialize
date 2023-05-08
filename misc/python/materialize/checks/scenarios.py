@@ -12,6 +12,7 @@ from typing import List, Optional, Type
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
+from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
 from materialize.checks.executors import Executor
 from materialize.checks.mzcompose_actions import ConfigureMz
 from materialize.checks.mzcompose_actions import (
@@ -73,7 +74,9 @@ class Scenario:
             action.execute(self.executor)
             action.join(self.executor)
             # Implicitly call configure to raise version-dependent limits
-            if isinstance(action, StartMz):
+            if isinstance(action, StartMz) or isinstance(
+                action, ReplaceEnvironmentdStatefulSet
+            ):
                 ConfigureMz(self).execute(self.executor)
                 ConfigureMz(self).join(self.executor)
 

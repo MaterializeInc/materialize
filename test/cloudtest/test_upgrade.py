@@ -14,38 +14,14 @@ import pytest
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
-from materialize.checks.executors import CloudtestExecutor, Executor
+from materialize.checks.cloudtest_actions import ReplaceEnvironmentdStatefulSet
+from materialize.checks.executors import CloudtestExecutor
 from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.application import MaterializeApplication
-from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
 from materialize.cloudtest.wait import wait
 from materialize.util import MzVersion, released_materialize_versions
 
 LAST_RELEASED_VERSION = str(released_materialize_versions()[0])
-
-
-class ReplaceEnvironmentdStatefulSet(Action):
-    """Change the image tag of the environmentd stateful set, re-create the definition and replace the existing one."""
-
-    def __init__(self, new_tag: Optional[str] = None) -> None:
-        self.new_tag = new_tag
-
-    def execute(self, e: Executor) -> None:
-        mz = e.cloudtest_application()
-        stateful_set = [
-            resource
-            for resource in mz.resources
-            if type(resource) == EnvironmentdStatefulSet
-        ]
-        assert len(stateful_set) == 1
-        stateful_set = stateful_set[0]
-
-        stateful_set.tag = self.new_tag
-        stateful_set.replace()
-
-    def join(self, e: Executor) -> None:
-        # execute is blocking already
-        pass
 
 
 class CloudtestUpgrade(Scenario):

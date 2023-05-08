@@ -98,7 +98,7 @@ class ConfigureMz(MzcomposeAction):
         if e.current_mz_version >= MzVersion.parse("0.51.0-dev"):
             input += "ALTER SYSTEM SET enable_ld_rbac_checks TO true;\n"
 
-        if e.current_mz_version >= MzVersion.parse("0.53.0-dev"):
+        if e.current_mz_version >= MzVersion.parse("0.52.0-dev"):
             # Since we already test with RBAC enabled, we have to give materialize
             # user the relevant privileges so the existing tests keep working.
             input += "GRANT CREATE ON DATABASE materialize TO materialize;\n"
