@@ -541,6 +541,20 @@ const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+static DEFAULT_UPSERT_ROCKSDB_TUNING_CONFIG: Lazy<String> = Lazy::new(|| "{}".to_string());
+/// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
+static UPSERT_ROCKSDB_TUNING_CONFIG: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("upsert_rocksdb_tuning_config"),
+    value: &*DEFAULT_UPSERT_ROCKSDB_TUNING_CONFIG,
+    description: "Tuning configuration for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Deserialized from json into a \
+                  `mz_rocksdb::tuning::RocksDBTuningParameters`. Default is \
+                  configuring by using the string: `{}`. Only takes effect \
+                  on source restart (Materialize).",
+    internal: true,
+    safe: true,
+});
+
 /// Controls the connect_timeout setting when connecting to PG via replication.
 const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_connect_timeout"),
@@ -1573,6 +1587,7 @@ impl Default for SystemVars {
             .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
             .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
             .with_var(&ENABLE_UPSERT_SOURCE_DISK)
+            .with_var(&UPSERT_ROCKSDB_TUNING_CONFIG)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
@@ -1851,6 +1866,11 @@ impl SystemVars {
     /// Returns the `enable_upsert_source_disk` configuration parameter.
     pub fn enable_upsert_source_disk(&self) -> bool {
         *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
+    }
+
+    /// Returns the `enable_upsert_source_disk` configuration parameter.
+    pub fn upsert_rocksdb_tuning_config(&self) -> &str {
+        &*self.expect_value(&UPSERT_ROCKSDB_TUNING_CONFIG)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
@@ -2706,6 +2726,20 @@ impl Value for str {
     }
 }
 
+// The same as the above impl, but works in `SystemVar`s.
+impl Value for String {
+    const TYPE_NAME: &'static str = "string";
+
+    fn parse(input: VarInput) -> Result<String, ()> {
+        let s = extract_single_value(input)?;
+        Ok(s.to_owned())
+    }
+
+    fn format(&self) -> String {
+        self.to_owned()
+    }
+}
+
 impl Value for Vec<String> {
     const TYPE_NAME: &'static str = "string list";
 
@@ -3031,6 +3065,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+        || name == UPSERT_ROCKSDB_TUNING_CONFIG.name()
         || is_persist_config_var(name)
 }
 

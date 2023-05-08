@@ -43,6 +43,7 @@ use mz_controller::clusters::{
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::soft_assert;
@@ -6862,6 +6863,21 @@ impl Catalog {
             keep_n_source_status_history_entries: self
                 .system_config()
                 .keep_n_source_status_history_entries(),
+            upsert_rocksdb_tuning_config: Some({
+                let config_str = self.system_config().upsert_rocksdb_tuning_config();
+                match serde_json::from_str(config_str) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to deserialize {} into a `RocksDBTuningParameters`, \
+                            failing back to reasonable defaults: {}",
+                            config_str,
+                            e.display_with_causes()
+                        );
+                        mz_rocksdb::RocksDBTuningParameters::reasonable_defaults()
+                    }
+                }
+            }),
         }
     }
 

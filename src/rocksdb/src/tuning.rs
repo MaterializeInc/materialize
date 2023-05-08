@@ -36,7 +36,7 @@
 use rocksdb::{DBCompactionStyle, DBCompressionType};
 
 /// A set of parameters to tune RocksDB.
-#[derive(serde::Deserialize, PartialEq, Eq, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
 pub struct RocksDBTuningParameters {
     /// RocksDB has 2 primary styles of compaction:
     /// - The default, usually referred to as "level" compaction
@@ -174,7 +174,7 @@ impl RocksDBTuningParameters {
 
 /// The 2 primary compaction styles in RocksDB`. See `RocksDBTuningParameters::compaction_style`
 /// for more information.
-#[derive(serde::Deserialize, Default, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CompactionStyle {
     #[serde(rename = "level")]
     #[default]
@@ -195,7 +195,7 @@ impl From<CompactionStyle> for DBCompactionStyle {
 
 /// Mz-supported compression types in RocksDB`. See `RocksDBTuningParameters::compression_type`
 /// for more information.
-#[derive(serde::Deserialize, Default, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CompressionType {
     #[serde(rename = "zstd")]
     #[default]
