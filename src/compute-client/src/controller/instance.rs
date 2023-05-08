@@ -739,6 +739,7 @@ where
 
     /// Cancels existing peek requests.
     pub fn cancel_peeks(&mut self, uuids: BTreeSet<Uuid>) {
+        tracing::info!("cancel_peeks({uuids:?})");
         // Enqueue the response to the cancelation.
         for uuid in &uuids {
             let otel_ctx = self

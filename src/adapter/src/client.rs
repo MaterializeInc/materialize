@@ -565,6 +565,7 @@ impl SessionClient {
 
 impl Drop for SessionClient {
     fn drop(&mut self) {
+        tracing::info!("drop in sessionclient {}", std::backtrace::Backtrace::force_capture());
         // We may not have a session if this client was dropped while awaiting
         // a response. In this case, it is the coordinator's responsibility to
         // terminate the session.
@@ -573,7 +574,11 @@ impl Drop for SessionClient {
             // prematurely terminated, for example due to a timeout.
             if let Some(inner) = &self.inner {
                 inner.inner.send(Command::Terminate { session, tx: None })
+            } else {
+                tracing::info!("no inner!");
             }
+        } else {
+            tracing::info!("no session");
         }
     }
 }

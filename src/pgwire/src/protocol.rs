@@ -289,7 +289,7 @@ where
     };
 
     select! {
-        r = machine.run() => r,
+        r = machine.run() => {tracing::info!("run returned {r:?}"); r },
         _ = is_expired => {
             conn
                 .send(ErrorResponse::fatal(SqlState::INVALID_AUTHORIZATION_SPECIFICATION, "authentication expired"))
@@ -523,13 +523,13 @@ where
             Some(FrontendMessage::ClosePortal { name }) => self.close_portal(name).await?,
             Some(FrontendMessage::Flush) => self.flush().await?,
             Some(FrontendMessage::Sync) => self.sync().await?,
-            Some(FrontendMessage::Terminate) => State::Done,
+            Some(FrontendMessage::Terminate) => { tracing::info!("termiante"); State::Done },
 
             Some(FrontendMessage::CopyData(_))
             | Some(FrontendMessage::CopyDone)
             | Some(FrontendMessage::CopyFail(_))
             | Some(FrontendMessage::Password { .. }) => State::Drain,
-            None => State::Done,
+            None => { tracing::info!("no frontend msg"); State::Done },
         };
 
         Ok(next_state)
@@ -543,7 +543,7 @@ where
         }
         match message {
             Some(FrontendMessage::Sync) => self.sync().await,
-            None => Ok(State::Done),
+            None => { tracing::info!("advacnce drain no more"); Ok(State::Done) },
             _ => Ok(State::Drain),
         }
     }
@@ -658,7 +658,7 @@ where
             match self.one_query(stmt).await? {
                 State::Ready => (),
                 State::Drain => break,
-                State::Done => return Ok(State::Done),
+                State::Done => { tracing::info!("implicit txn?"); return Ok(State::Done) },
             }
         }
 
@@ -1206,7 +1206,7 @@ where
         async move {
             loop {
                 tokio::select! {
-                    err = self.conn.wait_closed() => return Err(err),
+                    err = self.conn.wait_closed() => {tracing::info!("wait closed while converting to stream {}", err); return Err(err) },
                     rows = &mut rows => {
                         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                         tx.send(rows).expect("send must succeed");
@@ -1759,6 +1759,7 @@ where
                         .await
                 }
                 _ => {
+                    tracing::info!("done in copy?!");
                     next_state = State::Done;
                     break;
                 }
@@ -1842,6 +1843,7 @@ where
             }
         };
         if is_fatal {
+            tracing::info!("is fatal!!");
             Ok(State::Done)
         } else {
             Ok(State::Drain)

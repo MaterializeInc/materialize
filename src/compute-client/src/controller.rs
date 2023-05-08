@@ -553,6 +553,7 @@ where
         // Process pending ready responses.
         for instance in self.compute.instances.values_mut() {
             if let Some(response) = instance.ready_responses.pop_front() {
+                tracing::info!("client sending {response:?}");
                 return Some(response);
             }
         }
