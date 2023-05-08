@@ -9,14 +9,6 @@ historical documentation for why a thing was done a certain way. The idea is to
 go slower at the beginning and get everything out on the table so we can go fast
 when implementing.
 
-Design docs should contain enough information that a coworker could both justify
-and do the implementation rather than the author: this is a step along the path
-of transferring the work that makes it more likely "we", collectively,
-understand what we are looking at. It should record enough information that a
-coworker could review, diagnose, and debug the implementation of the design. A
-great design would have this property, that it acts as a map for understanding
-and fixing the feature, as well as implementing it.
-
 Design docs go hand in hand with a discussion meeting. Asynchronous, text-only
 communication tends to drag out the process and doesn't get the same kind of
 broad feedback as having a short, in-person meeting.
@@ -40,6 +32,34 @@ Examples:
 * [Cluster SQL API](https://github.com/MaterializeInc/materialize/pull/10680)
 * [`WITH MUTUALLY RECURSIVE`](https://github.com/MaterializeInc/materialize/pull/16445)
 
+## Goals
+
+Summary of the goals of a design document:
+
+ - Record context and assumptions.
+ - Achieve a (reasonable) level of consensus around a design.
+ - Record decisions.
+ - Document a chosen design and lay out _some_ of the technical details: this
+   is sufficiently vague and requires some _intuition_ from the writer. This
+   point depends on the target audience and the nature of the design/change
+   that is being proposed.
+
+## Non-Goals
+
+These are not explicitly required for a good design document. You should,
+however, use your own judgement to determine what is and isn't required for
+your specific case.
+
+ - Allow a drive-by commenter without any context to fully understand the
+   design: the intention is that a group of people with common context can come
+   together, understand the design and come to a decision. Some context might
+   be gathered from previous design documents, from reference documentation, or
+   from looking at the code.
+ - Provide a fully spec'ed reference implementation: depending on the topic, it
+   can be very helpful to prepare a prototype. Both for validating the design
+   and for presenting it to others. However, it is not always a required part
+   of the design.
+
 ## When should you make a design document?
 
 Design docs should be written for all changes where an implementation does not
@@ -47,13 +67,18 @@ immediately follow from the problem.
 
 Some specific times when you should write a design document:
 
+Definitely write a design document:
+
+1. If it's going to involve multiple people and/or teams coordinating changes.
+2. If there are multiple alternative implementations and no clear best option.
+3. If it changes a customer-facing/public API, or a major private API (for
+   example, the API for implementing new sinks).
+
+Consider writing a design document:
+
 1. If the change is large/cross-cutting, e.g., will be spread over multiple PRs.
 2. If the change will take more than a week to implement or will proceed in
    phases that need clearly delimited scope.
-3. If there are multiple alternative implementations and no clear best option.
-4. If it's going to involve multiple people and/or teams coordinating changes.
-5. If it changes a customer-facing/public API, or a major private API (for
-   example, the API for implementing new sinks).
 
 Many smaller changes do still benefit from a quick design doc to clarify
 thinking. Err on the side of writing a design document.
