@@ -44,7 +44,7 @@ use mz_controller::clusters::ClusterId;
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::adt::mz_acl_item::AclMode;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
@@ -103,6 +103,7 @@ pub enum Plan {
     DiscardTemp,
     DiscardAll,
     DropObjects(DropObjectsPlan),
+    DropOwned(DropOwnedPlan),
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
@@ -195,6 +196,7 @@ impl Plan {
             StatementKind::Delete => vec![PlanKind::ReadThenWrite],
             StatementKind::Discard => vec![PlanKind::DiscardAll, PlanKind::DiscardTemp],
             StatementKind::DropObjects => vec![PlanKind::DropObjects],
+            StatementKind::DropOwned => vec![PlanKind::DropOwned],
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::Explain => vec![PlanKind::Explain],
             StatementKind::Fetch => vec![PlanKind::Fetch],
@@ -259,6 +261,7 @@ impl Plan {
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
             },
+            Plan::DropOwned(_) => "drop owned",
             Plan::EmptyQuery => "do nothing",
             Plan::ShowAllVariables => "show all variables",
             Plan::ShowCreate(_) => "show create",
@@ -579,6 +582,16 @@ pub struct DropObjectsPlan {
     /// The type of object that was dropped explicitly in the DROP statement. `ids` may contain
     /// objects of different types due to CASCADE.
     pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct DropOwnedPlan {
+    /// The role IDs that own the objects.
+    pub role_ids: Vec<RoleId>,
+    /// All object IDs to drop.
+    pub drop_ids: Vec<ObjectId>,
+    /// The privileges to revoke.
+    pub revokes: Vec<(ObjectId, MzAclItem)>,
 }
 
 #[derive(Debug)]

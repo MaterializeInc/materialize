@@ -69,3 +69,4 @@ DROP SCHEMA IF EXISTS my_schema;
 
 - [`SHOW SCHEMAS`](../show-schemas)
 - [`CREATE SCHEMA`](../create-schema)
+- [DROP OWNED](../drop-owned)

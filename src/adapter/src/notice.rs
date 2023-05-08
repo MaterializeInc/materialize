@@ -93,6 +93,9 @@ pub enum AdapterNotice {
     AlterIndexOwner {
         name: String,
     },
+    CannotRevoke {
+        name: String,
+    },
 }
 
 impl AdapterNotice {
@@ -236,6 +239,9 @@ impl fmt::Display for AdapterNotice {
             ),
             AdapterNotice::AlterIndexOwner { name } => {
                 write!(f, "cannot change owner of {}", name.quoted())
+            }
+            AdapterNotice::CannotRevoke { name } => {
+                write!(f, "no privileges could be revoked for {}", name.quoted())
             }
         }
     }

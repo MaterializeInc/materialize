@@ -38,7 +38,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
@@ -56,11 +56,11 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan, GrantRolePlan,
-    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
-    QueryWhen, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
-    SubscribePlan, VariableValue, View,
+    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan,
+    GrantRolePlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig,
+    PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan,
+    RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    SubscribeFrom, SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
@@ -114,6 +114,12 @@ macro_rules! return_if_err {
 }
 
 pub(super) use return_if_err;
+
+struct DropOps {
+    ops: Vec<catalog::Op>,
+    dropped_active_db: bool,
+    dropped_active_cluster: bool,
+}
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1409,82 +1415,12 @@ impl Coordinator {
         session: &mut Session,
         plan: DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = Vec::new();
-        let mut dropped_active_db = false;
-        let mut dropped_active_cluster = false;
+        let DropOps {
+            ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        } = self.sequence_drop_common(session, plan.drop_ids)?;
 
-        let mut dropped_roles: BTreeMap<_, _> = plan
-            .drop_ids
-            .iter()
-            .filter_map(|id| match id {
-                ObjectId::Role(role_id) => Some(role_id),
-                _ => None,
-            })
-            .map(|id| {
-                let name = self.catalog().get_role(id).name();
-                (*id, name)
-            })
-            .collect();
-        for role_id in dropped_roles.keys() {
-            self.catalog().ensure_not_reserved_role(role_id)?;
-        }
-        self.validate_dropped_role_ownership(&dropped_roles)?;
-        // If any role is a member of a dropped role, then we must revoke that membership.
-        let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
-        for role in self.catalog().user_roles() {
-            for dropped_role_id in
-                dropped_role_ids.intersection(&role.membership.map.keys().collect())
-            {
-                ops.push(catalog::Op::RevokeRole {
-                    role_id: **dropped_role_id,
-                    member_id: role.id(),
-                    grantor_id: *role
-                        .membership
-                        .map
-                        .get(*dropped_role_id)
-                        .expect("included in keys above"),
-                })
-            }
-        }
-
-        for id in &plan.drop_ids {
-            match id {
-                ObjectId::Database(id) => {
-                    let name = self.catalog().get_database(id).name();
-                    if name == session.vars().database() {
-                        dropped_active_db = true;
-                    }
-                }
-                ObjectId::Cluster(id) => {
-                    if let Some(active_id) = self
-                        .catalog()
-                        .active_cluster(session)
-                        .ok()
-                        .map(|cluster| cluster.id())
-                    {
-                        if id == &active_id {
-                            dropped_active_cluster = true;
-                        }
-                    }
-                }
-                ObjectId::Role(id) => {
-                    let role = self.catalog().get_role(id);
-                    let name = role.name();
-                    dropped_roles.insert(*id, name);
-                    // We must revoke all role memberships that the dropped roles belongs to.
-                    for (group_id, grantor_id) in &role.membership.map {
-                        ops.push(catalog::Op::RevokeRole {
-                            role_id: *group_id,
-                            member_id: *id,
-                            grantor_id: *grantor_id,
-                        });
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        ops.extend(plan.drop_ids.into_iter().map(catalog::Op::DropObject));
         self.catalog_transact(Some(session), ops).await?;
 
         fail::fail_point!("after_sequencer_drop_replica");
@@ -1507,7 +1443,7 @@ impl Coordinator {
         dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
         fn privilege_check(
-            privileges: &BTreeMap<RoleId, Vec<MzAclItem>>,
+            privileges: &PrivilegeMap,
             dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
             object_type: ObjectType,
@@ -1515,7 +1451,7 @@ impl Coordinator {
             catalog: &Catalog,
         ) {
             let object_type = object_type.to_string().to_lowercase();
-            for (_, privileges) in privileges {
+            for (_, privileges) in &privileges.0 {
                 for privilege in privileges {
                     if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
                         let grantor_name = catalog.get_role(&privilege.grantor).name();
@@ -1622,6 +1558,131 @@ impl Coordinator {
         } else {
             Ok(())
         }
+    }
+
+    pub(super) async fn sequence_drop_owned(
+        &mut self,
+        session: &mut Session,
+        plan: DropOwnedPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let mut ops: Vec<_> = plan
+            .revokes
+            .into_iter()
+            .map(|(object_id, privilege)| catalog::Op::UpdatePrivilege {
+                object_id,
+                privilege,
+                variant: UpdatePrivilegeVariant::Revoke,
+            })
+            .collect();
+
+        let DropOps {
+            ops: drop_ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        } = self.sequence_drop_common(session, plan.drop_ids)?;
+        ops.extend(drop_ops);
+
+        self.catalog_transact(Some(session), ops).await?;
+
+        if dropped_active_db {
+            session.add_notice(AdapterNotice::DroppedActiveDatabase {
+                name: session.vars().database().to_string(),
+            });
+        }
+        if dropped_active_cluster {
+            session.add_notice(AdapterNotice::DroppedActiveCluster {
+                name: session.vars().cluster().to_string(),
+            });
+        }
+        Ok(ExecuteResponse::DroppedOwned)
+    }
+
+    fn sequence_drop_common(
+        &self,
+        session: &mut Session,
+        ids: Vec<ObjectId>,
+    ) -> Result<DropOps, AdapterError> {
+        let mut ops = Vec::new();
+        let mut dropped_active_db = false;
+        let mut dropped_active_cluster = false;
+
+        let mut dropped_roles: BTreeMap<_, _> = ids
+            .iter()
+            .filter_map(|id| match id {
+                ObjectId::Role(role_id) => Some(role_id),
+                _ => None,
+            })
+            .map(|id| {
+                let name = self.catalog().get_role(id).name();
+                (*id, name)
+            })
+            .collect();
+        for role_id in dropped_roles.keys() {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
+        self.validate_dropped_role_ownership(&dropped_roles)?;
+        // If any role is a member of a dropped role, then we must revoke that membership.
+        let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
+        for role in self.catalog().user_roles() {
+            for dropped_role_id in
+                dropped_role_ids.intersection(&role.membership.map.keys().collect())
+            {
+                ops.push(catalog::Op::RevokeRole {
+                    role_id: **dropped_role_id,
+                    member_id: role.id(),
+                    grantor_id: *role
+                        .membership
+                        .map
+                        .get(*dropped_role_id)
+                        .expect("included in keys above"),
+                })
+            }
+        }
+
+        for id in &ids {
+            match id {
+                ObjectId::Database(id) => {
+                    let name = self.catalog().get_database(id).name();
+                    if name == session.vars().database() {
+                        dropped_active_db = true;
+                    }
+                }
+                ObjectId::Cluster(id) => {
+                    if let Some(active_id) = self
+                        .catalog()
+                        .active_cluster(session)
+                        .ok()
+                        .map(|cluster| cluster.id())
+                    {
+                        if id == &active_id {
+                            dropped_active_cluster = true;
+                        }
+                    }
+                }
+                ObjectId::Role(id) => {
+                    let role = self.catalog().get_role(id);
+                    let name = role.name();
+                    dropped_roles.insert(*id, name);
+                    // We must revoke all role memberships that the dropped roles belongs to.
+                    for (group_id, grantor_id) in &role.membership.map {
+                        ops.push(catalog::Op::RevokeRole {
+                            role_id: *group_id,
+                            member_id: *id,
+                            grantor_id: *grantor_id,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        ops.extend(ids.into_iter().map(catalog::Op::DropObject));
+
+        Ok(DropOps {
+            ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        })
     }
 
     pub(super) fn sequence_show_all_variables(
@@ -3897,6 +3958,7 @@ impl Coordinator {
         let mut ops = Vec::with_capacity(grantees.len());
         for grantee in grantees {
             let existing_privilege = privileges
+                .0
                 .get(&grantee)
                 .and_then(|privileges| {
                     privileges

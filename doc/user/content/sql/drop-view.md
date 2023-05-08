@@ -49,3 +49,4 @@ DROP VIEW
 - [`CREATE VIEW`](../create-view)
 - [`SHOW VIEWS`](../show-views)
 - [`SHOW CREATE VIEW`](../show-create-view)
+- [DROP OWNED](../drop-owned)

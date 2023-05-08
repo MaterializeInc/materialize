@@ -56,7 +56,7 @@ impl Coordinator {
         &mut self,
         mut tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
-        plan: Plan,
+        mut plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
@@ -87,7 +87,7 @@ impl Coordinator {
         if let Err(e) = rbac::check_plan(
             &session_catalog,
             &session,
-            &plan,
+            &mut plan,
             target_cluster_id,
             &depends_on,
         ) {
@@ -199,6 +199,9 @@ impl Coordinator {
                     self.sequence_drop_objects(&mut session, plan).await,
                     session,
                 );
+            }
+            Plan::DropOwned(plan) => {
+                tx.send(self.sequence_drop_owned(&mut session, plan).await, session);
             }
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);

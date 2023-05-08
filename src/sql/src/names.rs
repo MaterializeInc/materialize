@@ -308,6 +308,10 @@ impl SchemaSpecifier {
             SchemaSpecifier::Id(id) => id.is_system(),
         }
     }
+
+    pub fn is_temporary(&self) -> bool {
+        matches!(self, SchemaSpecifier::Temporary)
+    }
 }
 
 impl fmt::Display for SchemaSpecifier {
@@ -826,6 +830,18 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
         }
     }
+
+    pub fn is_system(&self) -> bool {
+        match self {
+            ObjectId::Cluster(cluster_id) => cluster_id.is_system(),
+            // replica IDs aren't namespaced so we rely on the cluster ID.
+            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_system(),
+            ObjectId::Database(database_id) => database_id.is_system(),
+            ObjectId::Schema((_database_id, schema_id)) => schema_id.is_system(),
+            ObjectId::Role(role_id) => role_id.is_system(),
+            ObjectId::Item(global_id) => global_id.is_system(),
+        }
+    }
 }
 
 impl TryFrom<ResolvedObjectName> for ObjectId {
@@ -901,6 +917,18 @@ impl From<ItemQualifiers> for ObjectId {
 impl From<&ItemQualifiers> for ObjectId {
     fn from(qualifiers: &ItemQualifiers) -> Self {
         ObjectId::Schema((qualifiers.database_spec, qualifiers.schema_spec))
+    }
+}
+
+impl From<(ResolvedDatabaseSpecifier, SchemaSpecifier)> for ObjectId {
+    fn from(id: (ResolvedDatabaseSpecifier, SchemaSpecifier)) -> Self {
+        ObjectId::Schema(id)
+    }
+}
+
+impl From<&(ResolvedDatabaseSpecifier, SchemaSpecifier)> for ObjectId {
+    fn from(id: &(ResolvedDatabaseSpecifier, SchemaSpecifier)) -> Self {
+        ObjectId::Schema(*id)
     }
 }
 

@@ -3246,6 +3246,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
+        if self.parse_keyword(OWNED) {
+            return self.parse_drop_owned();
+        }
+
         let object_type = self.expect_object_type()?;
         let if_exists = self.parse_if_exists()?;
         match object_type {
@@ -3349,6 +3353,19 @@ impl<'a> Parser<'a> {
             if_exists,
             names,
             cascade: false,
+        }))
+    }
+
+    fn parse_drop_owned(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(BY)?;
+        let role_names = self.parse_comma_separated(Parser::parse_identifier)?;
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
+        Ok(Statement::DropOwned(DropOwnedStatement {
+            role_names,
+            cascade,
         }))
     }
 

@@ -248,6 +248,7 @@ Order
 Ordinality
 Outer
 Over
+Owned
 Owner
 Partition
 Password

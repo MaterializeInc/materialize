@@ -63,6 +63,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
@@ -263,6 +264,7 @@ pub fn user_privilege_hack(
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterIndexSetOptions(_)

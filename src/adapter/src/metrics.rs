@@ -120,6 +120,7 @@ where
         StatementKind::AlterConnection => "alter_connection",
         StatementKind::Discard => "discard",
         StatementKind::DropObjects => "drop_objects",
+        StatementKind::DropOwned => "drop_owned",
         StatementKind::SetVariable => "set_variable",
         StatementKind::ResetVariable => "reset_variable",
         StatementKind::Show => "show",

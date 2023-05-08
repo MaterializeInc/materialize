@@ -2056,7 +2056,303 @@ DROP TABLE t
 ----
 COMPLETE 0
 
+# Test DROP OWNED
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON DATABASE materialize TO PUBLIC;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO PUBLIC;
+----
+COMPLETE 0
+
+statement ok
+CREATE DATABASE db
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+db
+
+statement ok
+CREATE SCHEMA s
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+s
+
+statement ok
+CREATE TABLE t ();
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+t
+
+statement ok
+CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+c
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+replica1
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW v AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON v TO materialize;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  mz_system=r/mz_system
+v  materialize=r/mz_system
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+COMPLETE 0
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  mz_system=r/mz_system
+
+simple conn=mz_system,user=mz_system
+DROP VIEW v;
+----
+COMPLETE 0
+
+## Test invalid revokes
+
+statement ok
+CREATE DATABASE db
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+db
+
+statement ok
+CREATE SCHEMA s
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+s
+
+statement ok
+CREATE TABLE t ();
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+t
+
+statement ok
+CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+c
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+replica1
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW v AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON v TO materialize;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  mz_system=r/mz_system
+v  materialize=r/mz_system
+
+simple conn=materialize,user=materialize
+DROP OWNED BY materialize;
+----
+COMPLETE 0
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  mz_system=r/mz_system
+v  materialize=r/mz_system
+
+simple conn=mz_system,user=mz_system
+DROP VIEW v;
+----
+COMPLETE 0
+
+## Test CASCADE
+
+statement ok
+CREATE DATABASE db
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+db
+
+statement ok
+CREATE SCHEMA s
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+s
+
+statement ok
+CREATE TABLE t ();
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+t
+
+statement ok
+CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+c
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+replica1
+
+simple conn=mz_system,user=mz_system
+CREATE SCHEMA db.s;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: database "db" cannot be dropped without CASCADE while it contains non-owned schemas
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW s.v AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: schema "materialize.s" cannot be dropped without CASCADE while it contains non-owned objects
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW v AS SELECT * FROM t;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: cannot drop "materialize.public.t" without CASCADE: still depended upon by non-owned catalog items "materialize.public.v"
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: cannot drop cluster "c" without CASCADE while it contains active objects
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize CASCADE;
+----
+COMPLETE 0
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+
 # Disable rbac checks.
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----

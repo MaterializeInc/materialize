@@ -306,6 +306,8 @@ pub enum ExecuteResponse {
     DiscardedAll,
     /// The requested object was dropped.
     DroppedObject(ObjectType),
+    /// The requested objects were dropped.
+    DroppedOwned,
     /// The provided query was empty.
     EmptyQuery,
     /// Fetch results from a cursor.
@@ -391,6 +393,7 @@ impl ExecuteResponse {
             DiscardedTemp => Some("DISCARD TEMP".into()),
             DiscardedAll => Some("DISCARD ALL".into()),
             DroppedObject(o) => Some(format!("DROP {o}")),
+            DroppedOwned => Some("DROP OWNED".into()),
             EmptyQuery => None,
             Fetch { .. } => None,
             GrantedPrivilege => Some("GRANT".into()),
@@ -461,6 +464,7 @@ impl ExecuteResponse {
             DiscardTemp => vec![DiscardedTemp],
             DiscardAll => vec![DiscardedAll],
             DropObjects => vec![DroppedObject],
+            DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             Explain | Peek | ShowAllVariables | ShowCreate | ShowVariable => {
                 vec![CopyTo, SendingRows]

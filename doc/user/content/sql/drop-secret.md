@@ -58,3 +58,4 @@ DROP SECRET upstash_sasl_password CASCADE;
 ## Related pages
 
 - [`SHOW SECRETS`](../show-secrets)
+- [DROP OWNED](../drop-owned)

@@ -37,3 +37,4 @@ DROP SINK
 
 - [`SHOW SINKS`](../show-sinks)
 - [`CREATE SINK`](../create-sink)
+- [DROP OWNED](../drop-owned)
