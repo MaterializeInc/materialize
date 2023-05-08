@@ -46,6 +46,7 @@ fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
         | CastNumericToUint64(_)
         | CastNumericToMzTimestamp(_)
         | CastUint64ToMzTimestamp(_)
+        | CastInt64ToMzTimestamp(_)
         | CastTimestampToMzTimestamp(_)
         | CastTimestampTzToMzTimestamp(_) => Yes,
         // Including JSON casts.
@@ -981,7 +982,7 @@ mod tests {
     use mz_ore::panic;
     use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
 
-    use crate::func::{AbsInt64, CastJsonbToNumeric};
+    use crate::func::{AbsInt64, CastInt64ToMzTimestamp, CastJsonbToNumeric};
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
 
     use super::*;
@@ -1091,7 +1092,7 @@ mod tests {
         let result = expr.eval(&[], &arena);
         assert_eq!(result, Ok(Datum::True));
 
-        let mut interpreter = ColumnSpecs::new(RelationType::new(vec![]), &arena);
+        let interpreter = ColumnSpecs::new(RelationType::new(vec![]), &arena);
         let spec = interpreter.expr(&expr);
         assert!(spec.range.may_contain(Datum::True));
     }
@@ -1101,20 +1102,23 @@ mod tests {
         // Example inspired by the tumbling windows temporal filter in the docs
         let period_ms = MirScalarExpr::Literal(
             Ok(Row::pack_slice(&[Datum::Int64(10)])),
-            ScalarType::UInt64.nullable(false),
+            ScalarType::Int64.nullable(false),
         );
         let expr = MirScalarExpr::CallBinary {
             func: BinaryFunc::Gte,
             expr1: Box::new(MirScalarExpr::CallUnmaterializable(
                 UnmaterializableFunc::MzNow,
             )),
-            expr2: Box::new(MirScalarExpr::CallBinary {
-                func: BinaryFunc::MulInt64,
-                expr1: Box::new(period_ms.clone()),
-                expr2: Box::new(MirScalarExpr::CallBinary {
-                    func: BinaryFunc::DivInt64,
-                    expr1: Box::new(MirScalarExpr::Column(0)),
-                    expr2: Box::new(period_ms),
+            expr2: Box::new(MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastInt64ToMzTimestamp(CastInt64ToMzTimestamp),
+                expr: Box::new(MirScalarExpr::CallBinary {
+                    func: BinaryFunc::MulInt64,
+                    expr1: Box::new(period_ms.clone()),
+                    expr2: Box::new(MirScalarExpr::CallBinary {
+                        func: BinaryFunc::DivInt64,
+                        expr1: Box::new(MirScalarExpr::Column(0)),
+                        expr2: Box::new(period_ms),
+                    }),
                 }),
             }),
         };
@@ -1123,12 +1127,15 @@ mod tests {
             // Non-overlapping windows
             let arena = RowArena::new();
             let mut interpreter = ColumnSpecs::new(
-                RelationType::new(vec![ScalarType::UInt64.nullable(false)]),
+                RelationType::new(vec![ScalarType::Int64.nullable(false)]),
                 &arena,
             );
             interpreter.push_unmaterializable(
                 UnmaterializableFunc::MzNow,
-                ResultSpec::value_between(10i64.into(), 20i64.into()),
+                ResultSpec::value_between(
+                    Datum::MzTimestamp(10.into()),
+                    Datum::MzTimestamp(20.into()),
+                ),
             );
             interpreter.push_column(0, ResultSpec::value_between(30i64.into(), 40i64.into()));
 
@@ -1143,12 +1150,15 @@ mod tests {
             // Overlapping windows
             let arena = RowArena::new();
             let mut interpreter = ColumnSpecs::new(
-                RelationType::new(vec![ScalarType::UInt64.nullable(false)]),
+                RelationType::new(vec![ScalarType::Int64.nullable(false)]),
                 &arena,
             );
             interpreter.push_unmaterializable(
                 UnmaterializableFunc::MzNow,
-                ResultSpec::value_between(10i64.into(), 35i64.into()),
+                ResultSpec::value_between(
+                    Datum::MzTimestamp(10.into()),
+                    Datum::MzTimestamp(35.into()),
+                ),
             );
             interpreter.push_column(0, ResultSpec::value_between(30i64.into(), 40i64.into()));
 
@@ -1206,7 +1216,6 @@ mod tests {
     fn test_trace() {
         use super::Trace;
 
-        let _input_type = ScalarType::UInt64.nullable(false);
         let expr = MirScalarExpr::CallBinary {
             func: BinaryFunc::Gte,
             expr1: Box::new(MirScalarExpr::Column(0)),
