@@ -88,15 +88,15 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use itertools::Itertools;
-use rocksdb::{
-    DBCompressionType, Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB,
-};
+use rocksdb::{Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropHistogram;
+
+mod tuning;
 
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
@@ -130,11 +130,9 @@ pub struct Options {
     pub cleanup_on_drop: bool,
 
     /// Whether or not to write writes
-    /// to the wal.
+    /// to the wal. This is not in `RocksDBTuningParameters` because it
+    /// applies to `WriteOptions` when creating `WriteBatch`es.
     pub use_wal: bool,
-
-    /// Compression type for blocks and blobs.
-    pub compression_type: DBCompressionType,
 
     /// A possibly shared RocksDB `Env`.
     pub env: Env,
@@ -160,25 +158,21 @@ impl Options {
             cleanup_on_new: true,
             cleanup_on_drop: true,
             use_wal: false,
-            compression_type: DBCompressionType::Snappy,
             env: rocksdb::Env::new()?,
         })
     }
 
     fn as_rocksdb_options(&self) -> RocksDBOptions {
+        // Defaults + `create_if_missing`
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
 
-        /*
-        // Dumped every 600 seconds.
-        rocks_options.enable_statistics();
-        rocks_options.set_report_bg_io_stats(true);
-        */
-
-        options.set_compression_type(self.compression_type);
-        options.set_blob_compression_type(self.compression_type);
-
+        // Set the env first so tuning applies to the shared `Env`.
         options.set_env(&self.env);
+
+        let tuning_params = tuning::RocksDBTuningParameters::reasonable_defaults();
+        tuning_params.apply_to_options(&mut options);
+
         options
     }
 

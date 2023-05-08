@@ -10,11 +10,17 @@ publish = false
 bincode = { version = "1.3.3" }
 itertools = { version = "0.10.5" }
 mz-ore = { path = "../ore", features = ["async", "metrics"] }
+num_cpus = "1.14.0"
 tokio = { version = "1.24.2", features = ["macros", "sync", "rt"] }
-serde = { version = "1.0.152" }
+serde = { version = "1.0.152", features = ["derive"] }
+serde_json = { version = "1.0.89" }
 thiserror = "1.0.37"
 tracing = "0.1.37"
-rocksdb = { version = "0.20.1", default-features = false, features = ["snappy"] }
+# These features use compression code that are licensed with:
+# https://github.com/google/snappy/blob/main/COPYING
+# https://github.com/lz4/lz4/blob/dev/LICENSE
+# https://github.com/facebook/zstd
+rocksdb = { version = "0.20.1", default-features = false, features = ["snappy", "zstd", "lz4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
