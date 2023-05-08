@@ -518,7 +518,7 @@ async fn migrate(
         //
         // TODO(jkosh44) Can be cleared (patched to be empty) in v0.57.0
         |txn: &mut Transaction<'_>, _, _| {
-            txn.schemas.update(|key, value| {
+            txn.schemas.update(|_key, value| {
                 if value.database_id.is_none() {
                     let mut value = value.clone();
                     value.database_ns = None;
@@ -1485,7 +1485,7 @@ impl<'a> Transaction<'a> {
                 name: cluster_name.to_string(),
                 linked_object_id,
                 owner_id,
-                privileges: privileges,
+                privileges,
             },
         ) {
             return Err(Error::new(ErrorKind::ClusterAlreadyExists(
@@ -2681,17 +2681,16 @@ mod test {
 
     #[test]
     fn test_database_key_roundtrips() {
-        let k_none = DatabaseKey { id: 42, ns: None };
         let k_user = DatabaseKey {
             id: 24,
-            ns: Some(DatabaseNamespace::User),
+            ns: DatabaseNamespace::User,
         };
         let k_sys = DatabaseKey {
             id: 0,
-            ns: Some(DatabaseNamespace::System),
+            ns: DatabaseNamespace::System,
         };
 
-        for key in [k_none, k_user, k_sys] {
+        for key in [k_user, k_sys] {
             let og_json = serde_json::to_string(&key).expect("valid key");
 
             // Make sure our type roundtrips.
@@ -2702,12 +2701,5 @@ mod test {
             let af_json = serde_json::to_string(&after).expect("valid key");
             assert_eq!(og_json, af_json);
         }
-
-        let json_none = serde_json::json!({ "id": 42 }).to_string();
-
-        let key: DatabaseKey = serde_json::from_str(&json_none).expect("valid json");
-        let json_after = serde_json::to_string(&key).expect("valid key");
-
-        assert_eq!(json_none, json_after);
     }
 }
