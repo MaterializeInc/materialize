@@ -269,7 +269,7 @@ async fn migrate(
                 },
                 SchemaValue {
                     database_id: Some(MATERIALIZE_DATABASE_ID),
-                    database_ns: None,
+                    database_ns: Some(DatabaseNamespace::User),
                     name: "public".into(),
                     owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: vec![
