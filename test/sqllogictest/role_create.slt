@@ -58,34 +58,34 @@ CREATE ROLE regress_nosuch_superuser SUPERUSER;
 ----
 db error: ERROR: SUPERUSER attribute is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
-# This should fail, see https://github.com/MaterializeInc/materialize/issues/18960
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_createdb CREATEDB;
 ----
-COMPLETE 0
+db error: ERROR: permission denied to create role with attribute CREATEDB
+DETAIL: You must have the CREATEDB attribute to create role with attribute CREATEDB
 
-# This should fail, see https://github.com/MaterializeInc/materialize/issues/18960
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_createcluster CREATECLUSTER;
 ----
-COMPLETE 0
+db error: ERROR: permission denied to create role with attribute CREATECLUSTER
+DETAIL: You must have the CREATECLUSTER attribute to create role with attribute CREATECLUSTER
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_role_limited;
 ----
 COMPLETE 0
 
-# This should fail, see https://github.com/MaterializeInc/materialize/issues/18960
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 ALTER ROLE regress_role_limited CREATEDB;
 ----
-COMPLETE 0
+db error: ERROR: permission denied to alter role with attribute CREATEDB
+DETAIL: You must have the CREATEDB attribute to alter role with attribute CREATEDB
 
-# This should fail, see https://github.com/MaterializeInc/materialize/issues/18960
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 ALTER ROLE regress_role_limited CREATECLUSTER;
 ----
-COMPLETE 0
+db error: ERROR: permission denied to alter role with attribute CREATECLUSTER
+DETAIL: You must have the CREATECLUSTER attribute to alter role with attribute CREATECLUSTER
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_createdb CREATEDB;

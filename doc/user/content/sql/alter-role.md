@@ -35,14 +35,17 @@ _role_name_         | A name for the role.
 Unlike PostgreSQL, materialize derives the `LOGIN` and `SUPERUSER`
 attributes for a role during authentication, every time that role tries
 to connect to Materialize. Therefore, you cannot specify either
-attribute when creating a new role. Additionally, we do not support
-`CREATE USER` because it implies a `LOGIN` attribute for the role.
+attribute when altering an existing role.
 
 Unlike PostgreSQL, materialize does not currently support `NOINHERIT`.
 
 You may not specify redundant or conflicting sets of options. For example,
-Materialize will reject the statement `CREATE ROLE ... CREATEDB NOCREATEDB` because
+Materialize will reject the statement `ALTER ROLE ... CREATEDB NOCREATEDB` because
 the `CREATEDB` and `NOCREATEDB` options conflict.
+
+When RBAC is enabled a role must have the `CREATEROLE` attribute to alter another role.
+Additionally, no role can grant another role an attribute that the altering role doesn't
+have itself.
 
 ## Examples
 

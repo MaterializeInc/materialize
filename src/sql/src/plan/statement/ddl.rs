@@ -2572,11 +2572,12 @@ generate_extracted_config!(
     (ValueType, ResolvedDataType)
 );
 
-pub(crate) struct PlannedRoleAttributes {
-    pub(crate) inherit: Option<bool>,
-    pub(crate) create_role: Option<bool>,
-    pub(crate) create_db: Option<bool>,
-    pub(crate) create_cluster: Option<bool>,
+#[derive(Debug)]
+pub struct PlannedRoleAttributes {
+    pub inherit: Option<bool>,
+    pub create_role: Option<bool>,
+    pub create_db: Option<bool>,
+    pub create_cluster: Option<bool>,
 }
 
 fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
@@ -4262,16 +4263,15 @@ pub fn describe_alter_role(
 }
 
 pub fn plan_alter_role(
-    scx: &StatementContext,
+    _: &StatementContext,
     AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let role = scx.catalog.get_role(&name.id);
     let attributes = plan_role_attributes(options)?;
 
     Ok(Plan::AlterRole(AlterRolePlan {
         id: name.id,
         name: name.name,
-        attributes: (role, attributes).into(),
+        attributes,
     }))
 }
 
