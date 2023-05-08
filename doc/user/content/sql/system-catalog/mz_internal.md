@@ -129,6 +129,19 @@ extant cluster replicas.
 | `replica_id`      | [`text`]                       | The ID of a cluster replica.              |
 | `last_heartbeat`  | [`timestamp with time zone`]   | The time of the replica's last heartbeat. |
 
+### `mz_cluster_replica_history`
+
+The `mz_cluster_replica_history` gives the times each replica was
+created and (if applicable) dropped.
+
+| Field              | Type                         | Meaning                                                                                                                                   |
+|--------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `replica_id`       | [`text`]                     | The ID of a cluster replica.                                                                                                              |
+| `size`             | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
+| `created_at`       | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
+| `dropped_at`       | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
+| `credits_per_hour` | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credtis_per_hour`](#mz_cluster_replica_sizes). |
+
 ### `mz_sessions`
 
 The `mz_sessions` table contains a row for each active session in the system.
