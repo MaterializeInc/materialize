@@ -452,6 +452,35 @@ For zsh, add the follow to your `~/.zshrc`:
 source /path/to/materialize/misc/completions/zsh/*
 ```
 
+### Compilation Cache
+
+[sccache](https://github.com/mozilla/sccache) can be used to speed up
+compilation by caching results on disk. This is optional, and has
+[limitations](https://github.com/mozilla/sccache#known-caveats) like requiring
+the same absolute paths. For a from-scratch Debug build in the same directory
+you can expect about 40% faster build time. Installation on macOS:
+
+```shell
+brew install sccache
+```
+
+Installation on Linux:
+
+```shell
+cargo install sccache
+```
+
+Then add this fragment in your `~/.cargo/config.toml` (with the actual path via `which sccache`):
+```
+[build]
+rustc-wrapper = "/path/to/sccache"
+```
+
+By default the on-disk cache (`~/.cache/sccache` on Linux,
+`~/Library/Caches/Mozilla.sccache` on macOS) is limited to 10 GB. To change
+this (to 20 GB in this example) set `SCCACHE_CACHE_SIZE="20G"` in your shell
+environment (`~/.zshrc` or `~/.bashrc`).
+
 [Apache Kafka]: https://kafka.apache.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
 [askama]: https://github.com/djc/askama
