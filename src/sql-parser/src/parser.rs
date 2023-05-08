@@ -5690,11 +5690,16 @@ impl<'a> Parser<'a> {
         };
         let as_of = self.parse_optional_as_of()?;
         let up_to = self.parse_optional_up_to()?;
-        let output = if self.parse_keywords(&[ENVELOPE, UPSERT]) {
+        let output = if self.parse_keywords(&[ENVELOPE]) {
+            let keyword = self.expect_one_of_keywords(&[UPSERT, DEBEZIUM])?;
             self.expect_token(&Token::LParen)?;
             self.expect_keyword(KEY)?;
             let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
-            let output = SubscribeOutput::EnvelopeUpsert { key_columns };
+            let output = match keyword {
+                UPSERT => SubscribeOutput::EnvelopeUpsert { key_columns },
+                DEBEZIUM => SubscribeOutput::EnvelopeDebezium { key_columns },
+                _ => unreachable!("no other keyword allowed"),
+            };
             self.expect_token(&Token::RParen)?;
             output
         } else if self.parse_keywords(&[WITHIN, TIMESTAMP, ORDER, BY]) {

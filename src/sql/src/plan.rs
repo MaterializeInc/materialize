@@ -623,6 +623,10 @@ pub enum SubscribeOutput {
         /// Order by with just keys
         order_by_keys: Vec<ColumnOrder>,
     },
+    EnvelopeDebezium {
+        /// Order by with just keys
+        order_by_keys: Vec<ColumnOrder>,
+    },
 }
 
 #[derive(Debug)]

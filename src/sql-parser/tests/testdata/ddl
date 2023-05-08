@@ -837,6 +837,48 @@ SUBSCRIBE foo.bar ENVELOPE UPSERT (KEY (a, b, c, d, e))
 =>
 Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, output: EnvelopeUpsert { key_columns: [Ident("a"), Ident("b"), Ident("c"), Ident("d"), Ident("e")] } })
 
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM KEY (a)
+----
+error: Expected left parenthesis, found KEY
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM KEY (a)
+                                    ^
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM KEY (a, b, c, d, e)
+----
+error: Expected left parenthesis, found KEY
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM KEY (a, b, c, d, e)
+                                    ^
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM (KEY (c))
+----
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM (KEY (c))
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, output: EnvelopeDebezium { key_columns: [Ident("c")] } })
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM (KEY (a, b, c, d, e))
+----
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM (KEY (a, b, c, d, e))
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, output: EnvelopeDebezium { key_columns: [Ident("a"), Ident("b"), Ident("c"), Ident("d"), Ident("e")] } })
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE blah
+----
+error: Expected one of UPSERT or DEBEZIUM, found identifier "blah"
+SUBSCRIBE foo.bar ENVELOPE blah
+                           ^
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE
+----
+error: Expected one of UPSERT or DEBEZIUM, found EOF
+SUBSCRIBE foo.bar ENVELOPE
+                          ^
+
 
 parse-statement
 SUBSCRIBE foo.bar WITHIN TIMESTAMP ORDER BY a ASC NULLS LAST, b, c DESC
