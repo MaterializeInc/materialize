@@ -99,12 +99,19 @@ pub enum VarError {
     UnknownParameter(String),
     /// The specified session parameter is read only unless in unsafe mode.
     #[error("parameter {} can only be set in unsafe mode", .0.quoted())]
-    UnsafeParameter(&'static str),
+    RequiresUnsafeMode(&'static str),
+    #[error("{} is not supported", .feature.quoted())]
+    RequiresSystemVar { feature: String, gate: String },
 }
 
 impl VarError {
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            Self::RequiresSystemVar { .. } => {
+                Some("The requested feature is typically meant only for internal development and testing of Materialize.".into())
+            }
+            _ => None,
+        }
     }
 
     pub fn hint(&self) -> Option<String> {
@@ -113,6 +120,9 @@ impl VarError {
                 valid_values: Some(valid_values),
                 ..
             } => Some(format!("Available values: {}.", valid_values.join(", "))),
+            VarError::RequiresSystemVar { gate, .. } => Some(format!(
+                "contact support to see if the {gate} feature can be enabled"
+            )),
             _ => None,
         }
     }
@@ -1183,7 +1193,16 @@ impl SessionVars {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    pub fn set(&mut self, name: &str, input: VarInput, local: bool) -> Result<(), VarError> {
+    pub fn set(
+        &mut self,
+        system_vars: Option<&SystemVars>,
+        name: &str,
+        input: VarInput,
+        local: bool,
+    ) -> Result<(), VarError> {
+        let var = self.get(name)?;
+        var.can_be_set(system_vars)?;
+
         if name == APPLICATION_NAME.name {
             self.application_name.set(input, local)
         } else if name == CLIENT_ENCODING.name {
@@ -1321,7 +1340,15 @@ impl SessionVars {
     /// Like with [`SessionVars::get`], configuration parameters are matched case
     /// insensitively. If the named configuration parameter does not exist, an
     /// error is returned.
-    pub fn reset(&mut self, name: &str, local: bool) -> Result<(), VarError> {
+    pub fn reset(
+        &mut self,
+        system_vars: Option<&SystemVars>,
+        name: &str,
+        local: bool,
+    ) -> Result<(), VarError> {
+        let var = self.get(name)?;
+        var.can_be_set(system_vars)?;
+
         if name == APPLICATION_NAME.name {
             self.application_name.reset(local);
         } else if name == CLIENT_MIN_MESSAGES.name {
@@ -1775,16 +1802,15 @@ impl SystemVars {
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, VarError> {
-        self.vars
+        let var = self.get(name)?;
+        var.can_be_set(Some(self))?;
+
+        let var = self
+            .vars
             .get_mut(UncasedStr::new(name))
-            .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .and_then(|v| {
-                if v.name().starts_with("unsafe") && !self.allow_unsafe {
-                    Err(VarError::UnsafeParameter(v.name()))
-                } else {
-                    v.set(input)
-                }
-            })
+            .expect("already checked");
+
+        var.set(input)
     }
 
     /// Set the default for this variable. This is the value this
@@ -1811,10 +1837,15 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn reset(&mut self, name: &str) -> Result<bool, VarError> {
-        self.vars
+        let var = self.get(name)?;
+        var.can_be_set(Some(self))?;
+
+        let var = self
+            .vars
             .get_mut(UncasedStr::new(name))
-            .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .map(|v| v.reset())
+            .expect("already checked");
+
+        Ok(var.reset())
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
@@ -2111,12 +2142,13 @@ pub trait Var: fmt::Debug {
     ///
     /// Variables marked as `internal` are only visible for the
     /// system user.
-    fn visible(&self, user: &User) -> bool;
+    fn visible(&self, user: &User, system_vars: &SystemVars) -> bool;
 
-    /// Expresses whether the [`Var`] is visible as a function of `system_vars`'s state; if it is
-    /// not allowed, we return the name of the setting that is set to false which must be set to
-    /// true.
-    fn allowed(&self, system_vars: &SystemVars) -> Result<(), &'static str>;
+    /// Expresses whether the [`Var`]'s value is permitted to be changed.
+    ///
+    /// Some values cannot be changed without proving to the system that the `SystemVars` have
+    /// particular settings.
+    fn can_be_set(&self, system_vars: Option<&SystemVars>) -> Result<(), VarError>;
 
     /// Indicates wither the [`Var`] is experimental.
     ///
@@ -2187,15 +2219,34 @@ where
         V::TYPE_NAME
     }
 
-    fn visible(&self, user: &User) -> bool {
-        !self.internal || user == &*SYSTEM_USER
+    fn visible(&self, user: &User, system_vars: &SystemVars) -> bool {
+        (!self.internal || user == &*SYSTEM_USER) && self.can_be_set(Some(system_vars)).is_ok()
     }
 
-    fn allowed(&self, system_vars: &SystemVars) -> Result<(), &'static str> {
-        match self.system_var_gate {
-            Some(gate) if !*system_vars.expect_value(gate) => Err(gate.name()),
-            _ => Ok(()),
+    fn can_be_set(&self, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+        if self.name().starts_with("unsafe")
+            && match system_vars {
+                None => true,
+                Some(system_vars) => !system_vars.allow_unsafe,
+            }
+        {
+            return Err(VarError::RequiresUnsafeMode(self.name()));
         }
+
+        if let Some(gate) = self.system_var_gate {
+            let err = match system_vars {
+                None => true,
+                Some(system_vars) => !*system_vars.expect_value(gate),
+            };
+            if err {
+                return Err(VarError::RequiresSystemVar {
+                    feature: self.name.to_string(),
+                    gate: gate.name().to_string(),
+                });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -2278,12 +2329,12 @@ where
         V::TYPE_NAME
     }
 
-    fn visible(&self, user: &User) -> bool {
-        self.parent.visible(user)
+    fn visible(&self, user: &User, system_vars: &SystemVars) -> bool {
+        self.parent.visible(user, system_vars)
     }
 
-    fn allowed(&self, system_vars: &SystemVars) -> Result<(), &'static str> {
-        self.parent.allowed(system_vars)
+    fn can_be_set(&self, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+        self.parent.can_be_set(system_vars)
     }
 }
 
@@ -2440,12 +2491,12 @@ where
         V::TYPE_NAME
     }
 
-    fn visible(&self, user: &User) -> bool {
-        self.parent.visible(user)
+    fn visible(&self, user: &User, system_vars: &SystemVars) -> bool {
+        self.parent.visible(user, system_vars)
     }
 
-    fn allowed(&self, system_vars: &SystemVars) -> Result<(), &'static str> {
-        self.parent.allowed(system_vars)
+    fn can_be_set(&self, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+        self.parent.can_be_set(system_vars)
     }
 }
 
@@ -2466,11 +2517,11 @@ impl Var for BuildInfo {
         str::TYPE_NAME
     }
 
-    fn visible(&self, _: &User) -> bool {
+    fn visible(&self, _: &User, _: &SystemVars) -> bool {
         true
     }
 
-    fn allowed(&self, _system_vars: &SystemVars) -> Result<(), &'static str> {
+    fn can_be_set(&self, _: Option<&SystemVars>) -> Result<(), VarError> {
         Ok(())
     }
 }
@@ -2492,11 +2543,11 @@ impl Var for User {
         bool::TYPE_NAME
     }
 
-    fn visible(&self, _: &User) -> bool {
+    fn visible(&self, _: &User, _: &SystemVars) -> bool {
         true
     }
 
-    fn allowed(&self, _system_vars: &SystemVars) -> Result<(), &'static str> {
+    fn can_be_set(&self, _system_vars: Option<&SystemVars>) -> Result<(), VarError> {
         Ok(())
     }
 }

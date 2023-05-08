@@ -5427,9 +5427,8 @@ impl<'a> ExprContext<'a> {
         if enabled {
             Ok(())
         } else {
-            Err(PlanError::RequiresSystemVar {
+            Err(PlanError::RequiresFeatureFlag {
                 feature: var.name().to_string(),
-                gate: None,
             })
         }
     }

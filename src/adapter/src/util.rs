@@ -393,6 +393,5 @@ pub(crate) fn viewable_variables<'a>(
         .vars()
         .iter()
         .chain(catalog.system_config().iter())
-        .filter(|v| !v.experimental() && v.visible(session.user()))
-        .filter(|v| v.allowed(catalog.system_config()).is_ok())
+        .filter(|v| !v.experimental() && v.visible(session.user(), catalog.system_config()))
 }

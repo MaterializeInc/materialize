@@ -1070,9 +1070,8 @@ impl CatalogState {
 
     /// Get system configuration `name`.
     pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, AdapterError> {
-        let var = self.system_configuration.get(name)?;
-        self.check_var_allowance(var)?;
-        Ok(var)
+        let v = self.system_configuration.get(name)?;
+        Ok(v)
     }
 
     /// Set the default value for `name`, which is the value it will be reset to.
@@ -1439,15 +1438,6 @@ impl CatalogState {
         } else {
             Ok(())
         }
-    }
-
-    pub fn check_var_allowance(&self, var: &dyn Var) -> Result<(), AdapterError> {
-        var.allowed(self.system_config()).map_err(|gate| {
-            AdapterError::PlanError(PlanError::RequiresSystemVar {
-                feature: var.name().to_string(),
-                gate: Some(gate.to_string()),
-            })
-        })
     }
 
     /// Serializes the catalog's in-memory state.
@@ -6247,12 +6237,11 @@ impl Catalog {
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, value.borrow())?;
-                    let var = state.get_system_configuration(&name)?;
+                    let var = state.system_config().get(&name)?;
                     tx.upsert_system_config(&name, var.value())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
-                    state.get_system_configuration(&name)?;
                     tx.remove_system_config(&name);
                 }
                 Op::ResetAllSystemConfiguration => {
@@ -8119,7 +8108,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("pg_catalog"), false)
+                .set(None, "search_path", VarInput::Flat("pg_catalog"), false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -8146,7 +8135,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("mz_catalog"), false)
+                .set(None, "search_path", VarInput::Flat("mz_catalog"), false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -8173,7 +8162,7 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("mz_temp"), false)
+                .set(None, "search_path", VarInput::Flat("mz_temp"), false)
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(

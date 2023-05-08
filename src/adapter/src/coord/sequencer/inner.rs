@@ -1738,9 +1738,7 @@ impl Coordinator {
             .get(&plan.name)
             .or_else(|_| self.catalog().system_config().get(&plan.name))?;
 
-        if variable.visible(session.user())
-            && variable.allowed(self.catalog().system_config()).is_ok()
-        {
+        if variable.visible(session.user(), self.catalog().system_config()) {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
             Ok(send_immediate_rows(vec![row]))
         } else {
@@ -1762,12 +1760,14 @@ impl Coordinator {
             VariableValue::Values(values) => Some(values),
         };
 
-        let var = vars.get(&name)?;
-        self.catalog().state().check_var_allowance(var)?;
-
         match values {
             Some(values) => {
-                vars.set(&name, VarInput::SqlSet(&values), local)?;
+                vars.set(
+                    Some(self.catalog().state().system_config()),
+                    &name,
+                    VarInput::SqlSet(&values),
+                    local,
+                )?;
 
                 // Database or cluster value does not correspond to a catalog item.
                 if name.as_str() == DATABASE_VAR_NAME
@@ -1798,7 +1798,7 @@ impl Coordinator {
                     }
                 }
             }
-            None => vars.reset(&name, local)?,
+            None => vars.reset(Some(self.catalog().state().system_config()), &name, local)?,
         }
 
         Ok(ExecuteResponse::SetVariable { name, reset: false })
@@ -1809,12 +1809,11 @@ impl Coordinator {
         session: &mut Session,
         plan: ResetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let vars = session.vars_mut();
         let name = plan.name;
-        let var = vars.get(&name)?;
-        self.catalog().state().check_var_allowance(var)?;
 
-        session.vars_mut().reset(&name, false)?;
+        session
+            .vars_mut()
+            .reset(Some(self.catalog().state().system_config()), &name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
     }
 
