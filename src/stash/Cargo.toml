@@ -18,6 +18,7 @@ mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
 mz-postgres-util = { path = "../postgres-util" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { version = "0.13.3", default-features = false }
+prost = { version = "0.11.9", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 serde = "1.0.152"
 serde_json = "1.0.89"
@@ -38,7 +39,7 @@ tokio = { version = "1.24.2", features = ["macros"] }
 anyhow = "1.0.66"
 md-5 = "0.10.5"
 protobuf-src = "1.1.0"
-prost-build = "0.11.2"
+prost-build = "0.11.9"
 serde = "1.0.152"
 serde_json = "1.0.89"
 

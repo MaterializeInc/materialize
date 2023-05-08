@@ -49,6 +49,9 @@ use crate::{catalog, rbac};
 
 use super::{SerializedCatalogItem, SerializedReplicaLocation, SerializedReplicaLogging};
 
+pub mod objects;
+pub mod stash;
+
 const USER_VERSION: &str = "user_version";
 
 const MATERIALIZE_DATABASE_ID: u64 = 1;
