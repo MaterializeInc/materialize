@@ -2893,8 +2893,8 @@ pub struct GrantPrivilegeStatement<T: AstInfo> {
     pub object_type: ObjectType,
     /// The name of the object.
     pub name: T::ObjectName,
-    /// The role that will granted the privileges.
-    pub role: T::RoleName,
+    /// The roles that will granted the privileges.
+    pub roles: Vec<T::RoleName>,
 }
 
 impl<T: AstInfo> AstDisplay for GrantPrivilegeStatement<T> {
@@ -2906,7 +2906,7 @@ impl<T: AstInfo> AstDisplay for GrantPrivilegeStatement<T> {
         f.write_str(" ");
         f.write_node(&self.name);
         f.write_str(" TO ");
-        f.write_node(&self.role);
+        f.write_node(&display::comma_separated(&self.roles));
     }
 }
 impl_display_t!(GrantPrivilegeStatement);
@@ -2922,8 +2922,8 @@ pub struct RevokePrivilegeStatement<T: AstInfo> {
     pub object_type: ObjectType,
     /// The name of the object.
     pub name: T::ObjectName,
-    /// The role that will have privileges revoked.
-    pub role: T::RoleName,
+    /// The roles that will have privileges revoked.
+    pub roles: Vec<T::RoleName>,
 }
 
 impl<T: AstInfo> AstDisplay for RevokePrivilegeStatement<T> {
@@ -2935,7 +2935,7 @@ impl<T: AstInfo> AstDisplay for RevokePrivilegeStatement<T> {
         f.write_str(" ");
         f.write_node(&self.name);
         f.write_str(" FROM ");
-        f.write_node(&self.role);
+        f.write_node(&display::comma_separated(&self.roles));
     }
 }
 impl_display_t!(RevokePrivilegeStatement);

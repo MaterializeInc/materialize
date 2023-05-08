@@ -4383,17 +4383,11 @@ pub fn plan_grant_privilege(
         privileges,
         object_type,
         name,
-        role,
+        roles,
     }: GrantPrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let (acl_mode, object_id, grantee, grantor) =
-        plan_update_privilege(scx, privileges, object_type, name, role)?;
-    Ok(Plan::GrantPrivilege(GrantPrivilegePlan {
-        acl_mode,
-        object_id,
-        grantee,
-        grantor,
-    }))
+    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
+    Ok(Plan::GrantPrivilege(plan.into()))
 }
 
 pub fn describe_revoke_privilege(
@@ -4409,17 +4403,54 @@ pub fn plan_revoke_privilege(
         privileges,
         object_type,
         name,
-        role,
+        roles,
     }: RevokePrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let (acl_mode, object_id, revokee, grantor) =
-        plan_update_privilege(scx, privileges, object_type, name, role)?;
-    Ok(Plan::RevokePrivilege(RevokePrivilegePlan {
-        acl_mode,
-        object_id,
-        revokee,
-        grantor,
-    }))
+    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
+    Ok(Plan::RevokePrivilege(plan.into()))
+}
+
+struct UpdatePrivilegePlan {
+    acl_mode: AclMode,
+    object_id: ObjectId,
+    grantees: Vec<RoleId>,
+    grantor: RoleId,
+}
+
+impl From<UpdatePrivilegePlan> for GrantPrivilegePlan {
+    fn from(
+        UpdatePrivilegePlan {
+            acl_mode,
+            object_id,
+            grantees,
+            grantor,
+        }: UpdatePrivilegePlan,
+    ) -> GrantPrivilegePlan {
+        GrantPrivilegePlan {
+            acl_mode,
+            object_id,
+            grantees,
+            grantor,
+        }
+    }
+}
+
+impl From<UpdatePrivilegePlan> for RevokePrivilegePlan {
+    fn from(
+        UpdatePrivilegePlan {
+            acl_mode,
+            object_id,
+            grantees,
+            grantor,
+        }: UpdatePrivilegePlan,
+    ) -> RevokePrivilegePlan {
+        RevokePrivilegePlan {
+            acl_mode,
+            object_id,
+            revokees: grantees,
+            grantor,
+        }
+    }
 }
 
 fn plan_update_privilege(
@@ -4427,8 +4458,8 @@ fn plan_update_privilege(
     privileges: Vec<Privilege>,
     object_type: ObjectType,
     name: ResolvedObjectName,
-    role: ResolvedRoleName,
-) -> Result<(AclMode, ObjectId, RoleId, RoleId), PlanError> {
+    roles: Vec<ResolvedRoleName>,
+) -> Result<UpdatePrivilegePlan, PlanError> {
     let mut acl_mode = AclMode::empty();
     // PostgreSQL doesn't care about duplicate privileges, so we don't either.
     for privilege in privileges {
@@ -4477,8 +4508,14 @@ fn plan_update_privilege(
         .catalog
         .get_owner_id(&object_id)
         .expect("cannot revoke privileges on objects without owners");
+    let grantees = roles.into_iter().map(|role| role.id).collect();
 
-    Ok((acl_mode, object_id, role.id, grantor))
+    Ok(UpdatePrivilegePlan {
+        acl_mode,
+        object_id,
+        grantees,
+        grantor,
+    })
 }
 
 fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {

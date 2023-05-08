@@ -863,8 +863,8 @@ pub struct GrantPrivilegePlan {
     pub acl_mode: AclMode,
     /// The ID of the object.
     pub object_id: ObjectId,
-    /// The role that will granted the privileges.
-    pub grantee: RoleId,
+    /// The roles that will granted the privileges.
+    pub grantees: Vec<RoleId>,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
 }
@@ -875,8 +875,8 @@ pub struct RevokePrivilegePlan {
     pub acl_mode: AclMode,
     /// The ID of the object.
     pub object_id: ObjectId,
-    /// The role that will have privileges revoked.
-    pub revokee: RoleId,
+    /// The roles that will have privileges revoked.
+    pub revokees: Vec<RoleId>,
     /// The role that will revoke the privileges.
     pub grantor: RoleId,
 }

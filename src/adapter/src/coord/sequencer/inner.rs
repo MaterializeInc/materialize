@@ -3779,7 +3779,7 @@ impl Coordinator {
         GrantPrivilegePlan {
             acl_mode,
             object_id,
-            grantee,
+            grantees,
             grantor,
         }: GrantPrivilegePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -3787,7 +3787,7 @@ impl Coordinator {
             session,
             acl_mode,
             object_id,
-            grantee,
+            grantees,
             grantor,
             UpdatePrivilegeVariant::Grant,
         )
@@ -3800,7 +3800,7 @@ impl Coordinator {
         RevokePrivilegePlan {
             acl_mode,
             object_id,
-            revokee,
+            revokees,
             grantor,
         }: RevokePrivilegePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -3808,7 +3808,7 @@ impl Coordinator {
             session,
             acl_mode,
             object_id,
-            revokee,
+            revokees,
             grantor,
             UpdatePrivilegeVariant::Revoke,
         )
@@ -3820,7 +3820,7 @@ impl Coordinator {
         session: &mut Session,
         acl_mode: AclMode,
         object_id: ObjectId,
-        grantee: RoleId,
+        grantees: Vec<RoleId>,
         grantor: RoleId,
         variant: UpdatePrivilegeVariant,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -3831,45 +3831,59 @@ impl Coordinator {
             .catalog()
             .get_privileges(&object_id, session.conn_id())
             .expect("cannot grant privileges on objects without privileges");
-        let existing_privilege = privileges
-            .get(&grantee)
-            .and_then(|privileges| {
-                privileges
-                    .into_iter()
-                    .find(|mz_acl_item| mz_acl_item.grantor == grantor)
-            })
-            .map(Cow::Borrowed)
-            .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
 
-        match variant {
-            UpdatePrivilegeVariant::Grant => {
-                if existing_privilege.acl_mode.contains(acl_mode) {
-                    // The granted privileges already exists so we can return early.
-                    return Ok(ExecuteResponse::GrantedPrivilege);
-                }
-            }
-            UpdatePrivilegeVariant::Revoke => {
-                if existing_privilege
-                    .acl_mode
-                    .intersection(acl_mode)
-                    .is_empty()
+        let mut ops = Vec::with_capacity(grantees.len());
+        for grantee in grantees {
+            let existing_privilege = privileges
+                .get(&grantee)
+                .and_then(|privileges| {
+                    privileges
+                        .into_iter()
+                        .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+                })
+                .map(Cow::Borrowed)
+                .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
+
+            match variant {
+                UpdatePrivilegeVariant::Grant
+                    if !existing_privilege.acl_mode.contains(acl_mode) =>
                 {
-                    // The revoked privileges don't exist so we can return early.
-                    return Ok(ExecuteResponse::RevokedPrivilege);
+                    ops.push(catalog::Op::UpdatePrivilege {
+                        object_id: object_id.clone(),
+                        privilege: MzAclItem {
+                            grantee,
+                            grantor,
+                            acl_mode,
+                        },
+                        variant,
+                    });
                 }
+                UpdatePrivilegeVariant::Revoke
+                    if !existing_privilege
+                        .acl_mode
+                        .intersection(acl_mode)
+                        .is_empty() =>
+                {
+                    ops.push(catalog::Op::UpdatePrivilege {
+                        object_id: object_id.clone(),
+                        privilege: MzAclItem {
+                            grantee,
+                            grantor,
+                            acl_mode,
+                        },
+                        variant,
+                    });
+                }
+                // no-op
+                _ => {}
             }
         }
 
-        let op = catalog::Op::UpdatePrivilege {
-            object_id,
-            privilege: MzAclItem {
-                grantee,
-                grantor,
-                acl_mode,
-            },
-            variant,
-        };
-        self.catalog_transact(Some(session), vec![op])
+        if ops.is_empty() {
+            return Ok(variant.into());
+        }
+
+        self.catalog_transact(Some(session), ops)
             .await
             .map(|_| match variant {
                 UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,

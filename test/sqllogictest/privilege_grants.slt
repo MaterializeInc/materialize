@@ -1342,6 +1342,66 @@ GRANT SELECT ON DATABASE t TO joe
 statement error invalid privilege types USAGE for TABLE
 GRANT SELECT, USAGE ON TABLE t TO joe
 
+## Test multiple roles
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE t1 (a INT);
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't1'
+----
+t1  mz_system=arwd/mz_system
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON t1 TO joe, other
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't1'
+----
+t1  joe=r/mz_system
+t1  other=r/mz_system
+t1  mz_system=arwd/mz_system
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT, INSERT ON t1 TO test_role, other
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't1'
+----
+t1  joe=r/mz_system
+t1  other=ar/mz_system
+t1  test_role=ar/mz_system
+t1  mz_system=arwd/mz_system
+
+simple conn=mz_system,user=mz_system
+REVOKE INSERT ON t1 FROM joe, test_role, other
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't1'
+----
+t1  joe=r/mz_system
+t1  other=r/mz_system
+t1  test_role=r/mz_system
+t1  mz_system=arwd/mz_system
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON t1 FROM joe, test_role, other
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't1'
+----
+t1  mz_system=arwd/mz_system
+
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;

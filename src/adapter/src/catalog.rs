@@ -104,7 +104,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
-use crate::{rbac, AdapterError, DUMMY_AVAILABILITY_ZONE};
+use crate::{rbac, AdapterError, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
 
 use self::builtin::{BuiltinCluster, BuiltinSource};
 
@@ -6860,6 +6860,15 @@ fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) 
 pub enum UpdatePrivilegeVariant {
     Grant,
     Revoke,
+}
+
+impl From<UpdatePrivilegeVariant> for ExecuteResponse {
+    fn from(variant: UpdatePrivilegeVariant) -> Self {
+        match variant {
+            UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
+            UpdatePrivilegeVariant::Revoke => ExecuteResponse::RevokedPrivilege,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
