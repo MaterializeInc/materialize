@@ -160,7 +160,7 @@ where
                     desc: &fake_desc,
                     stats,
                 };
-                filter_may_match(desc.typ().clone(), time_range.clone(), stats, plan)
+                filter_may_match(desc.typ(), time_range.clone(), stats, plan)
             } else {
                 true
             }
@@ -171,7 +171,7 @@ where
 }
 
 fn filter_may_match(
-    relation_type: RelationType,
+    relation_type: &RelationType,
     time_range: ResultSpec,
     stats: PersistSourceDataStatsImpl,
     plan: &MfpPlan,
