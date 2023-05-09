@@ -70,4 +70,9 @@ pub enum Error {
     /// Always make sure the string is correctly formatted.
     #[error("Error parsing cloud provider.")]
     CloudProviderRegionParseError,
+    /// Indicates an error when the response from the
+    /// endpoint /api/environmentassignment does not contains
+    /// exactly one environment assignment
+    #[error("Response did not contain exactly one environment assignment")]
+    InvalidEnvironmentAssignment
 }

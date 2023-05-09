@@ -56,6 +56,6 @@ impl Client {
 
         let regions: Vec<Region> = self.send_request(req).await?;
 
-        Ok(regions.get(0).unwrap().to_owned())
+        Ok(regions.get(0).ok_or_else(|| Error::InvalidEnvironmentAssignment)?.to_owned())
     }
 }
