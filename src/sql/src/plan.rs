@@ -1035,6 +1035,13 @@ impl QueryWhen {
             }
         }
     }
+    /// Returns whether the selected timestamp should be tracked within the current transaction.
+    pub fn is_transactional(&self) -> bool {
+        match self {
+            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
+        }
+    }
 }
 
 #[derive(Debug)]

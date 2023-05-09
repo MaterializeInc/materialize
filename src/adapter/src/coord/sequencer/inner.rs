@@ -2229,7 +2229,7 @@ impl Coordinator {
         // OF or we're inside an explicit transaction. The latter case is
         // necessary to support PG's `BEGIN` semantics, whose behavior can
         // depend on whether or not reads have occurred in the txn.
-        if when == &QueryWhen::Immediately {
+        if when.is_transactional() {
             session.add_transaction_ops(TransactionOps::Peeks(
                 determination.timestamp_context.clone(),
             ))?;
