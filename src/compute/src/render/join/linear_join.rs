@@ -954,6 +954,7 @@ where
             edits: Vec::new(),
         }
     }
+
     /// Loads the contents of a cursor.
     fn load<C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
     where
@@ -971,21 +972,25 @@ where
             cursor.step_val(storage);
         }
     }
+
     /// Clears the list of edits.
     #[inline]
     fn clear(&mut self) {
         self.values.clear();
         self.edits.clear();
     }
+
     fn len(&self) -> usize {
         self.edits.len()
     }
+
     /// Inserts a new edit for an as-yet undetermined value.
     #[inline]
     fn push(&mut self, time: T, diff: R) {
         // TODO: Could attempt "insertion-sort" like behavior here, where we collapse if possible.
         self.edits.push((time, diff));
     }
+
     /// Associates all edits pushed since the previous `seal_value` call with `value`.
     #[inline]
     fn seal(&mut self, value: &'a V) {
@@ -995,6 +1000,7 @@ where
             self.values.push((value, self.edits.len()));
         }
     }
+
     fn map<F: FnMut(&V, &T, R)>(&self, mut logic: F) {
         for index in 0..self.values.len() {
             let lower = if index == 0 {
@@ -1084,9 +1090,11 @@ where
     fn time(&self) -> Option<&T> {
         self.replay.history.last().map(|x| &x.0)
     }
+
     fn meet(&self) -> Option<&T> {
         self.replay.history.last().map(|x| &x.1)
     }
+
     fn edit(&self) -> Option<(&V, &T, R)> {
         self.replay.history.last().map(|&(ref t, _, v, e)| {
             (
@@ -1108,12 +1116,14 @@ where
             self.replay.edits.edits[edit_offset].1.clone(),
         ));
     }
+
     fn advance_buffer_by(&mut self, meet: &T) {
         for element in self.replay.buffer.iter_mut() {
             (element.0).1 = (element.0).1.join(meet);
         }
         differential_dataflow::consolidation::consolidate(&mut self.replay.buffer);
     }
+
     fn is_done(&self) -> bool {
         self.replay.history.len() == 0
     }
