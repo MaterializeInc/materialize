@@ -1,46 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="421" height="179">
-   <polygon points="9 17 1 13 1 21"/>
-   <polygon points="17 17 9 13 9 21"/>
-   <rect x="31" y="3" width="70" height="32" rx="10"/>
-   <rect x="29"
+<svg xmlns="http://www.w3.org/2000/svg" width="339" height="179">
+   <polygon points="11 17 3 13 3 21"/>
+   <polygon points="19 17 11 13 11 21"/>
+   <rect x="33" y="3" width="70" height="32" rx="10"/>
+   <rect x="31"
          y="1"
          width="70"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="39" y="21">GRANT</text>
-   <rect x="121" y="3" width="88" height="32"/>
-   <rect x="119" y="1" width="88" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="129" y="21">role_name</text>
-   <rect x="229" y="3" width="40" height="32" rx="10"/>
-   <rect x="227"
+   <text class="terminal" x="41" y="21">GRANT</text>
+   <rect x="123" y="3" width="88" height="32"/>
+   <rect x="121" y="1" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="131" y="21">role_name</text>
+   <rect x="231" y="3" width="40" height="32" rx="10"/>
+   <rect x="229"
          y="1"
          width="40"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="237" y="21">TO</text>
-   <rect x="309" y="35" width="70" height="32" rx="10"/>
-   <rect x="307"
-         y="33"
+   <text class="terminal" x="239" y="21">TO</text>
+   <rect x="65" y="145" width="70" height="32" rx="10"/>
+   <rect x="63"
+         y="143"
          width="70"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="317" y="53">GROUP</text>
-   <rect x="257" y="145" width="116" height="32"/>
-   <rect x="255" y="143" width="116" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="265" y="163">member_name</text>
-   <rect x="257" y="101" width="24" height="32" rx="10"/>
-   <rect x="255"
-         y="99"
+   <text class="terminal" x="73" y="163">GROUP</text>
+   <rect x="175" y="113" width="116" height="32"/>
+   <rect x="173" y="111" width="116" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="183" y="131">member_name</text>
+   <rect x="45" y="69" width="24" height="32" rx="10"/>
+   <rect x="43"
+         y="67"
          width="24"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="265" y="119">,</text>
+   <text class="terminal" x="53" y="87">,</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m70 0 h10 m0 0 h10 m88 0 h10 m0 0 h10 m40 0 h10 m20 0 h10 m0 0 h80 m-110 0 h20 m90 0 h20 m-130 0 q10 0 10 10 m110 0 q0 -10 10 -10 m-120 10 v12 m110 0 v-12 m-110 12 q0 10 10 10 m90 0 q10 0 10 -10 m-100 10 h10 m70 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-206 142 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m116 0 h10 m-156 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m136 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-136 0 h10 m24 0 h10 m0 0 h92 m23 44 h-3"/>
-   <polygon points="411 159 419 155 419 163"/>
-   <polygon points="411 159 403 155 403 163"/>
+         d="m19 17 h2 m0 0 h10 m70 0 h10 m0 0 h10 m88 0 h10 m0 0 h10 m40 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-290 110 l2 0 m2 0 l2 0 m2 0 l2 0 m42 0 h10 m0 0 h80 m-110 0 h20 m90 0 h20 m-130 0 q10 0 10 10 m110 0 q0 -10 10 -10 m-120 10 v12 m110 0 v-12 m-110 12 q0 10 10 10 m90 0 q10 0 10 -10 m-100 10 h10 m70 0 h10 m20 -32 h10 m116 0 h10 m-286 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m266 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-266 0 h10 m24 0 h10 m0 0 h222 m23 44 h-3"/>
+   <polygon points="329 127 337 123 337 131"/>
+   <polygon points="329 127 321 123 321 131"/>
 </svg>
