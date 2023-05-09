@@ -611,3 +611,38 @@ SELECT * FROM rtr
 ----
 1
 1
+
+statement ok
+DELETE FROM t
+
+# AS OF should work in the middle of a transaction
+
+statement ok
+BEGIN
+
+query T
+SELECT * FROM t AS OF AT LEAST 1683131452106;
+----
+
+# Give t a chance to advance.
+statement ok
+SELECT mz_internal.mz_sleep(2)
+
+query T
+SELECT * FROM t AS OF AT LEAST 1683131452106;
+----
+
+query T
+SELECT * FROM t;
+----
+
+# Give t a chance to advance.
+statement ok
+SELECT mz_internal.mz_sleep(2)
+
+query T
+SELECT * FROM t AS OF AT LEAST 1683131452106;
+----
+
+statement ok
+COMMIT
