@@ -1782,6 +1782,27 @@ GRANT scientist TO joseph, michael
 GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
 
 parse-statement
+GRANT scientist TO GROUP joseph, GROUP michael
+----
+GRANT scientist TO joseph, michael
+=>
+GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+GRANT scientist TO joseph, GROUP michael
+----
+GRANT scientist TO joseph, michael
+=>
+GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+GRANT scientist TO GROUP joseph, GROUP michael, GROUP yisachar
+----
+GRANT scientist TO joseph, michael, yisachar
+=>
+GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael"), Ident("yisachar")] })
+
+parse-statement
 REVOKE doctor FROM joe
 ----
 REVOKE doctor FROM joe
@@ -1808,6 +1829,27 @@ REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, michael
 REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
 =>
 RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+REVOKE ability_to_practice_law_in_arkansas FROM joseph, GROUP michael
+----
+REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
+=>
+RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, GROUP michael
+----
+REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
+=>
+RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, GROUP michael, GROUP yisachar
+----
+REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael, yisachar
+=>
+RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael"), Ident("yisachar")] })
 
 parse-statement
 ALTER CLUSTER foo OWNER TO joe
@@ -2117,6 +2159,26 @@ GRANT ALL ON TYPE t TO joe
 =>
 GrantPrivilege(GrantPrivilegeStatement { privileges: All, object_type: Type, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe")] })
 
+parse-statement
+GRANT CREATE ON CLUSTER c TO GROUP joe, GROUP mike
+----
+GRANT CREATE ON CLUSTER c TO joe, mike
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT CREATE ON CLUSTER c TO joe, GROUP mike
+----
+GRANT CREATE ON CLUSTER c TO joe, mike
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT CREATE ON CLUSTER c TO joe, GROUP mike, GROUP yisachar
+----
+GRANT CREATE ON CLUSTER c TO joe, mike, yisachar
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike"), Ident("yisachar")] })
 
 parse-statement
 REVOKE USAGE, CREATE ON CLUSTER foo FROM joe
@@ -2243,3 +2305,24 @@ REVOKE ALL PRIVILEGES ON TYPE t FROM joe
 REVOKE ALL ON TYPE t FROM joe
 =>
 RevokePrivilege(RevokePrivilegeStatement { privileges: All, object_type: Type, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe")] })
+
+parse-statement
+REVOKE CREATE ON CLUSTER c FROM GROUP joe, GROUP mike
+----
+REVOKE CREATE ON CLUSTER c FROM joe, mike
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE CREATE ON CLUSTER c FROM joe, GROUP mike
+----
+REVOKE CREATE ON CLUSTER c FROM joe, mike
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE CREATE ON CLUSTER c FROM joe, GROUP mike, GROUP yisachar
+----
+REVOKE CREATE ON CLUSTER c FROM joe, mike, yisachar
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike"), Ident("yisachar")] })

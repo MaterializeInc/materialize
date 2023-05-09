@@ -5975,7 +5975,7 @@ impl<'a> Parser<'a> {
                 }
                 let name = self.parse_object_name(object_type)?;
                 self.expect_keyword(TO)?;
-                let roles = self.parse_comma_separated(Parser::parse_identifier)?;
+                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::GrantPrivilege(GrantPrivilegeStatement {
                     privileges,
                     object_type,
@@ -5986,8 +5986,7 @@ impl<'a> Parser<'a> {
             None => {
                 let role_name = self.parse_identifier()?;
                 self.expect_keyword(TO)?;
-                let _ = self.parse_keyword(GROUP);
-                let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
+                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::GrantRole(GrantRoleStatement {
                     role_name,
                     member_names,
@@ -6033,7 +6032,7 @@ impl<'a> Parser<'a> {
                 }
                 let name = self.parse_object_name(object_type)?;
                 self.expect_keyword(FROM)?;
-                let roles = self.parse_comma_separated(Parser::parse_identifier)?;
+                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::RevokePrivilege(RevokePrivilegeStatement {
                     privileges,
                     object_type,
@@ -6044,8 +6043,7 @@ impl<'a> Parser<'a> {
             None => {
                 let role_name = self.parse_identifier()?;
                 self.expect_keyword(FROM)?;
-                let _ = self.parse_keyword(GROUP);
-                let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
+                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::RevokeRole(RevokeRoleStatement {
                     role_name,
                     member_names,
@@ -6242,6 +6240,12 @@ impl<'a> Parser<'a> {
         } else {
             Some(PrivilegeSpecification::Privileges(privileges))
         }
+    }
+
+    /// Bail out if the current token is not a role specification, or consume and return it if it is.
+    fn expect_role_specification(&mut self) -> Result<Ident, ParserError> {
+        let _ = self.parse_keyword(GROUP);
+        self.parse_identifier()
     }
 }
 
