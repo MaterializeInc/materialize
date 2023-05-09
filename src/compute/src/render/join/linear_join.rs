@@ -13,9 +13,8 @@
 
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::fmt::Debug;
 
-use differential_dataflow::difference::{Multiply, Semigroup};
+use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::{Arrange, Arranged};
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -327,18 +326,12 @@ fn join_core<G, Tr1, Tr2, L, I>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
     mut result: L,
-) -> Collection<G, I::Item, <Tr1::R as Multiply<Tr2::R>>::Output>
+) -> Collection<G, I::Item, Diff>
 where
     G: Scope,
     G::Timestamp: Lattice,
-    Tr1: TraceReader<Time = G::Timestamp> + Clone + 'static,
-    Tr1::Key: Ord + Debug,
-    Tr1::Val: Ord + Clone + Debug,
-    Tr1::R: Semigroup + Multiply<Tr2::R>,
-    <Tr1::R as Multiply<Tr2::R>>::Output: Semigroup,
-    Tr2: TraceReader<Key = Tr1::Key, Time = G::Timestamp> + Clone + 'static,
-    Tr2::Val: Ord + Clone + Debug,
-    Tr2::R: Semigroup,
+    Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
+    Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
     L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
     I: IntoIterator,
     I::Item: Data,
@@ -640,40 +633,27 @@ where
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<K, T, R, C1, C2, D>
+struct Deferred<T, C1, C2, D>
 where
-    T: Timestamp + Lattice + Ord + Debug,
-    R: Semigroup,
-    C1: Cursor<Key = K, Time = T>,
-    C2: Cursor<Key = K, Time = T>,
-    C1::Val: Ord + Clone,
-    C2::Val: Ord + Clone,
-    C1::R: Semigroup,
-    C2::R: Semigroup,
-    D: Ord + Clone + Data,
+    T: Timestamp,
+    C1: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    C2: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
 {
-    phant: ::std::marker::PhantomData<K>,
     trace: C1,
     trace_storage: C1::Storage,
     batch: C2,
     batch_storage: C2::Storage,
     capability: Capability<T>,
     done: bool,
-    temp: Vec<((D, T), R)>,
+    temp: Vec<((D, T), Diff)>,
 }
 
-impl<K, T, R, C1, C2, D> Deferred<K, T, R, C1, C2, D>
+impl<T, C1, C2, D> Deferred<T, C1, C2, D>
 where
-    K: Ord + Debug + Eq,
-    C1: Cursor<Key = K, Time = T>,
-    C2: Cursor<Key = K, Time = T>,
-    C1::Val: Ord + Clone + Debug,
-    C2::Val: Ord + Clone + Debug,
-    C1::R: Semigroup,
-    C2::R: Semigroup,
-    T: Timestamp + Lattice + Ord + Debug,
-    R: Semigroup,
-    D: Clone + Data,
+    T: Timestamp + Lattice,
+    C1: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    C2: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    D: Data,
 {
     fn new(
         trace: C1,
@@ -683,7 +663,6 @@ where
         capability: Capability<T>,
     ) -> Self {
         Deferred {
-            phant: ::std::marker::PhantomData,
             trace,
             trace_storage,
             batch,
@@ -702,12 +681,12 @@ where
     #[inline(never)]
     fn work<L, I>(
         &mut self,
-        output: &mut OutputHandle<T, (D, T, R), Tee<T, (D, T, R)>>,
+        output: &mut OutputHandle<T, (D, T, Diff), Tee<T, (D, T, Diff)>>,
         mut logic: L,
         fuel: &mut usize,
     ) where
-        I: IntoIterator<Item = (D, T, R)>,
-        L: FnMut(&K, &C1::Val, &C2::Val, &T, &C1::R, &C2::R) -> I,
+        I: IntoIterator<Item = (D, T, Diff)>,
+        L: FnMut(&C1::Key, &C1::Val, &C2::Val, &T, &C1::R, &C2::R) -> I,
     {
         let meet = self.capability.time();
 
