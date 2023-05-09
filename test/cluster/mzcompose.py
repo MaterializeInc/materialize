@@ -75,6 +75,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-compute-reconciliation-reuse",
         "test-compute-reconciliation-no-errors",
         "test-mz-subscriptions",
+        "test-mv-source-sink",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -1440,3 +1441,48 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
 
     stop_subscribe(subscribe2)
     check_mz_subscriptions(())
+
+
+def workflow_test_mv_source_sink(c: Composition) -> None:
+    """
+    Test that compute materialized view's "since" timestamp is at least as large as source table's "since" timestamp.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/19151
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+
+    # Set up a dataflow on clusterd.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 2
+        ));
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        """
+    )
+
+    def extract_since_ts(output: str) -> int:
+        since_re = re.compile("^\s+since:\[(?P<ts>[0-9]*) \(.*\)\]")
+        for line in output.splitlines():
+            if match := since_re.match(line):
+                return int(match.group("ts"))
+        assert False, f"No since timestamp found in {output}"
+
+    # Verify that there are no empty frontiers.
+    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM t")
+    t_since = extract_since_ts(output[0][0])
+    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM mv")
+    mv_since = extract_since_ts(output[0][0])
+
+    assert (
+        mv_since >= t_since
+    ), f'"since" timestamp of mv ({mv_since}) is less than "since" timestamp of its source table ({t_since})'
