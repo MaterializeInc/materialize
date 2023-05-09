@@ -45,7 +45,10 @@ impl Client {
             .await?;
 
         let environments: Vec<Environment> = self.send_request(req).await?;
-        Ok(environments.get(0).unwrap().to_owned())
+        Ok(environments
+            .get(0)
+            .ok_or_else(|| Error::EmptyRegion)?
+            .to_owned())
     }
 
     /// Get all the available environments for the current user.
@@ -54,9 +57,15 @@ impl Client {
         let mut environments: Vec<Environment> = vec![];
 
         for cloud_provider in cloud_providers {
-            let region = self.get_region(cloud_provider).await?;
-            let environment = self.get_environment(region).await?;
-            environments.push(environment);
+            // Skip regions with no environments
+            match self.get_region(cloud_provider).await {
+                Ok(region) => {
+                    let environment = self.get_environment(region).await?;
+                    environments.push(environment);
+                },
+                Err(Error::InvalidEnvironmentAssignment) => {},
+                Err(e) => return Err(e),
+            }
         }
 
         Ok(environments)
