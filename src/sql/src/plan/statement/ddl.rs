@@ -118,6 +118,7 @@ use crate::plan::{
     SourceSinkClusterConfig, Table, Type, View,
 };
 use crate::session::user::SYSTEM_USER;
+use crate::session::vars;
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -295,12 +296,12 @@ pub fn plan_create_table(
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
                 // them in unsafe mode for sqllogictest's sake.
-                scx.require_unsafe_mode("CREATE TABLE with a foreign key")?
+                scx.require_feature_flag(&vars::ALLOW_TABLE_FOREIGN_KEY)?
             }
             TableConstraint::Check { .. } => {
                 // Check constraints are not presently enforced. We allow them
                 // in unsafe mode for sqllogictest's sake.
-                scx.require_unsafe_mode("CREATE TABLE with a check constraint")?
+                scx.require_feature_flag(&vars::ALLOW_TABLE_CHECK_CONSTRAINT)?
             }
         }
     }
@@ -308,7 +309,7 @@ pub fn plan_create_table(
     if !keys.is_empty() {
         // Unique constraints are not presently enforced. We allow them in
         // unsafe mode for sqllogictest's sake.
-        scx.require_unsafe_mode("CREATE TABLE with a primary key or unique constraint")?;
+        scx.require_feature_flag(&vars::ALLOW_TABLE_KEYS)?
     }
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -403,10 +404,13 @@ pub fn plan_create_source(
         .iter()
         .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_unsafe_mode(&format!(
-            "creating sources with WITH options other than {}",
-            comma_separated(SAFE_WITH_OPTIONS)
-        ))?;
+        scx.require_feature_flag(&vars::ALLOW_CREATE_SOURCE_UNSAFE_WITH_OPTIONS)
+            .map_err(|_| PlanError::RequiresFeatureFlag {
+                feature: format!(
+                    "creating sources with WITH options other than {}",
+                    comma_separated(SAFE_WITH_OPTIONS)
+                ),
+            })?;
     }
 
     if !matches!(connection, CreateSourceConnection::Kafka { .. })
@@ -443,7 +447,10 @@ pub fn plan_create_source(
                     && opt.name != KafkaConfigOptionName::StartTimestamp
                     && opt.name != KafkaConfigOptionName::Topic
             }) {
-                scx.require_unsafe_mode(&format!("KAFKA CONNECTION option {}", opt.name))?;
+                scx.require_feature_flag(&vars::ALLOW_DENYLIST_KAFKA_OPTIONS)
+                    .map_err(|_| PlanError::RequiresFeatureFlag {
+                        feature: format!("KAFKA CONNECTION option {}", opt.name),
+                    })?;
             }
 
             kafka_util::validate_options_for_context(
@@ -801,7 +808,7 @@ pub fn plan_create_source(
             (connection, encoding, available_subsources)
         }
         CreateSourceConnection::TestScript { desc_json } => {
-            scx.require_unsafe_mode("CREATE SOURCE ... FROM TEST SCRIPT")?;
+            scx.require_feature_flag(&vars::ALLOW_CREATE_SOURCE_FROM_TESTSCRIPT)?;
             let connection = GenericSourceConnection::from(TestScriptSourceConnection {
                 desc_json: desc_json.clone(),
             });
@@ -931,7 +938,7 @@ pub fn plan_create_source(
             }
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
-            scx.require_unsafe_mode("ENVELOPE MATERIALIZE")?;
+            scx.require_feature_flag(&vars::ALLOW_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
@@ -971,7 +978,7 @@ pub fn plan_create_source(
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
         // Don't remove this without addressing
         // https://github.com/MaterializeInc/materialize/issues/15272.
-        scx.require_unsafe_mode("PRIMARY KEY NOT ENFORCED")?;
+        scx.require_feature_flag(&vars::ALLOW_PRIMARY_KEY_NOT_ENFORCED)?;
 
         let key_columns = columns
             .into_iter()
@@ -1961,10 +1968,13 @@ pub fn plan_create_sink(
         .iter()
         .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_unsafe_mode(&format!(
-            "creating sinks with WITH options other than {}",
-            comma_separated(SAFE_WITH_OPTIONS)
-        ))?;
+        scx.require_feature_flag(&vars::ALLOW_CREATE_SINK_UNSAFE_WITH_OPTIONS)
+            .map_err(|_| PlanError::RequiresFeatureFlag {
+                feature: format!(
+                    "creating sinks with WITH options other than {}",
+                    comma_separated(SAFE_WITH_OPTIONS)
+                ),
+            })?;
     }
 
     let envelope = match envelope {
@@ -2165,13 +2175,19 @@ fn kafka_sink_builder(
         _ => sql_bail!("{} is not a kafka connection", item.name()),
     };
 
+    const SAFE_WITH_OPTIONS: &[KafkaConfigOptionName] = &[KafkaConfigOptionName::Topic];
+
     if with_options
         .iter()
-        .any(|mz_sql_parser::ast::KafkaConfigOption { name, .. }| {
-            !matches!(name, KafkaConfigOptionName::Topic)
-        })
+        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_unsafe_mode("KAFKA CONNECTION options besides TOPIC")?;
+        scx.require_feature_flag(&vars::ALLOW_CREATE_KAFKA_CONNECTION_UNSAFE_WITH_OPTIONS)
+            .map_err(|_| PlanError::RequiresFeatureFlag {
+                feature: format!(
+                    "creating KAFKA CONNECTION with WITH options other than {}",
+                    comma_separated(SAFE_WITH_OPTIONS)
+                ),
+            })?;
     }
 
     kafka_util::validate_options_for_context(
@@ -2790,7 +2806,7 @@ fn plan_replica_config(
             compute_addresses,
             workers,
         ) => {
-            scx.require_unsafe_mode("unmanaged cluster replicas")?;
+            scx.require_feature_flag(&vars::ALLOW_UNMANAGED_CLUSTER_REPLICAS)?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
             // accidentally omit one of these options, so we try to produce
@@ -3875,7 +3891,7 @@ fn plan_index_options(
 ) -> Result<Vec<crate::plan::IndexOption>, PlanError> {
     if !with_opts.is_empty() {
         // Index options are not durable.
-        scx.require_unsafe_mode("INDEX OPTIONS")?;
+        scx.require_feature_flag(&vars::ALLOW_INDEX_OPTIONS)?;
     }
 
     let IndexOptionExtracted {
@@ -3886,7 +3902,7 @@ fn plan_index_options(
     let mut out = Vec::with_capacity(1);
 
     if let Some(OptionalInterval(lcw)) = logical_compaction_window {
-        scx.require_unsafe_mode("LOGICAL COMPACTION WINDOW")?;
+        scx.require_feature_flag(&vars::ALLOW_LOGICAL_COMPACTION_WINDOW)?;
         out.push(crate::plan::IndexOption::LogicalCompactionWindow(
             lcw.map(|interval| interval.duration()).transpose()?,
         ))

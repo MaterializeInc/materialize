@@ -907,7 +907,49 @@ feature_flags!(
     (allow_list_n_layers, "the list_n_layers function"),
     (allow_list_length_max, "the list_length_max function"),
     (allow_list_remove, "the list_remove function"),
-    (allow_repeat_row, "the repeat_row function")
+    (allow_repeat_row, "the repeat_row function"),
+    (allow_table_foreign_key, "CREATE TABLE with a foreign key"),
+    (
+        allow_table_check_constraint,
+        "CREATE TABLE with a check constraint"
+    ),
+    (
+        allow_table_keys,
+        "CREATE TABLE with a primary key or unique constraint"
+    ),
+    (
+        allow_create_source_unsafe_with_options,
+        "CREATE SOURCE with unsafe options"
+    ),
+    (
+        allow_denylist_kafka_options,
+        "Kafka sources with non-allowlisted options"
+    ),
+    (
+        allow_create_source_from_testscript,
+        "CREATE SOURCE ... FROM TEST SCRIPT"
+    ),
+    (allow_envelope_materialize, "ENVELOPE MATERIALIZE"),
+    (allow_primary_key_not_enforced, "PRIMARY KEY NOT ENFORCED"),
+    (
+        allow_create_sink_unsafe_with_options,
+        "CREATE SINK with unsafe options"
+    ),
+    (
+        allow_create_kafka_connection_unsafe_with_options,
+        "CREATE KAFKA CONNECTION with unsafe options"
+    ),
+    (
+        allow_unmanaged_cluster_replicas,
+        "unmanaged cluster replicas"
+    ),
+    (allow_index_options, "INDEX OPTIONS"),
+    (allow_logical_compaction_window, "LOGICAL COMPACTION WINDOW"),
+    (
+        allow_mfp_pushdown_explain_flag,
+        "`mfp_pushdown` explain flag"
+    ),
+    (allow_raise_statement, "RAISE statement")
 );
 
 /// Represents the input to a variable.
@@ -1708,7 +1750,7 @@ impl SystemVars {
         self
     }
 
-    fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
+    pub(crate) fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
     where
         V: Value + Debug + PartialEq + Clone + 'static,
         V::Owned: Debug + PartialEq + Send + Clone + Sync,

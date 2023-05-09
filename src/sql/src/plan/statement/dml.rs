@@ -338,7 +338,7 @@ pub fn plan_explain(
     let config = ExplainConfig::try_from(config_flags)?;
 
     if config.mfp_pushdown {
-        scx.require_unsafe_mode("`mfp_pushdown` explain flag")?;
+        scx.require_feature_flag(&crate::session::vars::ALLOW_MFP_PUSHDOWN_EXPLAIN_FLAG)?;
     }
 
     let format = match format {

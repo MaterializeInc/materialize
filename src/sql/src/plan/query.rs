@@ -5411,26 +5411,7 @@ impl<'a> ExprContext<'a> {
     }
 
     pub fn require_feature_flag(&self, var: &ServerVar<bool>) -> Result<(), PlanError> {
-        use crate::session::vars::{Value, Var, VarInput};
-
-        let v = self
-            .qcx
-            .scx
-            .catalog
-            .system_vars()
-            .get(var.name())
-            .expect("var names must exist");
-
-        let enabled =
-            bool::parse(VarInput::Flat(&v.value())).expect("must use boolean system vars");
-
-        if enabled {
-            Ok(())
-        } else {
-            Err(PlanError::RequiresFeatureFlag {
-                feature: var.name().to_string(),
-            })
-        }
+        self.qcx.scx.require_feature_flag(var)
     }
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {

@@ -34,7 +34,7 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::{query, with_options};
 use crate::plan::{Params, Plan, PlanContext, PlanKind};
-use crate::session::vars::SystemVars;
+use crate::session::vars::{ServerVar, SystemVars};
 
 pub(crate) mod ddl;
 mod dml;
@@ -711,6 +711,18 @@ impl<'a> StatementContext<'a> {
 
     pub fn unsafe_mode(&self) -> bool {
         self.catalog.config().unsafe_mode
+    }
+
+    pub fn require_feature_flag(&self, var: &ServerVar<bool>) -> Result<(), PlanError> {
+        use crate::session::vars::Var;
+
+        if *self.catalog.system_vars().expect_value(var) {
+            Ok(())
+        } else {
+            Err(PlanError::RequiresFeatureFlag {
+                feature: var.name().to_string(),
+            })
+        }
     }
 
     pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
