@@ -431,7 +431,7 @@ where
                 move |capability, info| {
                     // Acquire an activator to reschedule the operator when it has unfinished work.
                     use timely::scheduling::Activator;
-                    let activations = self.stream.scope().activations().clone();
+                    let activations = self.stream.scope().activations();
                     let activator = Activator::new(&info.address[..], activations);
 
                     // Our initial invariants are that for each trace, physical compaction is less or equal the trace's upper bound.
@@ -534,7 +534,7 @@ where
                                 data.swap(&mut input1_buffer);
                                 for batch1 in input1_buffer.drain(..) {
                                     // Ignore any pre-loaded data.
-                                    if PartialOrder::less_equal(&acknowledged1, &batch1.lower()) {
+                                    if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
                                         if !batch1.is_empty() {
                                             // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
                                             // at start-up, and have held back physical compaction ever since.
@@ -574,7 +574,7 @@ where
                                 data.swap(&mut input2_buffer);
                                 for batch2 in input2_buffer.drain(..) {
                                     // Ignore any pre-loaded data.
-                                    if PartialOrder::less_equal(&acknowledged2, &batch2.lower()) {
+                                    if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
                                         if !batch2.is_empty() {
                                             // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
                                             // at start-up, and have held back physical compaction ever since.
@@ -798,7 +798,7 @@ where
                     thinker
                         .history1
                         .edits
-                        .load(trace, trace_storage, |time| time.join(&meet));
+                        .load(trace, trace_storage, |time| time.join(meet));
                     thinker
                         .history2
                         .edits
@@ -896,18 +896,18 @@ where
             //       is sufficient.
 
             while !replay1.is_done() && !replay2.is_done() {
-                if replay1.time().unwrap().cmp(&replay2.time().unwrap())
+                if replay1.time().unwrap().cmp(replay2.time().unwrap())
                     == ::std::cmp::Ordering::Less
                 {
                     replay2.advance_buffer_by(replay1.meet().unwrap());
-                    for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
+                    for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
                         let (val1, time1, ref diff1) = replay1.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
                     replay1.step();
                 } else {
                     replay1.advance_buffer_by(replay2.meet().unwrap());
-                    for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
+                    for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
                         let (val2, time2, ref diff2) = replay2.edit().unwrap();
                         results(val1, val2, time1.join(time2), diff1, diff2);
                     }
@@ -917,7 +917,7 @@ where
 
             while !replay1.is_done() {
                 replay2.advance_buffer_by(replay1.meet().unwrap());
-                for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
+                for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
                     let (val1, time1, ref diff1) = replay1.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
@@ -925,7 +925,7 @@ where
             }
             while !replay2.is_done() {
                 replay1.advance_buffer_by(replay2.meet().unwrap());
-                for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
+                for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
                     let (val2, time2, ref diff2) = replay2.edit().unwrap();
                     results(val1, val2, time1.join(time2), diff1, diff2);
                 }
@@ -1011,7 +1011,7 @@ where
             let upper = self.values[index].1;
             for edit in lower..upper {
                 logic(
-                    &self.values[index].0,
+                    self.values[index].0,
                     &self.edits[edit].0,
                     self.edits[edit].1.clone(),
                 );
