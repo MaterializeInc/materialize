@@ -1996,7 +1996,7 @@ GRANT USAGE, CREATE ON CLUSTER foo TO joe
 ----
 GRANT USAGE, CREATE ON CLUSTER foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE, CREATE], object_type: Cluster, name: Cluster(Ident("foo")), roles: [Ident("joe")] })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE, CREATE]), object_type: Cluster, name: Cluster(Ident("foo")), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE, CREATE ON CLUSTER REPLICA foo.r TO joe
@@ -2010,28 +2010,28 @@ GRANT CREATE ON DATABASE foo TO joe
 ----
 GRANT CREATE ON DATABASE foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [CREATE], object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), roles: [Ident("joe")] })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE ON SCHEMA foo TO joe
 ----
 GRANT USAGE ON SCHEMA foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), roles: [Ident("joe")] })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
 ----
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [SELECT, INSERT, UPDATE, DELETE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([SELECT, INSERT, UPDATE, DELETE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE ON foo TO joe
 ----
 GRANT USAGE ON TABLE foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE ON SINK foo TO joe
@@ -2059,14 +2059,14 @@ GRANT USAGE ON SECRET foo TO joe
 ----
 GRANT USAGE ON SECRET foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE ON CONNECTION foo TO joe
 ----
 GRANT USAGE ON CONNECTION foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT SELECT ON VIEW foo TO joe
@@ -2094,21 +2094,36 @@ GRANT SELECT, INSERT ON t TO joe, mike
 ----
 GRANT SELECT, INSERT ON TABLE t TO joe, mike
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [SELECT, INSERT], object_type: Table, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe"), Ident("mike")] })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([SELECT, INSERT]), object_type: Table, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe"), Ident("mike")] })
 
 parse-statement
 GRANT USAGE ON DATABASE d TO joe, mike
 ----
 GRANT USAGE ON DATABASE d TO joe, mike
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT ALL ON DATABASE d TO joe, mike
+----
+GRANT ALL ON DATABASE d TO joe, mike
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: All, object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT ALL PRIVILEGES ON TYPE t TO joe
+----
+GRANT ALL ON TYPE t TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: All, object_type: Type, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe")] })
+
 
 parse-statement
 REVOKE USAGE, CREATE ON CLUSTER foo FROM joe
 ----
 REVOKE USAGE, CREATE ON CLUSTER foo FROM joe
 =>
-RevokePrivilege(RevokePrivilegeStatement { privileges: [USAGE, CREATE], object_type: Cluster, name: Cluster(Ident("foo")), roles: [Ident("joe")] })
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE, CREATE]), object_type: Cluster, name: Cluster(Ident("foo")), roles: [Ident("joe")] })
 
 parse-statement
 REVOKE USAGE, CREATE ON CLUSTER REPLICA foo.r FROM joe
@@ -2122,28 +2137,28 @@ REVOKE CREATE ON DATABASE foo FROM joe
 ----
 REVOKE CREATE ON DATABASE foo FROM joe
 =>
-RevokePrivilege(RevokePrivilegeStatement { privileges: [CREATE], object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), roles: [Ident("joe")] })
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), roles: [Ident("joe")] })
 
 parse-statement
 REVOKE USAGE ON SCHEMA foo FROM joe
 ----
 REVOKE USAGE ON SCHEMA foo FROM joe
 =>
-RevokePrivilege(RevokePrivilegeStatement { privileges: [USAGE], object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), roles: [Ident("joe")] })
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE foo FROM joe
 ----
 REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE foo FROM joe
 =>
-RevokePrivilege(RevokePrivilegeStatement { privileges: [SELECT, INSERT, UPDATE, DELETE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([SELECT, INSERT, UPDATE, DELETE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 REVOKE USAGE ON foo FROM joe
 ----
 REVOKE USAGE ON TABLE foo FROM joe
 =>
-RevokePrivilege(RevokePrivilegeStatement { privileges: [USAGE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 REVOKE USAGE ON SINK foo FROM joe
@@ -2171,14 +2186,14 @@ REVOKE USAGE ON SECRET foo FROM joe
 ----
 REVOKE USAGE ON SECRET foo FROM joe
 =>
-RevokePrivilege(RevokePrivilegeStatement { privileges: [USAGE], object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 REVOKE USAGE ON CONNECTION foo FROM joe
 ----
 REVOKE USAGE ON CONNECTION foo FROM joe
 =>
-RevokePrivilege(RevokePrivilegeStatement { privileges: [USAGE], object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 REVOKE SELECT ON VIEW foo FROM joe
@@ -2206,11 +2221,25 @@ REVOKE SELECT, INSERT ON t FROM joe, mike
 ----
 REVOKE SELECT, INSERT ON TABLE t FROM joe, mike
 =>
-RevokePrivilege(RevokePrivilegeStatement { privileges: [SELECT, INSERT], object_type: Table, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe"), Ident("mike")] })
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([SELECT, INSERT]), object_type: Table, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe"), Ident("mike")] })
 
 parse-statement
 REVOKE USAGE ON DATABASE d FROM joe, mike
 ----
 REVOKE USAGE ON DATABASE d FROM joe, mike
 =>
-RevokePrivilege(RevokePrivilegeStatement { privileges: [USAGE], object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE ALL ON DATABASE d FROM joe, mike
+----
+REVOKE ALL ON DATABASE d FROM joe, mike
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: All, object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE ALL PRIVILEGES ON TYPE t FROM joe
+----
+REVOKE ALL ON TYPE t FROM joe
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: All, object_type: Type, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe")] })

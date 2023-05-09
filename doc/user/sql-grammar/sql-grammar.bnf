@@ -214,7 +214,7 @@ format_spec ::=
   'TEXT' |
   'BYTES'
 grant_privilege ::=
-  'GRANT' privilege (',' privilege)* ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'TO' 'GROUP'? role_name ( ',' role_name )*
+  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'TO' 'GROUP'? role_name ( ',' role_name )*
 grant_role ::=
   'GRANT' role_name 'TO' 'GROUP'? member_name ( ',' member_name )*
 key_strat ::=
@@ -288,7 +288,7 @@ privilege ::=
 reset_session_variable ::=
   'RESET' variable_name
 revoke_privilege ::=
-  'REVOKE' privilege (',' privilege)* ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'FROM' 'GROUP'? role_name ( ',' role_name )*
+  'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'FROM' 'GROUP'? role_name ( ',' role_name )*
 revoke_role ::=
   'REVOKE' role_name 'FROM' 'GROUP'? member_name ( ',' member_name )*
 rollback ::=
