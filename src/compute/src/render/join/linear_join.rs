@@ -788,28 +788,28 @@ where
         let batch = &mut self.batch;
 
         let temp = &mut self.temp;
-        let mut thinker = JoinThinker::new();
+        let mut edits1 = EditList::new();
+        let mut edits2 = EditList::new();
 
         while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) && effort < *fuel {
             match trace.key(trace_storage).cmp(batch.key(batch_storage)) {
                 Ordering::Less => trace.seek_key(trace_storage, batch.key(batch_storage)),
                 Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
                 Ordering::Equal => {
-                    thinker
-                        .edits1
-                        .load(trace, trace_storage, |time| time.join(meet));
-                    thinker
-                        .edits2
-                        .load(batch, batch_storage, |time| time.clone());
+                    edits1.load(trace, trace_storage, |time| time.join(meet));
+                    edits2.load(batch, batch_storage, |time| time.clone());
 
                     assert_eq!(temp.len(), 0);
 
-                    // populate `temp` with the results in the best way we know how.
-                    thinker.think(|v1, v2, t, r1, r2| {
-                        let key = batch.key(batch_storage);
-                        for (d, t, r) in logic(key, v1, v2, &t, r1, r2) {
-                            temp.push(((d, t), r));
-                        }
+                    // populate `temp` with the results
+                    let key = batch.key(batch_storage);
+                    edits1.map(|v1, t1, r1| {
+                        edits2.map(|v2, t2, r2| {
+                            let t = t1.join(t2);
+                            for (d, t, r) in logic(key, v1, v2, &t, &r1, &r2) {
+                                temp.push(((d, t), r));
+                            }
+                        });
                     });
 
                     // TODO: This consolidation is optional, and it may not be very
@@ -827,8 +827,8 @@ where
                     batch.step_key(batch_storage);
                     trace.step_key(trace_storage);
 
-                    thinker.edits1.clear();
-                    thinker.edits2.clear();
+                    edits1.clear();
+                    edits2.clear();
                 }
             }
         }
@@ -840,47 +840,6 @@ where
         } else {
             *fuel -= effort;
         }
-    }
-}
-
-struct JoinThinker<
-    'a,
-    V1: Ord + Clone + 'a,
-    V2: Ord + Clone + 'a,
-    T: Lattice + Ord + Clone,
-    R1: Semigroup,
-    R2: Semigroup,
-> {
-    pub edits1: EditList<'a, V1, T, R1>,
-    pub edits2: EditList<'a, V2, T, R2>,
-}
-
-impl<
-        'a,
-        V1: Ord + Clone,
-        V2: Ord + Clone,
-        T: Lattice + Ord + Clone,
-        R1: Semigroup,
-        R2: Semigroup,
-    > JoinThinker<'a, V1, V2, T, R1, R2>
-where
-    V1: Debug,
-    V2: Debug,
-    T: Debug,
-{
-    fn new() -> Self {
-        JoinThinker {
-            edits1: EditList::new(),
-            edits2: EditList::new(),
-        }
-    }
-
-    fn think<F: FnMut(&V1, &V2, T, &R1, &R2)>(&mut self, mut results: F) {
-        self.edits1.map(|v1, t1, d1| {
-            self.edits2.map(|v2, t2, d2| {
-                results(v1, v2, t1.join(t2), &d1, &d2);
-            })
-        })
     }
 }
 
