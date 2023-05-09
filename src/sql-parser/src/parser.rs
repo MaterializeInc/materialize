@@ -5941,7 +5941,7 @@ impl<'a> Parser<'a> {
     /// Parse a `GRANT` statement, assuming that the `GRANT` token
     /// has already been consumed.
     fn parse_grant(&mut self) -> Result<Statement<Raw>, ParserError> {
-        match self.parse_privileges() {
+        match self.parse_privilege_specification() {
             Some(privileges) => {
                 self.expect_keyword(ON)?;
                 // If the object type is omitted, then it is assumed to be a table.
@@ -5998,7 +5998,7 @@ impl<'a> Parser<'a> {
     /// Parse a `REVOKE` statement, assuming that the `REVOKE` token
     /// has already been consumed.
     fn parse_revoke(&mut self) -> Result<Statement<Raw>, ParserError> {
-        match self.parse_privileges() {
+        match self.parse_privilege_specification() {
             Some(privileges) => {
                 self.expect_keyword(ON)?;
                 // If the object type is omitted, then it is assumed to be a table.
@@ -6221,7 +6221,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse one or more privileges separated by a ','.
-    fn parse_privileges(&mut self) -> Option<Vec<Privilege>> {
+    fn parse_privilege_specification(&mut self) -> Option<PrivilegeSpecification> {
+        if self.parse_keyword(ALL) {
+            let _ = self.parse_keyword(PRIVILEGES);
+            return Some(PrivilegeSpecification::All);
+        }
+
         let mut privileges = Vec::new();
         while let Some(privilege) = self.parse_privilege() {
             privileges.push(privilege);
@@ -6233,7 +6238,7 @@ impl<'a> Parser<'a> {
         if privileges.is_empty() {
             None
         } else {
-            Some(privileges)
+            Some(PrivilegeSpecification::Privileges(privileges))
         }
     }
 

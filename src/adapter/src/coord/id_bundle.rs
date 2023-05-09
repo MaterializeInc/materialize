@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::{coord::Coordinator, session::Session};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_repr::GlobalId;
 
@@ -69,5 +70,26 @@ impl CollectionIdBundle {
             .iter()
             .copied()
             .chain(self.compute_ids.values().flat_map(BTreeSet::iter).copied())
+    }
+}
+
+impl Coordinator {
+    /// Resolves the full name from the corresponding catalog entry for each item in `id_bundle`.
+    /// If an item in the bundle does not exist in the catalog, it's not included in the result.
+    pub fn resolve_collection_id_bundle_names(
+        &self,
+        session: &Session,
+        id_bundle: &CollectionIdBundle,
+    ) -> Vec<String> {
+        id_bundle
+            .iter()
+            // This could filter out an entry that has been replaced in another transaction.
+            .filter_map(|id| self.catalog().try_get_entry(&id))
+            .map(|item| {
+                self.catalog()
+                    .resolve_full_name(item.name(), Some(session.conn_id()))
+                    .to_string()
+            })
+            .collect()
     }
 }

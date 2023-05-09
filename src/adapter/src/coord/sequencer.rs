@@ -476,8 +476,8 @@ impl Coordinator {
     }
 
     pub(crate) fn sequence_explain_timestamp_finish(
-        &self,
-        session: &Session,
+        &mut self,
+        session: &mut Session,
         format: ExplainFormat,
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,

@@ -54,7 +54,7 @@ use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
 
 use crate::client::{
@@ -1541,8 +1541,10 @@ where
                             // dropped, so that the internal task will stop.
                             self.state.introspection_tokens.insert(id, scraper_token);
                         }
-                        IntrospectionType::SourceStatusHistory
-                        | IntrospectionType::SinkStatusHistory => {
+                        IntrospectionType::SourceStatusHistory => {
+                            self.reconcile_source_status_history().await;
+                        }
+                        IntrospectionType::SinkStatusHistory => {
                             // nothing to do: these collections are append only
                         }
                     }
@@ -2522,6 +2524,84 @@ where
         }
 
         self.reconcile_managed_collection(id, updates).await;
+    }
+
+    /// Effectively truncates the source status history shard except for the most recent updates
+    /// from each ID.
+    async fn reconcile_source_status_history(&mut self) {
+        let id = self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+
+        let rows = match self.state.collections[&id]
+            .write_frontier
+            .elements()
+            .iter()
+            .min()
+        {
+            Some(f) if f > &T::minimum() => {
+                let as_of = f.step_back().unwrap();
+
+                self.snapshot(id, as_of).await.expect("snapshot succeeds")
+            }
+            // If collection is closed or the frontier is the minimum, we cannot
+            // or don't need to truncate (respectively).
+            _ => return,
+        };
+
+        let (occurred_at, _) = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("occurred_at"))
+            .expect("schema has not changed");
+
+        let (source_id, _) = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("source_id"))
+            .expect("schema has not changed");
+
+        // BTreeMap<SourceId, BTreeMap<OccurredAt, Row>>
+        let mut last_n_entries_per_id: BTreeMap<Datum, BTreeMap<Datum, Vec<Datum>>> =
+            BTreeMap::new();
+
+        let mut deletions = vec![];
+
+        for (row, diff) in rows.iter() {
+            mz_ore::soft_assert!(
+                *diff == 1,
+                "only know how to operate over consolidated data"
+            );
+
+            let d = row.unpack();
+            let source_id = d[source_id];
+            let occurred_at = d[occurred_at];
+
+            let entries = last_n_entries_per_id.entry(source_id).or_default();
+
+            let old = entries.insert(occurred_at, d.clone());
+            mz_ore::soft_assert!(
+                old.is_none(),
+                "expected only one status at each time, but got multiple at {:?}",
+                occurred_at
+            );
+
+            // Retain some number of entries, using pop_first to mark the oldest entries for
+            // deletion.
+            while entries.len() > self.state.config.keep_n_source_status_history_entries {
+                if let Some((_, r)) = entries.pop_first() {
+                    deletions.push(r);
+                }
+            }
+        }
+
+        let mut row_buf = Row::default();
+        // Updates are only deletes because everything else is already in the shard.
+        let updates = deletions
+            .into_iter()
+            .map(|unpacked_row| {
+                // Re-pack all rows
+                let mut packer = row_buf.packer();
+                packer.extend(unpacked_row.into_iter());
+                (row_buf.clone(), -1)
+            })
+            .collect();
+
+        self.append_to_managed_collection(id, updates).await;
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.

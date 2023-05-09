@@ -38,9 +38,9 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    GrantPrivilegeStatement, GrantRoleStatement, Privilege, RevokePrivilegeStatement,
-    RevokeRoleStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    GrantPrivilegeStatement, GrantRoleStatement, Privilege, PrivilegeSpecification,
+    RevokePrivilegeStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -4455,19 +4455,23 @@ impl From<UpdatePrivilegePlan> for RevokePrivilegePlan {
 
 fn plan_update_privilege(
     scx: &StatementContext,
-    privileges: Vec<Privilege>,
+    privileges: PrivilegeSpecification,
     object_type: ObjectType,
     name: ResolvedObjectName,
     roles: Vec<ResolvedRoleName>,
 ) -> Result<UpdatePrivilegePlan, PlanError> {
-    let mut acl_mode = AclMode::empty();
-    // PostgreSQL doesn't care about duplicate privileges, so we don't either.
-    for privilege in privileges {
-        acl_mode |= privilege_to_acl_mode(privilege);
-    }
     let object_id = name
         .try_into()
         .expect("name resolution should handle invalid objects");
+    let actual_object_type = scx.get_object_type(&object_id);
+    let acl_mode = match privileges {
+        PrivilegeSpecification::All => scx.catalog.all_object_privileges(actual_object_type),
+        PrivilegeSpecification::Privileges(privileges) => privileges
+            .into_iter()
+            .map(privilege_to_acl_mode)
+            // PostgreSQL doesn't care about duplicate privileges, so we don't either.
+            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode)),
+    };
     if let ObjectId::Item(id) = &object_id {
         let item = scx.get_item(id);
         let item_type: ObjectType = item.item_type().into();
@@ -4487,7 +4491,6 @@ fn plan_update_privilege(
         }
     }
 
-    let actual_object_type = scx.get_object_type(&object_id);
     let all_object_privileges = scx.catalog.all_object_privileges(actual_object_type);
     let invalid_acl_mode = acl_mode.difference(all_object_privileges);
     if !invalid_acl_mode.is_empty() {
