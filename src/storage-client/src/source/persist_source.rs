@@ -36,8 +36,8 @@ use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::stats::PersistSourceDataStats;
 use mz_repr::{
-    Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationType, Row, RowArena,
-    Timestamp,
+    ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationType,
+    Row, RowArena, ScalarType, Timestamp,
 };
 use mz_timely_util::buffer::ConsolidateBuffer;
 
@@ -176,7 +176,6 @@ fn filter_may_match(
     stats: PersistSourceDataStatsImpl,
     plan: &MfpPlan,
 ) -> bool {
-    let num_columns = relation_type.column_types.len();
     let arena = RowArena::new();
     let mut ranges = ColumnSpecs::new(relation_type, &arena);
     // TODO: even better if we can use the lower bound of the part itself!
@@ -188,11 +187,21 @@ fn filter_may_match(
     }
 
     let total_count = stats.len();
-    for id in 0..num_columns {
+    for (id, col_type) in relation_type.column_types.iter().enumerate() {
         let min = stats.col_min(id, &arena);
         let max = stats.col_max(id, &arena);
         let nulls = stats.col_null_count(id);
-        let json_spec = stats.col_json(id, &arena);
+        let json_range = match col_type {
+            ColumnType {
+                scalar_type: ScalarType::Jsonb,
+                nullable: false,
+            } => stats.col_json(id, &arena),
+            ColumnType {
+                scalar_type: ScalarType::Jsonb,
+                nullable: true,
+            } => stats.col_opt_json(id, &arena),
+            _ => ResultSpec::anything(),
+        };
 
         let value_range = match (total_count, min, max, nulls) {
             (Some(total_count), _, _, Some(nulls)) if total_count == nulls => ResultSpec::nothing(),
@@ -200,10 +209,9 @@ fn filter_may_match(
             _ => ResultSpec::value_all(),
         };
 
-        let value_range = match json_spec {
-            Some(json) => value_range.intersect(json),
-            None => value_range,
-        };
+        // If this is not a JSON column or we don't have JSON stats, json_range is
+        // [ResultSpec::anything] and this is a noop.
+        let value_range = value_range.intersect(json_range);
 
         let null_range = match nulls {
             Some(0) => ResultSpec::nothing(),
@@ -404,59 +412,82 @@ fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> 
 }
 
 impl PersistSourceDataStatsImpl<'_> {
-    fn col_json<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> Option<ResultSpec<'a>> {
+    fn json_spec(stats: &JsonStats) -> ResultSpec {
+        match stats {
+            JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
+            JsonStats::Bools(bools) => {
+                ResultSpec::value_between(bools.lower.into(), bools.upper.into())
+            }
+            JsonStats::Strings(strings) => ResultSpec::value_between(
+                strings.lower.as_str().into(),
+                strings.upper.as_str().into(),
+            ),
+            JsonStats::Numerics(floats) => {
+                fn float_to_datum(float: f64) -> Datum<'static> {
+                    let numeric: Numeric = float.into();
+                    numeric.into()
+                }
+                ResultSpec::value_between(
+                    float_to_datum(floats.lower.floor()),
+                    float_to_datum(floats.upper.ceil()),
+                )
+            }
+            JsonStats::Maps(maps) => {
+                ResultSpec::map_spec(
+                    maps.into_iter()
+                        .map(|(k, v)| {
+                            // TODO(mfp): we can't prove that a field is always present based on the stats
+                            // we keep, so we assume that accessing any field might return null.
+                            (
+                                k.as_str().into(),
+                                Self::json_spec(v).union(ResultSpec::null()),
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            JsonStats::None => ResultSpec::nothing(),
+            JsonStats::Lists | JsonStats::Mixed => ResultSpec::anything(),
+        }
+    }
+
+    fn col_json<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> ResultSpec<'a> {
         let name = self.desc.0.get_name(idx);
         let stats = self
             .stats
             .key
             .col::<Vec<u8>>(name.as_str())
-            .or_else(|_| {
-                self.stats
-                    .key
-                    .col::<Option<Vec<u8>>>(name.as_str())
-                    .map(|option| option.map(|s| &s.some))
-            })
-            .ok()??;
-        fn json_spec(stats: &JsonStats) -> ResultSpec {
-            match stats {
-                JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
-                JsonStats::Bools(bools) => {
-                    ResultSpec::value_between(bools.lower.into(), bools.upper.into())
-                }
-                JsonStats::Strings(strings) => ResultSpec::value_between(
-                    strings.lower.as_str().into(),
-                    strings.upper.as_str().into(),
-                ),
-                JsonStats::Numerics(floats) => {
-                    fn float_to_datum(float: f64) -> Datum<'static> {
-                        let numeric: Numeric = float.into();
-                        numeric.into()
-                    }
-                    ResultSpec::value_between(
-                        float_to_datum(floats.lower.floor()),
-                        float_to_datum(floats.upper.ceil()),
-                    )
-                }
-                JsonStats::Maps(maps) => {
-                    ResultSpec::map_spec(
-                        maps.into_iter()
-                            .map(|(k, v)| {
-                                // TODO(mfp): we can't prove that a field is always present based on the stats
-                                // we keep, so we assume that accessing any field might return null.
-                                (k.as_str().into(), json_spec(v).union(ResultSpec::null()))
-                            })
-                            .collect(),
-                    )
-                }
-                JsonStats::None => ResultSpec::nothing(),
-                JsonStats::Lists | JsonStats::Mixed => ResultSpec::anything(),
-            }
-        }
-
-        if let BytesStats::Json(json_stats) = stats {
-            Some(json_spec(json_stats))
+            .expect("stats type should match column");
+        if let Some(byte_stats) = stats {
+            let value_range = match byte_stats {
+                BytesStats::Json(json_stats) => Self::json_spec(json_stats),
+                BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+            };
+            value_range
         } else {
-            None
+            ResultSpec::anything()
+        }
+    }
+
+    fn col_opt_json<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> ResultSpec<'a> {
+        let name = self.desc.0.get_name(idx);
+        let stats = self
+            .stats
+            .key
+            .col::<Option<Vec<u8>>>(name.as_str())
+            .expect("stats type should match column");
+        if let Some(option_stats) = stats {
+            let null_range = match option_stats.none {
+                0 => ResultSpec::nothing(),
+                _ => ResultSpec::null(),
+            };
+            let value_range = match &option_stats.some {
+                BytesStats::Json(json_stats) => Self::json_spec(json_stats),
+                BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+            };
+            null_range.union(value_range)
+        } else {
+            ResultSpec::anything()
         }
     }
 }
