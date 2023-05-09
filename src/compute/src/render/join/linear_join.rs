@@ -796,12 +796,10 @@ where
                 Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
                 Ordering::Equal => {
                     thinker
-                        .history1
-                        .edits
+                        .edits1
                         .load(trace, trace_storage, |time| time.join(meet));
                     thinker
-                        .history2
-                        .edits
+                        .edits2
                         .load(batch, batch_storage, |time| time.clone());
 
                     assert_eq!(temp.len(), 0);
@@ -829,8 +827,8 @@ where
                     batch.step_key(batch_storage);
                     trace.step_key(trace_storage);
 
-                    thinker.history1.clear();
-                    thinker.history2.clear();
+                    thinker.edits1.clear();
+                    thinker.edits2.clear();
                 }
             }
         }
@@ -853,8 +851,8 @@ struct JoinThinker<
     R1: Semigroup,
     R2: Semigroup,
 > {
-    pub history1: ValueHistory<'a, V1, T, R1>,
-    pub history2: ValueHistory<'a, V2, T, R2>,
+    pub edits1: EditList<'a, V1, T, R1>,
+    pub edits2: EditList<'a, V2, T, R2>,
 }
 
 impl<
@@ -872,66 +870,17 @@ where
 {
     fn new() -> Self {
         JoinThinker {
-            history1: ValueHistory::new(),
-            history2: ValueHistory::new(),
+            edits1: EditList::new(),
+            edits2: EditList::new(),
         }
     }
 
     fn think<F: FnMut(&V1, &V2, T, &R1, &R2)>(&mut self, mut results: F) {
-        // for reasonably sized edits, do the dead-simple thing.
-        if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
-            self.history1.edits.map(|v1, t1, d1| {
-                self.history2.edits.map(|v2, t2, d2| {
-                    results(v1, v2, t1.join(t2), &d1, &d2);
-                })
+        self.edits1.map(|v1, t1, d1| {
+            self.edits2.map(|v2, t2, d2| {
+                results(v1, v2, t1.join(t2), &d1, &d2);
             })
-        } else {
-            let mut replay1 = self.history1.replay();
-            let mut replay2 = self.history2.replay();
-
-            // TODO: It seems like there is probably a good deal of redundant `advance_buffer_by`
-            //       in here. If a time is ever repeated, for example, the call will be identical
-            //       and accomplish nothing. If only a single record has been added, it may not
-            //       be worth the time to collapse (advance, re-sort) the data when a linear scan
-            //       is sufficient.
-
-            while !replay1.is_done() && !replay2.is_done() {
-                if replay1.time().unwrap().cmp(replay2.time().unwrap())
-                    == ::std::cmp::Ordering::Less
-                {
-                    replay2.advance_buffer_by(replay1.meet().unwrap());
-                    for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
-                        let (val1, time1, ref diff1) = replay1.edit().unwrap();
-                        results(val1, val2, time1.join(time2), diff1, diff2);
-                    }
-                    replay1.step();
-                } else {
-                    replay1.advance_buffer_by(replay2.meet().unwrap());
-                    for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
-                        let (val2, time2, ref diff2) = replay2.edit().unwrap();
-                        results(val1, val2, time1.join(time2), diff1, diff2);
-                    }
-                    replay2.step();
-                }
-            }
-
-            while !replay1.is_done() {
-                replay2.advance_buffer_by(replay1.meet().unwrap());
-                for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
-                    let (val1, time1, ref diff1) = replay1.edit().unwrap();
-                    results(val1, val2, time1.join(time2), diff1, diff2);
-                }
-                replay1.step();
-            }
-            while !replay2.is_done() {
-                replay1.advance_buffer_by(replay2.meet().unwrap());
-                for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
-                    let (val2, time2, ref diff2) = replay2.edit().unwrap();
-                    results(val1, val2, time1.join(time2), diff1, diff2);
-                }
-                replay2.step();
-            }
-        }
+        })
     }
 }
 
@@ -980,10 +929,6 @@ where
         self.edits.clear();
     }
 
-    fn len(&self) -> usize {
-        self.edits.len()
-    }
-
     /// Inserts a new edit for an as-yet undetermined value.
     #[inline]
     fn push(&mut self, time: T, diff: R) {
@@ -1017,114 +962,5 @@ where
                 );
             }
         }
-    }
-}
-
-struct ValueHistory<'storage, V: 'storage, T, R> {
-    edits: EditList<'storage, V, T, R>,
-    history: Vec<(T, T, usize, usize)>, // (time, meet, value_index, edit_offset)
-    // frontier: FrontierHistory<T>,           // tracks frontiers of remaining times.
-    buffer: Vec<((&'storage V, T), R)>, // where we accumulate / collapse updates.
-}
-
-impl<'storage, V: Ord + Clone + 'storage, T: Lattice + Ord + Clone, R: Semigroup>
-    ValueHistory<'storage, V, T, R>
-{
-    fn new() -> Self {
-        ValueHistory {
-            edits: EditList::new(),
-            history: Vec::new(),
-            buffer: Vec::new(),
-        }
-    }
-    fn clear(&mut self) {
-        self.edits.clear();
-        self.history.clear();
-        self.buffer.clear();
-    }
-
-    /// Organizes history based on current contents of edits.
-    fn replay<'history>(&'history mut self) -> HistoryReplay<'storage, 'history, V, T, R> {
-        self.buffer.clear();
-        self.history.clear();
-        for value_index in 0..self.edits.values.len() {
-            let lower = if value_index > 0 {
-                self.edits.values[value_index - 1].1
-            } else {
-                0
-            };
-            let upper = self.edits.values[value_index].1;
-            for edit_index in lower..upper {
-                let time = self.edits.edits[edit_index].0.clone();
-                self.history
-                    .push((time.clone(), time.clone(), value_index, edit_index));
-            }
-        }
-
-        self.history.sort_by(|x, y| y.cmp(x));
-        for index in 1..self.history.len() {
-            self.history[index].1 = self.history[index].1.meet(&self.history[index - 1].1);
-        }
-
-        HistoryReplay { replay: self }
-    }
-}
-
-struct HistoryReplay<'storage, 'history, V, T, R>
-where
-    'storage: 'history,
-    V: Ord + 'storage,
-    T: Lattice + Ord + Clone + 'history,
-    R: Semigroup + 'history,
-{
-    replay: &'history mut ValueHistory<'storage, V, T, R>,
-}
-
-impl<'storage, 'history, V, T, R> HistoryReplay<'storage, 'history, V, T, R>
-where
-    'storage: 'history,
-    V: Ord + 'storage,
-    T: Lattice + Ord + Clone + 'history,
-    R: Semigroup + 'history,
-{
-    fn time(&self) -> Option<&T> {
-        self.replay.history.last().map(|x| &x.0)
-    }
-
-    fn meet(&self) -> Option<&T> {
-        self.replay.history.last().map(|x| &x.1)
-    }
-
-    fn edit(&self) -> Option<(&V, &T, R)> {
-        self.replay.history.last().map(|&(ref t, _, v, e)| {
-            (
-                self.replay.edits.values[v].0,
-                t,
-                self.replay.edits.edits[e].1.clone(),
-            )
-        })
-    }
-
-    fn buffer(&self) -> &[((&'storage V, T), R)] {
-        &self.replay.buffer[..]
-    }
-
-    fn step(&mut self) {
-        let (time, _, value_index, edit_offset) = self.replay.history.pop().unwrap();
-        self.replay.buffer.push((
-            (self.replay.edits.values[value_index].0, time),
-            self.replay.edits.edits[edit_offset].1.clone(),
-        ));
-    }
-
-    fn advance_buffer_by(&mut self, meet: &T) {
-        for element in self.replay.buffer.iter_mut() {
-            (element.0).1 = (element.0).1.join(meet);
-        }
-        differential_dataflow::consolidation::consolidate(&mut self.replay.buffer);
-    }
-
-    fn is_done(&self) -> bool {
-        self.replay.history.len() == 0
     }
 }
