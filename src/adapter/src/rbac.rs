@@ -963,13 +963,13 @@ fn generate_required_privileges(
         Plan::GrantPrivilege(GrantPrivilegePlan {
             acl_mode: _,
             object_id,
-            grantee: _,
+            grantees: _,
             grantor: _,
         })
         | Plan::RevokePrivilege(RevokePrivilegePlan {
             acl_mode: _,
             object_id,
-            revokee: _,
+            revokees: _,
             grantor: _,
         }) => match object_id {
             ObjectId::ClusterReplica((cluster_id, _)) => {

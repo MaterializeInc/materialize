@@ -5975,12 +5975,12 @@ impl<'a> Parser<'a> {
                 }
                 let name = self.parse_object_name(object_type)?;
                 self.expect_keyword(TO)?;
-                let role = self.parse_identifier()?;
+                let roles = self.parse_comma_separated(Parser::parse_identifier)?;
                 Ok(Statement::GrantPrivilege(GrantPrivilegeStatement {
                     privileges,
                     object_type,
                     name,
-                    role,
+                    roles,
                 }))
             }
             None => {
@@ -6033,12 +6033,12 @@ impl<'a> Parser<'a> {
                 }
                 let name = self.parse_object_name(object_type)?;
                 self.expect_keyword(FROM)?;
-                let role = self.parse_identifier()?;
+                let roles = self.parse_comma_separated(Parser::parse_identifier)?;
                 Ok(Statement::RevokePrivilege(RevokePrivilegeStatement {
                     privileges,
                     object_type,
                     name,
-                    role,
+                    roles,
                 }))
             }
             None => {
