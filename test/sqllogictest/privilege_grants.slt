@@ -1402,6 +1402,61 @@ SELECT name, privilege FROM item_privileges WHERE name = 't1'
 ----
 t1  mz_system=arwd/mz_system
 
+## Test ALL keyword
+
+simple conn=mz_system,user=mz_system
+GRANT ALL ON t1 TO joe, test_role, mz_system
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't1'
+----
+t1  joe=arwd/mz_system
+t1  mz_system=arwd/mz_system
+t1  test_role=arwd/mz_system
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON t1 FROM joe, test_role, other
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 't1'
+----
+t1  mz_system=arwd/mz_system
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW v1 AS SELECT 1;
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v1'
+----
+v1  mz_system=r/mz_system
+
+simple conn=mz_system,user=mz_system
+GRANT ALL ON v1 TO joe
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v1'
+----
+v1  joe=r/mz_system
+v1  mz_system=r/mz_system
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON v1 FROM joe
+----
+COMPLETE 0
+
+query TT
+SELECT name, privilege FROM item_privileges WHERE name = 'v1'
+----
+v1  mz_system=r/mz_system
+
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;

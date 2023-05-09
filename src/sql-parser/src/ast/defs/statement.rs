@@ -2882,11 +2882,29 @@ impl AstDisplay for Privilege {
 }
 impl_display!(Privilege);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PrivilegeSpecification {
+    All,
+    Privileges(Vec<Privilege>),
+}
+
+impl AstDisplay for PrivilegeSpecification {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            PrivilegeSpecification::All => f.write_str("ALL"),
+            PrivilegeSpecification::Privileges(privileges) => {
+                f.write_node(&display::comma_separated(privileges))
+            }
+        }
+    }
+}
+impl_display!(PrivilegeSpecification);
+
 /// `GRANT ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GrantPrivilegeStatement<T: AstInfo> {
     /// The privileges being granted on an object.
-    pub privileges: Vec<Privilege>,
+    pub privileges: PrivilegeSpecification,
     /// The type of object.
     ///
     /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
@@ -2900,7 +2918,7 @@ pub struct GrantPrivilegeStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for GrantPrivilegeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("GRANT ");
-        f.write_node(&display::comma_separated(&self.privileges));
+        f.write_node(&self.privileges);
         f.write_str(" ON ");
         f.write_node(&self.object_type);
         f.write_str(" ");
@@ -2915,7 +2933,7 @@ impl_display_t!(GrantPrivilegeStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RevokePrivilegeStatement<T: AstInfo> {
     /// The privileges being revoked.
-    pub privileges: Vec<Privilege>,
+    pub privileges: PrivilegeSpecification,
     /// The type of object.
     ///
     /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
@@ -2929,7 +2947,7 @@ pub struct RevokePrivilegeStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for RevokePrivilegeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("REVOKE ");
-        f.write_node(&display::comma_separated(&self.privileges));
+        f.write_node(&self.privileges);
         f.write_str(" ON ");
         f.write_node(&self.object_type);
         f.write_str(" ");
