@@ -69,15 +69,6 @@ impl CloudProvider {
             _ => Err(Error::CloudProviderRegionParseError),
         }
     }
-
-    /// Returns the region controller endpoint subdomain
-    pub fn rc_subdomain(&self) -> String {
-        let host = self.api_url.host().unwrap().to_string();
-        let index = host.find("cloud.materialize.com").unwrap();
-        let subdomain: String = host[..index - 1].to_string();
-
-        subdomain
-    }
 }
 
 /// Represents a cloud provider and a region.
@@ -142,7 +133,7 @@ impl Client {
 
         loop {
             let req = self
-                .build_request(Method::GET, ["api", "cloud-regions"], format!("https://sync.{}", self.endpoint))
+                .build_global_request(Method::GET, ["api", "cloud-regions"])
                 .await?;
 
             let req = req.query(&[("limit", "50"), ("cursor", &cursor)]);

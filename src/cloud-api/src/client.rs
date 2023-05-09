@@ -21,6 +21,8 @@ use serde::{de::DeserializeOwned, Deserialize};
 
 use crate::error::{ApiError, Error};
 
+use self::region::Region;
+
 /// Represents the structure for the client.
 pub struct Client {
     pub(crate) inner: reqwest::Client,
@@ -45,23 +47,60 @@ pub mod region;
 ///
 impl Client {
     /// Builds a request towards the `Client`'s endpoint
-    async fn build_request<P>(
+    async fn build_global_request<P>(
         &self,
         method: Method,
         path: P,
-        domain: &str,
     ) -> Result<RequestBuilder, Error>
     where
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
-        let mut url = domain.parse();
-        url.path_segments_mut()?
+        let mut endpoint = self.endpoint.clone();
+        endpoint.set_host(Some(&format!(
+            "sync.{}",
+            self.endpoint
+                .domain()
+                .ok_or_else(|| Error::InvalidEndpointDomain)?
+        )))?;
+
+        self.build_request(method, path, endpoint).await
+    }
+
+    /// Builds a request towards the `Client`'s endpoint
+    async fn build_region_request<P>(
+        &self,
+        method: Method,
+        path: P,
+        region: Region,
+    ) -> Result<RequestBuilder, Error>
+    where
+        P: IntoIterator,
+        P::Item: AsRef<str>,
+    {
+        self.build_request(method, path, region.environment_controller_url)
+            .await
+    }
+
+    /// Builds a request towards the `Client`'s endpoint
+    async fn build_request<P>(
+        &self,
+        method: Method,
+        path: P,
+        mut domain: Url,
+    ) -> Result<RequestBuilder, Error>
+    where
+        P: IntoIterator,
+        P::Item: AsRef<str>,
+    {
+        domain
+            .path_segments_mut()
+            .or(Err(Error::UrlBaseError))?
             .clear()
             .extend(path);
 
-        let req = self.inner.request(method, url);
-        let token = self.auth_client.auth().await.unwrap();
+        let req = self.inner.request(method, domain);
+        let token = self.auth_client.auth().await?;
 
         Ok(req.bearer_auth(token))
     }

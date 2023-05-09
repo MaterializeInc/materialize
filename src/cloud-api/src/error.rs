@@ -28,6 +28,7 @@
 use reqwest::StatusCode;
 use std::fmt;
 use thiserror::Error;
+use url::ParseError;
 
 /// An error returned by the Materialize cloud API.
 #[derive(Debug, Clone)]
@@ -61,6 +62,9 @@ pub enum Error {
     /// Indicates a Materialize cloud API error from a request.
     #[error("API error during a Materialize cloud API request: {0}")]
     Api(#[from] ApiError),
+    /// Indicates a Materialize admin error from a request.
+    #[error("API error during a Materialize cloud API request: {0}")]
+    AdminApi(#[from] mz_frontegg_client::error::Error),
     /// Indicates an error when no environments are
     /// available in a requested region.
     #[error("No environment available in this region.")]
@@ -73,6 +77,16 @@ pub enum Error {
     /// Indicates an error when the response from the
     /// endpoint /api/environmentassignment does not contains
     /// exactly one environment assignment
-    #[error("Response did not contain exactly one environment assignment")]
-    InvalidEnvironmentAssignment
+    #[error("Response did not contain exactly one environment assignment.")]
+    InvalidEnvironmentAssignment,
+    /// Indicates an error when trying to retrieve the
+    /// domain from the client endpoint
+    #[error("Failed to retrieve domain from client endpoint.")]
+    InvalidEndpointDomain,
+    /// Indicates a Materialize cloud API error from a request.
+    #[error("Error trying to parse the url: {0}")]
+    UrlParseError(#[from] ParseError),
+    /// Indicates the URL is cannot-be-a-base.
+    #[error("Error while manipulating URL. The URL is cannot-be-a-base.")]
+    UrlBaseError,
 }

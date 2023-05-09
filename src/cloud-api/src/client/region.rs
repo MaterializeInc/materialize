@@ -34,28 +34,22 @@ pub struct Region {
     pub environment_controller_url: Url,
 }
 
-impl Region {
-    /// Returns the environment controller endpoint subdomain
-    pub fn ec_subdomain(&self) -> String {
-        let host = self.environment_controller_url.host().unwrap().to_string();
-        let index = host.find("cloud.materialize.com").unwrap();
-        let subdomain: String = host[..index - 1].to_string();
-
-        subdomain
-    }
-}
-
 impl Client {
     /// Get a region from a particular cloud provider for the current user.
     pub async fn get_region(&self, cloud_provider: CloudProvider) -> Result<Region, Error> {
-        let subdomain = cloud_provider.rc_subdomain();
-
         let req = self
-            .build_request(Method::GET, ["api", "environmentassignment"], &subdomain)
+            .build_request(
+                Method::GET,
+                ["api", "environmentassignment"],
+                cloud_provider.api_url,
+            )
             .await?;
 
         let regions: Vec<Region> = self.send_request(req).await?;
 
-        Ok(regions.get(0).ok_or_else(|| Error::InvalidEnvironmentAssignment)?.to_owned())
+        Ok(regions
+            .get(0)
+            .ok_or_else(|| Error::InvalidEnvironmentAssignment)?
+            .to_owned())
     }
 }

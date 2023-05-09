@@ -39,12 +39,9 @@ pub struct Environment {
 impl Client {
     /// Get an environment in a partciular region for the current user.
     pub async fn get_environment(&self, region: Region) -> Result<Environment, Error> {
-        // Build subdomain:
-        let subdomain = region.ec_subdomain();
-
         // Send request to the subdomain
         let req = self
-            .build_request(Method::GET, ["api", "environment"], &subdomain)
+            .build_region_request(Method::GET, ["api", "environment"], region)
             .await?;
 
         let environments: Vec<Environment> = self.send_request(req).await?;
@@ -89,9 +86,8 @@ impl Client {
             environmentd_extra_args,
         };
 
-        let subdomain = region.ec_subdomain();
         let req = self
-            .build_request(Method::POST, ["api", "environmentassignment"], &subdomain)
+            .build_region_request(Method::POST, ["api", "environmentassignment"], region)
             .await?;
         let req = req.json(&body);
         self.send_request(req).await
@@ -99,9 +95,8 @@ impl Client {
 
     /// Deletes an environment in a particular region for the current user
     pub async fn delete_environment(&self, region: Region) -> Result<Region, Error> {
-        let subdomain = region.ec_subdomain();
         let req = self
-            .build_request(Method::DELETE, ["api", "environmentassignment"], &subdomain)
+            .build_region_request(Method::DELETE, ["api", "environmentassignment"], region)
             .await?;
         self.send_request(req).await
     }
