@@ -788,29 +788,32 @@ where
         let batch = &mut self.batch;
 
         let temp = &mut self.temp;
-        let mut edits1 = EditList::new();
-        let mut edits2 = EditList::new();
 
         while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) && effort < *fuel {
             match trace.key(trace_storage).cmp(batch.key(batch_storage)) {
                 Ordering::Less => trace.seek_key(trace_storage, batch.key(batch_storage)),
                 Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
                 Ordering::Equal => {
-                    edits1.load(trace, trace_storage, |time| time.join(meet));
-                    edits2.load(batch, batch_storage, |time| time.clone());
-
                     assert_eq!(temp.len(), 0);
 
                     // populate `temp` with the results
                     let key = batch.key(batch_storage);
-                    edits1.map(|v1, t1, r1| {
-                        edits2.map(|v2, t2, r2| {
-                            let t = t1.join(t2);
-                            for (d, t, r) in logic(key, v1, v2, &t, &r1, &r2) {
-                                temp.push(((d, t), r));
-                            }
-                        });
-                    });
+                    while let Some(val1) = trace.get_val(trace_storage) {
+                        while let Some(val2) = batch.get_val(batch_storage) {
+                            trace.map_times(trace_storage, |time1, diff1| {
+                                let time1 = time1.join(meet);
+                                batch.map_times(batch_storage, |time2, diff2| {
+                                    let time = time1.join(time2);
+                                    for (d, t, r) in logic(key, val1, val2, &time, diff1, diff2) {
+                                        temp.push(((d, t), r));
+                                    }
+                                });
+                            });
+                            batch.step_val(batch_storage);
+                        }
+                        batch.rewind_vals(batch_storage);
+                        trace.step_val(trace_storage);
+                    }
 
                     // TODO: This consolidation is optional, and it may not be very
                     //       helpful. We might try harder to understand whether we
@@ -824,9 +827,6 @@ where
 
                     batch.step_key(batch_storage);
                     trace.step_key(trace_storage);
-
-                    edits1.clear();
-                    edits2.clear();
                 }
             }
         }
@@ -837,87 +837,6 @@ where
             *fuel = 0;
         } else {
             *fuel -= effort;
-        }
-    }
-}
-
-/// An accumulation of (value, time, diff) updates.
-struct EditList<'a, V: 'a, T, R> {
-    values: Vec<(&'a V, usize)>,
-    edits: Vec<(T, R)>,
-}
-
-impl<'a, V: 'a, T, R> EditList<'a, V, T, R>
-where
-    T: Ord + Clone,
-    R: Semigroup,
-{
-    /// Creates an empty list of edits.
-    #[inline]
-    fn new() -> Self {
-        EditList {
-            values: Vec::new(),
-            edits: Vec::new(),
-        }
-    }
-
-    /// Loads the contents of a cursor.
-    fn load<C, L>(&mut self, cursor: &mut C, storage: &'a C::Storage, logic: L)
-    where
-        V: Clone,
-        C: Cursor<Val = V, Time = T, R = R>,
-        C::Key: Eq,
-        L: Fn(&T) -> T,
-    {
-        self.clear();
-        while cursor.val_valid(storage) {
-            cursor.map_times(storage, |time1, diff1| {
-                self.push(logic(time1), diff1.clone())
-            });
-            self.seal(cursor.val(storage));
-            cursor.step_val(storage);
-        }
-    }
-
-    /// Clears the list of edits.
-    #[inline]
-    fn clear(&mut self) {
-        self.values.clear();
-        self.edits.clear();
-    }
-
-    /// Inserts a new edit for an as-yet undetermined value.
-    #[inline]
-    fn push(&mut self, time: T, diff: R) {
-        // TODO: Could attempt "insertion-sort" like behavior here, where we collapse if possible.
-        self.edits.push((time, diff));
-    }
-
-    /// Associates all edits pushed since the previous `seal_value` call with `value`.
-    #[inline]
-    fn seal(&mut self, value: &'a V) {
-        let prev = self.values.last().map(|x| x.1).unwrap_or(0);
-        differential_dataflow::consolidation::consolidate_from(&mut self.edits, prev);
-        if self.edits.len() > prev {
-            self.values.push((value, self.edits.len()));
-        }
-    }
-
-    fn map<F: FnMut(&V, &T, R)>(&self, mut logic: F) {
-        for index in 0..self.values.len() {
-            let lower = if index == 0 {
-                0
-            } else {
-                self.values[index - 1].1
-            };
-            let upper = self.values[index].1;
-            for edit in lower..upper {
-                logic(
-                    self.values[index].0,
-                    &self.edits[edit].0,
-                    self.edits[edit].1.clone(),
-                );
-            }
         }
     }
 }
