@@ -297,9 +297,12 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // Tune down the number of connections to make this all work a little easier
     // with local postgres.
     persist_cfg.consensus_connection_pool_max_size = 1;
-    let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| {
-        PubSubClientConnection::noop()
-    });
+    let persist_clients = {
+        let _tokio_guard = runtime.enter();
+        PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| {
+            PubSubClientConnection::noop()
+        });
+    }
     let persist_clients = Arc::new(persist_clients);
     let postgres_factory = StashFactory::new(&metrics_registry);
     let secrets_controller = Arc::clone(&orchestrator);
