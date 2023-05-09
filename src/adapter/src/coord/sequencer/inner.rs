@@ -4307,7 +4307,7 @@ impl Coordinator {
     }
 
     fn default_linked_cluster_size(&self) -> Result<String, AdapterError> {
-        if !self.catalog().config().unsafe_mode {
+        if !self.catalog().system_config().get_unsafe() {
             let mut entries = self
                 .catalog()
                 .cluster_replica_sizes()

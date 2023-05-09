@@ -1199,7 +1199,8 @@ pub fn plan_ctes(
             }
         }
         CteBlock::MutuallyRecursive(MutRecBlock { options: _, ctes }) => {
-            qcx.scx.require_with_mutually_recursive()?;
+            qcx.scx
+                .require_feature_flag(&crate::session::vars::ALLOW_WITH_MUTUALLY_RECURSIVE)?;
 
             // Insert column types into `qcx.ctes` first for recursive bindings.
             for cte in ctes.iter() {
@@ -5404,10 +5405,6 @@ impl<'a> ExprContext<'a> {
         let mut scope = self.scope.clone();
         scope.lateral_barrier = true;
         self.qcx.derived_context(scope, self.relation_type.clone())
-    }
-
-    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
-        self.qcx.scx.require_unsafe_mode(feature_name)
     }
 
     pub fn require_feature_flag(&self, var: &ServerVar<bool>) -> Result<(), PlanError> {

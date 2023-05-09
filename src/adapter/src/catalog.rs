@@ -70,8 +70,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, PlanError, SourceSinkClusterConfig as PlanStorageClusterConfig,
-    StatementDesc,
+    Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -209,7 +208,6 @@ impl CatalogState {
                 nonce: Default::default(),
                 environment_id: EnvironmentId::for_tests(),
                 session_id: Default::default(),
-                unsafe_mode: Default::default(),
                 build_info: &DUMMY_BUILD_INFO,
                 timestamp_interval: Default::default(),
                 now: NOW_ZERO.clone(),
@@ -1256,10 +1254,6 @@ impl CatalogState {
         &self.config
     }
 
-    pub fn unsafe_mode(&self) -> bool {
-        self.config.unsafe_mode
-    }
-
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
         match self.database_by_name.get(database_name) {
             Some(id) => Ok(&self.database_by_id[id]),
@@ -1428,16 +1422,6 @@ impl CatalogState {
     /// Return current system configuration.
     pub fn system_config(&self) -> &SystemVars {
         &self.system_configuration
-    }
-
-    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        if !self.config.unsafe_mode {
-            Err(AdapterError::PlanError(PlanError::RequiresUnsafe {
-                feature: feature_name.to_string(),
-            }))
-        } else {
-            Ok(())
-        }
     }
 
     /// Serializes the catalog's in-memory state.
@@ -2753,7 +2737,6 @@ impl Catalog {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
                     nonce: rand::random(),
-                    unsafe_mode: config.unsafe_mode,
                     environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -6788,14 +6771,6 @@ impl Catalog {
 
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
-    }
-
-    pub fn unsafe_mode(&self) -> bool {
-        self.config().unsafe_mode
-    }
-
-    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        self.state.require_unsafe_mode(feature_name)
     }
 
     /// Return the current compute configuration, derived from the system configuration.

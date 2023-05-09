@@ -542,16 +542,6 @@ const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
     system_var_gate: None,
 };
 
-/// Whether or not the `DISK` option in available `UPSERT` sources.
-const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_upsert_source_disk"),
-    value: &false,
-    description: "Feature flag indicating availability of the `DISK` \
-                  option in `UPSERT/DEBEZIUM` sources (Materialize).",
-    internal: true,
-    system_var_gate: None,
-};
-
 /// Controls the connect_timeout setting when connecting to PG via replication.
 const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_connect_timeout"),
@@ -826,14 +816,6 @@ pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     system_var_gate: None,
 };
 
-pub const ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_envelope_debezium_in_subscribe"),
-    value: &false,
-    description: "Feature flag indicating whether `ENVELOPE DEBEZIUM` can be used in `SUBSCRIBE` queries (Materialize).",
-    internal: false,
-    system_var_gate: None,
-};
-
 pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_within_timestamp_order_by_in_subscribe"),
     value: &false,
@@ -949,7 +931,29 @@ feature_flags!(
         allow_mfp_pushdown_explain_flag,
         "`mfp_pushdown` explain flag"
     ),
-    (allow_raise_statement, "RAISE statement")
+    (allow_raise_statement, "RAISE statement"),
+    (
+        allow_default_linked_cluster_size,
+        "default linked cluster size"
+    ),
+    (allow_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
+    (allow_format_json, "FORMAT JSON"),
+    (
+        allow_within_timestamp_order_by_in_subscribe,
+        "`WITHIN TIMESTAMP ORDER BY ..`"
+    ),
+    (
+        allow_enevelope_upsert_in_subscribe,
+        "ENVELOPE UPSERT in SUBSCRIBE"
+    ),
+    (
+        enable_upsert_source_disk,
+        "`WITH (DISK)` for `UPSERT/DEBEZIUM` sources"
+    ),
+    (
+        enable_envelope_debezium_in_subscribe,
+        "`ENVELOPE DEBEZIUM (KEY (..))`"
+    )
 );
 
 /// Represents the input to a variable.
@@ -1687,7 +1691,6 @@ impl Default for SystemVars {
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
             .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
-            .with_var(&ENABLE_UPSERT_SOURCE_DISK)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
@@ -1716,7 +1719,6 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
-            .with_var(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
@@ -1748,6 +1750,10 @@ impl SystemVars {
     pub fn set_unsafe(mut self, unsafe_allowed: bool) -> Self {
         self.allow_unsafe = unsafe_allowed;
         self
+    }
+
+    pub fn get_unsafe(&self) -> bool {
+        self.allow_unsafe
     }
 
     pub(crate) fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
@@ -1983,11 +1989,6 @@ impl SystemVars {
         *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
     }
 
-    /// Returns the `enable_upsert_source_disk` configuration parameter.
-    pub fn enable_upsert_source_disk(&self) -> bool {
-        *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
-    }
-
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
@@ -2139,11 +2140,6 @@ impl SystemVars {
     /// Returns the `enable_envelope_upsert_in_subscribe` configuration parameter.
     pub fn enable_envelope_upsert_in_subscribe(&self) -> bool {
         *self.expect_value(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
-    }
-
-    /// Returns the `enable_envelope_debezium_in_subscribe` configuration parameter.
-    pub fn enable_envelope_debezium_in_subscribe(&self) -> bool {
-        *self.expect_value(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
     }
 
     /// Returns the `enable_within_timestamp_order_by` configuration parameter.

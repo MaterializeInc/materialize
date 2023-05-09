@@ -949,9 +949,10 @@ pub fn plan_create_source(
     };
 
     if disk.is_some() {
-        scx.require_upsert_source_disk_available()?;
         match &envelope {
-            UnplannedSourceEnvelope::Upsert { .. } => {}
+            UnplannedSourceEnvelope::Upsert { .. } => {
+                scx.require_feature_flag(&vars::ENABLE_UPSERT_SOURCE_DISK)?
+            }
             _ => {
                 bail_unsupported!("ON DISK used with non-UPSERT/DEBEZIUM ENVELOPE");
             }
@@ -1619,7 +1620,7 @@ fn get_encoding_inner(
             })
         }
         Format::Json => {
-            scx.require_format_json()?;
+            scx.require_feature_flag(&crate::session::vars::ALLOW_FORMAT_JSON)?;
             DataEncodingInner::Json
         }
         Format::Text => DataEncodingInner::Text,
