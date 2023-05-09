@@ -761,3 +761,18 @@ WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
+
+# Regression test for #19148: support mz_now() on select from indexed table
+statement ok
+DROP TABLE IF EXISTS t CASCADE;
+
+statement ok
+CREATE TABLE t(a TIMESTAMP);
+
+statement ok
+CREATE DEFAULT INDEX ON t;
+
+# EXPLAIN output is time-dependent, so we don't want show the output here, just
+# assert that the query doesn't fail.
+statement ok
+EXPLAIN SELECT * FROM t WHERE a < mz_now();
