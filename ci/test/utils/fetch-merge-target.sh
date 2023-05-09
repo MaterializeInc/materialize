@@ -9,18 +9,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# check-merge-with-target.sh — check if merge with target branch
-# succeeds and checks still pass.
+# This requires BUILDKITE_REPO_REF to be set.
 
 set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-BUILDKITE_REPO_REF="origin"
-./ci/test/utils/fetch-merge-target.sh
+ci_collapsed_heading "Configure git"
+run git config --global user.email "buildkite@materialize.com"
+run git config --global user.name "Buildkite"
 
-ci_collapsed_heading "Merge target branch"
-run git merge "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"
-
-ci_collapsed_heading "Conduct checks"
-bin/ci-builder run stable cargo check
+ci_collapsed_heading "Fetch target branch"
+run git fetch "$BUILDKITE_REPO_REF" "$BUILDKITE_PULL_REQUEST_BASE_BRANCH"
