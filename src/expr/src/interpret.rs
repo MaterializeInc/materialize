@@ -712,7 +712,8 @@ pub struct ColumnSpec<'a> {
 ///   expression might have. (See the `eval_` methods.)
 #[derive(Clone, Debug)]
 pub struct ColumnSpecs<'a> {
-    pub columns: Vec<ColumnSpec<'a>>,
+    pub relation: &'a RelationType,
+    pub columns: Vec<ResultSpec<'a>>,
     pub unmaterializables: BTreeMap<UnmaterializableFunc, ResultSpec<'a>>,
     pub arena: &'a RowArena,
 }
@@ -720,16 +721,15 @@ pub struct ColumnSpecs<'a> {
 impl<'a> ColumnSpecs<'a> {
     /// Create a new, empty set of column specs. (Initially, the only assumption we make about the
     /// data in the column is that it matches the type.)
-    pub fn new(relation: RelationType, arena: &'a RowArena) -> Self {
+    pub fn new(relation: &'a RelationType, arena: &'a RowArena) -> Self {
+        let columns = relation
+            .column_types
+            .iter()
+            .map(|ct| ResultSpec::has_type(ct, false))
+            .collect();
         ColumnSpecs {
-            columns: relation
-                .column_types
-                .into_iter()
-                .map(|ct| ColumnSpec {
-                    range: ResultSpec::has_type(&ct, false),
-                    col_type: ct,
-                })
-                .collect(),
+            relation,
+            columns,
             unmaterializables: Default::default(),
             arena,
         }
@@ -738,7 +738,7 @@ impl<'a> ColumnSpecs<'a> {
     /// Restrict the set of possible values in a given column. (By intersecting it with the existing
     /// spec.)
     pub fn push_column(&mut self, id: usize, update: ResultSpec<'a>) {
-        let range = &mut self.columns.get_mut(id).expect("valid column id").range;
+        let range = self.columns.get_mut(id).expect("valid column id");
         *range = range.clone().intersect(update);
     }
 
@@ -774,7 +774,9 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     type Summary = ColumnSpec<'a>;
 
     fn column(&self, id: usize) -> Self::Summary {
-        self.columns[id].clone()
+        let col_type = self.relation.column_types[id].clone();
+        let range = self.columns[id].clone();
+        ColumnSpec { col_type, range }
     }
 
     fn literal(&self, result: &Result<Row, EvalError>, col_type: &ColumnType) -> Self::Summary {
@@ -1022,7 +1024,7 @@ mod tests {
             let arena = RowArena::new();
             let eval_result = expr.eval(&datums, &arena);
 
-            let mut interpreter = ColumnSpecs::new(relation, &arena);
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
 
             for (id, datum) in datums.iter().enumerate() {
                 interpreter.push_column(id, ResultSpec::value(*datum));
@@ -1085,14 +1087,12 @@ mod tests {
                 }),
             }),
         };
+        let relation = RelationType::new(vec![ScalarType::UInt64.nullable(false)]);
 
         {
             // Non-overlapping windows
             let arena = RowArena::new();
-            let mut interpreter = ColumnSpecs::new(
-                RelationType::new(vec![ScalarType::UInt64.nullable(false)]),
-                &arena,
-            );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
             interpreter.push_unmaterializable(
                 UnmaterializableFunc::MzNow,
                 ResultSpec::value_between(10i64.into(), 20i64.into()),
@@ -1109,10 +1109,7 @@ mod tests {
         {
             // Overlapping windows
             let arena = RowArena::new();
-            let mut interpreter = ColumnSpecs::new(
-                RelationType::new(vec![ScalarType::UInt64.nullable(false)]),
-                &arena,
-            );
+            let mut interpreter = ColumnSpecs::new(&relation, &arena);
             interpreter.push_unmaterializable(
                 UnmaterializableFunc::MzNow,
                 ResultSpec::value_between(10i64.into(), 35i64.into()),
@@ -1143,11 +1140,8 @@ mod tests {
             }),
         };
 
-        // Non-overlapping windows
-        let mut interpreter = ColumnSpecs::new(
-            RelationType::new(vec![ScalarType::Jsonb.nullable(true)]),
-            &arena,
-        );
+        let relation = RelationType::new(vec![ScalarType::Jsonb.nullable(true)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
         interpreter.push_column(
             0,
             ResultSpec::map_spec(
