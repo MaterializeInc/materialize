@@ -690,7 +690,6 @@ where
     {
         let meet = self.capability.time();
 
-        let mut effort = 0;
         let mut session = output.session(&self.capability);
 
         let trace_storage = &self.trace_storage;
@@ -701,14 +700,14 @@ where
 
         let temp = &mut self.temp;
 
-        while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) && effort < *fuel {
+        while batch.key_valid(batch_storage) && trace.key_valid(trace_storage) {
             match trace.key(trace_storage).cmp(batch.key(batch_storage)) {
                 Ordering::Less => trace.seek_key(trace_storage, batch.key(batch_storage)),
                 Ordering::Greater => batch.seek_key(batch_storage, trace.key(trace_storage)),
                 Ordering::Equal => {
                     assert_eq!(temp.len(), 0);
 
-                    // populate `temp` with the results
+                    // Populate `temp` with the results, as long as fuel remains.
                     let key = batch.key(batch_storage);
                     while let Some(val1) = trace.get_val(trace_storage) {
                         while let Some(val2) = batch.get_val(batch_storage) {
@@ -725,18 +724,25 @@ where
                         }
                         batch.rewind_vals(batch_storage);
                         trace.step_val(trace_storage);
-                    }
 
-                    // TODO: This consolidation is optional, and it may not be very
-                    //       helpful. We might try harder to understand whether we
-                    //       should do this work here, or downstream at consumers.
-                    // TODO: Perhaps `thinker` should have the buffer, do smarter
-                    //       consolidation, and then deposit results in `session`.
-                    differential_dataflow::consolidation::consolidate(temp);
+                        // TODO: This consolidation is optional, and it may not be very
+                        //       helpful. We might try harder to understand whether we
+                        //       should do this work here, or downstream at consumers.
+                        // TODO: Perhaps `thinker` should have the buffer, do smarter
+                        //       consolidation, and then deposit results in `session`.
+                        differential_dataflow::consolidation::consolidate(temp);
 
-                    effort += temp.len();
-                    for ((d, t), r) in temp.drain(..) {
-                        session.give((d, t, r));
+                        *fuel = fuel.saturating_sub(temp.len());
+                        for ((d, t), r) in temp.drain(..) {
+                            session.give((d, t, r));
+                        }
+
+                        if *fuel == 0 {
+                            // The fuel is exhausted, so we should yield. Returning here is only
+                            // allowed because we leave the cursors in a state that will let us
+                            // pick up the work correctly on the next invocation.
+                            return;
+                        }
                     }
 
                     batch.step_key(batch_storage);
@@ -745,12 +751,7 @@ where
             }
         }
 
-        self.done = !batch.key_valid(batch_storage) || !trace.key_valid(trace_storage);
-
-        if effort > *fuel {
-            *fuel = 0;
-        } else {
-            *fuel -= effort;
-        }
+        // We only get here after having iterated through all keys.
+        self.done = true;
     }
 }
