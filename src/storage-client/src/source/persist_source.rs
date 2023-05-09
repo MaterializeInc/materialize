@@ -448,7 +448,8 @@ impl PersistSourceDataStatsImpl<'_> {
                             .collect(),
                     )
                 }
-                JsonStats::Lists | JsonStats::None | JsonStats::Mixed => ResultSpec::anything(),
+                JsonStats::None => ResultSpec::nothing(),
+                JsonStats::Lists | JsonStats::Mixed => ResultSpec::anything(),
             }
         }
 
