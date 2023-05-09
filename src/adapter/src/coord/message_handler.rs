@@ -683,14 +683,14 @@ impl Coordinator {
         match real_time_recency_context {
             RealTimeRecencyContext::ExplainTimestamp {
                 tx,
-                session,
+                mut session,
                 format,
                 cluster_id,
                 optimized_plan,
                 id_bundle,
             } => tx.send(
                 self.sequence_explain_timestamp_finish(
-                    &session,
+                    &mut session,
                     format,
                     cluster_id,
                     optimized_plan,
@@ -712,7 +712,7 @@ impl Coordinator {
                 index_id,
                 timeline_context,
                 source_ids,
-                in_immediate_multi_stmt_txn,
+                in_immediate_multi_stmt_txn: _,
                 key,
                 typ,
             } => {
@@ -731,7 +731,6 @@ impl Coordinator {
                         index_id,
                         timeline_context,
                         source_ids,
-                        in_immediate_multi_stmt_txn,
                         real_time_recency_ts: Some(real_time_recency_ts),
                         key,
                         typ,

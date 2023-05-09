@@ -1291,6 +1291,131 @@ fn test_explain_timestamp_json() {
     let _explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
 }
 
+// Verify that `EXPLAIN TIMESTAMP ...` within acts like a peek within a transaction.
+// That is, ensure the following:
+// 1. Consistently returns its transaction timestamp as the "query timestamp"
+// 2. Acquires read holds for all objects within the same time domain
+// 3. Errors during a write-only transaction
+// 4. Errors when an object outside the chosen time domain is referenced
+#[test]
+fn test_github_18950() {
+    // Set the timestamp to zero for deterministic initial timestamps.
+    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
+    let now = {
+        let nowfn = Arc::clone(&nowfn);
+        NowFn::from(move || (nowfn.lock().unwrap())())
+    };
+
+    let config = util::Config::default()
+        .workers(2)
+        .with_now(now)
+        .unsafe_mode();
+
+    let server = util::start_server(config).unwrap();
+
+    let mut client_writes = server.connect(postgres::NoTls).unwrap();
+    let mut client_reads = server.connect(postgres::NoTls).unwrap();
+
+    client_writes
+        .batch_execute("CREATE TABLE t1 (i1 int)")
+        .unwrap();
+
+    // Verify execution during a write-only txn fails
+    client_writes.batch_execute("BEGIN").unwrap();
+    client_writes
+        .batch_execute("INSERT INTO t1 VALUES (1)")
+        .unwrap();
+    let error = client_writes
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
+        .unwrap_err();
+
+    assert!(format!("{}", error).contains("transaction in write-only mode"));
+
+    client_writes.batch_execute("ROLLBACK").unwrap();
+
+    // Verify the transaction timestamp is returned for each select and
+    // the read frontier does not advance.
+    client_reads.batch_execute("BEGIN").unwrap();
+    let mut query_timestamp = None;
+
+    for i in 1..5 {
+        let row = client_reads
+            .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
+            .unwrap();
+
+        let explain: String = row.get(0);
+        let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+        let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
+
+        if let Some(timestamp) = query_timestamp {
+            assert_eq!(timestamp, *explain_timestamp);
+        } else {
+            query_timestamp = Some(*explain_timestamp);
+        }
+
+        let explain_t1_read_frontier = explain
+            .sources
+            .first()
+            .unwrap()
+            .read_frontier
+            .first()
+            .unwrap();
+
+        // Ensure `t1`'s read frontier remains <= the query timestamp
+        assert!(*explain_t1_read_frontier <= query_timestamp.unwrap());
+
+        // Increase now by 2s each iteration
+        *nowfn.lock().unwrap() = NowFn::from(move || 2000 * i);
+        // Inserting tends to cause sources to compact, so this should ideally
+        // strengthen the assertion above that `t1`'s read frontier should
+        // not advance during the txn
+        client_writes
+            .batch_execute("INSERT INTO t1 VALUES (1)")
+            .unwrap();
+    }
+
+    // Errors when an object outside the chosen time domain is referenced
+    let error = client_reads
+        .query_one(
+            "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_catalog.mz_views;",
+            &[],
+        )
+        .unwrap_err();
+
+    assert!(format!("{}", error)
+        .contains("Transactions can only reference objects in the same timedomain"));
+
+    client_reads.batch_execute("COMMIT").unwrap();
+
+    // Since mz_now() is a custom function, the postgres client will look it up in the catalog on
+    // first use. If the first use happens to be in a transaction, then we can get unexpected time
+    // domain errors. This is an annoying hack to load the information in the postgres client before
+    // we start any transactions.
+    client_reads.query_one("SELECT mz_now();", &[]).unwrap();
+
+    // Ensure behavior is same when starting txn with `SELECT`
+    client_reads.batch_execute("BEGIN").unwrap();
+
+    client_reads.query("SELECT * FROM t1;", &[]).unwrap();
+
+    let row = client_reads
+        .query_one("SELECT mz_now()::text;", &[])
+        .unwrap();
+
+    let mz_now_ts_raw: String = row.get(0);
+    let mz_now_timestamp = Timestamp::new(mz_now_ts_raw.parse().unwrap());
+
+    let row = client_reads
+        .query_one("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t1;", &[])
+        .unwrap();
+
+    let explain: String = row.get(0);
+    let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
+
+    assert_eq!(*explain_timestamp, mz_now_timestamp);
+}
+
 // Test that the since for `mz_cluster_replica_utilization` is held back by at least
 // 30 days, which is required for the frontend observability work.
 //

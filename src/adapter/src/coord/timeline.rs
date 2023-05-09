@@ -684,6 +684,8 @@ impl Coordinator {
             }
             let depends_on = optimized_expr.depends_on();
             if depends_on.is_empty() {
+                // If the definition contains a temporal function, the timeline must
+                // be timestamp dependent.
                 if *contains_temporal {
                     timelines.insert(id, TimelineContext::TimestampDependent);
                 } else {
