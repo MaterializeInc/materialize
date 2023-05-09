@@ -2579,28 +2579,31 @@ impl Coordinator {
     pub(super) fn sequence_explain(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        mut session: Session,
         plan: ExplainPlan,
         depends_on: Vec<GlobalId>,
+        target_cluster: TargetCluster,
     ) {
         match plan.stage {
             ExplainStage::Timestamp => {
                 self.sequence_explain_timestamp_begin(tx, session, plan, depends_on)
             }
-            _ => tx.send(self.sequence_explain_plan(&session, plan), session),
+            _ => tx.send(
+                self.sequence_explain_plan(&mut session, plan, target_cluster),
+                session,
+            ),
         }
     }
 
     fn sequence_explain_plan(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: ExplainPlan,
+        target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
         use mz_compute_client::plan::Plan;
         use mz_repr::explain::trace_plan;
         use ExplainStage::*;
-
-        let cluster = self.catalog().active_cluster(session)?.id;
 
         let ExplainPlan {
             raw_plan,
@@ -2611,6 +2614,15 @@ impl Coordinator {
             no_errors,
             explainee,
         } = plan;
+
+        let cluster_id = {
+            let catalog = self.catalog();
+            let cluster = match explainee {
+                Explainee::Dataflow(_) => catalog.active_cluster(session)?,
+                Explainee::Query => catalog.resolve_target_cluster(target_cluster, session)?,
+            };
+            cluster.id
+        };
 
         /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
         /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
@@ -2661,7 +2673,22 @@ impl Coordinator {
                 raw_plan.optimize_and_lower(&OptimizerConfig {})
             })?;
 
-            self.validate_timeline_context(decorrelated_plan.depends_on())?;
+            let mut timeline_context =
+                self.validate_timeline_context(decorrelated_plan.depends_on())?;
+            if matches!(explainee, Explainee::Query)
+                && matches!(timeline_context, TimelineContext::TimestampIndependent)
+                && decorrelated_plan.contains_temporal()
+            {
+                // If the source IDs are timestamp independent but the query contains temporal functions,
+                // then the timeline context needs to be upgraded to timestamp dependent. This is
+                // required because `source_ids` doesn't contain functions.
+                timeline_context = TimelineContext::TimestampDependent;
+            }
+
+            let source_ids = decorrelated_plan.depends_on();
+            let id_bundle = self
+                .index_oracle(cluster_id)
+                .sufficient_collections(&source_ids);
 
             // Execute the `optimize/local` stage.
             let optimized_plan = catch_unwind(no_errors, "local", || {
@@ -2675,15 +2702,12 @@ impl Coordinator {
             })?;
 
             let mut dataflow = DataflowDesc::new("explanation".to_string());
-            self.dataflow_builder(cluster).import_view_into_dataflow(
-                &explainee_id,
-                &optimized_plan,
-                &mut dataflow,
-            )?;
+            self.dataflow_builder(cluster_id)
+                .import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
 
             // Execute the `optimize/global` stage.
             catch_unwind(no_errors, "global", || {
-                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster))
+                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster_id))
             })?;
 
             // Calculate indexes used by the dataflow at this point
@@ -2695,7 +2719,30 @@ impl Coordinator {
 
             // Determine if fast path plan will be used for this explainee
             let fast_path_plan = match explainee {
-                Explainee::Query => peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?,
+                Explainee::Query => {
+                    let timestamp_context = self
+                        .sequence_peek_timestamp(
+                            session,
+                            &QueryWhen::Immediately,
+                            cluster_id,
+                            timeline_context,
+                            &id_bundle,
+                            &source_ids,
+                            None, // no real-time recency
+                        )?
+                        .timestamp_context;
+                    dataflow.set_as_of(timestamp_context.antichain());
+                    let style = ExprPrepStyle::OneShot {
+                        logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+                        session,
+                    };
+                    let state = self.catalog().state();
+                    dataflow.visit_children(
+                        |r| prep_relation_expr(state, r, style),
+                        |s| prep_scalar_expr(state, s, style),
+                    )?;
+                    peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                }
                 _ => None,
             };
 
