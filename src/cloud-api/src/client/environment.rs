@@ -62,8 +62,8 @@ impl Client {
                 Ok(region) => {
                     let environment = self.get_environment(region).await?;
                     environments.push(environment);
-                },
-                Err(Error::InvalidEnvironmentAssignment) => {},
+                }
+                Err(Error::InvalidEnvironmentAssignment) => {}
                 Err(e) => return Err(e),
             }
         }
