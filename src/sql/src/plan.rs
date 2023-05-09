@@ -970,7 +970,7 @@ pub struct Type {
 }
 
 /// Specifies when a `Peek` or `Subscribe` should occur.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
