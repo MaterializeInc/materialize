@@ -114,12 +114,10 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.8.0/shellcheck-v0.8.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.8.0/shellcheck \
     && rm shellcheck.tar.xz \
-    && curl -fsSL https://github.com/bufbuild/buf/releases/download/v1.18.0/buf-Linux-$ARCH_GCC > /usr/local/bin/buf \
-    && curl -fsSL https://github.com/bufbuild/buf/releases/download/v1.18.0/protoc-gen-buf-breaking-Linux-$ARCH_GCC > /usr/local/bin/protoc-gen-buf-breaking \
-    && curl -fsSL https://github.com/bufbuild/buf/releases/download/v1.18.0/protoc-gen-buf-lint-Linux-$ARCH_GCC > /usr/local/bin/protoc-gen-buf-lint \
-    && chmod +x /usr/local/bin/buf \
-    && chmod +x /usr/local/bin/protoc-gen-buf-breaking \
-    && chmod +x /usr/local/bin/protoc-gen-buf-lint \
+    && curl -fsSL https://github.com/bufbuild/buf/releases/download/v1.18.0/buf-Linux-$ARCH_GCC.tar.gz > buf.tar.gz \
+    && tar -xf buf.tar.gz -C /usr/local/bin --strip-components 2 buf/bin \
+    && rm buf.tar.gz \
+    && chmod +x /usr/local/bin/buf /usr/local/bin/protoc-gen-buf-breaking /usr/local/bin/protoc-gen-buf-lint \
     && mkdir -p /usr/local/lib/docker/cli-plugins \
     && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
