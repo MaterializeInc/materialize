@@ -15,10 +15,15 @@
 
 import pytest
 from dbt.tests.adapter.hooks import test_model_hooks as core_base
-from fixtures import test_hooks
+from fixtures import model_hook, test_hooks
 
 
 class TestPrePostModelHooksMaterialize(core_base.TestPrePostModelHooks):
+    @pytest.fixture(scope="class", autouse=True)
+    def setUp(self, project):
+        project.run_sql(f"drop table if exists { project.test_schema }.on_model_hook")
+        project.run_sql(model_hook.format(schema=project.test_schema))
+
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return test_hooks
@@ -30,6 +35,11 @@ class TestPrePostModelHooksMaterialize(core_base.TestPrePostModelHooks):
 class TestPrePostModelHooksUnderscoresMaterialize(
     core_base.TestPrePostModelHooksUnderscores
 ):
+    @pytest.fixture(scope="class", autouse=True)
+    def setUp(self, project):
+        project.run_sql(f"drop table if exists { project.test_schema }.on_model_hook")
+        project.run_sql(model_hook.format(schema=project.test_schema))
+
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return test_hooks
@@ -39,5 +49,10 @@ class TestPrePostModelHooksUnderscoresMaterialize(
 
 
 class TestHookRefsMaterialize(core_base.TestHookRefs):
+    @pytest.fixture(scope="class", autouse=True)
+    def setUp(self, project):
+        project.run_sql(f"drop table if exists { project.test_schema }.on_model_hook")
+        project.run_sql(model_hook.format(schema=project.test_schema))
+
     def check_hooks(self, state, project, host, count=1):
         self.get_ctx_vars(state, count=count, project=project)

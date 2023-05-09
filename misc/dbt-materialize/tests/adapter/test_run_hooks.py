@@ -13,12 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 import pytest
 from dbt.tests.adapter.hooks import test_run_hooks as core_base
-from fixtures import test_run_operation
+from fixtures import run_hook, test_run_operation
 
 
 class TestPrePostRunHooksMaterialize(core_base.TestPrePostRunHooks):
+    @pytest.fixture(scope="function")
+    def setUp(self, project):
+        project.run_sql(f"drop table if exists { project.test_schema }.on_run_hook")
+        project.run_sql(run_hook.format(schema=project.test_schema))
+        project.run_sql(f"drop table if exists { project.test_schema }.schemas")
+        project.run_sql(f"drop table if exists { project.test_schema }.db_schemas")
+        os.environ["TERM_TEST"] = "TESTING"
+
     @pytest.fixture(scope="class")
     def project_config_update(self):
         return test_run_operation
