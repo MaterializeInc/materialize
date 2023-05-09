@@ -2229,12 +2229,13 @@ impl Coordinator {
         // OF or we're inside an explicit transaction. The latter case is
         // necessary to support PG's `BEGIN` semantics, whose behavior can
         // depend on whether or not reads have occurred in the txn.
-        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
-            || when == &QueryWhen::Immediately
-        {
+        if when.is_transactional() {
             session.add_transaction_ops(TransactionOps::Peeks(
                 determination.timestamp_context.clone(),
             ))?;
+        } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
+            // If the query uses AS OF, then ignore the timestamp.
+            session.add_transaction_ops(TransactionOps::Peeks(TimestampContext::NoTimestamp))?;
         }
 
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
