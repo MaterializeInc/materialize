@@ -65,7 +65,9 @@ class QueryExecutor:
             if index % QUERIES_PER_TX == 0:
                 self.begin_tx(cursor, commit_previous_tx=index > 0)
 
-            self.fire_and_compare_queries(cursor, query, self.evaluation_strategies)
+            self.fire_and_compare_queries(
+                cursor, query, index, self.evaluation_strategies
+            )
 
         self.commit_tx(cursor)
 
@@ -88,25 +90,33 @@ class QueryExecutor:
         self,
         cursor: Cursor,
         query: QueryTemplate,
+        query_index: int,
         evaluation_strategies: list[EvaluationStrategy],
     ) -> None:
+        query_execution = QueryExecution(query, query_index)
+
         for strategy in evaluation_strategies:
             sql_query_string = query.to_sql(strategy)
 
-            query_execution = QueryExecution(sql_query_string)
-
             try:
                 cursor.execute(sql_query_string)
-                result = QueryResult(strategy, cursor.fetchall())
+                result = QueryResult(strategy, sql_query_string, cursor.fetchall())
                 query_execution.outcomes.append(result)
             except DatabaseError as err:
-                failure = QueryFailure(strategy, str(err))
+                failure = QueryFailure(strategy, sql_query_string, str(err))
                 query_execution.outcomes.append(failure)
                 self.rollback_tx(cursor, start_new_tx=True)
             except ProgrammingError as err:
                 # TODO merge with previous
-                failure = QueryFailure(strategy, str(err))
+                failure = QueryFailure(strategy, sql_query_string, str(err))
                 query_execution.outcomes.append(failure)
                 self.rollback_tx(cursor, start_new_tx=True)
 
-            self.comparator.compare_results(query_execution)
+        comparison_outcome = self.comparator.compare_results(query_execution)
+
+        if comparison_outcome.success():
+            print(f"Test with query {query_execution.index} PASSED")
+        else:
+            print(
+                f"Test with query {query_execution.index} FAILED with {len(comparison_outcome.errors)} errors:\n{comparison_outcome.error_details()}"
+            )

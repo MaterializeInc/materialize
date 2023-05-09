@@ -9,29 +9,42 @@
 from typing import Any
 
 from materialize.output_consistency.execution.execution_strategy import (
+    DummyEvaluation,
     EvaluationStrategy,
 )
+from materialize.output_consistency.query.query_template import QueryTemplate
 
 
 class QueryExecution:
-    def __init__(self, query_sql: str):
-        self.query_sql = query_sql
+    def __init__(self, query: QueryTemplate, index: int):
+        self.generic_sql = query.to_sql(DummyEvaluation())
+        self.index = index
         self.outcomes: list[QueryOutcome] = []
+
+    def __str__(self) -> str:
+        return f"QueryExecution({len(self.outcomes)} outcomes for template query: {self.generic_sql})"
 
 
 class QueryOutcome:
-    def __init__(self, strategy: EvaluationStrategy, successful: bool):
+    def __init__(self, strategy: EvaluationStrategy, sql: str, successful: bool):
         self.strategy = strategy
+        self.sql = sql
         self.successful = successful
 
 
 class QueryResult(QueryOutcome):
-    def __init__(self, strategy: EvaluationStrategy, result_data: Any):
-        super().__init__(strategy, True)
+    def __init__(self, strategy: EvaluationStrategy, sql: str, result_data: Any):
+        super().__init__(strategy, sql, True)
         self.result_data = result_data
+
+    def __str__(self) -> str:
+        return f"Result({self.result_data}) with strategy '{self.strategy.name}'"
 
 
 class QueryFailure(QueryOutcome):
-    def __init__(self, strategy: EvaluationStrategy, error_message: str):
-        super().__init__(strategy, False)
+    def __init__(self, strategy: EvaluationStrategy, sql: str, error_message: str):
+        super().__init__(strategy, sql, False)
         self.error_message = error_message
+
+    def __str__(self) -> str:
+        return f"Failure({self.error_message}) with strategy '{self.strategy.name}'"

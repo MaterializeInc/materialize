@@ -20,6 +20,14 @@ class EvaluationStrategy:
         raise RuntimeError("Not implemented")
 
 
+class DummyEvaluation(EvaluationStrategy):
+    def __init__(self) -> None:
+        super().__init__("*", "Dummy")
+
+    def generate_source(self, data_types: list[DataType]) -> list[str]:
+        return []
+
+
 class DataFlowRenderingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__("t_dfr", "Dataflow rendering")
