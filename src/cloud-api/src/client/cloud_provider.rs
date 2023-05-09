@@ -142,7 +142,7 @@ impl Client {
 
         loop {
             let req = self
-                .build_request(Method::GET, ["api", "cloud-regions"], "sync")
+                .build_request(Method::GET, ["api", "cloud-regions"], format!("https://sync.{}", self.endpoint))
                 .await?;
 
             let req = req.query(&[("limit", "50"), ("cursor", &cursor)]);

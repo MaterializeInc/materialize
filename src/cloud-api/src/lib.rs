@@ -74,7 +74,7 @@
 // END LINT CONFIG
 #![warn(missing_docs)]
 
-//! A Frontegg client to interact with the Admin API.
+//! A client to interact with the Materialize Cloud API.
 //!
 //! # Example
 //!

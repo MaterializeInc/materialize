@@ -22,7 +22,6 @@ use serde::{de::DeserializeOwned, Deserialize};
 use crate::error::{ApiError, Error};
 
 /// Represents the structure for the client.
-#[allow(dead_code)]
 pub struct Client {
     pub(crate) inner: reqwest::Client,
     pub(crate) auth_client: mz_frontegg_client::client::Client,
@@ -50,20 +49,14 @@ impl Client {
         &self,
         method: Method,
         path: P,
-        subdomain: &str,
+        domain: &str,
     ) -> Result<RequestBuilder, Error>
     where
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
-        let mut url = self.endpoint.clone();
-
-        // Set the new host using a subdomain
-        let host = format!("{}.{}", subdomain, url.host().unwrap().to_owned());
-        url.set_host(Some(&host)).unwrap();
-
-        url.path_segments_mut()
-            .expect("builder validated URL can be a base")
+        let mut url = domain.parse();
+        url.path_segments_mut()?
             .clear()
             .extend(path);
 
