@@ -7,16 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from materialize.output_consistency.configuration.output_consistency_configuration import (
+    OutputConsistencyConfiguration,
+)
 from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.query.query_template import QueryTemplate
 
-# TODO: increase
-DEFAULT_MAX_COLS_PER_QUERY = 5
-
 
 class QueryGenerator:
-    def __init__(self, max_cols_per_query: int = DEFAULT_MAX_COLS_PER_QUERY):
-        self.max_cols_per_query = max_cols_per_query
+    def __init__(self, config: OutputConsistencyConfiguration):
+        self.config = config
 
     def generate_queries(self, expressions: list[Expression]) -> list[QueryTemplate]:
         if len(expressions) == 0:
@@ -26,7 +26,7 @@ class QueryGenerator:
 
         current_query = QueryTemplate()
         for index, expr in enumerate(expressions):
-            if index % self.max_cols_per_query == 0 and index > 0:
+            if index % self.config.max_cols_per_query == 0 and index > 0:
                 queries.append(current_query)
                 current_query = QueryTemplate()
 

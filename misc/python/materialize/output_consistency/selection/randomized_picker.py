@@ -9,15 +9,21 @@
 
 import random
 
+from materialize.output_consistency.configuration.output_consistency_configuration import (
+    OutputConsistencyConfiguration,
+)
 from materialize.output_consistency.expressions.expression import Expression
 
 
 class RandomizedPicker:
-    def __init__(self, random_seed: int = 0):
-        self.random_seed = random_seed
+    def __init__(self, config: OutputConsistencyConfiguration):
+        self.config = config
+
+    def get_seed(self) -> int:
+        return self.config.random_seed
 
     def select(
         self, expressions: list[Expression], num_elements: int = 10000
     ) -> list[Expression]:
-        random.seed(self.random_seed)
+        random.seed(self.get_seed())
         return random.choices(expressions, k=num_elements)

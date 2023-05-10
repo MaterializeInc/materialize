@@ -12,6 +12,9 @@ from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError
 
 from materialize.mzcompose import Composition
+from materialize.output_consistency.configuration.output_consistency_configuration import (
+    OutputConsistencyConfiguration,
+)
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -28,16 +31,16 @@ from materialize.output_consistency.validation.validation_outcome import (
     ValidationOutcome,
 )
 
-QUERIES_PER_TX = 20
-
 
 class QueryExecutor:
     def __init__(
         self,
         evaluation_strategies: list[EvaluationStrategy],
+        config: OutputConsistencyConfiguration,
         comparator: ResultComparator,
     ):
         self.evaluation_strategies = evaluation_strategies
+        self.config = config
         self.comparator = comparator
 
     def setup_database_objects(
@@ -68,7 +71,7 @@ class QueryExecutor:
         count_passed = 0
 
         for index, query in enumerate(queries):
-            if index % QUERIES_PER_TX == 0:
+            if index % self.config.queries_per_tx == 0:
                 self.begin_tx(cursor, commit_previous_tx=index > 0)
 
             test_passed = self.fire_and_compare_queries(
