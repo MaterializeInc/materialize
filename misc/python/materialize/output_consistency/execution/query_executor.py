@@ -12,8 +12,8 @@ from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError
 
 from materialize.mzcompose import Composition
-from materialize.output_consistency.configuration.output_consistency_configuration import (
-    OutputConsistencyConfiguration,
+from materialize.output_consistency.configuration.configuration import (
+    ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.execution.evaluation_strategy import (
@@ -36,7 +36,7 @@ class QueryExecutor:
     def __init__(
         self,
         evaluation_strategies: list[EvaluationStrategy],
-        config: OutputConsistencyConfiguration,
+        config: ConsistencyTestConfiguration,
         comparator: ResultComparator,
     ):
         self.evaluation_strategies = evaluation_strategies

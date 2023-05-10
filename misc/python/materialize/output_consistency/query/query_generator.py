@@ -7,15 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.configuration.output_consistency_configuration import (
-    OutputConsistencyConfiguration,
+from materialize.output_consistency.configuration.configuration import (
+    ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.query.query_template import QueryTemplate
 
 
 class QueryGenerator:
-    def __init__(self, config: OutputConsistencyConfiguration):
+    def __init__(self, config: ConsistencyTestConfiguration):
         self.config = config
 
     def generate_queries(self, expressions: list[Expression]) -> list[QueryTemplate]:

@@ -9,14 +9,14 @@
 
 import random
 
-from materialize.output_consistency.configuration.output_consistency_configuration import (
-    OutputConsistencyConfiguration,
+from materialize.output_consistency.configuration.configuration import (
+    ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.expressions.expression import Expression
 
 
 class RandomizedPicker:
-    def __init__(self, config: OutputConsistencyConfiguration):
+    def __init__(self, config: ConsistencyTestConfiguration):
         self.config = config
 
     def get_seed(self) -> int:

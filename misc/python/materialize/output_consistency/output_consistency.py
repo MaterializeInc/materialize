@@ -8,9 +8,9 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition
-from materialize.output_consistency.configuration.output_consistency_configuration import (
+from materialize.output_consistency.configuration.configuration import (
     DEFAULT_CONFIG,
-    OutputConsistencyConfiguration,
+    ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.data_type.data_provider import DATA_TYPES
 from materialize.output_consistency.execution.evaluation_strategy import (
@@ -28,7 +28,7 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 
 
 def run_output_consistency_tests(c: Composition) -> ConsistencyTestSummary:
-    config: OutputConsistencyConfiguration = DEFAULT_CONFIG
+    config: ConsistencyTestConfiguration = DEFAULT_CONFIG
 
     evaluation_strategies = [
         DataFlowRenderingEvaluation(),
