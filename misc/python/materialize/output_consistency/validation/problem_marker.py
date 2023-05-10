@@ -8,13 +8,12 @@
 # by the Apache License, Version 2.0.
 from typing import Optional
 
-from materialize.output_consistency.execution.execution_strategy import (
+from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
-from materialize.output_consistency.query.query_result import QueryExecution
 
 
-class ComparisonMismatch:
+class ValidationError:
     def __init__(
         self,
         message: str,
@@ -61,30 +60,3 @@ class ComparisonMismatch:
             value_and_strategy_desc = f"\n  Strategy: {self.strategy1}"
 
         return f"Error: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}"
-
-
-class ComparisonOutcome:
-    def __init__(self, query_execution: QueryExecution) -> None:
-        self.errors: list[ComparisonMismatch] = []
-        self.query_execution = query_execution.index
-
-    def add_error(
-        self,
-        message: str,
-        description: Optional[str] = None,
-        value1: Optional[str] = None,
-        value2: Optional[str] = None,
-        strategy1: Optional[EvaluationStrategy] = None,
-        strategy2: Optional[EvaluationStrategy] = None,
-        location: Optional[str] = None,
-    ) -> None:
-        error = ComparisonMismatch(
-            message, description, value1, value2, strategy1, strategy2, location
-        )
-        self.errors.append(error)
-
-    def success(self) -> bool:
-        return len(self.errors) == 0
-
-    def error_details(self) -> str:
-        return "\n=====\n".join([str(error) for error in self.errors])

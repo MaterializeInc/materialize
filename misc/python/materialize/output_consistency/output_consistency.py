@@ -9,17 +9,17 @@
 
 from materialize.mzcompose import Composition
 from materialize.output_consistency.data_type.data_provider import DATA_TYPES
-from materialize.output_consistency.execution.execution_strategy import (
+from materialize.output_consistency.execution.evaluation_strategy import (
     ConstantFoldingEvaluation,
     DataFlowRenderingEvaluation,
 )
 from materialize.output_consistency.execution.query_executor import QueryExecutor
-from materialize.output_consistency.execution.result_comparator import ResultComparator
 from materialize.output_consistency.expressions.expression_generator import (
     ExpressionGenerator,
 )
 from materialize.output_consistency.query.query_generator import QueryGenerator
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
+from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 
 def run_output_consistency_tests(c: Composition) -> None:

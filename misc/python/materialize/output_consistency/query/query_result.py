@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from typing import Any, Sequence
 
-from materialize.output_consistency.execution.execution_strategy import (
+from materialize.output_consistency.execution.evaluation_strategy import (
     DummyEvaluation,
     EvaluationStrategy,
 )

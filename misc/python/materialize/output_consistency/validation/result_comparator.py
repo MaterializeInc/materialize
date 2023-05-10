@@ -8,21 +8,21 @@
 # by the Apache License, Version 2.0.
 from typing import cast
 
-from materialize.output_consistency.execution.comparison_outcome import (
-    ComparisonOutcome,
-)
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
     QueryFailure,
     QueryOutcome,
     QueryResult,
 )
+from materialize.output_consistency.validation.validation_outcome import (
+    ValidationOutcome,
+)
 
 
 class ResultComparator:
-    def compare_results(self, query_execution: QueryExecution) -> ComparisonOutcome:
+    def compare_results(self, query_execution: QueryExecution) -> ValidationOutcome:
         print(f"Query {query_execution.index}: {query_execution.generic_sql}")
-        comparison_outcome = ComparisonOutcome(query_execution)
+        comparison_outcome = ValidationOutcome(query_execution)
 
         if len(query_execution.outcomes) == 0:
             raise RuntimeError("Contains no outcomes!")
@@ -44,7 +44,7 @@ class ResultComparator:
         return comparison_outcome
 
     def validate_outcomes_metadata(
-        self, outcomes: list[QueryOutcome], comparison_outcome: ComparisonOutcome
+        self, outcomes: list[QueryOutcome], comparison_outcome: ValidationOutcome
     ) -> None:
         outcome1 = outcomes[0]
 
@@ -57,7 +57,7 @@ class ResultComparator:
         self,
         outcome1: QueryOutcome,
         outcome2: QueryOutcome,
-        comparison_outcome: ComparisonOutcome,
+        comparison_outcome: ValidationOutcome,
     ) -> None:
         if outcome1.successful != outcome2.successful:
             comparison_outcome.add_error(
@@ -106,7 +106,7 @@ class ResultComparator:
                 )
 
     def validate_outcomes_data(
-        self, outcomes: list[QueryOutcome], comparison_outcome: ComparisonOutcome
+        self, outcomes: list[QueryOutcome], comparison_outcome: ValidationOutcome
     ) -> None:
         # each outcome is known to contain at least one row
         # each row is supposed to have the same number of columns
@@ -123,7 +123,7 @@ class ResultComparator:
         self,
         outcome1: QueryResult,
         outcome2: QueryResult,
-        comparison_outcome: ComparisonOutcome,
+        comparison_outcome: ValidationOutcome,
     ) -> None:
         num_columns1 = len(outcome1.result_rows[0])
         num_columns2 = len(outcome2.result_rows[0])
@@ -142,7 +142,7 @@ class ResultComparator:
         result1: QueryResult,
         result2: QueryResult,
         col_index: int,
-        comparison_outcome: ComparisonOutcome,
+        comparison_outcome: ValidationOutcome,
     ) -> None:
         # both results are known to be not empty and have the same number of rows
         row_length = len(result1.result_rows)

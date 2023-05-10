@@ -13,16 +13,16 @@ from pg8000.exceptions import DatabaseError
 
 from materialize.mzcompose import Composition
 from materialize.output_consistency.data_type.data_type import DataType
-from materialize.output_consistency.execution.execution_strategy import (
+from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
-from materialize.output_consistency.execution.result_comparator import ResultComparator
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
     QueryFailure,
     QueryResult,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 QUERIES_PER_TX = 20
 
