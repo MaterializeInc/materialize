@@ -3553,6 +3553,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-cloud-api"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-frontegg-auth",
+ "mz-frontegg-client",
+ "once_cell",
+ "reqwest",
+ "serde",
+ "thiserror",
+ "tokio",
+ "url",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-cloud-resources"
 version = "0.0.0"
 dependencies = [
