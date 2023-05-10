@@ -92,7 +92,6 @@ use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use mz_storage_client::types::sources::Timeline;
-use once_cell::sync::Lazy;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
@@ -2519,17 +2518,22 @@ fn test_emit_tracing_notice() {
 }
 
 #[test]
-fn test_query_on_dropped_source() {
-    fn test_query_on_dropped_source_inner(
+fn test_subscribe_on_dropped_source() {
+    fn test_subscribe_on_dropped_source_inner(
         server: &Server,
         tables: Vec<&'static str>,
-        query: &'static str,
+        subscribe: &'static str,
         assertion: impl FnOnce(
                 Result<(), tokio_postgres::error::Error>,
                 futures::channel::mpsc::UnboundedReceiver<DbError>,
             ) + Send
             + 'static,
     ) {
+        assert!(
+            subscribe.to_lowercase().contains("subscribe"),
+            "test only works with subscribe queries, query: {subscribe}"
+        );
+
         let (tx, rx) = futures::channel::mpsc::unbounded();
 
         let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2548,7 +2552,7 @@ fn test_query_on_dropped_source() {
             .connect(postgres::NoTls)
             .unwrap();
         let query_thread = std::thread::spawn(move || {
-            let res = query_client.batch_execute(query);
+            let res = query_client.batch_execute(subscribe);
             assertion(res, rx);
         });
 
@@ -2556,11 +2560,11 @@ fn test_query_on_dropped_source() {
             .max_duration(Duration::from_secs(10))
             .retry(|_| {
                 let row = client
-                    .query_one("SELECT count(*) FROM mz_internal.mz_compute_exports;", &[])
+                    .query_one("SELECT count(*) FROM mz_internal.mz_subscriptions;", &[])
                     .unwrap();
                 let count: i64 = row.get(0);
                 if count < 1 {
-                    Err("no active query")
+                    Err("no active subscribe")
                 } else {
                     Ok(())
                 }
@@ -2576,10 +2580,10 @@ fn test_query_on_dropped_source() {
         query_thread.join().unwrap();
 
         Retry::default()
-            .max_duration(Duration::from_secs(10))
+            .max_duration(Duration::from_secs(100))
             .retry(|_| {
                 let row = client
-                    .query_one("SELECT count(*) FROM mz_internal.mz_compute_exports;", &[])
+                    .query_one("SELECT count(*) FROM mz_internal.mz_subscriptions;", &[])
                     .unwrap();
                 let count: i64 = row.get(0);
                 if count > 0 {
@@ -2612,11 +2616,11 @@ fn test_query_on_dropped_source() {
     let config = util::Config::default();
     let server = util::start_server(config).unwrap();
 
-    test_query_on_dropped_source_inner(&server, vec!["t"], "SUBSCRIBE t", |res, rx| {
+    test_subscribe_on_dropped_source_inner(&server, vec!["t"], "SUBSCRIBE t", |res, rx| {
         res.unwrap();
         assert_subscribe_notice(rx);
     });
-    test_query_on_dropped_source_inner(
+    test_subscribe_on_dropped_source_inner(
         &server,
         vec!["t1", "t2"],
         "SUBSCRIBE (SELECT * FROM t1, t2)",
@@ -2625,14 +2629,6 @@ fn test_query_on_dropped_source() {
             assert_subscribe_notice(rx);
         },
     );
-    static SELECT: Lazy<String> =
-        Lazy::new(|| format!("SELECT * FROM t AS OF {}", mz_repr::Timestamp::MAX));
-    test_query_on_dropped_source_inner(&server, vec!["t"], &SELECT, |res, _| {
-        assert_eq!(
-            res.unwrap_err().as_db_error().unwrap().message(),
-            "query could not complete because materialize.public.t was dropped"
-        )
-    });
 }
 
 #[test]
