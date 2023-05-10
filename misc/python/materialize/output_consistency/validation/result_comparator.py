@@ -69,8 +69,8 @@ class ResultComparator:
             )
             return
 
-        both_successful = outcome1.successful
-        both_failed = not outcome1.successful
+        both_successful = outcome1.successful and outcome2.successful
+        both_failed = not outcome1.successful and not outcome2.successful
 
         if both_successful:
             self.validate_row_count(
