@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
@@ -49,11 +53,16 @@ impl SystemParameterFrontend {
         let ld_config = ld::ConfigBuilder::new(ld_sdk_key)
             .event_processor(ld::EventProcessorBuilder::new().on_success({
                 let last_known_time_seconds = ld_metrics.last_known_time_seconds.clone();
+                let last_cse_time_seconds = ld_metrics.last_cse_time_seconds.clone();
                 Arc::new(move |result| {
                     if let Ok(t_next) = u64::try_from(result.time_from_server / 1000) {
                         let t_curr = last_known_time_seconds.get();
                         if t_next > t_curr {
                             last_known_time_seconds.inc_by(t_next - t_curr);
+                        }
+                        let t_curr = last_cse_time_seconds.get();
+                        if t_next > t_curr {
+                            last_cse_time_seconds.inc_by(t_next - t_curr);
                         }
                     } else {
                         tracing::warn!("Cannot convert time_from_server / 1000 from u128 to u64");
@@ -102,8 +111,25 @@ impl SystemParameterFrontend {
     pub async fn ensure_initialized(&self) {
         tracing::info!("waiting for SystemParameterFrontend to initialize");
 
-        // Start and initialize LD client for the frontend.
-        self.ld_client.start_with_default_executor();
+        // Start and initialize LD client for the frontend. The callback passed
+        // will export the last time when an SSE event from the LD server was
+        // received in a Prometheus metric.
+        self.ld_client.start_with_default_executor_and_callback({
+            let last_sse_time_seconds = self.ld_metrics.last_sse_time_seconds.clone();
+            Arc::new(move |_ev| {
+                if let Ok(t_next) = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|duration| duration.as_secs())
+                {
+                    let t_curr = last_sse_time_seconds.get();
+                    if t_next > t_curr {
+                        last_sse_time_seconds.inc_by(t_next - t_curr);
+                    }
+                } else {
+                    tracing::warn!("Cannot get duration since UNIX_EPOCH as seconds");
+                }
+            })
+        });
 
         let max_backoff = Duration::from_secs(60);
         let mut backoff = Duration::from_secs(5);
@@ -151,16 +177,28 @@ impl SystemParameterFrontend {
 
 #[derive(Debug, Clone)]
 struct Metrics {
+    // TODO: remove this in favor of last_cse_time_seconds.
     pub last_known_time_seconds: IntCounter,
+    pub last_cse_time_seconds: IntCounter,
+    pub last_sse_time_seconds: IntCounter,
     pub params_changed: IntCounter,
 }
 
 impl Metrics {
     fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
+            // TODO: remove this in favor of last_cse_time_seconds.
             last_known_time_seconds: registry.register(metric!(
                 name: "mz_parameter_frontend_last_known_time_seconds",
                 help: "The last known time of the LaunchDarkly frontend (as unix timestamp).",
+            )),
+            last_cse_time_seconds: registry.register(metric!(
+                name: "mz_parameter_frontend_last_cse_time_seconds",
+                help: "The last known time when the LaunchDarkly client sent an event to the LaunchDarkly server (as unix timestamp).",
+            )),
+            last_sse_time_seconds: registry.register(metric!(
+                name: "mz_parameter_frontend_last_sse_time_seconds",
+                help: "The last known time when the LaunchDarkly client received an event from the LaunchDarkly server (as unix timestamp).",
             )),
             params_changed: registry.register(metric!(
                 name: "mz_parameter_frontend_params_changed",
