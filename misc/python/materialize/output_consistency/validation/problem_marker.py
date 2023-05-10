@@ -22,14 +22,17 @@ class ValidationError:
         value2: Optional[str] = None,
         strategy1: Optional[EvaluationStrategy] = None,
         strategy2: Optional[EvaluationStrategy] = None,
+        sql1: Optional[str] = None,
+        sql2: Optional[str] = None,
         location: Optional[str] = None,
-    ) -> None:
-        self.message = message
-        self.description = description
+    ):
+        super().__init__("Error", message, description)
         self.value1 = value1
         self.value2 = value2
         self.strategy1 = strategy1
         self.strategy2 = strategy2
+        self.sql1 = sql1
+        self.sql2 = sql2
         self.location = location
 
         if value1 is None and value2 is not None:
@@ -37,6 +40,9 @@ class ValidationError:
 
         if strategy1 is None and strategy2 is not None:
             raise RuntimeError("strategy1 must be set if strategy2 is set")
+
+        if sql1 is None and sql2 is not None:
+            raise RuntimeError("sql1 must be set if sql2 is set")
 
     def __str__(self) -> str:
         error_desc = f" ({self.description})" if self.description else ""
@@ -47,7 +53,7 @@ class ValidationError:
             # self.value1 will never be null in this case
             strategy1_desc = f" ({self.strategy1})"
             strategy2_desc = f" ({self.strategy2})"
-            value_and_strategy_desc = f"\n  Expected: '{self.value1}'{strategy1_desc}\n  Actual:   '{self.value2}'{strategy2_desc}"
+            value_and_strategy_desc = f"\n  Value 1: '{self.value1}'{strategy1_desc}\n  Value 2:   '{self.value2}'{strategy2_desc}"
         elif self.value1 is not None:
             strategy1_desc = f" ({self.strategy1})"
             value_and_strategy_desc = f"\n  Value: '{self.value1}'{strategy1_desc}"
@@ -59,4 +65,10 @@ class ValidationError:
         elif self.strategy1 is not None:
             value_and_strategy_desc = f"\n  Strategy: {self.strategy1}"
 
-        return f"Error: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}"
+        sql_desc = ""
+        if self.sql1 is not None:
+            sql_desc = f"\n  Query 1: {self.sql1}"
+        if self.sql2 is not None:
+            sql_desc += f"\n  Query 2: {self.sql2}"
+
+        return f"{self.problem_type}: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}{sql_desc}"

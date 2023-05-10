@@ -28,15 +28,28 @@ class ValidationOutcome:
         value2: Optional[str] = None,
         strategy1: Optional[EvaluationStrategy] = None,
         strategy2: Optional[EvaluationStrategy] = None,
+        sql1: Optional[str] = None,
+        sql2: Optional[str] = None,
         location: Optional[str] = None,
     ) -> None:
         error = ValidationError(
-            message, description, value1, value2, strategy1, strategy2, location
+            message,
+            description,
+            value1,
+            value2,
+            strategy1,
+            strategy2,
+            sql1,
+            sql2,
+            location,
         )
         self.errors.append(error)
 
     def success(self) -> bool:
-        return len(self.errors) == 0
+        return not self.has_errors()
+
+    def has_errors(self) -> bool:
+        return len(self.errors) > 0
 
     def error_details(self) -> str:
         return "\n=====\n".join([str(error) for error in self.errors])

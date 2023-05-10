@@ -66,6 +66,8 @@ class ResultComparator:
                 value2=outcome2.__class__.__name__,
                 strategy1=outcome1.strategy,
                 strategy2=outcome2.strategy,
+                sql1=outcome1.sql,
+                sql2=outcome2.sql,
             )
             return
 
@@ -104,6 +106,8 @@ class ResultComparator:
                 value2=str(num_rows2),
                 strategy1=result1.strategy,
                 strategy2=result2.strategy,
+                sql1=result1.sql,
+                sql2=result2.sql,
             )
 
     def validate_error_messages(
@@ -119,6 +123,8 @@ class ResultComparator:
                 value2=failure2.error_message,
                 strategy1=failure1.strategy,
                 strategy2=failure2.strategy,
+                sql1=failure1.sql,
+                sql2=failure2.sql,
             )
             return
 
@@ -175,5 +181,7 @@ class ResultComparator:
                     value2=result_value2,
                     strategy1=result1.strategy,
                     strategy2=result2.strategy,
+                    sql1=result1.sql,
+                    sql2=result2.sql,
                     location=f"row index {row_index}, column index {col_index}",
                 )
