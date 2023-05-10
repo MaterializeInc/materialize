@@ -107,6 +107,16 @@ pub struct PersistConfig {
     pub reader_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
+    /// Timeout per connection attempt to Persist PubSub service.
+    pub pubsub_connect_attempt_timeout: Duration,
+    /// Maximum backoff when retrying connection establishment to Persist PubSub service.
+    pub pubsub_connect_max_backoff: Duration,
+    /// Size of channel used to buffer send messages to PubSub service.
+    pub pubsub_client_sender_channel_size: usize,
+    /// Size of channel used to buffer received messages from PubSub service.
+    pub pubsub_client_receiver_channel_size: usize,
+    /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
+    pub pubsub_server_connection_channel_size: usize,
 }
 
 impl PersistConfig {
@@ -153,6 +163,11 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
+            pubsub_connect_attempt_timeout: Duration::from_secs(5),
+            pubsub_connect_max_backoff: Duration::from_secs(60),
+            pubsub_client_sender_channel_size: 25,
+            pubsub_client_receiver_channel_size: 25,
+            pubsub_server_connection_channel_size: 25,
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is

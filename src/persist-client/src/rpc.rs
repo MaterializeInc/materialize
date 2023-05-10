@@ -185,11 +185,13 @@ impl PersistPubSubClient for GrpcPubSubClient {
         // broadcast to allow us to create new Receivers on demand, in case the underlying gRPC stream
         // is swapped out (e.g. due to connection failure). It is expected that only 1 Receiver is
         // ever active at a given time.
-        let (rpc_requests, _) = tokio::sync::broadcast::channel(20);
+        let (rpc_requests, _) =
+            tokio::sync::broadcast::channel(config.persist_cfg.pubsub_client_sender_channel_size);
         // Create a stable channel to receive messages from our gRPC stream. The input end lives inside
         // a task that continuously reads from the active gRPC stream, decoupling the `PubSubReceiver`
         // from the lifetime of a specific gRPC connection.
-        let (receiver_input, receiver_output) = tokio::sync::mpsc::channel(20);
+        let (receiver_input, receiver_output) =
+            tokio::sync::mpsc::channel(config.persist_cfg.pubsub_client_receiver_channel_size);
 
         let sender = Arc::new(SubscriptionTrackingSender::new(Arc::new(
             GrpcPubSubSender {
@@ -198,7 +200,6 @@ impl PersistPubSubClient for GrpcPubSubClient {
             },
         )));
         let pubsub_sender = Arc::clone(&sender);
-        let dynamic_cfg = Arc::clone(&config.persist_cfg.dynamic);
         mz_ore::task::spawn(
             || "persist::rpc::client::connection".to_string(),
             async move {
@@ -212,14 +213,14 @@ impl PersistPubSubClient for GrpcPubSubClient {
                 'reconnect_forever: loop {
                     metrics.pubsub_client.grpc_connection.connected.set(0);
 
-                    if !dynamic_cfg.pubsub_client_enabled() {
+                    if !config.persist_cfg.dynamic.pubsub_client_enabled() {
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         continue 'reconnect_forever;
                     }
 
                     info!("Connecting to Persist PubSub: {}", config.url);
                     let client = mz_ore::retry::Retry::default()
-                        .clamp_backoff(Duration::from_secs(60))
+                        .clamp_backoff(config.persist_cfg.pubsub_connect_max_backoff)
                         .retry_async(|_| async {
                             metrics
                                 .pubsub_client
@@ -231,7 +232,7 @@ impl PersistPubSubClient for GrpcPubSubClient {
                                 Err(err) => return RetryResult::FatalErr(err),
                             };
                             ProtoPersistPubSubClient::connect(
-                                endpoint.timeout(Duration::from_secs(5)),
+                                endpoint.timeout(config.persist_cfg.pubsub_connect_attempt_timeout),
                             )
                             .await
                             .into()
@@ -291,7 +292,7 @@ impl PersistPubSubClient for GrpcPubSubClient {
                     pubsub_sender.reconnect();
 
                     'read_active_stream: loop {
-                        if !dynamic_cfg.pubsub_client_enabled() {
+                        if !config.persist_cfg.dynamic.pubsub_client_enabled() {
                             break 'read_active_stream;
                         }
 
@@ -850,7 +851,7 @@ impl PersistGrpcPubSubServer {
     /// to the server state. Calls into this connection do not go over the network
     /// nor require message serde.
     pub fn new_same_process_connection(&self) -> PubSubClientConnection {
-        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let (tx, rx) = tokio::sync::mpsc::channel(self.cfg.pubsub_client_receiver_channel_size);
         let sender: Arc<dyn PubSubSender> = Arc::new(SubscriptionTrackingSender::new(Arc::new(
             Arc::clone(&self.state).new_connection(tx),
         )));
@@ -907,7 +908,7 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
         info!("Received Persist PubSub connection from: {:?}", caller_id);
 
         let mut in_stream = request.into_inner();
-        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let (tx, rx) = tokio::sync::mpsc::channel(self.cfg.pubsub_server_connection_channel_size);
 
         let caller = caller_id.clone();
         let dynamic_cfg = Arc::clone(&self.cfg.dynamic);
