@@ -43,7 +43,7 @@ pub trait Attribute: 'static + Default + Send + Sync {
 
     /// Schedule environment maintenance tasks.
     ///
-    /// Deletate to [`Env::schedule_tasks`] if this attribute has an [`Env`] field.
+    /// Delegate to [`Env::schedule_tasks`] if this attribute has an [`Env`] field.
     fn schedule_env_tasks(&mut self, _expr: &MirRelationExpr) {}
 
     /// Handle scheduled environment maintenance tasks.
@@ -94,7 +94,7 @@ impl<A: Attribute> Env<A> {
 impl<A: Attribute> Env<A> {
     /// Schedules environment maintenance tasks.
     ///
-    /// Should be called from a `Visitor<MirRelationExpr>::pre_visit` implementaion.
+    /// Should be called from a `Visitor<MirRelationExpr>::pre_visit` implementation.
     pub fn schedule_tasks(&mut self, expr: &MirRelationExpr) {
         match expr {
             MirRelationExpr::Let { id, .. } => {
@@ -102,15 +102,15 @@ impl<A: Attribute> Env<A> {
                 self.env_tasks.push(EnvTask::Extend(id.clone()));
             }
             _ => {
-                // Don not do anything with the environment in this node's children.
+                // Do not do anything with the environment in this node's children.
                 self.env_tasks.push(EnvTask::NoOp);
             }
         }
     }
 
-    /// Handles scheduled evinronment maintenance tasks.
+    /// Handles scheduled environment maintenance tasks.
     ///
-    /// Should be called from a `Visitor<MirRelationExpr>::post_visit` implementaion.
+    /// Should be called from a `Visitor<MirRelationExpr>::post_visit` implementation.
     pub fn handle_tasks(&mut self, results: &Vec<A::Value>) {
         // Pop the env task for this element's children.
         let parent = self.env_tasks.pop();
@@ -140,6 +140,7 @@ impl<A: Attribute> Env<A> {
                 // An Reset task indicates that we are about to leave the Let binding body
                 // and the id of the Let parent shadowed another `id` in the environment.
                 EnvTask::Reset(id, val) => {
+                    assert!(false); // There is no shadowing!
                     // Before moving to the post_visit of the enclosing Let parent, do as follows:
                     // 1. Reset the entry in the env map with the shadowed value.
                     self.env.insert(id, val);
@@ -150,12 +151,12 @@ impl<A: Attribute> Env<A> {
                 // and the id of the Let parent did not shadow another `id` in the environment.
                 EnvTask::Remove(id) => {
                     // Before moving to the post_visit of the enclosing Let parent, do as follows:
-                    // 1. Remove the value assciated with the given `id` from the environment.
+                    // 1. Remove the value associated with the given `id` from the environment.
                     self.env.remove(&id);
                     // 2. Create a NoOp task indicating that there is nothing more to be done.
                     EnvTask::NoOp
                 }
-                // A NoOp task indicates that we don't need to do anyting.
+                // A NoOp task indicates that we don't need to do anything.
                 EnvTask::NoOp => EnvTask::NoOp,
             };
             // Advance the state machine.
@@ -164,7 +165,7 @@ impl<A: Attribute> Env<A> {
     }
 }
 
-/// Models an environment maintenence task that needs to be executed
+/// Models an environment maintenance task that needs to be executed
 /// after visiting a [`MirRelationExpr`].
 ///
 /// The [`Env::schedule_tasks`] hook installs such a task for each node,
@@ -172,7 +173,7 @@ impl<A: Attribute> Env<A> {
 ///
 /// In addition, the [`Env::handle_tasks`] looks at the task installed
 /// by its parent and modifies it if needed, advancing it through the
-/// following state machinge from left to right:
+/// following state machine from left to right:
 /// ```text
 /// Set --- Reset ---- NoOp
 ///     \            /
