@@ -753,3 +753,11 @@ Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
 
 EOF
+
+## linear_chains is currently disabled for WMR.
+statement error not supported
+EXPLAIN WITH(linear_chains)
+WITH MUTUALLY RECURSIVE
+    foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
+    bar (a int) as (SELECT a FROM foo)
+SELECT * FROM bar;
