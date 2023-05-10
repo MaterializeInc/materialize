@@ -1,6 +1,8 @@
 ---
 title: "Window functions (OVER clause)"
 description: "How to efficiently handle queries that require window functions in Materialize."
+aliases:
+  - /sql/patterns/window-functions/
 menu:
   main:
     parent: 'sql-patterns'

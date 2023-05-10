@@ -3,10 +3,11 @@ title: "Troubleshooting"
 description: "Troubleshoot issues."
 menu:
   main:
-    parent: ops
-    weight: 70
+    parent: manage
+    weight: 5
 aliases:
-  - /ops/diagnosing-using-sql
+  - /ops/diagnosing-using-sql/
+  - /ops/troubleshooting/
 ---
 
 This page describes several SQL queries you can run to diagnose performance

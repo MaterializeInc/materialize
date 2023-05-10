@@ -5,6 +5,7 @@ weight:
 aliases:
   - /sql/idioms
   - /guides/top-k
+  - /sql/patterns/top-k/
 menu:
   main:
     parent: 'sql-patterns'
@@ -16,7 +17,7 @@ disable_toc: true
 Suppose you want to group rows in a table by some key, then filter out all but
 the first _K_ elements within each group according to some ordering. In other
 databases, you might use window functions. In Materialize, we recommend using a
-[`LATERAL` subquery](/sql/join/#lateral-subqueries). The general form of the
+[`LATERAL` subquery](/transform-data/join/#lateral-subqueries). The general form of the
 query looks like this:
 
 ```sql

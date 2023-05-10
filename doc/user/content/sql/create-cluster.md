@@ -7,7 +7,7 @@ menu:
     parent: commands
 ---
 
-`CREATE CLUSTER` creates a logical [cluster](/overview/key-concepts#clusters),
+`CREATE CLUSTER` creates a logical [cluster](/get-started/key-concepts#clusters),
 which contains dataflow-powered objects. By default, a cluster named `default`
 with a single cluster replica will exist in every environment.
 
@@ -36,7 +36,7 @@ We plan to remove this restriction in a future version of Materialize.
 {{< /warning >}}
 
 Importantly, clusters are strictly a logical component; they rely on [cluster
-replicas](/overview/key-concepts#cluster-replicas) to run dataflows. Said a
+replicas](/get-started/key-concepts#cluster-replicas) to run dataflows. Said a
 slightly different way, a cluster with no replicas does no computation. For
 example, if you create an index on a cluster with no replicas, you cannot select
 from that index because there is no physical representation of the index to read

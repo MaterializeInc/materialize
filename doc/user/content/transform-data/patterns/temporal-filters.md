@@ -3,6 +3,7 @@ title: "Temporal filters (sliding, hopping & tumbling windows)"
 description: "Perform time-windowed computation over temporal data."
 aliases:
   - /guides/temporal-filters/
+  - /sql/patterns/temporal-filters/
 menu:
   main:
     parent: 'sql-patterns'

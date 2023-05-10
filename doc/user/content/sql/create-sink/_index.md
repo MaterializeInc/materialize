@@ -11,7 +11,7 @@ menu:
     weight: 30
 ---
 
-A [sink](../../overview/key-concepts/#sinks) describes an external system you
+A [sink](../../get-started/key-concepts/#sinks) describes an external system you
 want Materialize to write data to, and provides details about how to encode
 that data. To create a sink, you must specify a [connector](#connectors), a
 [format](#formats) and an [envelope](#envelopes).
@@ -110,7 +110,7 @@ Sinks that specify the `SIZE` option are linked to a single-purpose cluster
 dedicated to maintaining that sink.
 
 You can also choose to place a sink in an existing
-[cluster](/overview/key-concepts/#clusters) by using the `IN CLUSTER` option.
+[cluster](/get-started/key-concepts/#clusters) by using the `IN CLUSTER` option.
 Sinks in a cluster share the resource allocation of the cluster with all other
 objects in the cluster.
 
@@ -122,7 +122,7 @@ capacity.
 
 ## Related pages
 
-- [Key Concepts](../../overview/key-concepts/)
+- [Key Concepts](../../get-started/key-concepts/)
 - [`SHOW SINKS`](/sql/show-sinks/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SINK`](/sql/show-create-sink/)

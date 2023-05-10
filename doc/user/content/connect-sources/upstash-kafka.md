@@ -1,11 +1,12 @@
 ---
 title: "Upstash Kafka"
 description: "How to securely connect an Upstash Kafka cluster to Materialize as a source or sink."
+aliases:
+  - /integrations/upstash-kafka/
 menu:
   main:
-    parent: "integration-guides"
+    parent: "kafka"
     name: "Upstash Kafka"
-    weight: 13
 ---
 
 This guide goes through the required steps to connect Materialize to an Upstash Kafka cluster.

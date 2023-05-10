@@ -1,6 +1,8 @@
 ---
 title: "Time-To-Live"
 description: "Use the time-to-live pattern and assign an expiration time for a particular row."
+aliases:
+  - /sql/patterns/ttl/
 menu:
   main:
     parent: 'sql-patterns'

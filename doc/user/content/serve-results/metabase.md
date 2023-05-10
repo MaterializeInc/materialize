@@ -1,12 +1,14 @@
 ---
-title: "Metabase"
+title: "Create real-time dashboards with Metabase"
 description: "How to connect a Metabase instance to Materialize"
 aliases:
-  /third-party/metabase/
+  - /third-party/metabase/
+  - /integrations/metabase/
 menu:
   main:
-    parent: "integration-guides"
-    name: "Metabase"
+    parent: "serve"
+    name: "Create dashboards with Metabase"
+    weight: 20
 ---
 
 You can use [Metabase](https://www.metabase.com/) to create real-time dashboards based on the data maintained in Materialize.

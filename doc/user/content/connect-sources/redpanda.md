@@ -2,11 +2,12 @@
 title: "Redpanda"
 description: "Get details about using Materialize with Redpanda"
 aliases:
-  /third-party/redpanda/
+  - /third-party/redpanda/
+  - /integrations/redpanda/
 menu:
   main:
-    parent: "integration-guides"
-    name: "Redpanda"
+    parent: "redpanda"
+    name: "Self-hosted Redpanda"
     weight: 10
 ---
 
