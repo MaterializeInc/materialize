@@ -15,6 +15,7 @@
 //! with the underlying client, it will reconnect the client and replay the
 //! command stream.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
 use std::time::Duration;
@@ -38,7 +39,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 
 use crate::client::{
-    CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,
+    CreateSinkCommand, RunIngestionCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
 use crate::metrics::RehydratingStorageClientMetrics;
@@ -142,7 +143,7 @@ struct RehydrationTask<T> {
     /// A channel upon which responses from the storage replica are delivered.
     response_tx: UnboundedSender<StorageResponse<T>>,
     /// The sources that have been observed.
-    sources: BTreeMap<GlobalId, CreateSourceCommand>,
+    sources: BTreeMap<GlobalId, RunIngestionCommand>,
     /// The exports that have been observed.
     sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
     /// The upper frontier information received.
@@ -304,7 +305,7 @@ where
         let mut commands = vec![
             timely_command,
             StorageCommand::UpdateConfiguration(self.config.clone()),
-            StorageCommand::CreateSources(self.sources.values().cloned().collect()),
+            StorageCommand::RunIngestions(self.sources.values().cloned().collect()),
             StorageCommand::CreateSinks(self.sinks.values().cloned().collect()),
             StorageCommand::AllowCompaction(
                 self.sinces
@@ -403,12 +404,23 @@ where
             StorageCommand::UpdateConfiguration(params) => {
                 self.config.update(params.clone());
             }
-            StorageCommand::CreateSources(ingestions) => {
+            StorageCommand::RunIngestions(ingestions) => {
                 for ingestion in ingestions {
-                    self.sources.insert(ingestion.id, ingestion.clone());
-                    // Initialize the uppers we are tracking
+                    let prev = self.sources.insert(ingestion.id, ingestion.clone());
+                    assert!(
+                        prev.is_some() == ingestion.update,
+                        "can only and must update source if RunIngestion is update"
+                    );
+
                     for id in ingestion.description.subsource_ids() {
-                        self.uppers.insert(id, Antichain::from_elem(T::minimum()));
+                        match self.uppers.entry(id) {
+                            Entry::Occupied(_) => {
+                                assert!(ingestion.update, "tried to re-insert frontier for {}", id)
+                            }
+                            Entry::Vacant(v) => {
+                                v.insert(Antichain::from_elem(T::minimum()));
+                            }
+                        };
                     }
                 }
             }

@@ -58,7 +58,7 @@ use tokio_stream::StreamMap;
 use tracing::{debug, info};
 
 use crate::client::{
-    CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
+    CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
 use crate::controller::command_wals::ProtoShardId;
@@ -300,7 +300,7 @@ pub trait StorageController: Debug + Send {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
-    /// Create the sources described in the individual CreateSourceCommand commands.
+    /// Create the sources described in the individual RunIngestionCommand commands.
     ///
     /// Each command carries the source id, the source description, and any associated metadata
     /// needed to ingest the particular source.
@@ -1680,9 +1680,13 @@ where
                             storage_instance_id: ingestion.instance_id,
                             ingestion_id: id,
                         })?;
-                    let augmented_ingestion = CreateSourceCommand { id, description };
+                    let augmented_ingestion = RunIngestionCommand {
+                        id,
+                        description,
+                        update: false,
+                    };
 
-                    client.send(StorageCommand::CreateSources(vec![augmented_ingestion]));
+                    client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
                 DataSource::Introspection(i) => {
                     let prev = self.state.introspection_ids.insert(i, id);
