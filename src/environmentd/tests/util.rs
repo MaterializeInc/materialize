@@ -352,7 +352,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             postgres_factory,
             metrics_registry: metrics_registry.clone(),
             scratch_directory: None,
-            persist_pubsub_addr: "http://localhost:6879".to_owned(),
+            persist_pubsub_url: "http://localhost:6879".to_owned(),
         },
         secrets_controller,
         cloud_resource_controller: None,

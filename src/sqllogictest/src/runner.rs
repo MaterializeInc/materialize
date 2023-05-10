@@ -904,7 +904,7 @@ impl RunnerInner {
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
                 scratch_directory: None,
-                persist_pubsub_addr: "http://localhost:6879".into(),
+                persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
             },
             secrets_controller,
             cloud_resource_controller: None,

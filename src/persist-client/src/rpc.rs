@@ -24,7 +24,6 @@ use futures::Stream;
 use prost::Message;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::OnceCell;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
@@ -99,7 +98,8 @@ pub trait PubSubSender: std::fmt::Debug + Send + Sync {
     /// Returns a token that, when dropped, will unsubscribe the client from the
     /// shard.
     ///
-    /// This call is idempotent and is a no-op for an already subscribed shard.
+    /// If the client is already subscribed to the shard, repeated calls will make
+    /// no further calls to the server and instead return clones of the Arc<ShardSubscriptionToken>.
     fn subscribe(self: Arc<Self>, shard_id: &ShardId) -> Arc<ShardSubscriptionToken>;
 }
 
@@ -117,9 +117,6 @@ trait PubSubSenderInternal: Debug + Send + Sync {
     fn subscribe(&self, shard_id: &ShardId);
 
     /// Unsubscribe the corresponding [PubSubReceiver] from diffs for the given shard.
-    /// Users should not need to call this method directly, as it will be called
-    /// automatically when the [ShardSubscriptionToken] returned by [PubSubSender::subscribe]
-    /// is dropped.
     ///
     /// This call is idempotent and is a no-op for already unsubscribed shards.
     fn unsubscribe(&self, shard_id: &ShardId);
@@ -146,7 +143,6 @@ impl<T> PubSubReceiver for T where
 pub struct ShardSubscriptionToken {
     pub(crate) shard_id: ShardId,
     sender: Arc<dyn PubSubSenderInternal>,
-    on_drop_fn: Arc<OnceCell<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl Debug for ShardSubscriptionToken {
@@ -158,9 +154,6 @@ impl Debug for ShardSubscriptionToken {
 impl Drop for ShardSubscriptionToken {
     fn drop(&mut self) {
         self.sender.unsubscribe(&self.shard_id);
-        if let Some(f) = self.on_drop_fn.get() {
-            f();
-        }
     }
 }
 
@@ -171,7 +164,7 @@ pub const PERSIST_PUBSUB_CALLER_KEY: &str = "persist-pubsub-caller-id";
 #[derive(Debug)]
 pub struct PersistPubSubClientConfig {
     /// Connection address for the pubsub server, e.g. `http://localhost:6879`
-    pub addr: String,
+    pub url: String,
     /// A caller ID for the client. Used for debugging.
     pub caller_id: String,
     /// A copy of [PersistConfig]
@@ -220,11 +213,11 @@ impl PersistPubSubClient for GrpcPubSubClient {
                     metrics.pubsub_client.grpc_connection.connected.set(0);
 
                     if !dynamic_cfg.pubsub_client_enabled() {
-                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        tokio::time::sleep(Duration::from_secs(5)).await;
                         continue 'reconnect_forever;
                     }
 
-                    info!("Connecting to Persist PubSub: {}", config.addr);
+                    info!("Connecting to Persist PubSub: {}", config.url);
                     let client = mz_ore::retry::Retry::default()
                         .clamp_backoff(Duration::from_secs(60))
                         .retry_async(|_| async {
@@ -233,7 +226,7 @@ impl PersistPubSubClient for GrpcPubSubClient {
                                 .grpc_connection
                                 .connect_call_attempt_count
                                 .inc();
-                            let endpoint = match Endpoint::from_str(&config.addr) {
+                            let endpoint = match Endpoint::from_str(&config.url) {
                                 Ok(endpoint) => endpoint,
                                 Err(err) => return RetryResult::FatalErr(err),
                             };
@@ -260,7 +253,7 @@ impl PersistPubSubClient for GrpcPubSubClient {
                         .inc();
                     metrics.pubsub_client.grpc_connection.connected.set(1);
 
-                    info!("Connected to Persist PubSub: {}", config.addr);
+                    info!("Connected to Persist PubSub: {}", config.url);
 
                     let mut broadcast = BroadcastStream::new(rpc_requests.subscribe());
                     let broadcast_errors = metrics
@@ -481,7 +474,6 @@ impl PubSubSender for SubscriptionTrackingSender {
         let token = Arc::new(ShardSubscriptionToken {
             shard_id: *shard_id,
             sender: pubsub_sender,
-            on_drop_fn: Arc::new(OnceCell::new()),
         });
 
         assert!(subscribes
@@ -521,18 +513,14 @@ impl PubSubSender for MetricsSameProcessPubSubSender {
     }
 
     fn subscribe(self: Arc<Self>, shard_id: &ShardId) -> Arc<ShardSubscriptionToken> {
-        let token = Arc::clone(&self.delegate).subscribe(shard_id);
-        let unsubscribe_metric = self
-            .metrics
-            .pubsub_client
-            .sender
-            .unsubscribe
-            .succeeded
-            .clone();
-        let _ = token
-            .on_drop_fn
-            .set(Box::new(move || unsubscribe_metric.inc()));
-        token
+        // Create a no-op token that does not subscribe nor unsubscribe.
+        // For clients running in the same process as the server, this is
+        // safe because the StateCached is shared between them, and the
+        // server necessarily always receives and applies all diffs.
+        Arc::new(ShardSubscriptionToken {
+            shard_id: *shard_id,
+            sender: Arc::new(NoopPubSubSender),
+        })
     }
 }
 
@@ -552,7 +540,6 @@ impl PubSubSender for NoopPubSubSender {
         Arc::new(ShardSubscriptionToken {
             shard_id: *shard_id,
             sender: self,
-            on_drop_fn: Default::default(),
         })
     }
 }
@@ -888,7 +875,6 @@ impl PersistGrpcPubSubServer {
 
     /// Starts the gRPC server with the given listener stream.
     /// Consumes `self` and runs until the task is cancelled.
-    #[cfg(test)]
     pub async fn serve_with_stream(
         self,
         listener: tokio_stream::wrappers::TcpListenerStream,
@@ -1281,7 +1267,7 @@ mod grpc {
             mz_ore::task::spawn(|| "client".to_string(), async move {
                 let client = GrpcPubSubClient::connect(
                     PersistPubSubClientConfig {
-                        addr: format!("http://{}", addr),
+                        url: format!("http://{}", addr),
                         caller_id: "client".to_string(),
                         persist_cfg: test_persist_config(),
                     },
@@ -1334,7 +1320,7 @@ mod grpc {
         let client = client_runtime.block_on(async {
             GrpcPubSubClient::connect(
                 PersistPubSubClientConfig {
-                    addr: format!("http://{}", addr),
+                    url: format!("http://{}", addr),
                     caller_id: "client".to_string(),
                     persist_cfg: test_persist_config(),
                 },
@@ -1412,7 +1398,7 @@ mod grpc {
 
         let client = GrpcPubSubClient::connect(
             PersistPubSubClientConfig {
-                addr: format!("http://{}", addr),
+                url: format!("http://{}", addr),
                 caller_id: "client".to_string(),
                 persist_cfg: test_persist_config(),
             },
@@ -1488,7 +1474,7 @@ mod grpc {
         let mut client_1 = client_runtime.block_on(async {
             GrpcPubSubClient::connect(
                 PersistPubSubClientConfig {
-                    addr: format!("http://{}", addr),
+                    url: format!("http://{}", addr),
                     caller_id: "client_1".to_string(),
                     persist_cfg: test_persist_config(),
                 },
@@ -1498,7 +1484,7 @@ mod grpc {
         let mut client_2 = client_runtime.block_on(async {
             GrpcPubSubClient::connect(
                 PersistPubSubClientConfig {
-                    addr: format!("http://{}", addr),
+                    url: format!("http://{}", addr),
                     caller_id: "client_2".to_string(),
                     persist_cfg: test_persist_config(),
                 },

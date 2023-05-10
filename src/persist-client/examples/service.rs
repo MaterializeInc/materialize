@@ -64,7 +64,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         Role::Writer => {
             let connection = GrpcPubSubClient::connect(
                 PersistPubSubClientConfig {
-                    addr: format!("http://{}", args.listen_addr),
+                    url: format!("http://{}", args.listen_addr),
                     caller_id: "writer".to_string(),
                     persist_cfg: config.clone(),
                 },
@@ -88,7 +88,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         Role::Reader => {
             let mut connection = GrpcPubSubClient::connect(
                 PersistPubSubClientConfig {
-                    addr: format!("http://{}", args.listen_addr),
+                    url: format!("http://{}", args.listen_addr),
                     caller_id: "reader".to_string(),
                     persist_cfg: config.clone(),
                 },

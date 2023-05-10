@@ -34,7 +34,6 @@ message ProtoPubSubMessage {
         ProtoSubscribe subscribe = 3;
         ProtoUnsubscribe unsubscribe = 4;
     }
-
 }
 
 service ProtoPersistPubSub {

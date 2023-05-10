@@ -81,7 +81,6 @@ use anyhow::Context;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
-use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use once_cell::sync::Lazy;
 use tracing::info;
 
@@ -97,6 +96,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::GrpcServer;
@@ -140,14 +140,16 @@ struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
-    /// The address for the Persist PubSub service.
+
+    // === Storage options. ===
+    /// The URL for the Persist PubSub service.
     #[clap(
         long,
-        env = "PERSIST_PUBSUB_ADDR",
-        value_name = "HOST:PORT",
-        default_value = "127.0.0.1:6879"
+        env = "PERSIST_PUBSUB_URL",
+        value_name = "http://HOST:PORT",
+        default_value = "http://localhost:6879"
     )]
-    persist_pubsub_addr: String,
+    persist_pubsub_url: String,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -281,7 +283,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         &metrics_registry,
         |persist_cfg, metrics| {
             let cfg = PersistPubSubClientConfig {
-                addr: args.persist_pubsub_addr,
+                url: args.persist_pubsub_url,
                 caller_id: pubsub_caller_id,
                 persist_cfg: persist_cfg.clone(),
             };

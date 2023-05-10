@@ -104,7 +104,7 @@ use mz_persist_client::rpc::{
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::info;
+use tracing::{error, info};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use url::Url;
@@ -420,9 +420,17 @@ pub struct Args {
     /// The PostgreSQL URL for the storage stash.
     #[clap(long, env = "STORAGE_STASH_URL", value_name = "POSTGRES_URL")]
     storage_stash_url: String,
-    /// The Persist PubSub service hostname.
-    #[clap(long, env = "PERSIST_PUBSUB_HOSTNAME", default_value = "localhost")]
-    persist_pubsub_hostname: String,
+    /// The Persist PubSub service URL.
+    ///
+    /// This URL is passed along with the port specified in `internal_persist_pubsub_listen_addr`
+    /// to `clusterd` for external discovery of the Persist PubSub service hosted within
+    /// `environmentd`.
+    #[clap(
+        long,
+        env = "PERSIST_PUBSUB_SERVICE_URL",
+        default_value = "http://localhost"
+    )]
+    persist_pubsub_service_url: String,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -755,11 +763,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
 
-    let persist_pubsub_addr = format!(
-        "http://{}:{}",
-        args.persist_pubsub_hostname,
-        args.internal_persist_pubsub_listen_addr.port()
-    );
     let persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
@@ -776,7 +779,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         let res = persist_pubsub_server
             .serve(args.internal_persist_pubsub_listen_addr)
             .await;
-        info!("Persist Pubsub server exited {:?}", res);
+        error!("Persist Pubsub server exited {:?}", res);
     });
 
     let persist_clients = {
@@ -808,7 +811,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
         scratch_directory: args.orchestrator_process_scratch_directory,
-        persist_pubsub_addr,
+        persist_pubsub_url: format!(
+            "{}:{}",
+            args.persist_pubsub_service_url,
+            args.internal_persist_pubsub_listen_addr.port()
+        ),
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
