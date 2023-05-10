@@ -634,3 +634,167 @@ where
         Rc::new(shutdown_button.press_on_drop()),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use timely::dataflow::operators::Probe;
+    use timely::progress::Antichain;
+
+    use crate::cache::PersistClientCache;
+    use crate::operators::shard_source::shard_source;
+    use crate::{PersistLocation, ShardId};
+
+    /// Verifies that a `shard_source` will downgrade it's output frontier to
+    /// the `since` of the shard when no explicit `as_of` is given. Even if
+    /// there is no data/no snapshot available in the
+    /// shard.
+    ///
+    /// NOTE: This test is weird: if everything is good it will pass. If we
+    /// break the assumption that we test this will time out and we will notice.
+    #[tokio::test]
+    async fn test_shard_source_implicit_initial_as_of() {
+        let (persist_clients, location) = new_test_client_cache_and_location();
+
+        let expected_frontier = 42;
+        let shard_id = ShardId::new();
+
+        initialize_shard(
+            &persist_clients,
+            location.clone(),
+            shard_id,
+            Antichain::from_elem(expected_frontier),
+        )
+        .await;
+
+        let res = timely::execute::execute_directly(move |worker| {
+            let until = Antichain::new();
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
+                let (stream, token) = shard_source::<String, String, u64, _, _>(
+                    scope,
+                    "test_source",
+                    persist_clients,
+                    location,
+                    shard_id,
+                    None, // No explicit as_of!
+                    until,
+                    None,
+                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                    |_fetch| true,
+                );
+
+                let probe = stream.probe();
+
+                (probe, token)
+            });
+
+            while probe.less_than(&expected_frontier) {
+                worker.step();
+            }
+
+            let mut probe_frontier = Antichain::new();
+            probe.with_frontier(|f| probe_frontier.extend(f.iter().cloned()));
+
+            probe_frontier
+        });
+
+        assert_eq!(res, Antichain::from_elem(expected_frontier));
+    }
+
+    /// Verifies that a `shard_source` will downgrade it's output frontier to
+    /// the given `as_of`. Even if there is no data/no snapshot available in the
+    /// shard.
+    ///
+    /// NOTE: This test is weird: if everything is good it will pass. If we
+    /// break the assumption that we test this will time out and we will notice.
+    #[tokio::test]
+    async fn test_shard_source_explicit_initial_as_of() {
+        let (persist_clients, location) = new_test_client_cache_and_location();
+
+        let expected_frontier = 42;
+        let shard_id = ShardId::new();
+
+        initialize_shard(
+            &persist_clients,
+            location.clone(),
+            shard_id,
+            Antichain::from_elem(expected_frontier),
+        )
+        .await;
+
+        let res = timely::execute::execute_directly(move |worker| {
+            let as_of = Antichain::from_elem(expected_frontier);
+            let until = Antichain::new();
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
+                let (stream, token) = shard_source::<String, String, u64, _, _>(
+                    scope,
+                    "test_source",
+                    persist_clients,
+                    location,
+                    shard_id,
+                    Some(as_of), // We specify the as_of explicitly!
+                    until,
+                    None,
+                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                    |_fetch| true,
+                );
+
+                let probe = stream.probe();
+
+                (probe, token)
+            });
+
+            while probe.less_than(&expected_frontier) {
+                worker.step();
+            }
+
+            let mut probe_frontier = Antichain::new();
+            probe.with_frontier(|f| probe_frontier.extend(f.iter().cloned()));
+
+            probe_frontier
+        });
+
+        assert_eq!(res, Antichain::from_elem(expected_frontier));
+    }
+
+    async fn initialize_shard(
+        persist_clients: &Arc<PersistClientCache>,
+        location: PersistLocation,
+        shard_id: ShardId,
+        since: Antichain<u64>,
+    ) {
+        let persist_client = persist_clients
+            .open(location.clone())
+            .await
+            .expect("client construction failed");
+
+        let mut read_handle = persist_client
+            .open_leased_reader::<String, String, u64, u64>(
+                shard_id,
+                "tests",
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+            )
+            .await
+            .expect("invalid usage");
+
+        read_handle.downgrade_since(&since).await;
+    }
+
+    fn new_test_client_cache_and_location() -> (Arc<PersistClientCache>, PersistLocation) {
+        let persist_clients = PersistClientCache::new_no_metrics();
+
+        let persist_clients = Arc::new(persist_clients);
+        let location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        (persist_clients, location)
+    }
+}
