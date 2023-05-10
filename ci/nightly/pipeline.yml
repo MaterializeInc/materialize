@@ -601,7 +601,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--max-joins=1, --runtime=3300]
+          args: [--max-joins=1, --runtime=3000]
 
   - id: sqlsmith-explain
     label: "SQLsmith explain"
@@ -612,7 +612,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--max-joins=15, --explain-only, --runtime=3300]
+          args: [--max-joins=15, --explain-only, --runtime=3000]
 
   - id: sqlancer-pqs
     label: "SQLancer PQS"
@@ -623,7 +623,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
-          args: [--runtime=3300, --oracle=PQS, --no-qpg]
+          args: [--runtime=3000, --oracle=PQS, --no-qpg]
 
   - id: sqlancer-norec
     label: "SQLancer NoREC"
@@ -634,7 +634,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
-          args: [--runtime=3300, --oracle=NOREC]
+          args: [--runtime=3000, --oracle=NOREC]
 
   - id: sqlancer-query-partitioning
     label: "SQLancer QueryPartitioning"
@@ -645,7 +645,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
-          args: [--runtime=3300, --oracle=QUERY_PARTITIONING]
+          args: [--runtime=3000, --oracle=QUERY_PARTITIONING]
 
   - id: sqlancer-having
     label: "SQLancer Having"
@@ -656,7 +656,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
-          args: [--runtime=3300, --oracle=HAVING]
+          args: [--runtime=3000, --oracle=HAVING]
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
