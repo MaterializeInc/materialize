@@ -262,19 +262,47 @@ where
             return;
         }
 
-        let client = clients
-            .open(location)
-            .await
-            .expect("location should be valid");
-        let read = client
-            .open_leased_reader::<K, V, G::Timestamp, D>(
-                shard_id,
-                &format!("shard_source({})", name_owned),
-                key_schema,
-                val_schema,
-            )
-            .await
-            .expect("could not open persist shard");
+        let token_is_dropped = token_tx.closed();
+        tokio::pin!(token_is_dropped);
+
+        let create_read_handle = async {
+            let client = clients
+                .open(location)
+                .await
+                .expect("location should be valid");
+            let read = client
+                .open_leased_reader::<K, V, G::Timestamp, D>(
+                    shard_id,
+                    &format!("shard_source({})", name_owned),
+                    key_schema,
+                    val_schema,
+                )
+                .await
+                .expect("could not open persist shard");
+
+            read
+        };
+
+        tokio::pin!(create_read_handle);
+
+        // Creating a ReadHandle can take indefinitely long, so we race its creation with our token
+        // to ensure any async work is dropped once the token is dropped.
+        //
+        // NB: Reading from a channel (token_is_dropped) is cancel-safe. `create_read_handle` is NOT
+        // cancel-safe, but we will not retry it if it is dropped.
+        let read = match futures::future::select(token_is_dropped, create_read_handle).await {
+            Either::Left(_) => {
+                // The token dropped before we finished creating our `ReadHandle.
+                // We can return immediately, as we could not have emitted any
+                // parts to fetch.
+                cap_set.downgrade(&[]);
+                return;
+            }
+            Either::Right((read, _)) => {
+                read
+            }
+        };
+
         let as_of = as_of.unwrap_or_else(|| read.since().clone());
 
 
