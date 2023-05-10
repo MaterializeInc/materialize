@@ -1172,3 +1172,67 @@ Used Indexes:
   - materialize.public.idx_t4_a_b_c
 
 EOF
+
+# WMR
+
+statement ok
+CREATE TABLE t5 (f1 int);
+
+statement ok
+CREATE INDEX idx_t5_f1 ON t5(f1);
+
+statement ok
+INSERT INTO t5 VALUES (0), (2), (5);
+
+query I
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT = 3)
+  c0(f1 int) as (
+    (SELECT * FROM t5)
+    UNION
+    (SELECT t5.f1 + c0.f1
+    FROM t5, c0
+    WHERE (t5.f1 = 0 OR t5.f1 = 2 OR t5.f1 = 8))
+  )
+SELECT * FROM c0;
+----
+0
+2
+4
+5
+6
+7
+9
+
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT = 3)
+  c0(f1 int) as (
+    (SELECT * FROM t5)
+    UNION
+    (SELECT t5.f1 + c0.f1
+    FROM t5, c0
+    WHERE (t5.f1 = 0 OR t5.f1 = 2 OR t5.f1 = 8))
+  )
+SELECT * FROM c0;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive [iteration_limit=3]
+    cte l0 =
+      Distinct group_by=[#0]
+        Union
+          Get materialize.public.t5
+          Project (#2)
+            Map ((#0 + #1))
+              CrossJoin type=differential
+                ArrangeBy keys=[[]]
+                  Project (#0)
+                    ReadExistingIndex materialize.public.t5 lookup_values=[(0); (2); (8)]
+                ArrangeBy keys=[[]]
+                  Get l0
+
+Used Indexes:
+  - materialize.public.idx_t5_f1
+
+EOF
