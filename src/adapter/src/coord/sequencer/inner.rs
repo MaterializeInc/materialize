@@ -85,7 +85,7 @@ use crate::coord::peek::{FastPathPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
-    TimestampContext, TimestampDetermination, TimestampSource,
+    TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
 };
 use crate::coord::{
     peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
@@ -2458,7 +2458,7 @@ impl Coordinator {
 
         let make_sink_desc = |coord: &mut Coordinator, session: &mut Session, from, from_desc| {
             let up_to = up_to
-                .map(|expr| coord.evaluate_when(expr, session))
+                .map(|expr| Coordinator::evaluate_when(coord.catalog().state(), expr, session))
                 .transpose()?;
             if let Some(up_to) = up_to {
                 if as_of == up_to {
