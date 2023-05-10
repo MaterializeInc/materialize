@@ -89,8 +89,8 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
-    PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext, SinkConnectionReady,
-    TargetCluster, TransientPlan, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
+    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -1837,7 +1837,6 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         plan: PeekPlan,
-        depends_on: Vec<GlobalId>,
         target_cluster: TargetCluster,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
@@ -1847,7 +1846,6 @@ impl Coordinator {
             session,
             PeekStage::Validate(PeekStageValidate {
                 plan,
-                depends_on,
                 target_cluster,
             }),
         )
@@ -1864,6 +1862,16 @@ impl Coordinator {
         // Process the current stage and allow for processing the next.
         loop {
             event!(Level::TRACE, stage = format!("{:?}", stage));
+
+            // Always verify peek validity. This is cheap, and prevents programming errors
+            // if we move any stages off thread.
+            if let Some(validity) = stage.validity() {
+                if let Err(err) = validity.check(self.catalog()) {
+                    tx.send(Err(err), session);
+                    return;
+                }
+            }
+
             (tx, session, stage) = match stage {
                 PeekStage::Validate(stage) => {
                     let next =
@@ -1882,17 +1890,6 @@ impl Coordinator {
                     }
                 }
                 PeekStage::Finish(stage) => {
-                    // The finish stage doesn't go off-thread, so do a revision check before proceeding.
-                    if self.catalog().transient_revision() != stage.replan.transient_revision {
-                        self.internal_cmd_tx
-                            .send(Message::Replan {
-                                tx,
-                                session,
-                                replan: stage.replan,
-                            })
-                            .expect("coordinator must exist");
-                        return;
-                    }
                     let res = self.peek_stage_finish(&mut session, stage).await;
                     tx.send(res, session);
                     return;
@@ -1907,7 +1904,6 @@ impl Coordinator {
         session: &mut Session,
         PeekStageValidate {
             plan,
-            depends_on,
             target_cluster,
         }: PeekStageValidate,
     ) -> Result<PeekStageOptimize, AdapterError> {
@@ -1916,7 +1912,7 @@ impl Coordinator {
             when,
             finishing,
             copy_to,
-        } = plan.clone();
+        } = plan;
 
         // Two transient allocations. We could reclaim these if we don't use them, potentially.
         // TODO: reclaim transient identifiers in fast path cases.
@@ -1959,14 +1955,15 @@ impl Coordinator {
 
         check_no_invalid_log_reads(catalog, cluster, &source_ids, &mut target_replica)?;
 
-        let replan = TransientPlan {
+        let validity = PeekValidity {
             transient_revision: catalog.transient_revision(),
-            plan: Plan::Peek(plan),
-            depends_on,
+            source_ids: source_ids.clone(),
+            cluster_id: cluster.id(),
+            replica_id: target_replica,
         };
 
         Ok(PeekStageOptimize {
-            replan,
+            validity,
             source,
             finishing,
             copy_to,
@@ -1985,7 +1982,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         PeekStageOptimize {
-            replan,
+            validity,
             source,
             finishing,
             copy_to,
@@ -2040,7 +2037,7 @@ impl Coordinator {
         mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
 
         Ok(PeekStageTimestamp {
-            replan,
+            validity,
             dataflow,
             finishing,
             copy_to,
@@ -2063,7 +2060,7 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         PeekStageTimestamp {
-            replan,
+            validity,
             dataflow,
             finishing,
             copy_to,
@@ -2109,7 +2106,7 @@ impl Coordinator {
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
                         conn_id,
                         real_time_recency_ts,
-                        replan,
+                        validity,
                     });
                     if let Err(e) = result {
                         warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -2121,7 +2118,7 @@ impl Coordinator {
                 tx,
                 session,
                 PeekStageFinish {
-                    replan,
+                    validity,
                     finishing,
                     copy_to,
                     dataflow,
@@ -2145,7 +2142,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         PeekStageFinish {
-            replan: _,
+            validity: _,
             finishing,
             copy_to,
             dataflow,
@@ -2581,13 +2578,10 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: ExplainPlan,
-        depends_on: Vec<GlobalId>,
         target_cluster: TargetCluster,
     ) {
         match plan.stage {
-            ExplainStage::Timestamp => {
-                self.sequence_explain_timestamp_begin(tx, session, plan, depends_on)
-            }
+            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(tx, session, plan),
             _ => tx.send(
                 self.sequence_explain_plan(&mut session, plan, target_cluster),
                 session,
@@ -2834,19 +2828,19 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: ExplainPlan,
-        depends_on: Vec<GlobalId>,
     ) {
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
-            self.sequence_explain_timestamp_begin_inner(&session, plan.clone()),
+            self.sequence_explain_timestamp_begin_inner(&session, plan),
             tx,
             session
         );
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
-                let replan = TransientPlan {
+                let validity = PeekValidity {
                     transient_revision: self.catalog().transient_revision(),
-                    plan: Plan::Explain(plan),
-                    depends_on,
+                    source_ids,
+                    cluster_id,
+                    replica_id: None,
                 };
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = session.conn_id();
@@ -2867,7 +2861,7 @@ impl Coordinator {
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
                         conn_id,
                         real_time_recency_ts,
-                        replan,
+                        validity,
                     });
                     if let Err(e) = result {
                         warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -3083,7 +3077,6 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: InsertPlan,
-        depends_on: Vec<GlobalId>,
     ) {
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
@@ -3151,7 +3144,7 @@ impl Coordinator {
                     returning: plan.returning,
                 };
 
-                self.sequence_read_then_write(tx, session, read_then_write_plan, depends_on)
+                self.sequence_read_then_write(tx, session, read_then_write_plan)
                     .await;
             }
         }
@@ -3237,7 +3230,6 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: ReadThenWritePlan,
-        depends_on: Vec<GlobalId>,
     ) {
         guard_write_critical_section!(self, tx, session, Plan::ReadThenWrite(plan));
 
@@ -3324,7 +3316,6 @@ impl Coordinator {
                 finishing,
                 copy_to: None,
             },
-            depends_on,
             TargetCluster::Active,
         )
         .await;
