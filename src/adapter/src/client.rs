@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
+use std::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -130,7 +131,7 @@ impl Client {
         session_client
             .declare(EMPTY_PORTAL.into(), stmt, vec![])
             .await?;
-        match session_client.execute(EMPTY_PORTAL.into()).await? {
+        match session_client.execute(EMPTY_PORTAL.into(), futures::future::pending()).await? {
             ExecuteResponse::SendingRows { future, span: _ } => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
@@ -236,15 +237,6 @@ impl ConnClient {
             secret_key,
         });
     }
-
-    async fn send<T, F>(&mut self, f: F) -> T
-    where
-        F: FnOnce(oneshot::Sender<T>) -> Command,
-    {
-        let (tx, rx) = oneshot::channel();
-        self.inner.send(f(tx));
-        rx.await.expect("coordinator unexpectedly canceled request")
-    }
 }
 
 impl Drop for ConnClient {
@@ -348,14 +340,14 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, AdapterError> {
-        self.send(|tx, session| Command::Execute {
+    #[tracing::instrument(level = "debug", skip(self, cancel_future))]
+    pub async fn execute(&mut self, portal_name: String, cancel_future: impl Future<Output = std::io::Error> + Send) -> Result<ExecuteResponse, AdapterError> {
+        self.send_with_cancel(|tx, session| Command::Execute {
             portal_name,
             session,
             tx,
             span: tracing::Span::current(),
-        })
+        }, cancel_future)
         .await
     }
 
@@ -485,13 +477,23 @@ impl SessionClient {
     where
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
     {
+        return self.send_with_cancel(f, futures::future::pending()).await;
+    }
+
+    async fn send_with_cancel<T, F>(&mut self, f: F, cancel_future: impl Future<Output = std::io::Error> + Send) -> Result<T, AdapterError>
+    where
+        F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
+    {
         let session = self.session.take().expect("session invariant violated");
         let mut typ = None;
         let application_name = session.application_name();
         let name_hint = ApplicationNameHint::from_str(application_name);
-        let res = self
+        let (tx, mut rx) = oneshot::channel();
+        let conn_id = session.conn_id();
+        let secret_key = session.secret_key();
+        self
             .inner_mut()
-            .send(|tx| {
+            .inner.send({
                 let cmd = f(tx, session);
                 // Measure the success and error rate of certain commands:
                 // - declare reports success of SQL statement planning
@@ -511,23 +513,36 @@ impl SessionClient {
                     | Command::Terminate { .. } => {}
                 };
                 cmd
-            })
-            .await;
-        let status = if res.result.is_ok() {
-            "success"
-        } else {
-            "error"
-        };
-        if let Some(typ) = typ {
-            self.inner()
-                .inner
-                .metrics
-                .commands
-                .with_label_values(&[typ, status, name_hint.as_str()])
-                .inc();
+            });
+
+        let mut cancel_future = pin::pin!(cancel_future);
+        let mut cancelled = false;
+        loop {
+            tokio::select! {
+                res = &mut rx => {
+                    let res = res.expect("sender dropped");
+                    let status = if res.result.is_ok() {
+                        "success"
+                    } else {
+                        "error"
+                    };
+                    if let Some(typ) = typ {
+                        self.inner()
+                            .inner
+                            .metrics
+                            .commands
+                            .with_label_values(&[typ, status, name_hint.as_str()])
+                            .inc();
+                    }
+                    self.session = Some(res.session);
+                    return res.result
+                },
+                _err = &mut cancel_future, if !cancelled => {
+                    cancelled = true;
+                    self.inner_mut().cancel_request(conn_id, secret_key);
+                }
+            };
         }
-        self.session = Some(res.session);
-        res.result
     }
 
     pub fn add_idle_in_transaction_session_timeout(&mut self) {
