@@ -13,17 +13,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `mz` is the Materialize command-line interface (CLI).
+//! Implementation of the `mz sql` command.
+//!
+//! Consult the user-facing documentation for details.
 
-use mz_build_info::{build_info, BuildInfo};
-use once_cell::sync::Lazy;
+use crate::{context::RegionContext, error::Error};
 
-pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_string());
+pub struct RunArgs {
+    pub psql_args: Vec<String>,
+}
 
-pub mod command;
-pub mod config_file;
-pub mod context;
-pub mod error;
-mod server;
-pub mod ui;
+pub async fn run(cx: &mut RegionContext, RunArgs { psql_args }: RunArgs) -> Result<(), Error> {
+    todo!();
+}

@@ -13,17 +13,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `mz` is the Materialize command-line interface (CLI).
+//! Implementation of the `mz user` command.
+//!
+//! Consult the user-facing documentation for details.
 
-use mz_build_info::{build_info, BuildInfo};
-use once_cell::sync::Lazy;
+use crate::{context::ProfileContext, error::Error};
 
-pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_string());
+pub struct CreateArgs<'a> {
+    pub email: &'a str,
+    pub name: &'a str,
+}
 
-pub mod command;
-pub mod config_file;
-pub mod context;
-pub mod error;
-mod server;
-pub mod ui;
+pub async fn create(
+    cx: &mut ProfileContext,
+    CreateArgs { email, name }: CreateArgs<'_>,
+) -> Result<(), Error> {
+    todo!()
+}
+
+pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
+    todo!()
+}
+
+pub struct RemoveArgs<'a> {
+    pub email: &'a str,
+}
+
+pub async fn remove(
+    cx: &mut ProfileContext,
+    RemoveArgs { email }: RemoveArgs<'_>,
+) -> Result<(), Error> {
+    todo!()
+}

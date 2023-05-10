@@ -13,17 +13,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `mz` is the Materialize command-line interface (CLI).
+//! Drivers for each `mz` command.
+//!
+//! Each submodule here is responsible only for command-line argument parsing.
+//! The implementation of each command is in the corresponding `command`
+//! submodule of the library crate.
 
-use mz_build_info::{build_info, BuildInfo};
-use once_cell::sync::Lazy;
-
-pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_string());
-
-pub mod command;
-pub mod config_file;
-pub mod context;
-pub mod error;
-mod server;
-pub mod ui;
+pub mod app_password;
+pub mod config;
+pub mod profile;
+pub mod region;
+pub mod secret;
+pub mod sql;
+pub mod user;

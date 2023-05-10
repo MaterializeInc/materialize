@@ -13,17 +13,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `mz` is the Materialize command-line interface (CLI).
+//! Implementation of the `mz region` command.
+//!
+//! Consult the user-facing documentation for details.
 
-use mz_build_info::{build_info, BuildInfo};
-use once_cell::sync::Lazy;
+use crate::{context::RegionContext, error::Error};
 
-pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_string());
+pub async fn enable(cx: &mut RegionContext) -> Result<(), Error> {
+    // cx.cloud_client().create_environment().await
+    todo!()
+}
 
-pub mod command;
-pub mod config_file;
-pub mod context;
-pub mod error;
-mod server;
-pub mod ui;
+pub async fn list(cx: &mut RegionContext) -> Result<(), Error> {
+    cx.cloud_client().get_all_environments().await?;
+    Ok(())
+}
+
+pub async fn show(cx: &mut RegionContext) -> Result<(), Error> {
+    // cx.cloud_client().create_environment().await
+    todo!()
+}

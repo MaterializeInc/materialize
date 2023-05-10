@@ -13,17 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `mz` is the Materialize command-line interface (CLI).
+//! Reusable arguments that can be mixed in to commands.
 
-use mz_build_info::{build_info, BuildInfo};
-use once_cell::sync::Lazy;
+#[derive(Debug, clap::Args)]
+pub struct ProfileArg {
+    /// Use the specified authentication profile.
+    #[clap(long, env = "PROFILE")]
+    pub profile: Option<String>,
+}
 
-pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.semver_version().to_string());
-
-pub mod command;
-pub mod config_file;
-pub mod context;
-pub mod error;
-mod server;
-pub mod ui;
+#[derive(Debug, clap::Args)]
+pub struct RegionArg {
+    /// Use the specified region.
+    #[clap(long, env = "REGION")]
+    pub region: Option<String>,
+}
