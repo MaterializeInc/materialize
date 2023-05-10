@@ -19,7 +19,7 @@ all objects across all databases.
 
 Field | Use
 ------|-----
-_role_name_   | The role name that is gaining privileges.
+_role_name_   | The role name whose owned objects will be dropped.
 **CASCADE** | Remove all dependent objects.
 **RESTRICT**  | Don't remove anything if any non-index objects depencies exist. _(Default.)_
 
