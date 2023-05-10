@@ -32,8 +32,9 @@ use mz_sql::plan::{
     CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
     ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegePlan, GrantRolePlan, InsertPlan,
     MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
-    ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan, SetVariablePlan,
-    ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig, StartTransactionPlan, SubscribePlan,
+    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan,
+    SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    StartTransactionPlan, SubscribePlan,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -241,6 +242,15 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
     match plan {
         Plan::AlterOwner(AlterOwnerPlan { new_owner, .. }) => vec![*new_owner],
         Plan::DropOwned(DropOwnedPlan { role_ids, .. }) => role_ids.clone(),
+        Plan::ReassignOwned(ReassignOwnedPlan {
+            old_roles,
+            new_role,
+            ..
+        }) => {
+            let mut roles = old_roles.clone();
+            roles.push(*new_role);
+            roles
+        }
         Plan::CreateConnection(_)
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
@@ -391,7 +401,8 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::Raise(_)
         | Plan::RotateKeys(_)
         | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_) => Vec::new(),
+        | Plan::RevokePrivilege(_)
+        | Plan::ReassignOwned(_) => Vec::new(),
     }
 }
 
@@ -541,7 +552,8 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::Raise(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
-        | Plan::DropOwned(_) => Vec::new(),
+        | Plan::DropOwned(_)
+        | Plan::ReassignOwned(_) => Vec::new(),
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
@@ -1142,6 +1154,11 @@ fn generate_required_privileges(
             role_ids: _,
             drop_ids: _,
             revokes: _,
+        })
+        | Plan::ReassignOwned(ReassignOwnedPlan {
+            old_roles: _,
+            new_role: _,
+            reassign_ids: _,
         }) => Vec::new(),
     }
 }

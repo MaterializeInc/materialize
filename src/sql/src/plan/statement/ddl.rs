@@ -40,8 +40,8 @@ use mz_sql_parser::ast::{
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
     DropOwnedStatement, GrantPrivilegeStatement, GrantRoleStatement, Privilege,
-    PrivilegeSpecification, RevokePrivilegeStatement, RevokeRoleStatement, SshConnectionOption,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    PrivilegeSpecification, ReassignOwnedStatement, RevokePrivilegeStatement, RevokeRoleStatement,
+    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -113,8 +113,8 @@ use crate::plan::{
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
     DropObjectsPlan, DropOwnedPlan, FullItemName, GrantPrivilegePlan, GrantRolePlan, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, QueryContext, ReplicaConfig,
-    RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan, Secret, Sink, Source,
+    Index, Ingestion, MaterializedView, Params, Plan, QueryContext, ReassignOwnedPlan,
+    ReplicaConfig, RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan, Secret, Sink, Source,
     SourceSinkClusterConfig, Table, Type, View,
 };
 use crate::session::user::SYSTEM_USER;
@@ -4718,6 +4718,77 @@ fn acl_mode_to_privileges(acl_mode: AclMode) -> Vec<Privilege> {
         }
     }
     privileges
+}
+
+pub fn describe_reassign_owned(
+    _: &StatementContext,
+    _: ReassignOwnedStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_reassign_owned(
+    scx: &StatementContext,
+    ReassignOwnedStatement {
+        old_roles,
+        new_role,
+    }: ReassignOwnedStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let old_roles: BTreeSet<_> = old_roles.into_iter().map(|role| role.id).collect();
+    let mut reassign_ids: Vec<ObjectId> = Vec::new();
+
+    // Replicas
+    for replica in scx.catalog.get_cluster_replicas() {
+        if old_roles.contains(&replica.owner_id()) {
+            reassign_ids.push((replica.cluster_id(), replica.replica_id()).into());
+        }
+    }
+    // Clusters
+    for cluster in scx.catalog.get_clusters() {
+        if old_roles.contains(&cluster.owner_id()) {
+            reassign_ids.push(cluster.id().into());
+        }
+    }
+    // Items
+    for item in scx.catalog.get_items() {
+        if old_roles.contains(&item.owner_id()) {
+            reassign_ids.push(item.id().into());
+        }
+    }
+    // Schemas
+    for schema in scx.catalog.get_schemas() {
+        if !schema.id().is_temporary() {
+            if old_roles.contains(&schema.owner_id()) {
+                reassign_ids.push((*schema.database(), *schema.id()).into())
+            }
+        }
+    }
+    // Databases
+    for database in scx.catalog.get_databases() {
+        if old_roles.contains(&database.owner_id()) {
+            reassign_ids.push(database.id().into());
+        }
+    }
+
+    let system_ids: Vec<_> = reassign_ids.iter().filter(|id| id.is_system()).collect();
+    if !system_ids.is_empty() {
+        let mut owners = system_ids
+            .into_iter()
+            .filter_map(|object_id| scx.catalog.get_owner_id(object_id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted());
+        sql_bail!(
+            "cannot reassign objects owned by role {} because they are required by the database system",
+            owners.join(", "),
+        );
+    }
+
+    Ok(Plan::ReassignOwned(ReassignOwnedPlan {
+        old_roles: old_roles.into_iter().collect(),
+        new_role: new_role.id,
+        reassign_ids,
+    }))
 }
 
 fn resolve_cluster<'a>(

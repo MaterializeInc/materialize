@@ -461,6 +461,12 @@ impl Coordinator {
             Plan::AlterOwner(plan) => {
                 tx.send(self.sequence_alter_owner(&mut session, plan).await, session);
             }
+            Plan::ReassignOwned(plan) => {
+                tx.send(
+                    self.sequence_reassign_owned(&mut session, plan).await,
+                    session,
+                );
+            }
         }
     }
 

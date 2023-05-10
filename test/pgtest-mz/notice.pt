@@ -113,9 +113,15 @@ Query {"query": "drop database d1"}
 Query {"query": "set database = dB3"}
 Query {"query": "show database"}
 Query {"query": "drop DATABASE Db3"}
+Query {"query": "create database d4"}
+Query {"query": "set database = d4"}
+Query {"query": "drop owned by materialize"}
 ----
 
 until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -148,6 +154,13 @@ ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"db3\" has been dropped"}]}
 CommandComplete {"tag":"DROP DATABASE"}
 ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE DATABASE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active database \"d4\" has been dropped"}]}
+CommandComplete {"tag":"DROP OWNED"}
+ReadyForQuery {"status":"I"}
 
 # Test dropping active cluster
 send
@@ -160,9 +173,15 @@ Query {"query": "drop cluster c1"}
 Query {"query": "set cluster = cL3"}
 Query {"query": "show cluster"}
 Query {"query": "drop CLUSTER Cl3"}
+Query {"query": "create cluster c4 REPLICAS ()"}
+Query {"query": "set cluster = c4"}
+Query {"query": "drop owned by materialize"}
 ----
 
 until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -194,4 +213,11 @@ CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"cl3\" has been dropped"}]}
 CommandComplete {"tag":"DROP CLUSTER"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE CLUSTER"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"active cluster \"c4\" has been dropped"}]}
+CommandComplete {"tag":"DROP OWNED"}
 ReadyForQuery {"status":"I"}

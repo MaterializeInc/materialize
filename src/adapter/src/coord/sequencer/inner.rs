@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
 use std::time::Duration;
@@ -59,9 +60,9 @@ use mz_sql::plan::{
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan,
     GrantRolePlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig,
-    PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan,
-    RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig,
-    SubscribeFrom, SubscribePlan, VariableValue, View,
+    PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
+    RevokePrivilegePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
@@ -4178,6 +4179,32 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::AlteredObject(object_type))
+    }
+
+    pub(super) async fn sequence_reassign_owned(
+        &mut self,
+        session: &mut Session,
+        ReassignOwnedPlan {
+            old_roles,
+            new_role,
+            reassign_ids,
+        }: ReassignOwnedPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        for role_id in old_roles.iter().chain(iter::once(&new_role)) {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
+
+        let ops = reassign_ids
+            .into_iter()
+            .map(|id| Op::UpdateOwner {
+                id,
+                new_owner: new_role,
+            })
+            .collect();
+
+        self.catalog_transact(Some(session), ops)
+            .await
+            .map(|_| ExecuteResponse::ReassignOwned)
     }
 
     /// Generates the catalog operations to create a linked cluster for the
