@@ -9,6 +9,7 @@
 
 //! gRPC-based implementations of Persist PubSub client and server.
 
+use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::BTreeMap;
@@ -42,7 +43,7 @@ use mz_proto::{ProtoType, RustType};
 
 use crate::cache::StateCache;
 use crate::cfg::PersistConfig;
-use crate::internal::metrics::PubSubServerMetrics;
+use crate::internal::metrics::{PubSubClientCallMetrics, PubSubServerMetrics};
 use crate::internal::service::proto_persist_pub_sub_client::ProtoPersistPubSubClient;
 use crate::internal::service::proto_persist_pub_sub_server::ProtoPersistPubSubServer;
 use crate::internal::service::{
@@ -147,7 +148,11 @@ pub struct ShardSubscriptionToken {
 
 impl Debug for ShardSubscriptionToken {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ShardSubscriptionToken({})", self.shard_id)
+        let ShardSubscriptionToken {
+            shard_id,
+            sender: _sender,
+        } = self;
+        write!(f, "ShardSubscriptionToken({})", shard_id)
     }
 }
 
@@ -179,24 +184,170 @@ pub struct PersistPubSubClientConfig {
 #[derive(Debug)]
 pub struct GrpcPubSubClient;
 
+impl GrpcPubSubClient {
+    async fn reconnect_to_server_forever(
+        send_requests: tokio::sync::broadcast::Sender<ProtoPubSubMessage>,
+        receiver_input: &mut tokio::sync::mpsc::Sender<ProtoPubSubMessage>,
+        sender: Arc<SubscriptionTrackingSender>,
+        metadata: MetadataMap,
+        config: PersistPubSubClientConfig,
+        metrics: Arc<Metrics>,
+    ) {
+        loop {
+            metrics.pubsub_client.grpc_connection.connected.set(0);
+
+            if !config.persist_cfg.dynamic.pubsub_client_enabled() {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+
+            info!("Connecting to Persist PubSub: {}", config.url);
+            let client = mz_ore::retry::Retry::default()
+                .clamp_backoff(config.persist_cfg.pubsub_connect_max_backoff)
+                .retry_async(|_| async {
+                    metrics
+                        .pubsub_client
+                        .grpc_connection
+                        .connect_call_attempt_count
+                        .inc();
+                    let endpoint = match Endpoint::from_str(&config.url) {
+                        Ok(endpoint) => endpoint,
+                        Err(err) => return RetryResult::FatalErr(err),
+                    };
+                    ProtoPersistPubSubClient::connect(
+                        endpoint.timeout(config.persist_cfg.pubsub_connect_attempt_timeout),
+                    )
+                    .await
+                    .into()
+                })
+                .await;
+
+            let mut client = match client {
+                Ok(client) => client,
+                Err(err) => {
+                    error!("fatal error connecting to persist pubsub: {:?}", err);
+                    return;
+                }
+            };
+
+            metrics
+                .pubsub_client
+                .grpc_connection
+                .connection_established_count
+                .inc();
+            metrics.pubsub_client.grpc_connection.connected.set(1);
+
+            info!("Connected to Persist PubSub: {}", config.url);
+
+            let mut broadcast = BroadcastStream::new(send_requests.subscribe());
+            let broadcast_errors = metrics
+                .pubsub_client
+                .grpc_connection
+                .broadcast_recv_lagged_count
+                .clone();
+            let pubsub_request = Request::from_parts(
+                metadata.clone(),
+                Extensions::default(),
+                async_stream::stream! {
+                    while let Some(message) = broadcast.next().await {
+                        debug!("sending pubsub message: {:?}", message);
+                        match message {
+                            Ok(message) => yield message,
+                            Err(BroadcastStreamRecvError::Lagged(i)) => {
+                                broadcast_errors.inc_by(i);
+                            }
+                        }
+                    }
+                },
+            );
+
+            let responses = match client.pub_sub(pubsub_request).await {
+                Ok(response) => response.into_inner(),
+                Err(err) => {
+                    warn!("pub_sub rpc error: {:?}", err);
+                    continue;
+                }
+            };
+
+            // shard subscriptions are tracked by connection on the server, so if our
+            // gRPC stream is ever swapped out, we must inform the server which shards
+            // our client intended to be subscribed to.
+            sender.reconnect();
+
+            let stream_completed = GrpcPubSubClient::consume_grpc_stream(
+                responses,
+                receiver_input,
+                &config,
+                metrics.as_ref(),
+            )
+            .await;
+
+            match stream_completed {
+                // common case: reconnect due to some transient error
+                Ok(_) => continue,
+                // uncommon case: we should stop connecting to the PubSub server entirely.
+                // in practice, we should only see this during shut down.
+                Err(err) => {
+                    warn!("shutting down connection loop to Persist PubSub: {}", err);
+                    return;
+                }
+            }
+        }
+    }
+
+    async fn consume_grpc_stream(
+        mut responses: Streaming<ProtoPubSubMessage>,
+        receiver_input: &mut Sender<ProtoPubSubMessage>,
+        config: &PersistPubSubClientConfig,
+        metrics: &Metrics,
+    ) -> Result<(), Error> {
+        loop {
+            if !config.persist_cfg.dynamic.pubsub_client_enabled() {
+                return Ok(());
+            }
+
+            debug!("awaiting next pubsub response");
+            match responses.next().await {
+                Some(Ok(message)) => {
+                    debug!("received pubsub message: {:?}", message);
+                    match receiver_input.send(message).await {
+                        Ok(_) => {}
+                        // if the receiver has dropped, we can drop our
+                        // no-longer-needed grpc connection entirely.
+                        Err(err) => {
+                            return Err(anyhow!("closing pubsub grpc client connection: {}", err));
+                        }
+                    }
+                }
+                Some(Err(err)) => {
+                    metrics.pubsub_client.grpc_connection.grpc_error_count.inc();
+                    warn!("pubsub client error: {:?}", err);
+                    return Ok(());
+                }
+                None => return Ok(()),
+            }
+        }
+    }
+}
+
 impl PersistPubSubClient for GrpcPubSubClient {
     fn connect(config: PersistPubSubClientConfig, metrics: Arc<Metrics>) -> PubSubClientConnection {
         // Create a stable channel for our client to transmit message into our gRPC stream. We use a
         // broadcast to allow us to create new Receivers on demand, in case the underlying gRPC stream
         // is swapped out (e.g. due to connection failure). It is expected that only 1 Receiver is
         // ever active at a given time.
-        let (rpc_requests, _) =
+        let (send_requests, _) =
             tokio::sync::broadcast::channel(config.persist_cfg.pubsub_client_sender_channel_size);
         // Create a stable channel to receive messages from our gRPC stream. The input end lives inside
         // a task that continuously reads from the active gRPC stream, decoupling the `PubSubReceiver`
         // from the lifetime of a specific gRPC connection.
-        let (receiver_input, receiver_output) =
+        let (mut receiver_input, receiver_output) =
             tokio::sync::mpsc::channel(config.persist_cfg.pubsub_client_receiver_channel_size);
 
         let sender = Arc::new(SubscriptionTrackingSender::new(Arc::new(
             GrpcPubSubSender {
                 metrics: Arc::clone(&metrics),
-                requests: rpc_requests.clone(),
+                requests: send_requests.clone(),
             },
         )));
         let pubsub_sender = Arc::clone(&sender);
@@ -210,116 +361,15 @@ impl PersistPubSubClient for GrpcPubSubClient {
                         .unwrap_or_else(|_| AsciiMetadataValue::from_static("unknown")),
                 );
 
-                'reconnect_forever: loop {
-                    metrics.pubsub_client.grpc_connection.connected.set(0);
-
-                    if !config.persist_cfg.dynamic.pubsub_client_enabled() {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        continue 'reconnect_forever;
-                    }
-
-                    info!("Connecting to Persist PubSub: {}", config.url);
-                    let client = mz_ore::retry::Retry::default()
-                        .clamp_backoff(config.persist_cfg.pubsub_connect_max_backoff)
-                        .retry_async(|_| async {
-                            metrics
-                                .pubsub_client
-                                .grpc_connection
-                                .connect_call_attempt_count
-                                .inc();
-                            let endpoint = match Endpoint::from_str(&config.url) {
-                                Ok(endpoint) => endpoint,
-                                Err(err) => return RetryResult::FatalErr(err),
-                            };
-                            ProtoPersistPubSubClient::connect(
-                                endpoint.timeout(config.persist_cfg.pubsub_connect_attempt_timeout),
-                            )
-                            .await
-                            .into()
-                        })
-                        .await;
-
-                    let mut client = match client {
-                        Ok(client) => client,
-                        Err(err) => {
-                            error!("fatal error connecting to persist pubsub: {:?}", err);
-                            break 'reconnect_forever;
-                        }
-                    };
-
-                    metrics
-                        .pubsub_client
-                        .grpc_connection
-                        .connection_established_count
-                        .inc();
-                    metrics.pubsub_client.grpc_connection.connected.set(1);
-
-                    info!("Connected to Persist PubSub: {}", config.url);
-
-                    let mut broadcast = BroadcastStream::new(rpc_requests.subscribe());
-                    let broadcast_errors = metrics
-                        .pubsub_client
-                        .grpc_connection
-                        .broadcast_recv_lagged_count
-                        .clone();
-                    let pubsub_request = Request::from_parts(
-                        metadata.clone(),
-                        Extensions::default(),
-                        async_stream::stream! {
-                            while let Some(message) = broadcast.next().await {
-                                debug!("sending pubsub message: {:?}", message);
-                                match message {
-                                    Ok(message) => yield message,
-                                    Err(BroadcastStreamRecvError::Lagged(i)) => {
-                                        broadcast_errors.inc_by(i);
-                                    }
-                                }
-                            }
-                        },
-                    );
-
-                    let mut responses = match client.pub_sub(pubsub_request).await {
-                        Ok(response) => response.into_inner(),
-                        Err(err) => {
-                            warn!("pub_sub rpc error: {:?}", err);
-                            continue;
-                        }
-                    };
-
-                    // shard subscriptions are tracked by connection on the server, so if our
-                    // gRPC stream is ever swapped out, we must inform the server which shards
-                    // our client intended to be subscribed to.
-                    pubsub_sender.reconnect();
-
-                    'read_active_stream: loop {
-                        if !config.persist_cfg.dynamic.pubsub_client_enabled() {
-                            break 'read_active_stream;
-                        }
-
-                        debug!("awaiting next pubsub response");
-                        match responses.next().await {
-                            Some(Ok(message)) => {
-                                debug!("received pubsub message: {:?}", message);
-                                match receiver_input.send(message).await {
-                                    Ok(_) => {}
-                                    // if the receiver has dropped, end the task to drop
-                                    // our no-longer-needed grpc connection. in practice,
-                                    // this should only occur during shutdown.
-                                    Err(_) => {
-                                        info!("closing pubsub grpc client connection");
-                                        break 'reconnect_forever;
-                                    }
-                                }
-                            }
-                            Some(Err(err)) => {
-                                metrics.pubsub_client.grpc_connection.grpc_error_count.inc();
-                                warn!("pubsub client error: {:?}", err);
-                                break 'read_active_stream;
-                            }
-                            None => break 'read_active_stream,
-                        }
-                    }
-                }
+                GrpcPubSubClient::reconnect_to_server_forever(
+                    send_requests,
+                    &mut receiver_input,
+                    pubsub_sender,
+                    metadata,
+                    config,
+                    metrics,
+                )
+                .await;
             },
         );
 
@@ -338,90 +388,68 @@ struct GrpcPubSubSender {
 
 impl Debug for GrpcPubSubSender {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let GrpcPubSubSender {
+            metrics: _metrics,
+            requests: _requests,
+        } = self;
+
         write!(f, "GrpcPubSubSender")
+    }
+}
+
+impl GrpcPubSubSender {
+    fn send(&self, message: proto_pub_sub_message::Message, metrics: &PubSubClientCallMetrics) {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("failed to get millis since epoch");
+
+        let message = ProtoPubSubMessage {
+            timestamp: Some(now.into_proto()),
+            message: Some(message),
+        };
+        let size = message.encoded_len();
+
+        match self.requests.send(message) {
+            Ok(_) => {
+                metrics.succeeded.inc();
+                metrics.bytes_sent.inc_by(u64::cast_from(size));
+            }
+            Err(err) => {
+                metrics.failed.inc();
+                debug!("error sending client message: {}", err);
+            }
+        }
     }
 }
 
 impl PubSubSenderInternal for GrpcPubSubSender {
     fn push_diff(&self, shard_id: &ShardId, diff: &VersionedData) {
-        let seqno = diff.seqno.clone();
-        let diff = ProtoPushDiff {
-            shard_id: shard_id.into_proto(),
-            seqno: diff.seqno.into_proto(),
-            diff: diff.data.clone(),
-        };
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("failed to get millis since epoch");
-        let msg = ProtoPubSubMessage {
-            timestamp: Some(now.into_proto()),
-            message: Some(proto_pub_sub_message::Message::PushDiff(diff)),
-        };
-        let size = msg.encoded_len();
-        let metrics = &self.metrics.pubsub_client.sender.push;
-        match self.requests.send(msg) {
-            Ok(i) => {
-                metrics.succeeded.inc();
-                metrics.bytes_sent.inc_by(u64::cast_from(size));
-                debug!("pushed ({}, {}) to {} listeners", shard_id, seqno, i);
-            }
-            Err(err) => {
-                metrics.failed.inc();
-                debug!("error pushing diff: {}", err);
-            }
-        }
+        self.send(
+            proto_pub_sub_message::Message::PushDiff(ProtoPushDiff {
+                shard_id: shard_id.into_proto(),
+                seqno: diff.seqno.into_proto(),
+                diff: diff.data.clone(),
+            }),
+            &self.metrics.pubsub_client.sender.push,
+        )
     }
 
     fn subscribe(&self, shard_id: &ShardId) {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("failed to get millis since epoch");
-        let msg = ProtoPubSubMessage {
-            timestamp: Some(now.into_proto()),
-            message: Some(proto_pub_sub_message::Message::Subscribe(ProtoSubscribe {
+        self.send(
+            proto_pub_sub_message::Message::Subscribe(ProtoSubscribe {
                 shard_id: shard_id.into_proto(),
-            })),
-        };
-        let size = msg.encoded_len();
-        let metrics = &self.metrics.pubsub_client.sender.subscribe;
-        match self.requests.send(msg) {
-            Ok(_) => {
-                metrics.succeeded.inc();
-                metrics.bytes_sent.inc_by(u64::cast_from(size));
-                debug!("subscribed to {}", shard_id);
-            }
-            Err(err) => {
-                metrics.failed.inc();
-                debug!("error subscribing to {}: {}", shard_id, err);
-            }
-        }
+            }),
+            &self.metrics.pubsub_client.sender.subscribe,
+        )
     }
 
     fn unsubscribe(&self, shard_id: &ShardId) {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("failed to get millis since epoch");
-        let msg = ProtoPubSubMessage {
-            timestamp: Some(now.into_proto()),
-            message: Some(proto_pub_sub_message::Message::Unsubscribe(
-                ProtoUnsubscribe {
-                    shard_id: shard_id.into_proto(),
-                },
-            )),
-        };
-        let size = msg.encoded_len();
-        let metrics = &self.metrics.pubsub_client.sender.unsubscribe;
-        match self.requests.send(msg) {
-            Ok(_) => {
-                metrics.succeeded.inc();
-                metrics.bytes_sent.inc_by(u64::cast_from(size));
-                debug!("unsubscribed from {}", shard_id);
-            }
-            Err(err) => {
-                metrics.failed.inc();
-                debug!("error unsubscribing from {}: {}", shard_id, err);
-            }
-        }
+        self.send(
+            proto_pub_sub_message::Message::Unsubscribe(ProtoUnsubscribe {
+                shard_id: shard_id.into_proto(),
+            }),
+            &self.metrics.pubsub_client.sender.unsubscribe,
+        )
     }
 }
 
