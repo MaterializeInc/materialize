@@ -12,12 +12,16 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
 from materialize.output_consistency.query.query_result import QueryExecution
-from materialize.output_consistency.validation.problem_marker import ValidationError
+from materialize.output_consistency.validation.problem_marker import (
+    ValidationError,
+    ValidationWarning,
+)
 
 
 class ValidationOutcome:
     def __init__(self, query_execution: QueryExecution) -> None:
         self.errors: list[ValidationError] = []
+        self.warnings: list[ValidationWarning] = []
         self.query_execution = query_execution.index
 
     def add_error(
@@ -45,6 +49,16 @@ class ValidationOutcome:
         )
         self.errors.append(error)
 
+    def add_warning(
+        self,
+        message: str,
+        description: Optional[str] = None,
+        strategy: Optional[EvaluationStrategy] = None,
+        sql: Optional[str] = None,
+    ) -> None:
+        warning = ValidationWarning(message, description, strategy, sql)
+        self.warnings.append(warning)
+
     def success(self) -> bool:
         return not self.has_errors()
 
@@ -53,3 +67,6 @@ class ValidationOutcome:
 
     def error_details(self) -> str:
         return "\n=====\n".join([str(error) for error in self.errors])
+
+    def warning_output(self) -> str:
+        return "\n=====\n".join([str(warning) for warning in self.warnings])

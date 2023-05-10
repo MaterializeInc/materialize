@@ -25,3 +25,6 @@ class QueryTemplate:
         return f"""
             SELECT {', '.join(expressions_as_sql)}
             FROM {strategy.db_object_name};""".strip()
+
+    def column_count(self) -> int:
+        return len(self.select_expressions)

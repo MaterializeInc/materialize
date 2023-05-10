@@ -13,7 +13,39 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 )
 
 
-class ValidationError:
+class ValidationProblemMarker:
+    def __init__(
+        self,
+        problem_type: str,
+        message: str,
+        description: Optional[str] = None,
+    ):
+        self.problem_type = problem_type
+        self.message = message
+        self.description = description
+
+
+class ValidationWarning(ValidationProblemMarker):
+    def __init__(
+        self,
+        message: str,
+        description: Optional[str] = None,
+        strategy: Optional[EvaluationStrategy] = None,
+        sql: Optional[str] = None,
+    ):
+        super().__init__("Warning", message, description)
+        self.strategy = strategy
+        self.sql = sql
+
+    def __str__(self) -> str:
+        warning_desc = f" ({self.description})" if self.description else ""
+        strategy_desc = f" at strategy '{self.strategy}'"
+        query_desc = f"\n  Query: {self.sql}"
+
+        return f"{self.problem_type}: {self.message}{strategy_desc}{warning_desc}{query_desc}"
+
+
+class ValidationError(ValidationProblemMarker):
     def __init__(
         self,
         message: str,

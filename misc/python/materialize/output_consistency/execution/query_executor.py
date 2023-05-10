@@ -103,7 +103,9 @@ class QueryExecutor:
                 result = QueryResult(strategy, sql_query_string, cursor.fetchall())
                 query_execution.outcomes.append(result)
             except (ProgrammingError, DatabaseError) as err:
-                failure = QueryFailure(strategy, sql_query_string, str(err))
+                failure = QueryFailure(
+                    strategy, sql_query_string, str(err), query.column_count()
+                )
                 query_execution.outcomes.append(failure)
                 self.rollback_tx(cursor, start_new_tx=True)
 

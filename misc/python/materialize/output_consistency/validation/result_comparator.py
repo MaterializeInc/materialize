@@ -21,7 +21,6 @@ from materialize.output_consistency.validation.validation_outcome import (
 
 class ResultComparator:
     def compare_results(self, query_execution: QueryExecution) -> ValidationOutcome:
-        print(f"Query {query_execution.index}: {query_execution.generic_sql}")
         comparison_outcome = ValidationOutcome(query_execution)
 
         if len(query_execution.outcomes) == 0:
@@ -88,6 +87,12 @@ class ResultComparator:
                 comparison_outcome,
             )
 
+        if not both_successful:
+            any_failure = outcome1 if not outcome1.successful else outcome2
+            self.warn_on_failure_with_multiple_columns(
+                cast(QueryFailure, any_failure), comparison_outcome
+            )
+
     def validate_row_count(
         self,
         result1: QueryResult,
@@ -126,7 +131,18 @@ class ResultComparator:
                 sql1=failure1.sql,
                 sql2=failure2.sql,
             )
-            return
+
+    def warn_on_failure_with_multiple_columns(
+            self,
+            failure: QueryFailure,
+            comparison_outcome: ValidationOutcome,
+    ) -> None:
+        if failure.query_column_count > 1:
+            comparison_outcome.add_warning(
+                "Query error with multiple columns",
+                "Queries expected to return an error should contain only one colum.",
+                sql=failure.sql,
+            )
 
     def validate_outcomes_data(
         self, outcomes: list[QueryOutcome], comparison_outcome: ValidationOutcome

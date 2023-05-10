@@ -47,9 +47,16 @@ class QueryResult(QueryOutcome):
 
 
 class QueryFailure(QueryOutcome):
-    def __init__(self, strategy: EvaluationStrategy, sql: str, error_message: str):
+    def __init__(
+        self,
+        strategy: EvaluationStrategy,
+        sql: str,
+        error_message: str,
+        query_column_count: int,
+    ):
         super().__init__(strategy, sql, False)
         self.error_message = error_message
+        self.query_column_count = query_column_count
 
     def __str__(self) -> str:
         return f"Failure({self.error_message}) with strategy '{self.strategy.name}'"
