@@ -8,7 +8,9 @@
 # by the Apache License, Version 2.0.
 from typing import cast
 
-from materialize.output_consistency.execution.comparison_outcome import ComparisonOutcome
+from materialize.output_consistency.execution.comparison_outcome import (
+    ComparisonOutcome,
+)
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
     QueryFailure,
@@ -28,7 +30,7 @@ class ResultComparator:
         if len(query_execution.outcomes) == 1:
             raise RuntimeError("Contains only one outcome, nothing to compare against!")
 
-        self.validate_outcome_metadata(query_execution.outcomes, comparison_outcome)
+        self.validate_outcomes_metadata(query_execution.outcomes, comparison_outcome)
 
         if not comparison_outcome.success():
             # do not continue with value comparison if metadata differs
@@ -37,21 +39,34 @@ class ResultComparator:
         queries_succeeded = query_execution.outcomes[0].successful
 
         if queries_succeeded:
-            self.validate_outcome_data(query_execution.outcomes, comparison_outcome)
+            self.validate_outcomes_data(query_execution.outcomes, comparison_outcome)
 
         return comparison_outcome
 
-    def validate_outcome_metadata(self, outcomes: list[QueryOutcome], comparison_outcome: ComparisonOutcome) -> None:
+    def validate_outcomes_metadata(
+        self, outcomes: list[QueryOutcome], comparison_outcome: ComparisonOutcome
+    ) -> None:
         outcome1 = outcomes[0]
 
         for index in range(1, len(outcomes)):
-            self.validate_two_outcome_metadata(outcome1, outcomes[index], comparison_outcome)
+            self.validate_metadata_of_two_outcomes(
+                outcome1, outcomes[index], comparison_outcome
+            )
 
-    def validate_two_outcome_metadata(
-        self, outcome1: QueryOutcome, outcome2: QueryOutcome,comparison_outcome: ComparisonOutcome
+    def validate_metadata_of_two_outcomes(
+        self,
+        outcome1: QueryOutcome,
+        outcome2: QueryOutcome,
+        comparison_outcome: ComparisonOutcome,
     ) -> None:
         if outcome1.successful != outcome2.successful:
-            comparison_outcome.add_error("Outcome differs", value1=outcome1.__class__.__name__, value2=outcome2.__class__.__name__, strategy1= outcome1.strategy, strategy2= outcome2.strategy)
+            comparison_outcome.add_error(
+                "Outcome differs",
+                value1=outcome1.__class__.__name__,
+                value2=outcome2.__class__.__name__,
+                strategy1=outcome1.strategy,
+                strategy2=outcome2.strategy,
+            )
             return
 
         both_successful = outcome1.successful
@@ -63,43 +78,85 @@ class ResultComparator:
             error2 = cast(QueryFailure, outcome2).error_message
 
             if error1 != error2:
-                comparison_outcome.add_error("Error differs", value1=error1, value2=error2, strategy1= outcome1.strategy, strategy2= outcome2.strategy)
+                comparison_outcome.add_error(
+                    "Error differs",
+                    value1=error1,
+                    value2=error2,
+                    strategy1=outcome1.strategy,
+                    strategy2=outcome2.strategy,
+                )
                 return
 
         # both succeeded, only check that number of entries match at this point
         if both_successful:
-            result_value1 = cast(QueryResult, outcome1).result_data
-            result_value2 = cast(QueryResult, outcome2).result_data
+            num_rows1 = len(cast(QueryResult, outcome1).result_rows)
+            num_rows2 = len(cast(QueryResult, outcome2).result_rows)
 
-            if len(result_value1) == 0:
-                raise RuntimeError("Contains no columns!")
+            if num_rows1 == 0 and num_rows2 == 0:
+                # no rows in both results, this is ok
+                return
 
-            if len(result_value1) != len(result_value2):
-                raise RuntimeError("Result count mismatch!")
+            if num_rows1 != num_rows2:
+                comparison_outcome.add_error(
+                    "Row count differs",
+                    value1=str(num_rows1),
+                    value2=str(num_rows2),
+                    strategy1=outcome1.strategy,
+                    strategy2=outcome2.strategy,
+                )
 
+    def validate_outcomes_data(
+        self, outcomes: list[QueryOutcome], comparison_outcome: ComparisonOutcome
+    ) -> None:
+        # each outcome is known to contain at least one row
+        # each row is supposed to have the same number of columns
 
-    def validate_outcome_data(self, outcomes: list[QueryOutcome],comparison_outcome: ComparisonOutcome) -> None:
-        num_columns = len(cast(QueryResult, outcomes[0]).result_data)
+        result_outcome1 = cast(QueryResult, outcomes[0])
 
-        for col_index in range(0, num_columns):
-            self.validate_column(outcomes, col_index,comparison_outcome)
-
-    def validate_column(self, outcomes: list[QueryOutcome], col_index: int, comparison_outcome: ComparisonOutcome) -> None:
-        # all query outcomes are known to be successful
-
-        first_result = cast(QueryResult, outcomes[0])
-
-        for strategy_index in range(1, len(outcomes)):
-            other_result = cast(QueryResult, outcomes[strategy_index])
-            self.validate_two_values(
-                first_result, other_result, col_index,comparison_outcome
+        for index in range(1, len(outcomes)):
+            other_outcome = cast(QueryResult, outcomes[index])
+            self.validate_data_of_two_outcomes(
+                result_outcome1, other_outcome, comparison_outcome
             )
 
-    def validate_two_values(
-        self, result1: QueryResult, result2: QueryResult, col_index: int, comparison_outcome: ComparisonOutcome
+    def validate_data_of_two_outcomes(
+        self,
+        outcome1: QueryResult,
+        outcome2: QueryResult,
+        comparison_outcome: ComparisonOutcome,
     ) -> None:
-        result_value1 = result1.result_data[col_index]
-        result_value2 = result2.result_data[col_index]
+        num_columns1 = len(outcome1.result_rows[0])
+        num_columns2 = len(outcome2.result_rows[0])
 
-        if result_value1 != result_value2:
-            comparison_outcome.add_error("Error differs", value1=result_value1, value2=result_value2, strategy1= result1.strategy, strategy2= result2.strategy,  col_index=col_index)
+        if num_columns1 == 0:
+            raise RuntimeError("Result contains no columns!")
+
+        if num_columns1 != num_columns2:
+            raise RuntimeError("Results count different number of columns!")
+
+        for col_index in range(0, num_columns1):
+            self.validate_column(outcome1, outcome2, col_index, comparison_outcome)
+
+    def validate_column(
+        self,
+        result1: QueryResult,
+        result2: QueryResult,
+        col_index: int,
+        comparison_outcome: ComparisonOutcome,
+    ) -> None:
+        # both results are known to be not empty and have the same number of rows
+        row_length = len(result1.result_rows)
+
+        for row_index in range(0, row_length):
+            result_value1 = result1.result_rows[row_index][col_index]
+            result_value2 = result2.result_rows[row_index][col_index]
+
+            if result_value1 != result_value2:
+                comparison_outcome.add_error(
+                    "Value differs",
+                    value1=result_value1,
+                    value2=result_value2,
+                    strategy1=result1.strategy,
+                    strategy2=result2.strategy,
+                    location=f"row index {row_index}, column index {col_index}",
+                )

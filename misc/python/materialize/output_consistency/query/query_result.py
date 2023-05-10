@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Any
+from typing import Any, Sequence
 
 from materialize.output_consistency.execution.execution_strategy import (
     DummyEvaluation,
@@ -22,7 +22,7 @@ class QueryExecution:
         self.outcomes: list[QueryOutcome] = []
 
     def __str__(self) -> str:
-        return f"QueryExecution({len(self.outcomes)} outcomes for template query: {self.generic_sql})"
+        return f"QueryExecution with {len(self.outcomes)} outcomes for template query: {self.generic_sql})"
 
 
 class QueryOutcome:
@@ -33,12 +33,17 @@ class QueryOutcome:
 
 
 class QueryResult(QueryOutcome):
-    def __init__(self, strategy: EvaluationStrategy, sql: str, result_data: Any):
+    def __init__(
+        self,
+        strategy: EvaluationStrategy,
+        sql: str,
+        result_rows: Sequence[Sequence[Any]],
+    ):
         super().__init__(strategy, sql, True)
-        self.result_data = result_data
+        self.result_rows = result_rows
 
     def __str__(self) -> str:
-        return f"Result({self.result_data}) with strategy '{self.strategy.name}'"
+        return f"Result with {len(self.result_rows)} rows with strategy '{self.strategy.name}'"
 
 
 class QueryFailure(QueryOutcome):

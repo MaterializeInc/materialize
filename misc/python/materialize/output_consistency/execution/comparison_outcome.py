@@ -15,22 +15,23 @@ from materialize.output_consistency.query.query_result import QueryExecution
 
 
 class ComparisonMismatch:
-    def __init__(self,
-                 message: str,
-                 description: Optional[str] = None,
-                 value1: Optional[str] = None,
-                 value2: Optional[str] = None,
-                 strategy1: Optional[EvaluationStrategy] = None,
-                 strategy2: Optional[EvaluationStrategy] = None,
-                 col_index: Optional[int] = None,
-                 ) -> None:
+    def __init__(
+        self,
+        message: str,
+        description: Optional[str] = None,
+        value1: Optional[str] = None,
+        value2: Optional[str] = None,
+        strategy1: Optional[EvaluationStrategy] = None,
+        strategy2: Optional[EvaluationStrategy] = None,
+        location: Optional[str] = None,
+    ) -> None:
         self.message = message
         self.description = description
         self.value1 = value1
         self.value2 = value2
         self.strategy1 = strategy1
         self.strategy2 = strategy2
-        self.col_index = col_index
+        self.location = location
 
         if value1 is None and value2 is not None:
             raise RuntimeError("value1 must be set if value2 is set")
@@ -40,9 +41,26 @@ class ComparisonMismatch:
 
     def __str__(self) -> str:
         error_desc = f" ({self.description})" if self.description else ""
-        col_desc = f" at column index {self.col_index}" if self.col_index is not None else ""
+        location_desc = f" at {self.location}" if self.location is not None else ""
+        value_and_strategy_desc = ""
 
-        return f"Error: {self.message}{col_desc}{error_desc}."
+        if self.value2 is not None:
+            # self.value1 will never be null in this case
+            strategy1_desc = f" ({self.strategy1})"
+            strategy2_desc = f" ({self.strategy2})"
+            value_and_strategy_desc = f"\n  Expected: '{self.value1}'{strategy1_desc}\n  Actual:   '{self.value2}'{strategy2_desc}"
+        elif self.value1 is not None:
+            strategy1_desc = f" ({self.strategy1})"
+            value_and_strategy_desc = f"\n  Value: '{self.value1}'{strategy1_desc}"
+        elif self.strategy2 is not None:
+            # self.strategy1 will never be null in this case
+            value_and_strategy_desc = (
+                f"\n  Strategy 1: {self.strategy1}\nStrategy 2:   {self.strategy2}"
+            )
+        elif self.strategy1 is not None:
+            value_and_strategy_desc = f"\n  Strategy: {self.strategy1}"
+
+        return f"Error: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}"
 
 
 class ComparisonOutcome:
@@ -51,20 +69,22 @@ class ComparisonOutcome:
         self.query_execution = query_execution.index
 
     def add_error(
-            self,
-            message: str,
-            description: Optional[str] = None,
-            value1: Optional[str] = None,
-            value2: Optional[str] = None,
-            strategy1: Optional[EvaluationStrategy] = None,
-            strategy2: Optional[EvaluationStrategy] = None,
-            col_index: Optional[int] = None,
+        self,
+        message: str,
+        description: Optional[str] = None,
+        value1: Optional[str] = None,
+        value2: Optional[str] = None,
+        strategy1: Optional[EvaluationStrategy] = None,
+        strategy2: Optional[EvaluationStrategy] = None,
+        location: Optional[str] = None,
     ) -> None:
-        error = ComparisonMismatch(message, description, value1, value2, strategy1, strategy2, col_index)
+        error = ComparisonMismatch(
+            message, description, value1, value2, strategy1, strategy2, location
+        )
         self.errors.append(error)
 
     def success(self) -> bool:
         return len(self.errors) == 0
 
     def error_details(self) -> str:
-        return "\n".join([str(error) for error in self.errors])
+        return "\n=====\n".join([str(error) for error in self.errors])

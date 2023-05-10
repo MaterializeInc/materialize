@@ -19,6 +19,9 @@ class EvaluationStrategy:
     def generate_source(self, data_types: list[DataType]) -> list[str]:
         raise RuntimeError("Not implemented")
 
+    def __str__(self) -> str:
+        return self.name
+
 
 class DummyEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
