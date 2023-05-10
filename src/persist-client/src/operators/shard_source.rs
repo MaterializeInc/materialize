@@ -248,7 +248,6 @@ where
     let _shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
-        let mut current_ts = timely::progress::Timestamp::minimum();
         let mut inflight_bytes = 0;
         let mut inflight_parts: Vec<(Antichain<G::Timestamp>, usize)> = Vec::new();
 
@@ -263,22 +262,48 @@ where
             return;
         }
 
+        let client = clients
+            .open(location)
+            .await
+            .expect("location should be valid");
+        let read = client
+            .open_leased_reader::<K, V, G::Timestamp, D>(
+                shard_id,
+                &format!("shard_source({})", name_owned),
+                key_schema,
+                val_schema,
+            )
+            .await
+            .expect("could not open persist shard");
+        let as_of = as_of.unwrap_or_else(|| read.since().clone());
+
+
+        // Eagerly downgrade our frontier to the initial as_of. This makes sure
+        // that the output frontier of the `persist_source` closely tracks the
+        // `upper` frontier of the persist shard. It might be that the snapshot
+        // for `as_of` is not initially available yet, but this makes sure we
+        // already downgrade to it.
+        //
+        // Downstream consumers might rely on close frontier tracking for making
+        // progress. For example, the `persist_sink` needs to know the
+        // up-to-date upper of the output shard to make progress because it will
+        // only write out new data once it knows that earlier writes went
+        // through, including the initial downgrade of the shard upper to the
+        // `as_of`.
+        //
+        // NOTE: We have to do this before our `subscribe()` call (which
+        // internally calls `snapshot()` because that call will block when there
+        // is no data yet available in the shard.
+        cap_set.downgrade(as_of.clone());
+        let mut current_ts = match as_of.clone().into_option() {
+            Some(ts) => ts,
+            None => {
+                return;
+            }
+        };
+
         let create_subscribe = async {
-            let client = clients
-                .open(location)
-                .await
-                .expect("location should be valid");
-            let read = client
-                .open_leased_reader::<K, V, G::Timestamp, D>(
-                    shard_id,
-                    &format!("shard_source({})", name_owned),
-                    key_schema,
-                    val_schema,
-                )
-                .await
-                .expect("could not open persist shard");
-            let as_of = as_of.unwrap_or_else(|| read.since().clone());
-            (read.subscribe(as_of.clone()).await, as_of)
+            read.subscribe(as_of.clone()).await
         };
         tokio::pin!(create_subscribe);
         let token_is_dropped = token_tx.closed();
@@ -290,7 +315,7 @@ where
         //
         // NB: reading from a channel (token_is_dropped) is cancel-safe.
         //     create_subscribe is NOT cancel-safe, but we will not retry it if it is dropped.
-        let (subscription, as_of) = match futures::future::select(token_is_dropped, create_subscribe).await {
+        let subscription = match futures::future::select(token_is_dropped, create_subscribe).await {
             Either::Left(_) => {
                 // the token dropped before we finished creating our Subscribe.
                 // we can return immediately, as we could not have emitted any
@@ -298,8 +323,8 @@ where
                 cap_set.downgrade(&[]);
                 return;
             }
-            Either::Right(((subscription, as_of), _)) => {
-                (subscription, as_of)
+            Either::Right((subscription, _)) => {
+                subscription
             }
         };
 
@@ -314,19 +339,6 @@ where
         let mut lease_returner = subscription.lease_returner().clone();
         let (_keep_subscribe_alive_tx, keep_subscribe_alive_rx) = tokio::sync::oneshot::channel::<()>();
         let subscription_stream = async_stream::stream! {
-            // Eagerly yield the initial as_of. This makes sure that the output
-            // frontier of the `persist_source` closely tracks the `upper` frontier
-            // of the persist shard. It might be that the snapshot for `as_of` is
-            // not initially available yet, but this makes sure we already downgrade
-            // to it.
-            //
-            // Downstream consumers might rely on close frontier tracking for making
-            // progress. For example, the `persist_sink` needs to know the
-            // up-to-date upper of the output shard to make progress because it
-            // will only write out new data once it knows that earlier writes went
-            // through, including the initial downgrade of the shard upper to the
-            // `as_of`.
-            yield ListenEvent::Progress(as_of.clone());
 
             let mut done = false;
             while !done {
