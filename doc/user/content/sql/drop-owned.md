@@ -50,8 +50,3 @@ DROP OWNED BY joe, george CASCADE;
 - [DROP TABLE](../drop-table)
 - [DROP TYPE](../drop-type)
 - [DROP VIEW](../drop-view)
-
-
-## Related pages
-
-- [DROP OWNED](../drop-owned)
