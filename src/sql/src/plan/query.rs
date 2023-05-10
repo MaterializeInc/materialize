@@ -86,7 +86,7 @@ use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidIterationLimit;
 use crate::plan::{transform_ast, PlanContext, ShowCreatePlan};
 use crate::plan::{Params, QueryWhen};
-use crate::session::vars::ServerVar;
+use crate::session::vars::FeatureFlag;
 
 use super::statement::show;
 
@@ -5407,8 +5407,8 @@ impl<'a> ExprContext<'a> {
         self.qcx.derived_context(scope, self.relation_type.clone())
     }
 
-    pub fn require_feature_flag(&self, var: &ServerVar<bool>) -> Result<(), PlanError> {
-        self.qcx.scx.require_feature_flag(var)
+    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
+        self.qcx.scx.require_feature_flag(flag)
     }
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {

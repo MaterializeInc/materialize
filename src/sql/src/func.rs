@@ -397,7 +397,7 @@ fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
 // aliased if needed.
 fn sql_impl_table_func_inner(
     sql: &'static str,
-    feature_flag: Option<&'static vars::ServerVar<bool>>,
+    feature_flag: Option<&'static vars::FeatureFlag>,
 ) -> Operation<TableFuncPlan> {
     let query = match mz_sql_parser::parser::parse_statements(sql)
         .expect("static function definition failed to parse")
@@ -445,7 +445,7 @@ fn sql_impl_table_func(sql: &'static str) -> Operation<TableFuncPlan> {
 }
 
 fn experimental_sql_impl_table_func(
-    feature: &'static vars::ServerVar<bool>,
+    feature: &'static vars::FeatureFlag,
     sql: &'static str,
 ) -> Operation<TableFuncPlan> {
     sql_impl_table_func_inner(sql, Some(feature))

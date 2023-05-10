@@ -393,6 +393,7 @@ impl ErrorResponse {
                 VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
                 VarError::RequiresUnsafeMode(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
                 VarError::RequiresSystemVar { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                VarError::RequiresFeatureFlag { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
                 VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
             },
         };

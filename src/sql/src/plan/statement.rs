@@ -34,7 +34,7 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::{query, with_options};
 use crate::plan::{Params, Plan, PlanContext, PlanKind};
-use crate::session::vars::ServerVar;
+use crate::session::vars::FeatureFlag;
 
 pub(crate) mod ddl;
 mod dml;
@@ -709,16 +709,9 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn require_feature_flag(&self, var: &ServerVar<bool>) -> Result<(), PlanError> {
-        use crate::session::vars::Var;
-
-        if *self.catalog.system_vars().expect_value(var) {
-            Ok(())
-        } else {
-            Err(PlanError::RequiresFeatureFlag {
-                feature: var.name().to_string(),
-            })
-        }
+    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
+        flag.enabled(self.catalog.system_vars())?;
+        Ok(())
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {

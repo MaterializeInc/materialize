@@ -44,7 +44,7 @@ pub enum EndTransactionAction {
 }
 
 /// Errors that can occur when working with [`Var`]s
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum VarError {
     /// The specified session parameter is constrained to a finite set of
     /// values.
@@ -102,12 +102,17 @@ pub enum VarError {
     RequiresUnsafeMode(&'static str),
     #[error("{} is not supported", .feature.quoted())]
     RequiresSystemVar { feature: String, gate: String },
+    #[error("{} is not supported", .feature)]
+    RequiresFeatureFlag { feature: &'static str },
 }
 
 impl VarError {
     pub fn detail(&self) -> Option<String> {
         match self {
             Self::RequiresSystemVar { .. } => {
+                Some("The requested feature is typically meant only for internal development and testing of Materialize.".into())
+            }
+            Self::RequiresFeatureFlag { .. } => {
                 Some("The requested feature is typically meant only for internal development and testing of Materialize.".into())
             }
             _ => None,
@@ -689,7 +694,7 @@ static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
     internal: true,
-    system_var_gate: Some(&ALLOW_REAL_TIME_RECENCY),
+    system_var_gate: Some(&ALLOW_REAL_TIME_RECENCY_VAR),
 };
 
 static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
@@ -784,12 +789,19 @@ macro_rules! feature_flags {
     ($(($name:expr, $feature_desc:literal)),+) => {
         paste::paste!{
             $(
-                pub static [<$name:upper>]: ServerVar<bool> = ServerVar {
+                // Note that the ServerVar is not directly exported; we expect these to be
+                // accessible through their FeatureFlag variant.
+                static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
                     name: UncasedStr::new(stringify!($name)),
                     value: &false,
                     description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
                     internal: true,
                     system_var_gate: None,
+                };
+
+                pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
+                    flag: &[<$name:upper _VAR>],
+                    feature_desc: $feature_desc,
                 };
             )+
 
@@ -798,13 +810,13 @@ macro_rules! feature_flags {
                 {
                     self
                     $(
-                        .with_var(&[<$name:upper>])
+                        .with_var(&[<$name:upper _VAR>])
                     )+
                 }
 
                 $(
                     pub fn [<$name:lower>](&self) -> bool {
-                        *self.expect_value(&[<$name:upper>])
+                        *self.expect_value(&[<$name:upper _VAR>])
                     }
                 )+
             }
@@ -872,15 +884,8 @@ feature_flags!(
         enable_logical_compaction_window,
         "LOGICAL COMPACTION WINDOW"
     ),
-    (
-        enable_mfp_pushdown_explain_flag,
-        "`mfp_pushdown` explain flag"
-    ),
+    (enable_mfp_pushdown_explain, "`mfp_pushdown` explain flag"),
     (enable_raise_statement, "RAISE statement"),
-    (
-        enable_default_linked_cluster_size,
-        "default linked cluster size"
-    ),
     (enable_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
     (enable_format_json, "FORMAT JSON"),
     (
@@ -2046,7 +2051,7 @@ impl SystemVars {
     /// Sets the `enable_with_mutually_recursive` configuration parameter.
     pub fn set_enable_with_mutually_recursive(&mut self, value: bool) -> bool {
         self.vars
-            .get_mut(ENABLE_WITH_MUTUALLY_RECURSIVE.name)
+            .get_mut(ENABLE_WITH_MUTUALLY_RECURSIVE_VAR.name)
             .expect("var known to exist")
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
@@ -2055,7 +2060,7 @@ impl SystemVars {
     /// Sets the `enable_format_json` configuration parameter.
     pub fn set_enable_format_json(&mut self, value: bool) -> bool {
         self.vars
-            .get_mut(ENABLE_FORMAT_JSON.name)
+            .get_mut(ENABLE_FORMAT_JSON_VAR.name)
             .expect("var known to exist")
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
@@ -2209,6 +2214,52 @@ where
         }
 
         Ok(())
+    }
+}
+
+/// Provides a wrapper to express that a particular `ServerVar` is meant to be used as a feature
+/// flag.
+#[derive(Debug)]
+pub struct FeatureFlag {
+    flag: &'static ServerVar<bool>,
+    feature_desc: &'static str,
+}
+
+impl Var for FeatureFlag {
+    fn name(&self) -> &'static str {
+        self.flag.name()
+    }
+
+    fn value(&self) -> String {
+        self.flag.value()
+    }
+
+    fn description(&self) -> &'static str {
+        self.flag.description()
+    }
+
+    fn type_name(&self) -> &'static str {
+        bool::TYPE_NAME
+    }
+
+    fn visible(&self, user: &User, system_vars: &SystemVars) -> bool {
+        self.flag.visible(user, system_vars)
+    }
+
+    fn can_be_set(&self, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+        self.flag.can_be_set(system_vars)
+    }
+}
+
+impl FeatureFlag {
+    pub fn enabled(&self, system_vars: &SystemVars) -> Result<(), VarError> {
+        if *system_vars.expect_value(self.flag) {
+            Ok(())
+        } else {
+            Err(VarError::RequiresFeatureFlag {
+                feature: self.feature_desc,
+            })
+        }
     }
 }
 

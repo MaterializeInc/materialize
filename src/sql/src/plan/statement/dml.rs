@@ -339,7 +339,7 @@ pub fn plan_explain(
     let config = ExplainConfig::try_from(config_flags)?;
 
     if config.mfp_pushdown {
-        scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN_FLAG)?;
+        scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
     }
 
     let format = match format {
