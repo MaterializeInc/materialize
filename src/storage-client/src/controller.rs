@@ -743,12 +743,6 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
     stashed_response: Option<StorageResponse<T>>,
-    /// IDs of sources that were dropped whose statuses should be
-    /// updated during the next call to `StorageController::process`.
-    pending_source_drops: Vec<GlobalId>,
-    /// IDs of sinks that were dropped whose statuses should be
-    /// updated during the next call to `StorageController::process`.
-    pending_sink_drops: Vec<GlobalId>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
     pending_compaction_commands: Vec<(GlobalId, Antichain<T>, Option<StorageInstanceId>)>,
@@ -1009,8 +1003,6 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             persist_write_handles,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
             stashed_response: None,
-            pending_source_drops: vec![],
-            pending_sink_drops: vec![],
             pending_compaction_commands: vec![],
             collection_manager,
             introspection_ids: BTreeMap::new(),
@@ -1777,13 +1769,11 @@ where
                 continue;
             }
 
-            // We don't explicitly call `remove_read_capabilities`! Downgrading the
-            // frontier of the source to `[]` (the empty Antichain), will propagate
-            // to the storage dependencies.
+            // We don't explicitly call `remove_read_capabilities`! Downgrading the frontier of the
+            // sink to `[]` (the empty Antichain), will propagate to the storage dependencies.
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
             self.update_write_frontiers(&[(id, Antichain::new())]);
-            self.state.pending_sink_drops.push(id);
         }
     }
 
@@ -2145,22 +2135,29 @@ where
             }
         }
 
+        // IDs of sources that were dropped whose statuses should be updated.
+        let mut pending_source_drops = vec![];
+
+        // IDs of sinks that were dropped whose statuses should be updated.
+        let mut pending_sink_drops = vec![];
+
         // TODO(aljoscha): We could consolidate these before sending to
         // instances, but this seems fine for now.
         for (id, frontier, cluster_id) in self.state.pending_compaction_commands.drain(..) {
             // TODO(petrosagg): make this a strict check
             // TODO(aljoscha): What's up with this TODO?
-            let client = cluster_id.and_then(|cluster_id| self.state.clients.get_mut(&cluster_id));
-
-            // Only ingestion collections have actual work to do on drop.
-            //
             // Note that while collections are dropped, the `client` may already
             // be cleared out, before we do this post-processing!
-            if cluster_id.is_some()
-                && frontier.is_empty()
-                && self.state.collections.get(&id).is_some()
-            {
-                self.state.pending_source_drops.push(id);
+            let client = cluster_id.and_then(|cluster_id| self.state.clients.get_mut(&cluster_id));
+
+            if cluster_id.is_some() && frontier.is_empty() {
+                if self.state.collections.get(&id).is_some() {
+                    pending_source_drops.push(id);
+                } else if self.state.exports.get(&id).is_some() {
+                    pending_sink_drops.push(id);
+                } else {
+                    panic!("Reference to absent collection {id}");
+                }
             }
 
             if let Some(client) = client {
@@ -2172,14 +2169,14 @@ where
         }
 
         // Delete all source->shard mappings
-        self.append_shard_mappings(self.state.pending_source_drops.iter().cloned(), -1)
+        self.append_shard_mappings(pending_source_drops.iter().cloned(), -1)
             .await;
 
         // Record the drop status for all pending source and sink drops.
         let source_status_history_id =
             self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
-        for id in self.state.pending_source_drops.drain(..) {
+        for id in pending_source_drops.drain(..) {
             let status_row =
                 healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
             updates.push((status_row, 1));
@@ -2192,7 +2189,7 @@ where
         let sink_status_history_id =
             self.state.introspection_ids[&IntrospectionType::SinkStatusHistory];
         let mut updates = vec![];
-        for id in self.state.pending_sink_drops.drain(..) {
+        for id in pending_sink_drops.drain(..) {
             let status_row =
                 healthcheck::pack_status_row(id, "dropped", None, (self.state.now)(), None);
             updates.push((status_row, 1));
