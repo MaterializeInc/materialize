@@ -398,6 +398,20 @@ where
                     }
                 }
             }
+            StorageCommand::AlterSource(alter_source) => {
+                let create_source_command = self
+                    .sources
+                    .get_mut(&alter_source.id)
+                    .expect("can only alter sources known to exist");
+
+                create_source_command.description = alter_source.description.clone();
+
+                for id in alter_source.description.subsource_ids() {
+                    self.uppers
+                        .entry(id)
+                        .or_insert(Antichain::from_elem(T::minimum()));
+                }
+            }
             StorageCommand::CreateSinks(exports) => {
                 for export in exports {
                     self.sinks.insert(export.id, export.clone());

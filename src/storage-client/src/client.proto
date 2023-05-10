@@ -44,6 +44,15 @@ message ProtoCreateSources {
     repeated ProtoCreateSourceCommand sources = 1;
 }
 
+message ProtoAlterSourceCommand {
+    mz_repr.global_id.ProtoGlobalId id = 1;
+    mz_storage_client.types.sources.ProtoIngestionDescription description = 2;
+}
+
+message ProtoAlterSource {
+    ProtoAlterSourceCommand inner = 1;
+}
+
 message ProtoCreateSinkCommand {
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_storage_client.types.sinks.ProtoStorageSinkDesc description = 2;
@@ -75,6 +84,7 @@ message ProtoStorageCommand {
         google.protobuf.Empty initialization_complete = 3;
         ProtoCreateSinks create_sinks = 4;
         mz_storage_client.types.parameters.ProtoStorageParameters update_configuration = 5;
+        ProtoAlterSource alter_source = 7;
     }
 }
 

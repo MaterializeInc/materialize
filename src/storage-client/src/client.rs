@@ -107,6 +107,8 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     UpdateConfiguration(StorageParameters),
     /// Create the enumerated sources, each associated with its identifier.
     CreateSources(Vec<CreateSourceCommand<T>>),
+    /// Create the enumerated sources, each associated with its identifier.
+    AlterSource(AlterSourceCommand),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -168,6 +170,48 @@ impl RustType<ProtoCreateSourceCommand> for CreateSourceCommand<mz_repr::Timesta
     }
 }
 
+/// A command that stops the current ingestion, changes its description, and then resumes it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AlterSourceCommand {
+    /// The id of the storage collection being ingested.
+    pub id: GlobalId,
+    /// The description of what source type should be ingested and what post-processing steps must
+    /// be applied to the data before writing them down into the storage collection
+    pub description: IngestionDescription<CollectionMetadata>,
+}
+
+impl Arbitrary for AlterSourceCommand {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<GlobalId>(),
+            any::<IngestionDescription<CollectionMetadata>>(),
+        )
+            .prop_map(|(id, description)| Self { id, description })
+            .boxed()
+    }
+}
+
+impl RustType<ProtoAlterSourceCommand> for AlterSourceCommand {
+    fn into_proto(&self) -> ProtoAlterSourceCommand {
+        ProtoAlterSourceCommand {
+            id: Some(self.id.into_proto()),
+            description: Some(self.description.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoAlterSourceCommand) -> Result<Self, TryFromProtoError> {
+        Ok(AlterSourceCommand {
+            id: proto.id.into_rust_if_some("ProtoAlterSourceCommand::id")?,
+            description: proto
+                .description
+                .into_rust_if_some("ProtoAlterSourceCommand::description")?,
+        })
+    }
+}
+
 impl RustType<ProtoCreateSinkCommand> for CreateSinkCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoCreateSinkCommand {
         ProtoCreateSinkCommand {
@@ -224,6 +268,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 StorageCommand::CreateSources(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
+                StorageCommand::AlterSource(source) => AlterSource(ProtoAlterSource {
+                    inner: Some(source.into_proto()),
+                }),
                 StorageCommand::AllowCompaction(collections) => {
                     AllowCompaction(ProtoAllowCompaction {
                         collections: collections.into_proto(),
@@ -253,6 +300,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             Some(CreateSources(ProtoCreateSources { sources })) => {
                 Ok(StorageCommand::CreateSources(sources.into_rust()?))
             }
+            Some(AlterSource(ProtoAlterSource { inner })) => Ok(StorageCommand::AlterSource(
+                inner.into_rust_if_some("ProtoAlterSource::inner")?,
+            )),
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
@@ -539,6 +589,21 @@ where
                         let previous = self.uppers.insert(export_id, (frontier, part_frontiers));
                         assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export_id, command);
                     }
+                }
+            }
+            StorageCommand::AlterSource(alter_source) => {
+                for export_id in alter_source.description.subsource_ids() {
+                    if self.uppers.contains_key(&export_id) {
+                        continue;
+                    }
+
+                    let mut frontier = MutableAntichain::new();
+                    // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
+                    // merging the types that compute and storage use.
+                    #[allow(clippy::as_conversions)]
+                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+                    let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
+                    self.uppers.insert(export_id, (frontier, part_frontiers));
                 }
             }
             StorageCommand::CreateSinks(exports) => {

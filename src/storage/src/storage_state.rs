@@ -948,9 +948,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 StorageCommand::InitializationComplete
                 | StorageCommand::UpdateConfiguration(_)
                 | StorageCommand::CreateSources(_)
+                | StorageCommand::AlterSource(_)
                 | StorageCommand::CreateSinks(_) => (),
             }
         }
+
+        let mut final_ingestion_description = BTreeMap::new();
 
         for command in &mut commands {
             match command {
@@ -959,7 +962,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
                 StorageCommand::CreateSources(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
-                        if drop_commands.remove(&ingestion.id) {
+                        if drop_commands.remove(&ingestion.id) || self.storage_state.dropped_ids.contains(&ingestion.id) {
                             // Make sure that we report back that the ID was
                             // dropped.
                             self.storage_state.dropped_ids.insert(ingestion.id);
@@ -973,6 +976,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             );
 
                             stale_ingestions.remove(&ingestion.id);
+                            final_ingestion_description.insert(ingestion.id, existing);
                             // If we've been asked to create an ingestion that is
                             // already installed, the descriptions must match
                             // exactly.
@@ -989,6 +993,32 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             true
                         }
                     })
+                }
+                StorageCommand::AlterSource(alter_source) => {
+                    if drop_commands.remove(&alter_source.id)
+                        || self.storage_state.dropped_ids.contains(&alter_source.id)
+                    {
+                        // Make sure that we report back that the ID was
+                        // dropped.
+                        self.storage_state.dropped_ids.insert(alter_source.id);
+                    } else {
+                        trace!(
+                            worker_id = self.timely_worker.index(),
+                            has_token = self
+                                .storage_state
+                                .source_tokens
+                                .contains_key(&alter_source.id),
+                            "reconciliation, existing ingestion updated: {}",
+                            alter_source.id
+                        );
+                        let existing = self
+                            .storage_state
+                            .ingestions
+                            .get(&alter_source.id)
+                            .expect("AlterSource only valid if altering a created ingestion");
+
+                        final_ingestion_description.insert(alter_source.id, existing);
+                    }
                 }
                 StorageCommand::CreateSinks(exports) => {
                     exports.retain_mut(|export| {
@@ -1018,6 +1048,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 | StorageCommand::UpdateConfiguration(_)
                 | StorageCommand::AllowCompaction(_) => (),
             }
+        }
+
+        for (id, desc) in final_ingestion_description {
+            let curr = &self.storage_state.ingestions[&id];
+            assert_eq!(
+                curr, desc,
+                "final reconciled ingestion descriptions must match"
+            );
         }
 
         // Make sure all the "drop commands" matched up with a source or sink.
@@ -1119,6 +1157,32 @@ impl StorageState {
                     if worker_index == 0 {
                         async_worker.calculate_resume_upper(ingestion.id, ingestion.description);
                     }
+                }
+            }
+            StorageCommand::AlterSource(alter_source) => {
+                // Remember the ingestion description to facilitate possible
+                // reconciliation later.
+                self.ingestions
+                    .insert(alter_source.id, alter_source.description.clone());
+
+                // Initialize shared frontier reporting.
+                for id in alter_source.description.subsource_ids() {
+                    self.reported_frontiers
+                        .entry(id)
+                        .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
+                }
+
+                // With the new ingestion description installed, restart the ingestion on.
+                //
+                // Doing this separately on each worker could lead to differing resume_uppers which
+                // might lead to all kinds of mayhem.
+                if worker_index == 0 {
+                    internal_cmd_tx.broadcast(InternalStorageCommand::SuspendAndRestart {
+                        // Suspend and restart is expected to operate on the primary source and
+                        // not any of the subsources.
+                        id: alter_source.id,
+                        reason: format!("ALTER SOURCE on {:?}", alter_source.id),
+                    });
                 }
             }
             StorageCommand::CreateSinks(exports) => {
