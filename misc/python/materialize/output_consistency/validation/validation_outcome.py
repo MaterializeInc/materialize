@@ -14,6 +14,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 from materialize.output_consistency.query.query_result import QueryExecution
 from materialize.output_consistency.validation.problem_marker import (
     ValidationError,
+    ValidationErrorType,
     ValidationWarning,
 )
 
@@ -26,6 +27,7 @@ class ValidationOutcome:
 
     def add_error(
         self,
+        error_type: ValidationErrorType,
         message: str,
         description: Optional[str] = None,
         value1: Optional[str] = None,
@@ -37,6 +39,7 @@ class ValidationOutcome:
         location: Optional[str] = None,
     ) -> None:
         error = ValidationError(
+            error_type,
             message,
             description,
             value1,

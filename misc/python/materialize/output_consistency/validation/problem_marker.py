@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from enum import Enum
 from typing import Optional
 
 from materialize.output_consistency.execution.evaluation_strategy import (
@@ -13,14 +14,21 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 )
 
 
+class ValidationErrorType(Enum):
+    SUCCESS_MISMATCH = 1
+    ROW_COUNT_MISMATCH = 2
+    CONTENT_MISMATCH = 3
+    ERROR_MISMATCH = 4
+
+
 class ValidationProblemMarker:
     def __init__(
         self,
-        problem_type: str,
+        problem_severity: str,
         message: str,
         description: Optional[str] = None,
     ):
-        self.problem_type = problem_type
+        self.problem_severity = problem_severity
         self.message = message
         self.description = description
 
@@ -42,12 +50,13 @@ class ValidationWarning(ValidationProblemMarker):
         strategy_desc = f" at strategy '{self.strategy}'"
         query_desc = f"\n  Query: {self.sql}"
 
-        return f"{self.problem_type}: {self.message}{strategy_desc}{warning_desc}{query_desc}"
+        return f"{self.problem_severity}: {self.message}{strategy_desc}{warning_desc}{query_desc}"
 
 
 class ValidationError(ValidationProblemMarker):
     def __init__(
         self,
+        error_type: ValidationErrorType,
         message: str,
         description: Optional[str] = None,
         value1: Optional[str] = None,
@@ -59,6 +68,7 @@ class ValidationError(ValidationProblemMarker):
         location: Optional[str] = None,
     ):
         super().__init__("Error", message, description)
+        self.error_type = error_type
         self.value1 = value1
         self.value2 = value2
         self.strategy1 = strategy1
@@ -103,4 +113,4 @@ class ValidationError(ValidationProblemMarker):
         if self.sql2 is not None:
             sql_desc += f"\n  Query 2: {self.sql2}"
 
-        return f"{self.problem_type}: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}{sql_desc}"
+        return f"{self.problem_severity} ({self.error_type}): {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}{sql_desc}"

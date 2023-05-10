@@ -14,6 +14,7 @@ from materialize.output_consistency.query.query_result import (
     QueryOutcome,
     QueryResult,
 )
+from materialize.output_consistency.validation.problem_marker import ValidationErrorType
 from materialize.output_consistency.validation.validation_outcome import (
     ValidationOutcome,
 )
@@ -60,6 +61,7 @@ class ResultComparator:
     ) -> None:
         if outcome1.successful != outcome2.successful:
             validation_outcome.add_error(
+                ValidationErrorType.SUCCESS_MISMATCH,
                 "Outcome differs",
                 value1=outcome1.__class__.__name__,
                 value2=outcome2.__class__.__name__,
@@ -106,6 +108,7 @@ class ResultComparator:
 
         if num_rows1 != num_rows2:
             validation_outcome.add_error(
+                ValidationErrorType.ROW_COUNT_MISMATCH,
                 "Row count differs",
                 value1=str(num_rows1),
                 value2=str(num_rows2),
@@ -123,6 +126,7 @@ class ResultComparator:
     ) -> None:
         if failure1.error_message != failure2.error_message:
             validation_outcome.add_error(
+                ValidationErrorType.ERROR_MISMATCH,
                 "Error differs",
                 value1=failure1.error_message,
                 value2=failure2.error_message,
@@ -192,6 +196,7 @@ class ResultComparator:
 
             if result_value1 != result_value2:
                 validation_outcome.add_error(
+                    ValidationErrorType.CONTENT_MISMATCH,
                     "Value differs",
                     value1=result_value1,
                     value2=result_value2,

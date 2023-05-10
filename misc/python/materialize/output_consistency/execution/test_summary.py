@@ -18,7 +18,9 @@ class ConsistencyTestSummary:
         self.count_successful_query_templates = count_successful_query_templates
 
     def all_passed(self) -> bool:
-        return self.count_successful_query_templates == self.count_executed_query_templates
+        return (
+            self.count_successful_query_templates == self.count_executed_query_templates
+        )
 
     def __str__(self) -> str:
         return f"{self.count_successful_query_templates}/{self.count_executed_query_templates} passed."
