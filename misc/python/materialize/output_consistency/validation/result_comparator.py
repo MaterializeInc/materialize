@@ -72,38 +72,55 @@ class ResultComparator:
         both_successful = outcome1.successful
         both_failed = not outcome1.successful
 
-        # both failed, error messages must (somewhat) match
-        if both_failed:
-            error1 = cast(QueryFailure, outcome1).error_message
-            error2 = cast(QueryFailure, outcome2).error_message
-
-            if error1 != error2:
-                comparison_outcome.add_error(
-                    "Error differs",
-                    value1=error1,
-                    value2=error2,
-                    strategy1=outcome1.strategy,
-                    strategy2=outcome2.strategy,
-                )
-                return
-
-        # both succeeded, only check that number of entries match at this point
         if both_successful:
-            num_rows1 = len(cast(QueryResult, outcome1).result_rows)
-            num_rows2 = len(cast(QueryResult, outcome2).result_rows)
+            self.validate_row_count(
+                cast(QueryResult, outcome1),
+                cast(QueryResult, outcome2),
+                comparison_outcome,
+            )
 
-            if num_rows1 == 0 and num_rows2 == 0:
-                # no rows in both results, this is ok
-                return
+        if both_failed:
+            self.validate_error_messages(
+                cast(QueryFailure, outcome1),
+                cast(QueryFailure, outcome2),
+                comparison_outcome,
+            )
 
-            if num_rows1 != num_rows2:
-                comparison_outcome.add_error(
-                    "Row count differs",
-                    value1=str(num_rows1),
-                    value2=str(num_rows2),
-                    strategy1=outcome1.strategy,
-                    strategy2=outcome2.strategy,
-                )
+    def validate_row_count(
+        self,
+        result1: QueryResult,
+        result2: QueryResult,
+        comparison_outcome: ValidationOutcome,
+    ) -> None:
+        # It is ok if both results don't have any rows.
+
+        num_rows1 = len(result1.result_rows)
+        num_rows2 = len(result2.result_rows)
+
+        if num_rows1 != num_rows2:
+            comparison_outcome.add_error(
+                "Row count differs",
+                value1=str(num_rows1),
+                value2=str(num_rows2),
+                strategy1=result1.strategy,
+                strategy2=result2.strategy,
+            )
+
+    def validate_error_messages(
+        self,
+        failure1: QueryFailure,
+        failure2: QueryFailure,
+        comparison_outcome: ValidationOutcome,
+    ) -> None:
+        if failure1.error_message != failure2.error_message:
+            comparison_outcome.add_error(
+                "Error differs",
+                value1=failure1.error_message,
+                value2=failure2.error_message,
+                strategy1=failure1.strategy,
+                strategy2=failure2.strategy,
+            )
+            return
 
     def validate_outcomes_data(
         self, outcomes: list[QueryOutcome], comparison_outcome: ValidationOutcome
