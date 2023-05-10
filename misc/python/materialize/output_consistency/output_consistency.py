@@ -17,7 +17,10 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     ConstantFoldingEvaluation,
     DataFlowRenderingEvaluation,
 )
-from materialize.output_consistency.execution.query_executor import QueryExecutor
+from materialize.output_consistency.execution.query_execution_manager import (
+    QueryExecutionManager,
+)
+from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.expressions.expression_generator import (
     ExpressionGenerator,
@@ -48,10 +51,13 @@ def run_output_consistency_tests(c: Composition) -> ConsistencyTestSummary:
     print(f"Created {len(queries)} queries.")
 
     comparator = ResultComparator()
+    sql_executor = create_sql_executor(config, c)
 
-    executor = QueryExecutor(evaluation_strategies, config, comparator)
-    executor.setup_database_objects(c, DATA_TYPES, evaluation_strategies)
-    test_summary = executor.execute_queries(c, queries)
+    execution_manager = QueryExecutionManager(
+        evaluation_strategies, config, sql_executor, comparator
+    )
+    execution_manager.setup_database_objects(DATA_TYPES, evaluation_strategies)
+    test_summary = execution_manager.execute_queries(queries)
 
     print(f"Test summary: {test_summary}")
 

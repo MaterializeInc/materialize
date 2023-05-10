@@ -9,12 +9,19 @@
 
 
 class ConsistencyTestConfiguration:
-    def __init__(self, queries_per_tx: int, max_cols_per_query: int, random_seed: int):
+    def __init__(
+        self,
+        queries_per_tx: int,
+        max_cols_per_query: int,
+        random_seed: int,
+        dry_run: bool,
+    ):
         self.queries_per_tx = queries_per_tx
         self.max_cols_per_query = max_cols_per_query
         self.random_seed = random_seed
+        self.dry_run = dry_run
 
 
 DEFAULT_CONFIG = ConsistencyTestConfiguration(
-    queries_per_tx=20, random_seed=0, max_cols_per_query=8
+    queries_per_tx=20, random_seed=0, max_cols_per_query=8, dry_run=False
 )

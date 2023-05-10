@@ -7,17 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from pg8000 import Cursor
-from pg8000.dbapi import ProgrammingError
-from pg8000.exceptions import DatabaseError
-
-from materialize.mzcompose import Composition
 from materialize.output_consistency.configuration.configuration import (
     ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
+)
+from materialize.output_consistency.execution.sql_executor import (
+    SqlExecutionError,
+    SqlExecutor,
 )
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.query.query_result import (
@@ -32,20 +31,21 @@ from materialize.output_consistency.validation.validation_outcome import (
 )
 
 
-class QueryExecutor:
+class QueryExecutionManager:
     def __init__(
         self,
         evaluation_strategies: list[EvaluationStrategy],
         config: ConsistencyTestConfiguration,
+        executor: SqlExecutor,
         comparator: ResultComparator,
     ):
         self.evaluation_strategies = evaluation_strategies
         self.config = config
+        self.executor = executor
         self.comparator = comparator
 
     def setup_database_objects(
         self,
-        c: Composition,
         data_types: list[DataType],
         evaluation_strategies: list[EvaluationStrategy],
     ) -> None:
@@ -54,58 +54,57 @@ class QueryExecutor:
             ddl_statements.extend(strategy.generate_source(data_types))
 
         for sql_statement in ddl_statements:
-            c.sql(sql_statement)
+            self.executor.ddl(sql_statement)
 
     def execute_queries(
         self,
-        c: Composition,
         queries: list[QueryTemplate],
     ) -> ConsistencyTestSummary:
         if len(queries) == 0:
             print("No queries found!")
-            return ConsistencyTestSummary(0, 0)
+            return ConsistencyTestSummary(0, 0, self.config.dry_run)
 
         print(f"Processing {len(queries)} queries.")
-        cursor: Cursor = c.sql_cursor()
+        self.executor.acquire_cursor()
 
         count_passed = 0
 
         for index, query in enumerate(queries):
             if index % self.config.queries_per_tx == 0:
-                self.begin_tx(cursor, commit_previous_tx=index > 0)
+                self.begin_tx(commit_previous_tx=index > 0)
 
             test_passed = self.fire_and_compare_queries(
-                cursor, query, index, self.evaluation_strategies
+                query, index, self.evaluation_strategies
             )
 
             if test_passed:
                 count_passed += 1
 
-        self.commit_tx(cursor)
+        self.commit_tx()
 
         return ConsistencyTestSummary(
             count_executed_query_templates=len(queries),
             count_successful_query_templates=count_passed,
+            dry_run=self.config.dry_run,
         )
 
-    def begin_tx(self, cursor: Cursor, commit_previous_tx: bool) -> None:
+    def begin_tx(self, commit_previous_tx: bool) -> None:
         if commit_previous_tx:
-            self.commit_tx(cursor)
+            self.commit_tx()
 
-        cursor.execute("BEGIN ISOLATION LEVEL SERIALIZABLE;")
+        self.executor.begin_tx("SERIALIZABLE")
 
-    def commit_tx(self, cursor: Cursor) -> None:
-        cursor.execute("COMMIT;")
+    def commit_tx(self) -> None:
+        self.executor.commit()
 
-    def rollback_tx(self, cursor: Cursor, start_new_tx: bool) -> None:
-        cursor.execute("ROLLBACK;")
+    def rollback_tx(self, start_new_tx: bool) -> None:
+        self.executor.rollback()
 
         if start_new_tx:
-            self.begin_tx(cursor, commit_previous_tx=False)
+            self.begin_tx(commit_previous_tx=False)
 
     def fire_and_compare_queries(
         self,
-        cursor: Cursor,
         query: QueryTemplate,
         query_index: int,
         evaluation_strategies: list[EvaluationStrategy],
@@ -119,15 +118,18 @@ class QueryExecutor:
             sql_query_string = query.to_sql(strategy)
 
             try:
-                cursor.execute(sql_query_string)
-                result = QueryResult(strategy, sql_query_string, cursor.fetchall())
+                data = self.executor.query(sql_query_string)
+                result = QueryResult(strategy, sql_query_string, data)
                 query_execution.outcomes.append(result)
-            except (ProgrammingError, DatabaseError) as err:
+            except SqlExecutionError as err:
                 failure = QueryFailure(
                     strategy, sql_query_string, str(err), query.column_count()
                 )
                 query_execution.outcomes.append(failure)
-                self.rollback_tx(cursor, start_new_tx=True)
+                self.rollback_tx(start_new_tx=True)
+
+        if self.config.dry_run:
+            return True
 
         validation_outcome = self.comparator.compare_results(query_execution)
         self.print_test_result(query_no, validation_outcome)
@@ -137,11 +139,11 @@ class QueryExecutor:
     def print_test_result(
         self, query_no: int, validation_outcome: ValidationOutcome
     ) -> None:
+        result_desc = "PASSED" if validation_outcome.success() else "FAILED"
 
-        if validation_outcome.success():
-            print(f"Test with query {query_no} PASSED.")
-        else:
-            print(f"Test with query {query_no} FAILED!")
+        print(f"Test with query #{query_no} {result_desc}.")
+
+        if validation_outcome.has_errors():
             print(f"Errors:\n{validation_outcome.error_output()}")
 
         if validation_outcome.has_warnings():
