@@ -1623,61 +1623,15 @@ where
         for (id, description) in to_create {
             match description.data_source {
                 DataSource::Ingestion(ingestion) => {
-                    // Each ingestion is augmented with the collection metadata.
-                    let mut source_imports = BTreeMap::new();
-                    for (id, _) in ingestion.source_imports {
-                        // This _requires_ that the sub-source collection (with
-                        // `DataSource::Other`) was registered BEFORE we process this, the
-                        // top-level collection.
-                        let metadata = self.collection(id)?.collection_metadata.clone();
-                        source_imports.insert(id, metadata);
-                    }
-
-                    if let SourceEnvelope::Upsert(upsert) = &ingestion.desc.envelope {
-                        if upsert.disk && !self.state.scratch_directory_enabled {
-                            return Err(StorageError::InvalidUsage(
-                                "Attempting to render `ON DISK` source without a \
-                                configured scratch directory. This is a bug."
-                                    .into(),
-                            ));
-                        }
-                    }
-
-                    // The ingestion metadata is simply the collection metadata of the collection with
-                    // the associated ingestion
-                    let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
-
-                    let mut source_exports = BTreeMap::new();
-                    for (id, export) in ingestion.source_exports {
-                        // Note that these metadata's have been previously enriched with the
-                        // required `RelationDesc` for each sub-source above!
-                        let storage_metadata = self.collection(id)?.collection_metadata.clone();
-                        source_exports.insert(
-                            id,
-                            SourceExport {
-                                storage_metadata,
-                                output_index: export.output_index,
-                            },
-                        );
-                    }
-
-                    let description = IngestionDescription {
-                        source_imports,
-                        source_exports,
-                        ingestion_metadata,
-                        // The rest of the fields are identical
-                        desc: ingestion.desc,
-                        instance_id: ingestion.instance_id,
-                        remap_collection_id: ingestion.remap_collection_id,
-                    };
+                    let description = self.enrich_ingestion(id, ingestion)?;
 
                     // Fetch the client for this ingestion's instance.
                     let client = self
                         .state
                         .clients
-                        .get_mut(&ingestion.instance_id)
+                        .get_mut(&description.instance_id)
                         .ok_or_else(|| StorageError::IngestionInstanceMissing {
-                            storage_instance_id: ingestion.instance_id,
+                            storage_instance_id: description.instance_id,
                             ingestion_id: id,
                         })?;
                     let augmented_ingestion = RunIngestionCommand {
@@ -3171,6 +3125,61 @@ where
             self.clear_from_shard_finalization_register(finalized_shards)
                 .await;
         }
+    }
+
+    /// Converts an `IngestionDescription<()>` into `IngestionDescription<CollectionMetadata>`.
+    fn enrich_ingestion(
+        &mut self,
+        id: GlobalId,
+        ingestion: IngestionDescription,
+    ) -> Result<IngestionDescription<CollectionMetadata>, StorageError> {
+        // Each ingestion is augmented with the collection metadata.
+        let mut source_imports = BTreeMap::new();
+        for (id, _) in ingestion.source_imports {
+            // This _requires_ that the sub-source collection (with
+            // `DataSource::Other`) was registered BEFORE we process this, the
+            // top-level collection.
+            let metadata = self.collection(id)?.collection_metadata.clone();
+            source_imports.insert(id, metadata);
+        }
+
+        if let SourceEnvelope::Upsert(upsert) = &ingestion.desc.envelope {
+            if upsert.disk && !self.state.scratch_directory_enabled {
+                return Err(StorageError::InvalidUsage(
+                    "Attempting to render `ON DISK` source without a \
+                    configured scratch directory. This is a bug."
+                        .into(),
+                ));
+            }
+        }
+
+        // The ingestion metadata is simply the collection metadata of the collection with
+        // the associated ingestion
+        let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
+
+        let mut source_exports = BTreeMap::new();
+        for (id, export) in ingestion.source_exports {
+            // Note that these metadata's have been previously enriched with the
+            // required `RelationDesc` for each sub-source above!
+            let storage_metadata = self.collection(id)?.collection_metadata.clone();
+            source_exports.insert(
+                id,
+                SourceExport {
+                    storage_metadata,
+                    output_index: export.output_index,
+                },
+            );
+        }
+
+        Ok(IngestionDescription {
+            source_imports,
+            source_exports,
+            ingestion_metadata,
+            // The rest of the fields are identical
+            desc: ingestion.desc,
+            instance_id: ingestion.instance_id,
+            remap_collection_id: ingestion.remap_collection_id,
+        })
     }
 }
 
