@@ -70,14 +70,17 @@ Some specific times when you should write a design document:
 
 Definitely write a design document:
 
-1. If it's going to involve multiple people and/or teams coordinating changes.
+1. If the change is large/cross-cutting, e.g., will be spread over multiple PRs
+   and/or multiple teams.
 2. If there are multiple alternative implementations and no clear best option.
 3. If it changes a customer-facing/public API, or a major private API (for
    example, the API for implementing new sinks).
 
 Consider writing a design document:
 
-1. If the change is large/cross-cutting, e.g., will be spread over multiple PRs.
+1. If it's going to involve multiple people and/or teams coordinating changes.
+   You have to use your gut feeling/common sense here. A change that involves
+   two people from the same team might not need a document.
 2. If the change will take more than a week to implement or will proceed in
    phases that need clearly delimited scope.
 
