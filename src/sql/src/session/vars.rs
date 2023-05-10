@@ -683,27 +683,6 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     system_var_gate: None,
 };
 
-/// Boolean flag indicating whether to enable syncing from
-/// LaunchDarkly. Can be turned off as an emergency measure to still
-/// be able to alter parameters while LD is broken.
-pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_launchdarkly"),
-    value: &true,
-    description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
-    internal: true,
-    system_var_gate: None,
-};
-
-/// Feature flag indicating whether monotonic evaluation of one-shot SELECT queries is enabled.
-static ENABLE_MONOTONIC_ONESHOT_SELECTS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_monotonic_oneshot_selects"),
-    value: &false,
-    description: "Feature flag indicating whether monotonic evaluation of one-shot SELECT queries \
-                  is enabled (Materialize).",
-    internal: true,
-    system_var_gate: None,
-};
-
 /// Feature flag indicating whether real time recency is enabled.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
@@ -778,14 +757,6 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     system_var_gate: None,
 };
 
-pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_envelope_upsert_in_subscribe"),
-    value: &false,
-    description: "Feature flag indicating whether `ENVELOPE UPSERT` can be used in `SUBSCRIBE` queries (Materialize).",
-    internal: false,
-    system_var_gate: None,
-};
-
 pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_connections"),
     value: &1000,
@@ -805,6 +776,10 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
 
 // Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
 // availability of features.
+//
+// Note that not all ServerVar<bool> are feature flags. Feature flags are for variables that:
+// - Belong to `SystemVars`, _not_ `SessionVars`
+// - Default to false and must be explicitly enabled
 macro_rules! feature_flags {
     ($(($name:expr, $feature_desc:literal)),+) => {
         paste::paste!{
@@ -812,7 +787,7 @@ macro_rules! feature_flags {
                 pub static [<$name:upper>]: ServerVar<bool> = ServerVar {
                     name: UncasedStr::new(stringify!($name)),
                     value: &false,
-                    description: concat!("Whether ", $feature_desc, " is enabled (Materialize)."),
+                    description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
                     internal: true,
                     system_var_gate: None,
                 };
@@ -820,7 +795,7 @@ macro_rules! feature_flags {
 
             impl SystemVars {
                 fn with_feature_flags(self) -> Self
-            {
+                {
                     self
                     $(
                         .with_var(&[<$name:upper>])
@@ -838,6 +813,11 @@ macro_rules! feature_flags {
 }
 
 feature_flags!(
+    // Gates for other feature flags
+    (
+        allow_real_time_recency,
+        "setting the real_time_recency flag"
+    ),
     // Actual feature flags
     (
         enable_unstable_dependencies,
@@ -923,10 +903,17 @@ feature_flags!(
         enable_multi_worker_storage_persist_sink,
         "multi-worker storage persist sink"
     ),
-    // Gates for other feature flags
     (
-        allow_real_time_recency,
-        "setting the real_time_recency flag"
+        enable_launchdarkly,
+        "flag synchronization from LaunchDarkly"
+    ),
+    (
+        enable_envelope_upsert_in_subscribe,
+        "`ENVELOPE UPSERT` can be used in `SUBSCRIBE`"
+    ),
+    (
+        enable_monotonic_oneshot_selects,
+        "monotonic evaluation of one-shot SELECT queries"
     )
 );
 
@@ -1680,7 +1667,6 @@ impl Default for SystemVars {
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&METRICS_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
-            .with_var(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
@@ -1688,9 +1674,6 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_INTERVAL)
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
-            .with_var(&ENABLE_LAUNCHDARKLY)
-            .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
-            .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
     }
@@ -2069,11 +2052,6 @@ impl SystemVars {
             .expect("valid parameter value")
     }
 
-    /// Returns the `enable_monotonic_oneshot_selects` configuration parameter.
-    pub fn enable_monotonic_oneshot_selects(&self) -> bool {
-        *self.expect_value(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
-    }
-
     /// Sets the `enable_format_json` configuration parameter.
     pub fn set_enable_format_json(&mut self, value: bool) -> bool {
         self.vars
@@ -2091,11 +2069,6 @@ impl SystemVars {
     /// Returns the `enable_rbac_checks` configuration parameter.
     pub fn enable_rbac_checks(&self) -> bool {
         *self.expect_value(&ENABLE_RBAC_CHECKS)
-    }
-
-    /// Returns the `enable_envelope_upsert_in_subscribe` configuration parameter.
-    pub fn enable_envelope_upsert_in_subscribe(&self) -> bool {
-        *self.expect_value(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
     }
 
     /// Returns the `max_connections` configuration parameter.
