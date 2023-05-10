@@ -65,7 +65,10 @@ class ValidationOutcome:
     def has_errors(self) -> bool:
         return len(self.errors) > 0
 
-    def error_details(self) -> str:
+    def has_warnings(self) -> bool:
+        return len(self.warnings) > 0
+
+    def error_output(self) -> str:
         return "\n=====\n".join([str(error) for error in self.errors])
 
     def warning_output(self) -> str:

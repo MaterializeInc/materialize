@@ -23,6 +23,9 @@ from materialize.output_consistency.query.query_result import (
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.validation.result_comparator import ResultComparator
+from materialize.output_consistency.validation.validation_outcome import (
+    ValidationOutcome,
+)
 
 QUERIES_PER_TX = 20
 
@@ -95,6 +98,9 @@ class QueryExecutor:
     ) -> None:
         query_execution = QueryExecution(query, query_index)
 
+        query_no = query_execution.index + 1
+        print(f"Test query {query_no}: {query_execution.generic_sql}")
+
         for strategy in evaluation_strategies:
             sql_query_string = query.to_sql(strategy)
 
@@ -109,11 +115,18 @@ class QueryExecutor:
                 query_execution.outcomes.append(failure)
                 self.rollback_tx(cursor, start_new_tx=True)
 
-        comparison_outcome = self.comparator.compare_results(query_execution)
+        validation_outcome = self.comparator.compare_results(query_execution)
+        self.print_test_result(query_no, validation_outcome)
 
-        if comparison_outcome.success():
-            print(f"Test with query {query_execution.index} PASSED")
+    def print_test_result(
+        self, query_no: int, validation_outcome: ValidationOutcome
+    ) -> None:
+
+        if validation_outcome.success():
+            print(f"Test with query {query_no} PASSED.")
         else:
-            print(
-                f"Test with query {query_execution.index} FAILED with {len(comparison_outcome.errors)} errors:\n{comparison_outcome.error_details()}"
-            )
+            print(f"Test with query {query_no} FAILED!")
+            print(f"Errors:\n{validation_outcome.error_output()}")
+
+        if validation_outcome.has_warnings():
+            print(f"Warnings:\n{validation_outcome.warning_output()}")
