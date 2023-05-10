@@ -46,7 +46,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.workflow(test_name)
 
 
-def workflow_test_output_consistency(c: Composition) -> None:
+def workflow_test_output_consistency(c: Composition) -> bool:
     """
     Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).
     """
@@ -58,4 +58,5 @@ def workflow_test_output_consistency(c: Composition) -> None:
         c.up("testdrive", persistent=True)
         c.up("materialized")
 
-    run_output_consistency_tests(c)
+    test_summary = run_output_consistency_tests(c)
+    return test_summary.all_passed()

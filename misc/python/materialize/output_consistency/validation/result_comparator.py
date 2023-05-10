@@ -133,9 +133,9 @@ class ResultComparator:
             )
 
     def warn_on_failure_with_multiple_columns(
-            self,
-            failure: QueryFailure,
-            comparison_outcome: ValidationOutcome,
+        self,
+        failure: QueryFailure,
+        comparison_outcome: ValidationOutcome,
     ) -> None:
         if failure.query_column_count > 1:
             comparison_outcome.add_warning(

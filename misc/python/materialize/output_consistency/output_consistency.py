@@ -14,6 +14,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     DataFlowRenderingEvaluation,
 )
 from materialize.output_consistency.execution.query_executor import QueryExecutor
+from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.expressions.expression_generator import (
     ExpressionGenerator,
 )
@@ -22,7 +23,7 @@ from materialize.output_consistency.selection.randomized_picker import Randomize
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 
-def run_output_consistency_tests(c: Composition) -> None:
+def run_output_consistency_tests(c: Composition) -> ConsistencyTestSummary:
     evaluation_strategies = [
         DataFlowRenderingEvaluation(),
         ConstantFoldingEvaluation(),
@@ -44,4 +45,8 @@ def run_output_consistency_tests(c: Composition) -> None:
 
     executor = QueryExecutor(evaluation_strategies, comparator)
     executor.setup_database_objects(c, DATA_TYPES, evaluation_strategies)
-    executor.execute_queries(c, queries)
+    test_summary = executor.execute_queries(c, queries)
+
+    print(f"Test summary: {test_summary}")
+
+    return test_summary

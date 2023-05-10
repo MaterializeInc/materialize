@@ -16,6 +16,7 @@ from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
+from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
     QueryFailure,
@@ -56,23 +57,33 @@ class QueryExecutor:
         self,
         c: Composition,
         queries: list[QueryTemplate],
-    ) -> None:
+    ) -> ConsistencyTestSummary:
         if len(queries) == 0:
             print("No queries found!")
-            return
+            return ConsistencyTestSummary(0, 0)
 
         print(f"Processing {len(queries)} queries.")
         cursor: Cursor = c.sql_cursor()
+
+        count_passed = 0
 
         for index, query in enumerate(queries):
             if index % QUERIES_PER_TX == 0:
                 self.begin_tx(cursor, commit_previous_tx=index > 0)
 
-            self.fire_and_compare_queries(
+            test_passed = self.fire_and_compare_queries(
                 cursor, query, index, self.evaluation_strategies
             )
 
+            if test_passed:
+                count_passed += 1
+
         self.commit_tx(cursor)
+
+        return ConsistencyTestSummary(
+            count_executed_query_templates=len(queries),
+            count_successful_query_templates=count_passed,
+        )
 
     def begin_tx(self, cursor: Cursor, commit_previous_tx: bool) -> None:
         if commit_previous_tx:
@@ -95,7 +106,7 @@ class QueryExecutor:
         query: QueryTemplate,
         query_index: int,
         evaluation_strategies: list[EvaluationStrategy],
-    ) -> None:
+    ) -> bool:
         query_execution = QueryExecution(query, query_index)
 
         query_no = query_execution.index + 1
@@ -117,6 +128,8 @@ class QueryExecutor:
 
         validation_outcome = self.comparator.compare_results(query_execution)
         self.print_test_result(query_no, validation_outcome)
+
+        return validation_outcome.success()
 
     def print_test_result(
         self, query_no: int, validation_outcome: ValidationOutcome
