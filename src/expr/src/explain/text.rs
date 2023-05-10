@@ -303,17 +303,7 @@ impl MirRelationExpr {
                 let head = body.as_ref();
 
                 if ctx.config.linear_chains {
-                    writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
-                    ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter() {
-                            writeln!(f, "{}cte {} =", ctx.indent, *id)?;
-                            ctx.indented(|ctx| value.fmt_text(f, ctx))?;
-                        }
-                        Ok(())
-                    })?;
-                    write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_attributes(f, ctx)?;
-                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
+                    unreachable!(); // We exclude this case in `as_explain_single_plan`.
                 } else {
                     write!(f, "{}Return", ctx.indent)?;
                     self.fmt_attributes(f, ctx)?;
