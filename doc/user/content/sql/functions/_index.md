@@ -72,7 +72,7 @@ Operator | Computes
 `/` | Division
 `%` | Modulo
 `&` | Bitwise AND
-`|` | Bitwise OR
+<code>&vert;</code> | Bitwise OR
 `#` | Bitwise XOR
 `~` | Bitwise NOT
 `<<`| Bitwise left shift
