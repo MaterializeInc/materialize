@@ -516,17 +516,25 @@ impl PgOffsetCommitter {
 #[allow(clippy::or_fun_call)]
 async fn postgres_replication_loop(mut task_info: PostgresTaskInfo) {
     loop {
-        // Signal that the primary source is running.
-        let _ = task_info
-            .sender
-            .send((
-                0,
-                InternalMessage::Status(HealthStatusUpdate {
-                    update: HealthStatus::Running,
-                    should_halt: false,
-                }),
-            ))
-            .await;
+        // Signal that the source + its subsources are running. Note that this does not directly
+        // correlate with the ability to query a subsource; if a subsource errors due to a schema
+        // change, the schema gets "fixed" to make it compatible, and the source restarts, we will
+        // begin ingesting its values again (it will be "running"), but you will not be able to
+        // query the subsource.
+        for output_index in
+            std::iter::once(0).chain(task_info.source_tables.values().map(|t| t.output_index))
+        {
+            let _ = task_info
+                .sender
+                .send((
+                    output_index,
+                    InternalMessage::Status(HealthStatusUpdate {
+                        update: HealthStatus::Running,
+                        should_halt: false,
+                    }),
+                ))
+                .await;
+        }
 
         match postgres_replication_loop_inner(&mut task_info).await {
             Ok(()) => {}
