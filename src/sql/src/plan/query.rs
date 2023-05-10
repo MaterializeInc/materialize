@@ -1200,7 +1200,7 @@ pub fn plan_ctes(
         }
         CteBlock::MutuallyRecursive(MutRecBlock { options: _, ctes }) => {
             qcx.scx
-                .require_feature_flag(&crate::session::vars::ALLOW_WITH_MUTUALLY_RECURSIVE)?;
+                .require_feature_flag(&crate::session::vars::ENABLE_WITH_MUTUALLY_RECURSIVE)?;
 
             // Insert column types into `qcx.ctes` first for recursive bindings.
             for cte in ctes.iter() {

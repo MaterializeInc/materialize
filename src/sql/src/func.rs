@@ -1803,11 +1803,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "date_bin" => Scalar {
             params!(Interval, Timestamp) => Operation::binary(|ecx, stride, source| {
-                ecx.require_feature_flag(&vars::ALLOW_BINARY_DATE_BIN)?;
+                ecx.require_feature_flag(&vars::ENABLE_BINARY_DATE_BIN)?;
                 Ok(stride.call_binary(source, BinaryFunc::DateBinTimestamp))
             }) => Timestamp, oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TS_OID;
             params!(Interval, TimestampTz) => Operation::binary(|ecx, stride, source| {
-                ecx.require_feature_flag(&vars::ALLOW_BINARY_DATE_BIN)?;
+                ecx.require_feature_flag(&vars::ENABLE_BINARY_DATE_BIN)?;
                 Ok(stride.call_binary(source, BinaryFunc::DateBinTimestampTz))
             }) => TimestampTz, oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TSTZ_OID;
             params!(Interval, Timestamp, Timestamp) => VariadicFunc::DateBinTimestamp => Timestamp, 6177;
@@ -2812,28 +2812,28 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         // equally valid windows we could generate.
         "date_bin_hopping" => Table {
             // (hop, width, timestamp)
-            params!(Interval, Interval, Timestamp) => experimental_sql_impl_table_func(&vars::ALLOW_DATE_BIN_HOPPING, "
+            params!(Interval, Interval, Timestamp) => experimental_sql_impl_table_func(&vars::ENABLE_DATE_BIN_HOPPING, "
                     SELECT *
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, '1970-01-01') - $2, $3, $1
                     ) AS dbh(date_bin_hopping)
                 ") => ReturnType::set_of(Timestamp.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TS_OID;
             // (hop, width, timestamp)
-            params!(Interval, Interval, TimestampTz) => experimental_sql_impl_table_func(&vars::ALLOW_DATE_BIN_HOPPING, "
+            params!(Interval, Interval, TimestampTz) => experimental_sql_impl_table_func(&vars::ENABLE_DATE_BIN_HOPPING, "
                     SELECT *
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, '1970-01-01') - $2, $3, $1
                     ) AS dbh(date_bin_hopping)
                 ") => ReturnType::set_of(TimestampTz.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TSTZ_OID;
             // (hop, width, timestamp, origin)
-            params!(Interval, Interval, Timestamp, Timestamp) => experimental_sql_impl_table_func(&vars::ALLOW_DATE_BIN_HOPPING, "
+            params!(Interval, Interval, Timestamp, Timestamp) => experimental_sql_impl_table_func(&vars::ENABLE_DATE_BIN_HOPPING, "
                     SELECT *
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, $4) - $2, $3, $1
                     ) AS dbh(date_bin_hopping)
                 ") => ReturnType::set_of(Timestamp.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_TS_OID;
             // (hop, width, timestamp, origin)
-            params!(Interval, Interval, TimestampTz, TimestampTz) => experimental_sql_impl_table_func(&vars::ALLOW_DATE_BIN_HOPPING, "
+            params!(Interval, Interval, TimestampTz, TimestampTz) => experimental_sql_impl_table_func(&vars::ENABLE_DATE_BIN_HOPPING, "
                     SELECT *
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, $4) - $2, $3, $1
@@ -2917,7 +2917,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "list_n_layers" => Scalar {
             vec![ListAny] => Operation::unary(|ecx, e| {
-                ecx.require_feature_flag(&crate::session::vars::ALLOW_LIST_N_LAYERS)?;
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_N_LAYERS)?;
                 let d = ecx.scalar_type(&e).unwrap_list_n_layers();
                 match i32::try_from(d) {
                     Ok(d) => Ok(HirScalarExpr::literal(Datum::Int32(d), ScalarType::Int32)),
@@ -2931,7 +2931,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "list_length_max" => Scalar {
             vec![ListAny, Plain(Int64)] => Operation::binary(|ecx, lhs, rhs| {
-                ecx.require_feature_flag(&crate::session::vars::ALLOW_LIST_LENGTH_MAX)?;
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_LENGTH_MAX)?;
                 let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
             }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
@@ -2941,7 +2941,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "list_remove" => Scalar {
             vec![ListAnyCompatible, ListElementAnyCompatible] => Operation::binary(|ecx, lhs, rhs| {
-                ecx.require_feature_flag(&crate::session::vars::ALLOW_LIST_REMOVE)?;
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_REMOVE)?;
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListRemove))
             }) => ListAnyCompatible, oid::FUNC_LIST_REMOVE_OID;
         },
@@ -2989,7 +2989,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "repeat_row" => Table {
             params!(Int64) => Operation::unary(move |ecx, n| {
-                ecx.require_feature_flag(&crate::session::vars::ALLOW_REPEAT_ROW)?;
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_REPEAT_ROW)?;
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
                         func: TableFunc::Repeat,

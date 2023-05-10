@@ -485,7 +485,7 @@ impl CatalogState {
     }
 
     fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), AdapterError> {
-        if self.system_config().allow_unstable_dependencies() {
+        if self.system_config().enable_unstable_dependencies() {
             return Ok(());
         }
 

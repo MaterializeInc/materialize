@@ -296,12 +296,12 @@ pub fn plan_create_table(
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
                 // them in unsafe mode for sqllogictest's sake.
-                scx.require_feature_flag(&vars::ALLOW_TABLE_FOREIGN_KEY)?
+                scx.require_feature_flag(&vars::ENABLE_TABLE_FOREIGN_KEY)?
             }
             TableConstraint::Check { .. } => {
                 // Check constraints are not presently enforced. We allow them
                 // in unsafe mode for sqllogictest's sake.
-                scx.require_feature_flag(&vars::ALLOW_TABLE_CHECK_CONSTRAINT)?
+                scx.require_feature_flag(&vars::ENABLE_TABLE_CHECK_CONSTRAINT)?
             }
         }
     }
@@ -309,7 +309,7 @@ pub fn plan_create_table(
     if !keys.is_empty() {
         // Unique constraints are not presently enforced. We allow them in
         // unsafe mode for sqllogictest's sake.
-        scx.require_feature_flag(&vars::ALLOW_TABLE_KEYS)?
+        scx.require_feature_flag(&vars::ENABLE_TABLE_KEYS)?
     }
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -404,7 +404,7 @@ pub fn plan_create_source(
         .iter()
         .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_feature_flag(&vars::ALLOW_CREATE_SOURCE_UNSAFE_WITH_OPTIONS)
+        scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE_UNSAFE_WITH_OPTIONS)
             .map_err(|_| PlanError::RequiresFeatureFlag {
                 feature: format!(
                     "creating sources with WITH options other than {}",
@@ -447,7 +447,7 @@ pub fn plan_create_source(
                     && opt.name != KafkaConfigOptionName::StartTimestamp
                     && opt.name != KafkaConfigOptionName::Topic
             }) {
-                scx.require_feature_flag(&vars::ALLOW_DENYLIST_KAFKA_OPTIONS)
+                scx.require_feature_flag(&vars::ENABLE_DENYLIST_KAFKA_OPTIONS)
                     .map_err(|_| PlanError::RequiresFeatureFlag {
                         feature: format!("KAFKA CONNECTION option {}", opt.name),
                     })?;
@@ -808,7 +808,7 @@ pub fn plan_create_source(
             (connection, encoding, available_subsources)
         }
         CreateSourceConnection::TestScript { desc_json } => {
-            scx.require_feature_flag(&vars::ALLOW_CREATE_SOURCE_FROM_TESTSCRIPT)?;
+            scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE_FROM_TESTSCRIPT)?;
             let connection = GenericSourceConnection::from(TestScriptSourceConnection {
                 desc_json: desc_json.clone(),
             });
@@ -938,7 +938,7 @@ pub fn plan_create_source(
             }
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
-            scx.require_feature_flag(&vars::ALLOW_ENVELOPE_MATERIALIZE)?;
+            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
@@ -979,7 +979,7 @@ pub fn plan_create_source(
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
         // Don't remove this without addressing
         // https://github.com/MaterializeInc/materialize/issues/15272.
-        scx.require_feature_flag(&vars::ALLOW_PRIMARY_KEY_NOT_ENFORCED)?;
+        scx.require_feature_flag(&vars::ENABLE_PRIMARY_KEY_NOT_ENFORCED)?;
 
         let key_columns = columns
             .into_iter()
@@ -1620,7 +1620,7 @@ fn get_encoding_inner(
             })
         }
         Format::Json => {
-            scx.require_feature_flag(&crate::session::vars::ALLOW_FORMAT_JSON)?;
+            scx.require_feature_flag(&crate::session::vars::ENABLE_FORMAT_JSON)?;
             DataEncodingInner::Json
         }
         Format::Text => DataEncodingInner::Text,
@@ -1969,7 +1969,7 @@ pub fn plan_create_sink(
         .iter()
         .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_feature_flag(&vars::ALLOW_CREATE_SINK_UNSAFE_WITH_OPTIONS)
+        scx.require_feature_flag(&vars::ENABLE_CREATE_SINK_UNSAFE_WITH_OPTIONS)
             .map_err(|_| PlanError::RequiresFeatureFlag {
                 feature: format!(
                     "creating sinks with WITH options other than {}",
@@ -2182,7 +2182,7 @@ fn kafka_sink_builder(
         .iter()
         .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_feature_flag(&vars::ALLOW_CREATE_KAFKA_CONNECTION_UNSAFE_WITH_OPTIONS)
+        scx.require_feature_flag(&vars::ENABLE_CREATE_KAFKA_CONNECTION_UNSAFE_WITH_OPTIONS)
             .map_err(|_| PlanError::RequiresFeatureFlag {
                 feature: format!(
                     "creating KAFKA CONNECTION with WITH options other than {}",
@@ -2807,7 +2807,7 @@ fn plan_replica_config(
             compute_addresses,
             workers,
         ) => {
-            scx.require_feature_flag(&vars::ALLOW_UNMANAGED_CLUSTER_REPLICAS)?;
+            scx.require_feature_flag(&vars::ENABLE_UNMANAGED_CLUSTER_REPLICAS)?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
             // accidentally omit one of these options, so we try to produce
@@ -3892,7 +3892,7 @@ fn plan_index_options(
 ) -> Result<Vec<crate::plan::IndexOption>, PlanError> {
     if !with_opts.is_empty() {
         // Index options are not durable.
-        scx.require_feature_flag(&vars::ALLOW_INDEX_OPTIONS)?;
+        scx.require_feature_flag(&vars::ENABLE_INDEX_OPTIONS)?;
     }
 
     let IndexOptionExtracted {
@@ -3903,7 +3903,7 @@ fn plan_index_options(
     let mut out = Vec::with_capacity(1);
 
     if let Some(OptionalInterval(lcw)) = logical_compaction_window {
-        scx.require_feature_flag(&vars::ALLOW_LOGICAL_COMPACTION_WINDOW)?;
+        scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
         out.push(crate::plan::IndexOption::LogicalCompactionWindow(
             lcw.map(|interval| interval.duration()).transpose()?,
         ))

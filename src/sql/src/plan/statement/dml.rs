@@ -339,7 +339,7 @@ pub fn plan_explain(
     let config = ExplainConfig::try_from(config_flags)?;
 
     if config.mfp_pushdown {
-        scx.require_feature_flag(&vars::ALLOW_MFP_PUSHDOWN_EXPLAIN_FLAG)?;
+        scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN_FLAG)?;
     }
 
     let format = match format {
@@ -530,7 +530,7 @@ pub fn plan_subscribe(
     let output = match output {
         SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
         SubscribeOutput::EnvelopeUpsert { key_columns } => {
-            scx.require_feature_flag(&vars::ALLOW_ENEVELOPE_UPSERT_IN_SUBSCRIBE)?;
+            scx.require_feature_flag(&vars::ENABLE_ENEVELOPE_UPSERT_IN_SUBSCRIBE)?;
             let order_by = key_columns
                 .iter()
                 .map(|ident| OrderByExpr {
@@ -580,7 +580,7 @@ pub fn plan_subscribe(
             }
         }
         SubscribeOutput::WithinTimestampOrderBy { order_by } => {
-            scx.require_feature_flag(&vars::ALLOW_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)?;
+            scx.require_feature_flag(&vars::ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)?;
             let mz_diff = "mz_diff".into();
             let output_columns = std::iter::once((0, &mz_diff))
                 .chain(output_columns.into_iter().map(|(i, c)| (i + 1, c)))

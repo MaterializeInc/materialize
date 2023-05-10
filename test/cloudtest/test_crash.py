@@ -141,7 +141,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
         input=dedent(
             """
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET allow_unstable_dependencies = true;
+            ALTER SYSTEM SET enable_unstable_dependencies = true;
             """
         ),
         no_reset=True,

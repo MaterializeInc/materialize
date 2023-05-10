@@ -694,30 +694,12 @@ pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
     system_var_gate: None,
 };
 
-/// Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled.
-static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_with_mutually_recursive"),
-    value: &false,
-    description: "Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled (Materialize).",
-    internal: true,
-    system_var_gate: None,
-};
-
 /// Feature flag indicating whether monotonic evaluation of one-shot SELECT queries is enabled.
 static ENABLE_MONOTONIC_ONESHOT_SELECTS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_monotonic_oneshot_selects"),
     value: &false,
     description: "Feature flag indicating whether monotonic evaluation of one-shot SELECT queries \
                   is enabled (Materialize).",
-    internal: true,
-    system_var_gate: None,
-};
-
-/// Feature flag indicating whether `FORMAT JSON` sources are enabled.
-static ENABLE_FORMAT_JSON: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_format_json"),
-    value: &false,
-    description: "Feature flag indicating whether `FORMAT JSON` sources are enabled (Materialize).",
     internal: true,
     system_var_gate: None,
 };
@@ -804,14 +786,6 @@ pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     system_var_gate: None,
 };
 
-pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_within_timestamp_order_by_in_subscribe"),
-    value: &false,
-    description: "Feature flag indicating whether `WITHIN TIMESTAMP ORDER BY` can be used in `SUBSCRIBE` queries (Materialize).",
-    internal: false,
-    system_var_gate: None,
-};
-
 pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_connections"),
     value: &1000,
@@ -838,7 +812,7 @@ macro_rules! feature_flags {
                 pub static [<$name:upper>]: ServerVar<bool> = ServerVar {
                     name: UncasedStr::new(stringify!($name)),
                     value: &false,
-                    description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
+                    description: concat!("Whether ", $feature_desc, " is enabled (Materialize)."),
                     internal: true,
                     system_var_gate: None,
                 };
@@ -864,74 +838,77 @@ macro_rules! feature_flags {
 }
 
 feature_flags!(
-    (allow_unstable_dependencies, "depending on unstable objects"),
+    // Actual feature flags
     (
-        allow_real_time_recency,
-        "setting the real_time_recency flag"
+        enable_unstable_dependencies,
+        "depending on unstable objects"
     ),
-    (allow_date_bin_hopping, "the date_bin_hopping function"),
+    (enable_date_bin_hopping, "the date_bin_hopping function"),
     (
-        allow_binary_date_bin,
+        enable_binary_date_bin,
         "the binary version of date_bin function"
     ),
-    (allow_list_n_layers, "the list_n_layers function"),
-    (allow_list_length_max, "the list_length_max function"),
-    (allow_list_remove, "the list_remove function"),
-    (allow_repeat_row, "the repeat_row function"),
-    (allow_table_foreign_key, "CREATE TABLE with a foreign key"),
+    (enable_list_n_layers, "the list_n_layers function"),
+    (enable_list_length_max, "the list_length_max function"),
+    (enable_list_remove, "the list_remove function"),
+    (enable_repeat_row, "the repeat_row function"),
+    (enable_table_foreign_key, "CREATE TABLE with a foreign key"),
     (
-        allow_table_check_constraint,
+        enable_table_check_constraint,
         "CREATE TABLE with a check constraint"
     ),
     (
-        allow_table_keys,
+        enable_table_keys,
         "CREATE TABLE with a primary key or unique constraint"
     ),
     (
-        allow_create_source_unsafe_with_options,
+        enable_create_source_unsafe_with_options,
         "CREATE SOURCE with unsafe options"
     ),
     (
-        allow_denylist_kafka_options,
+        enable_denylist_kafka_options,
         "Kafka sources with non-allowlisted options"
     ),
     (
-        allow_create_source_from_testscript,
+        enable_create_source_from_testscript,
         "CREATE SOURCE ... FROM TEST SCRIPT"
     ),
-    (allow_envelope_materialize, "ENVELOPE MATERIALIZE"),
-    (allow_primary_key_not_enforced, "PRIMARY KEY NOT ENFORCED"),
+    (enable_envelope_materialize, "ENVELOPE MATERIALIZE"),
+    (enable_primary_key_not_enforced, "PRIMARY KEY NOT ENFORCED"),
     (
-        allow_create_sink_unsafe_with_options,
+        enable_create_sink_unsafe_with_options,
         "CREATE SINK with unsafe options"
     ),
     (
-        allow_create_kafka_connection_unsafe_with_options,
+        enable_create_kafka_connection_unsafe_with_options,
         "CREATE KAFKA CONNECTION with unsafe options"
     ),
     (
-        allow_unmanaged_cluster_replicas,
+        enable_unmanaged_cluster_replicas,
         "unmanaged cluster replicas"
     ),
-    (allow_index_options, "INDEX OPTIONS"),
-    (allow_logical_compaction_window, "LOGICAL COMPACTION WINDOW"),
+    (enable_index_options, "INDEX OPTIONS"),
     (
-        allow_mfp_pushdown_explain_flag,
+        enable_logical_compaction_window,
+        "LOGICAL COMPACTION WINDOW"
+    ),
+    (
+        enable_mfp_pushdown_explain_flag,
         "`mfp_pushdown` explain flag"
     ),
-    (allow_raise_statement, "RAISE statement"),
+    (enable_raise_statement, "RAISE statement"),
     (
-        allow_default_linked_cluster_size,
+        enable_default_linked_cluster_size,
         "default linked cluster size"
     ),
-    (allow_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
-    (allow_format_json, "FORMAT JSON"),
+    (enable_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
+    (enable_format_json, "FORMAT JSON"),
     (
-        allow_within_timestamp_order_by_in_subscribe,
+        enable_within_timestamp_order_by_in_subscribe,
         "`WITHIN TIMESTAMP ORDER BY ..`"
     ),
     (
-        allow_enevelope_upsert_in_subscribe,
+        enable_enevelope_upsert_in_subscribe,
         "ENVELOPE UPSERT in SUBSCRIBE"
     ),
     (
@@ -945,6 +922,11 @@ feature_flags!(
     (
         enable_multi_worker_storage_persist_sink,
         "multi-worker storage persist sink"
+    ),
+    // Gates for other feature flags
+    (
+        allow_real_time_recency,
+        "setting the real_time_recency flag"
     )
 );
 
@@ -1698,9 +1680,7 @@ impl Default for SystemVars {
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&METRICS_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
-            .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
             .with_var(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
-            .with_var(&ENABLE_FORMAT_JSON)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
@@ -2080,11 +2060,6 @@ impl SystemVars {
         *self.expect_value(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
     }
 
-    /// Returns the `enable_with_mutually_recursive` configuration parameter.
-    pub fn enable_with_mutually_recursive(&self) -> bool {
-        *self.expect_value(&ENABLE_WITH_MUTUALLY_RECURSIVE)
-    }
-
     /// Sets the `enable_with_mutually_recursive` configuration parameter.
     pub fn set_enable_with_mutually_recursive(&mut self, value: bool) -> bool {
         self.vars
@@ -2097,11 +2072,6 @@ impl SystemVars {
     /// Returns the `enable_monotonic_oneshot_selects` configuration parameter.
     pub fn enable_monotonic_oneshot_selects(&self) -> bool {
         *self.expect_value(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
-    }
-
-    /// Returns the `enable_format_json` configuration parameter.
-    pub fn enable_format_json(&self) -> bool {
-        *self.expect_value(&ENABLE_FORMAT_JSON)
     }
 
     /// Sets the `enable_format_json` configuration parameter.
@@ -2126,11 +2096,6 @@ impl SystemVars {
     /// Returns the `enable_envelope_upsert_in_subscribe` configuration parameter.
     pub fn enable_envelope_upsert_in_subscribe(&self) -> bool {
         *self.expect_value(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
-    }
-
-    /// Returns the `enable_within_timestamp_order_by` configuration parameter.
-    pub fn enable_within_timestamp_order_by(&self) -> bool {
-        *self.expect_value(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
     }
 
     /// Returns the `max_connections` configuration parameter.
