@@ -25,7 +25,7 @@ class EvaluationStrategy:
 
 class DummyEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
-        super().__init__("*", "Dummy")
+        super().__init__("<source>", "Dummy")
 
     def generate_source(self, data_types: list[DataType]) -> list[str]:
         return []
