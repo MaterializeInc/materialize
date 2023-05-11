@@ -12,9 +12,8 @@ use std::collections::BTreeMap;
 use super::InternalStashError;
 use crate::{StashError, Transaction, TypedCollection};
 
-// TODO(parkmycar): This shouldn't be public, but it is for now to prevent dead code warnings.
 pub mod json_to_proto;
-mod legacy_types;
+pub mod legacy_types;
 
 pub enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.

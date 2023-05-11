@@ -17,6 +17,7 @@ bytes = "1.3.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
+itertools = "0.10.5"
 mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
 mz-postgres-util = { path = "../postgres-util" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
@@ -37,7 +38,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [dev-dependencies]
 anyhow = "1.0.66"
 criterion = { version = "0.4.0", features = ["async_tokio"] }
-itertools = "0.10.5"
 mz-postgres-util = { path = "../postgres-util" }
 once_cell = "1.16.0"
 tokio = { version = "1.24.2", features = ["rt", "time"] }

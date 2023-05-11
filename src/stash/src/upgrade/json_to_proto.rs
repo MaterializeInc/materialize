@@ -162,6 +162,10 @@ pub async fn migrate_json_to_proto(
             .await
             .context("checking fence, step 2")?;
 
+        fail_point!("stash_proto_swap_table", |_| {
+            Err(anyhow::anyhow!("Failpoint stash_proto_swap_table"))
+        });
+
         // End the transaction.
         tx.commit().await.context("commiting rename Transaction")?;
 
@@ -1413,5 +1417,556 @@ impl From<std::time::Duration> for objects_v15::Duration {
 impl From<String> for objects_v15::StringWrapper {
     fn from(value: String) -> Self {
         objects_v15::StringWrapper { inner: value }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::arbitrary::any;
+    use proptest::strategy::{Strategy, ValueTree};
+    use proptest::test_runner::TestRunner;
+    use rand::Rng;
+    use tokio_postgres::Config;
+
+    use mz_ore::metrics::MetricsRegistry;
+
+    use super::{migrate_json_to_proto, objects_v15};
+    use crate::upgrade::json_to_proto::test_helpers::{
+        insert_collections, insert_stash, ArbitraryStash, Collection,
+    };
+    use crate::upgrade::legacy_types::{
+        ConfigValue, SettingKey, SettingValue, StorageUsageKey, StorageUsageV1,
+        VersionedStorageUsage,
+    };
+    use crate::StashFactory;
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn smoketest_migrate_json_to_proto() {
+        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+        let factory = StashFactory::new(&MetricsRegistry::new());
+
+        // Connect to Cockroach.
+        let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
+        let (mut client, connection) = tokio_postgres::connect(&connstr, tls.clone())
+            .await
+            .expect("able to connect");
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {}", e);
+            }
+        });
+
+        // Create a simple Stash we'll check against.
+        let mut arbitrary_stash = ArbitraryStash::new();
+        arbitrary_stash
+            .config
+            .items
+            .push(("foo".to_string(), ConfigValue { value: 42 }, 1, 1));
+        arbitrary_stash.setting.items.push((
+            SettingKey {
+                name: "version".to_string(),
+            },
+            SettingValue {
+                value: "bar".to_string(),
+            },
+            2,
+            -2,
+        ));
+
+        // Create a schema for our test.
+        let seed: u32 = rand::thread_rng().gen();
+        println!("Using Seed {seed}");
+        let schema = format!("stash_test_{seed}");
+
+        client
+            .execute(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"), &[])
+            .await
+            .unwrap();
+        client
+            .execute(&format!("SET search_path TO {schema}"), &[])
+            .await
+            .unwrap();
+
+        // Initialize the Stash.
+        let stash = factory
+            .open(connstr.to_string(), Some(schema), tls.clone())
+            .await
+            .unwrap();
+        let epoch = stash.epoch().unwrap();
+
+        insert_collections(&client, &arbitrary_stash).await;
+        insert_stash(&client, &arbitrary_stash).await;
+
+        // Migrate the Stash to protobuf.
+        migrate_json_to_proto(&mut client, epoch)
+            .await
+            .expect("migration to succeed");
+
+        let protos_config: Collection<objects_v15::ConfigKey, objects_v15::ConfigValue> =
+            Collection::read(arbitrary_stash.config.id, &client)
+                .await
+                .expect("config");
+        assert_eq!(protos_config.items[0].0.key, "foo");
+        assert_eq!(protos_config.items[0].1.value, 42);
+        assert_eq!(protos_config.items[0].2, 1);
+        assert_eq!(protos_config.items[0].3, 1);
+
+        let protos_setting: Collection<objects_v15::SettingKey, objects_v15::SettingValue> =
+            Collection::read(arbitrary_stash.setting.id, &client)
+                .await
+                .expect("setting");
+        assert_eq!(protos_setting.items[0].0.name, "version");
+        assert_eq!(protos_setting.items[0].1.value, "bar");
+        assert_eq!(protos_setting.items[0].2, 2);
+        assert_eq!(protos_setting.items[0].3, -2);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_unrecognized_collection() {
+        mz_ore::test::init_logging();
+        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+        let factory = StashFactory::new(&MetricsRegistry::new());
+
+        // Connect to Cockroach.
+        let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
+        let (mut client, connection) = tokio_postgres::connect(&connstr, tls.clone())
+            .await
+            .expect("able to connect");
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {}", e);
+            }
+        });
+
+        // Create a schema for our test.
+        let seed: u32 = rand::thread_rng().gen();
+        println!("Using Seed {seed}");
+        let schema = format!("stash_test_unrecognized_collection_{seed}");
+
+        client
+            .execute(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"), &[])
+            .await
+            .unwrap();
+        client
+            .execute(&format!("SET search_path TO {schema}"), &[])
+            .await
+            .unwrap();
+
+        // Initialize the Stash.
+        let stash = factory
+            .open(connstr.to_string(), Some(schema), tls.clone())
+            .await
+            .unwrap();
+        let epoch = stash.epoch().unwrap();
+
+        // Insert a collection that is unknown.
+        client
+            .execute(
+                "INSERT INTO collections (collection_id, name) VALUES ($1, $2)",
+                &[&42i64, &"unknown-foo"],
+            )
+            .await
+            .unwrap();
+
+        // Migrate the Stash to protobuf.
+        migrate_json_to_proto(&mut client, epoch)
+            .await
+            .expect("migration to succeed");
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_very_large_collections() {
+        mz_ore::test::init_logging();
+        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+        let factory = StashFactory::new(&MetricsRegistry::new());
+
+        // Connect to Cockroach.
+        let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
+        let (mut client, connection) = tokio_postgres::connect(&connstr, tls.clone())
+            .await
+            .expect("able to connect");
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {}", e);
+            }
+        });
+
+        // Create a very large Stash we'll check against.
+        let mut arbitrary_stash = ArbitraryStash::new();
+        for i in 0..100_000 {
+            arbitrary_stash.storage_usage.items.push((
+                StorageUsageKey {
+                    metric: VersionedStorageUsage::V1(StorageUsageV1 {
+                        id: i,
+                        shard_id: Some("i_am_a_shard_id_that_is_decently_large".to_string()),
+                        size_bytes: i,
+                        collection_timestamp: i,
+                    }),
+                },
+                (),
+                1,
+                1,
+            ));
+        }
+
+        // Create a schema for our test.
+        let seed: u32 = rand::thread_rng().gen();
+        println!("Using Seed {seed}");
+        let schema = format!("stash_test_{seed}");
+
+        client
+            .execute(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"), &[])
+            .await
+            .unwrap();
+        client
+            .execute(&format!("SET search_path TO {schema}"), &[])
+            .await
+            .unwrap();
+
+        // Initialize the Stash.
+        let stash = factory
+            .open(connstr.to_string(), Some(schema), tls.clone())
+            .await
+            .unwrap();
+        let epoch = stash.epoch().unwrap();
+
+        insert_collections(&client, &arbitrary_stash).await;
+        insert_stash(&client, &arbitrary_stash).await;
+
+        // Migrate the Stash to protobuf.
+        migrate_json_to_proto(&mut client, epoch)
+            .await
+            .expect("migration to succeed");
+
+        let protos_storage_usage: Collection<objects_v15::StorageUsageKey, ()> =
+            Collection::read(arbitrary_stash.storage_usage.id, &client)
+                .await
+                .expect("storage_usage");
+        assert_eq!(protos_storage_usage.items.len(), 100_000);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn proptest_stash_migrate_json_to_proto() {
+        let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+        let factory = StashFactory::new(&MetricsRegistry::new());
+
+        // Connect to Cockroach.
+        let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
+        let (mut client, connection) = tokio_postgres::connect(&connstr, tls.clone())
+            .await
+            .expect("able to connect");
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {}", e);
+            }
+        });
+
+        // Create a proptest Runner to generate random Stashes.
+        let mut runner = TestRunner::deterministic();
+        let strategy = any::<ArbitraryStash>();
+
+        // These can take a little while to run, so lets always do 1/8 of PROPTEST_CASES.
+        let cases = runner
+            .config()
+            .cases
+            .checked_div(8)
+            .unwrap_or_default()
+            .max(1);
+        for _ in 0..cases {
+            // Generate an arbitrary Stash.
+            let arbitrary_stash = strategy
+                .new_tree(&mut runner)
+                .expect("valid tree")
+                .current();
+
+            // Create a schema for our test.
+            let seed: u32 = rand::thread_rng().gen();
+            println!("Using Seed {seed}");
+            let schema = format!("stash_proptest_{seed}");
+
+            client
+                .execute(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"), &[])
+                .await
+                .unwrap();
+            client
+                .execute(&format!("SET search_path TO {schema}"), &[])
+                .await
+                .unwrap();
+
+            // Initialize the Stash.
+            let stash = factory
+                .open(connstr.to_string(), Some(schema), tls.clone())
+                .await
+                .unwrap();
+            let epoch = stash.epoch().unwrap();
+
+            insert_collections(&client, &arbitrary_stash).await;
+            insert_stash(&client, &arbitrary_stash).await;
+
+            // Migrate the Stash to protobuf.
+            migrate_json_to_proto(&mut client, epoch)
+                .await
+                .expect("migration to succeed");
+        }
+    }
+}
+
+pub mod test_helpers {
+    use itertools::Itertools;
+    use proptest_derive::Arbitrary;
+    use serde::Serialize;
+    use tokio_postgres::types::ToSql;
+    use tokio_postgres::Client;
+
+    use crate::upgrade::legacy_types::{
+        AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
+        ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, ConfigValue, DatabaseKey,
+        DatabaseValue, DurableCollectionMetadata, DurableExportMetadata, GidMappingKey,
+        GidMappingValue, GlobalId, IdAllocKey, IdAllocValue, ItemKey, ItemValue, RoleKey,
+        RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
+        SettingKey, SettingValue, ShardId, StorageUsageKey, TimestampKey, TimestampValue,
+    };
+
+    /// Insert all of the non-empty collections into CockroachDB.
+    pub async fn insert_collections(client: &Client, stash: &ArbitraryStash) {
+        let collections = stash.non_empty_collections();
+
+        // Add all of the collections.
+        let str_args: String = itertools::Itertools::intersperse(
+            collections.iter().enumerate().map(|(idx, _)| {
+                let idx = 1 + idx * 2;
+                format!("(${}, ${})", idx, idx + 1)
+            }),
+            ", ".to_string(),
+        )
+        .collect();
+        let stmt = format!("INSERT INTO collections (collection_id, name) VALUES {str_args}");
+        let mut args: Vec<&'_ (dyn ToSql + Sync)> = vec![];
+
+        for (collection, name) in &collections {
+            let id = collection.id();
+
+            args.push(id);
+            args.push(name);
+        }
+        client.execute(&stmt, &args).await.unwrap();
+    }
+
+    /// Inserts all of the items for non-empty collections into CockroackDB.
+    pub async fn insert_stash(client: &Client, stash: &ArbitraryStash) {
+        for (collection, _name) in stash.non_empty_collections() {
+            let id = collection.id();
+            let items = collection.items();
+
+            // Break into chunks so we don't go over the CockroachDB request size.
+            for chunk in &items.into_iter().chunks(2048) {
+                let chunk = chunk.collect_vec();
+
+                // Generate an INSERT statement.
+                let str_args: String = itertools::Itertools::intersperse(
+                    chunk.iter().enumerate().map(|(idx, _)| {
+                        let idx = 1 + idx * 5;
+                        format!(
+                            "(${}, ${}, ${}, ${}, ${})",
+                            idx,
+                            idx + 1,
+                            idx + 2,
+                            idx + 3,
+                            idx + 4
+                        )
+                    }),
+                    ", ".to_string(),
+                )
+                .collect();
+                let stmt = format!(
+                    "INSERT INTO data (collection_id, key, value, time, diff) VALUES {str_args}"
+                );
+
+                // Collect our arguments.
+                let mut args: Vec<&'_ (dyn ToSql + Sync)> = vec![];
+                for (key, val, ts, diff) in &chunk {
+                    args.push(&id);
+                    args.push(key);
+                    args.push(val);
+                    args.push(ts);
+                    args.push(diff);
+                }
+
+                // Insert all of our data.
+                client.execute(&stmt, &args).await.unwrap();
+            }
+        }
+    }
+
+    #[derive(Debug, Default, Clone, PartialEq, Eq, Arbitrary)]
+    pub struct Collection<K, V> {
+        pub id: i64,
+        pub items: Vec<(K, V, Timestamp, Diff)>,
+    }
+
+    impl<K, V> Collection<K, V> {
+        pub fn new(id: i64) -> Self {
+            Collection {
+                id,
+                items: Vec::default(),
+            }
+        }
+    }
+
+    impl<K, V> Collection<K, V>
+    where
+        K: ::prost::Message + Default,
+        V: ::prost::Message + Default,
+    {
+        pub async fn read(id: i64, client: &Client) -> Result<Self, anyhow::Error> {
+            let rows = client
+                .query(
+                    "SELECT key, value, time, diff FROM data WHERE collection_id = $1",
+                    &[&id],
+                )
+                .await?;
+
+            let protos = rows
+                .into_iter()
+                .map(|row| {
+                    let key: Vec<u8> = row.get("key");
+                    let val: Vec<u8> = row.get("value");
+                    let time: i64 = row.get("time");
+                    let diff: i64 = row.get("diff");
+
+                    let key = K::decode(&key[..]).expect("success");
+                    let val = V::decode(&val[..]).expect("success");
+
+                    (key, val, time, diff)
+                })
+                .collect();
+
+            Ok(Collection { id, items: protos })
+        }
+    }
+
+    impl<K: Serialize, V: Serialize> ArbitraryCollection for Collection<K, V> {
+        fn id(&self) -> &i64 {
+            &self.id
+        }
+
+        fn items(&self) -> Vec<(serde_json::Value, serde_json::Value, Timestamp, Diff)> {
+            self.items
+                .iter()
+                .map(|(key, val, ts, diff)| {
+                    let key = serde_json::to_value(key).unwrap();
+                    let val = serde_json::to_value(val).unwrap();
+
+                    (key, val, *ts, *diff)
+                })
+                .collect()
+        }
+
+        fn len(&self) -> usize {
+            self.items.len()
+        }
+    }
+
+    type Diff = i64;
+    type Timestamp = i64;
+
+    pub trait ArbitraryCollection {
+        fn id(&self) -> &i64;
+        fn items(&self) -> Vec<(serde_json::Value, serde_json::Value, Timestamp, Diff)>;
+        fn len(&self) -> usize;
+    }
+
+    #[derive(Debug, Clone, Arbitrary)]
+    pub struct ArbitraryStash {
+        pub config: Collection<String, ConfigValue>,
+        pub setting: Collection<SettingKey, SettingValue>,
+        pub id_alloc: Collection<IdAllocKey, IdAllocValue>,
+        pub system_gid_mapping: Collection<GidMappingKey, GidMappingValue>,
+        pub compute_instance: Collection<ClusterKey, ClusterValue>,
+        pub compute_introspection_source_index:
+            Collection<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
+        pub compute_replicas: Collection<ClusterReplicaKey, ClusterReplicaValue>,
+        pub database: Collection<DatabaseKey, DatabaseValue>,
+        pub schema: Collection<SchemaKey, SchemaValue>,
+        pub item: Collection<ItemKey, ItemValue>,
+        pub role: Collection<RoleKey, RoleValue>,
+        pub timestamp: Collection<TimestampKey, TimestampValue>,
+        pub system_configuration: Collection<ServerConfigurationKey, ServerConfigurationValue>,
+        pub audit_log: Collection<AuditLogKey, ()>,
+        pub storage_usage: Collection<StorageUsageKey, ()>,
+        pub storage_collection_metadata: Collection<GlobalId, DurableCollectionMetadata>,
+        pub storage_export_metadata_u64: Collection<GlobalId, DurableExportMetadata>,
+        pub storage_shards_to_finalize: Collection<ShardId, ()>,
+    }
+
+    impl ArbitraryStash {
+        // Create a new `ArbitraryStash` with some default collection IDs.
+        pub fn new() -> Self {
+            ArbitraryStash {
+                config: Collection::new(1),
+                setting: Collection::new(2),
+                id_alloc: Collection::new(3),
+                system_gid_mapping: Collection::new(4),
+                compute_instance: Collection::new(5),
+                compute_introspection_source_index: Collection::new(6),
+                compute_replicas: Collection::new(7),
+                database: Collection::new(8),
+                schema: Collection::new(9),
+                item: Collection::new(10),
+                role: Collection::new(11),
+                timestamp: Collection::new(12),
+                system_configuration: Collection::new(13),
+                audit_log: Collection::new(14),
+                storage_usage: Collection::new(15),
+                storage_collection_metadata: Collection::new(16),
+                storage_export_metadata_u64: Collection::new(17),
+                storage_shards_to_finalize: Collection::new(18),
+            }
+        }
+
+        /// Returns all collections that contain at least one item.
+        pub fn non_empty_collections(&self) -> Vec<(&dyn ArbitraryCollection, &'static str)> {
+            let collections: Vec<(&dyn ArbitraryCollection, &'static str)> = vec![
+                (&self.config, "config"),
+                (&self.setting, "setting"),
+                (&self.id_alloc, "id_alloc"),
+                (&self.system_gid_mapping, "system_gid_mapping"),
+                (&self.compute_instance, "compute_instance"),
+                (
+                    &self.compute_introspection_source_index,
+                    "compute_introspection_source_index",
+                ),
+                (&self.compute_replicas, "compute_replicas"),
+                (&self.database, "database"),
+                (&self.schema, "schema"),
+                (&self.item, "item"),
+                (&self.role, "role"),
+                (&self.timestamp, "timestamp"),
+                (&self.system_configuration, "system_configuration"),
+                (&self.audit_log, "audit_log"),
+                (&self.storage_usage, "storage_usage"),
+                (
+                    &self.storage_collection_metadata,
+                    "storage-collection-metadata",
+                ),
+                (
+                    &self.storage_export_metadata_u64,
+                    "storage-export-metadata-u64",
+                ),
+                (
+                    &self.storage_shards_to_finalize,
+                    "storage-shards-to-finalize",
+                ),
+            ];
+
+            collections
+                .into_iter()
+                .filter(|(c, _name)| c.len() != 0)
+                .collect()
+        }
     }
 }
