@@ -100,8 +100,16 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("clusterd1")
     c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
+
     c.sql(
-        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+            
+    c.sql(
+        """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
             STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
             COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],

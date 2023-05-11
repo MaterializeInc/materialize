@@ -230,6 +230,14 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])
 
+
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
         c.sql(
             """
             DROP CLUSTER IF EXISTS cluster1 CASCADE;

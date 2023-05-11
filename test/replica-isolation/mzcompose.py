@@ -212,6 +212,13 @@ def restart_environmentd(c: Composition) -> None:
 
 
 def drop_create_replica(c: Composition) -> None:
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     c.testdrive(
         dedent(
             """

@@ -1286,6 +1286,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up(*[n.name for n in nodes])
 
         c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
             f"""
             DROP CLUSTER DEFAULT cascade;
             CREATE CLUSTER default REPLICAS (

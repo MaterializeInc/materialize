@@ -153,6 +153,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
     ):
         c.up("materialized")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
         c.sql(
             """
             CREATE CLUSTER storaged REPLICAS (r2 (
@@ -161,7 +168,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 COMPUTECTL ADDRESSES ['storaged:2101'],
                 COMPUTE ADDRESSES ['storaged:2102'],
                 WORKERS 4
-
             ))
         """
         )
