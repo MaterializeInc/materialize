@@ -553,7 +553,7 @@ where
                     };
 
                     // Perform some amount of outstanding work.
-                    let mut fuel = 1_000_000;
+                    let mut fuel = 1_000;
                     while !todo1.is_empty() && fuel > 0 {
                         todo1.front_mut().unwrap().work(
                             output,
@@ -566,7 +566,7 @@ where
                     }
 
                     // Perform some amount of outstanding work.
-                    let mut fuel = 1_000_000;
+                    let mut fuel = 1_000;
                     while !todo2.is_empty() && fuel > 0 {
                         todo2
                             .front_mut()
