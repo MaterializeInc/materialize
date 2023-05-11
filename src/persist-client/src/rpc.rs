@@ -573,109 +573,86 @@ impl PubSubSender for NoopPubSubSender {
     }
 }
 
-enum StateCacheSubscriptionMessage {
-    StateRef((ShardId, Weak<dyn DynState>)),
-    PubSubMessage(ProtoPubSubMessage),
-}
-
 /// Spawns a Tokio task that consumes a [PubSubReceiver], applying its diffs to a [StateCache].
 pub(crate) fn subscribe_state_cache_to_pubsub(
     cache: Arc<StateCache>,
-    pubsub_receiver: Box<dyn PubSubReceiver>,
+    mut pubsub_receiver: Box<dyn PubSubReceiver>,
 ) -> JoinHandle<()> {
-    let receiver_metrics = cache.metrics.pubsub_client.receiver.clone();
     let mut state_refs: HashMap<ShardId, Weak<dyn DynState>> = HashMap::new();
-
-    // We track two inputs:
-    // 1) a stream of weak references to our shared shard states. this allows us to avoid
-    // needing a mutex call per `push_diff` to lookup the state to apply the diff to.
-    // 2) a stream of pubsub messages, which we expect to all be state diffs.
-    let mut inputs = cache
-        .state_weak_refs()
-        .map(StateCacheSubscriptionMessage::StateRef)
-        .merge(pubsub_receiver.map(StateCacheSubscriptionMessage::PubSubMessage));
+    let receiver_metrics = cache.metrics.pubsub_client.receiver.clone();
 
     mz_ore::task::spawn(
         || "persist::rpc::client::state_cache_diff_apply",
         async move {
-            while let Some(x) = inputs.next().await {
-                match x {
-                    StateCacheSubscriptionMessage::StateRef((shard_id, state_ref)) => {
-                        state_refs.insert(shard_id, state_ref);
-                    }
-                    StateCacheSubscriptionMessage::PubSubMessage(message) => {
-                        match message.message {
-                            Some(proto_pub_sub_message::Message::PushDiff(diff)) => {
-                                receiver_metrics.push_received.inc();
-                                let shard_id = diff.shard_id.into_rust().expect("valid shard id");
-                                let diff = VersionedData {
-                                    seqno: diff.seqno.into_rust().expect("valid SeqNo"),
-                                    data: diff.diff,
-                                };
-                                debug!(
-                                    "applying pubsub diff {} {} {}",
-                                    shard_id,
-                                    diff.seqno,
-                                    diff.data.len()
-                                );
+            while let Some(msg) = pubsub_receiver.next().await {
+                match msg.message {
+                    Some(proto_pub_sub_message::Message::PushDiff(diff)) => {
+                        receiver_metrics.push_received.inc();
+                        let shard_id = diff.shard_id.into_rust().expect("valid shard id");
+                        let diff = VersionedData {
+                            seqno: diff.seqno.into_rust().expect("valid SeqNo"),
+                            data: diff.diff,
+                        };
+                        debug!(
+                            "applying pubsub diff {} {} {}",
+                            shard_id,
+                            diff.seqno,
+                            diff.data.len()
+                        );
 
-                                let mut pushed_diff = false;
-                                if let Some(state_ref) = state_refs.get(&shard_id) {
-                                    // common case: we have a reference to the shard state already
-                                    // and can apply our diff directly.
-                                    if let Some(state) = state_ref.upgrade() {
-                                        state.push_diff(diff.clone());
-                                        pushed_diff = true;
-                                        receiver_metrics.state_pushed_diff_fast_path.inc();
-                                    }
-                                }
-
-                                if !pushed_diff {
-                                    // uncommon case: we either don't have a reference yet, or ours
-                                    // is out-of-date (e.g. the shard was dropped and then re-added
-                                    // to StateCache). here we'll fetch the latest, try to apply the
-                                    // diff again, and update our local reference.
-                                    let state_ref = cache.get_state_weak(&shard_id);
-                                    match state_ref {
-                                        None => {
-                                            state_refs.remove(&shard_id);
-                                        }
-                                        Some(state_ref) => {
-                                            if let Some(state) = state_ref.upgrade() {
-                                                state.push_diff(diff);
-                                                pushed_diff = true;
-                                                state_refs.insert(shard_id, state_ref);
-                                            } else {
-                                                state_refs.remove(&shard_id);
-                                            }
-                                        }
-                                    }
-
-                                    if pushed_diff {
-                                        receiver_metrics
-                                            .state_pushed_diff_slow_path_succeeded
-                                            .inc();
-                                    } else {
-                                        receiver_metrics.state_pushed_diff_slow_path_failed.inc();
-                                    }
-                                }
-
-                                if let Some(send_timestamp) = message.timestamp {
-                                    let send_timestamp =
-                                        send_timestamp.into_rust().expect("valid timestamp");
-                                    let now = SystemTime::now()
-                                        .duration_since(SystemTime::UNIX_EPOCH)
-                                        .expect("failed to get millis since epoch");
-                                    receiver_metrics.approx_diff_latency_seconds.observe(
-                                        (now.saturating_sub(send_timestamp)).as_secs_f64(),
-                                    );
-                                }
-                            }
-                            ref msg @ None | ref msg @ Some(_) => {
-                                warn!("pubsub client received unexpected message: {:?}", msg);
-                                receiver_metrics.unknown_message_received.inc();
+                        let mut pushed_diff = false;
+                        if let Some(state_ref) = state_refs.get(&shard_id) {
+                            // common case: we have a reference to the shard state already
+                            // and can apply our diff directly.
+                            if let Some(state) = state_ref.upgrade() {
+                                state.push_diff(diff.clone());
+                                pushed_diff = true;
+                                receiver_metrics.state_pushed_diff_fast_path.inc();
                             }
                         }
+
+                        if !pushed_diff {
+                            // uncommon case: we either don't have a reference yet, or ours
+                            // is out-of-date (e.g. the shard was dropped and then re-added
+                            // to StateCache). here we'll fetch the latest, try to apply the
+                            // diff again, and update our local reference.
+                            let state_ref = cache.get_state_weak(&shard_id);
+                            match state_ref {
+                                None => {
+                                    state_refs.remove(&shard_id);
+                                }
+                                Some(state_ref) => {
+                                    if let Some(state) = state_ref.upgrade() {
+                                        state.push_diff(diff);
+                                        pushed_diff = true;
+                                        state_refs.insert(shard_id, state_ref);
+                                    } else {
+                                        state_refs.remove(&shard_id);
+                                    }
+                                }
+                            }
+
+                            if pushed_diff {
+                                receiver_metrics.state_pushed_diff_slow_path_succeeded.inc();
+                            } else {
+                                receiver_metrics.state_pushed_diff_slow_path_failed.inc();
+                            }
+                        }
+
+                        if let Some(send_timestamp) = msg.timestamp {
+                            let send_timestamp =
+                                send_timestamp.into_rust().expect("valid timestamp");
+                            let now = SystemTime::now()
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .expect("failed to get millis since epoch");
+                            receiver_metrics
+                                .approx_diff_latency_seconds
+                                .observe((now.saturating_sub(send_timestamp)).as_secs_f64());
+                        }
+                    }
+                    ref msg @ None | ref msg @ Some(_) => {
+                        warn!("pubsub client received unexpected message: {:?}", msg);
+                        receiver_metrics.unknown_message_received.inc();
                     }
                 }
             }
