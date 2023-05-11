@@ -182,7 +182,7 @@ pub struct Config {
     pub bootstrap_builtin_cluster_replica_size: String,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
-    pub bootstrap_system_parameters: BTreeMap<String, String>,
+    pub system_parameter_defaults: BTreeMap<String, String>,
     /// The interval at which to collect storage usage information.
     pub storage_usage_collection_interval: Duration,
     /// How long to retain storage usage records for.
@@ -377,7 +377,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         cluster_replica_sizes: config.cluster_replica_sizes,
         default_storage_cluster_size: config.default_storage_cluster_size,
         availability_zones: config.availability_zones,
-        bootstrap_system_parameters: config.bootstrap_system_parameters,
+        system_parameter_defaults: config.system_parameter_defaults,
         connection_context: config.connection_context,
         storage_usage_client,
         storage_usage_collection_interval: config.storage_usage_collection_interval,

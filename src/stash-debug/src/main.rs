@@ -412,7 +412,7 @@ impl Usage {
             metrics_registry,
             cluster_replica_sizes,
             default_storage_cluster_size: None,
-            bootstrap_system_parameters: Default::default(),
+            system_parameter_defaults: Default::default(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],

@@ -1608,6 +1608,14 @@ impl SystemVars {
             .expect("provided var type should matched stored var")
     }
 
+    /// Reset all the values to their defaults (preserving
+    /// defaults from `VarMut::set_default).
+    pub fn reset_all(&mut self) {
+        for (_, var) in &mut self.vars {
+            var.reset();
+        }
+    }
+
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
@@ -1683,6 +1691,16 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))
+    }
+
+    /// Set the default for this variable. This is the value this
+    /// variable will be be `reset` to. If no default is set, the static default in the
+    /// variable definition is used instead.
+    pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
+        self.vars
+            .get_mut(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.into()))
+            .and_then(|v| v.set_default(input))
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -2026,6 +2044,10 @@ pub trait VarMut: Var + Send + Sync {
 
     /// Reset the stored value to the default.
     fn reset(&mut self) -> bool;
+
+    /// Set the default for this variable. This is the value this
+    /// variable will be be `reset` to.
+    fn set_default(&mut self, input: VarInput) -> Result<(), VarError>;
 }
 
 /// A `ServerVar` is the default value for a configuration parameter.
@@ -2079,6 +2101,7 @@ where
     V::Owned: fmt::Debug,
 {
     persisted_value: Option<V::Owned>,
+    dynamic_default: Option<V::Owned>,
     parent: &'static ServerVar<V>,
 }
 
@@ -2091,6 +2114,7 @@ where
     fn clone(&self) -> Self {
         SystemVar {
             persisted_value: self.persisted_value.clone(),
+            dynamic_default: self.dynamic_default.clone(),
             parent: self.parent,
         }
     }
@@ -2104,6 +2128,7 @@ where
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
             persisted_value: None,
+            dynamic_default: None,
             parent,
         }
     }
@@ -2116,7 +2141,12 @@ where
         self.persisted_value
             .as_ref()
             .map(|v| v.borrow())
-            .unwrap_or(self.parent.value)
+            .unwrap_or_else(|| {
+                self.dynamic_default
+                    .as_ref()
+                    .map(|v| v.borrow())
+                    .unwrap_or(self.parent.value)
+            })
     }
 }
 
@@ -2195,6 +2225,16 @@ where
             true
         } else {
             false
+        }
+    }
+
+    fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
+        match V::parse(input) {
+            Ok(v) => {
+                self.dynamic_default = Some(v);
+                Ok(())
+            }
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
         }
     }
 }

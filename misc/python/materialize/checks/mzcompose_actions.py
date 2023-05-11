@@ -30,11 +30,11 @@ class StartMz(MzcomposeAction):
         self,
         tag: Optional[MzVersion] = None,
         environment_extra: List[str] = [],
-        bootstrap_system_parameters: Optional[List[str]] = None,
+        system_parameter_defaults: Optional[List[str]] = None,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra
-        self.bootstrap_system_parameters = bootstrap_system_parameters
+        self.system_parameter_defaults = system_parameter_defaults
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -45,7 +45,7 @@ class StartMz(MzcomposeAction):
             image=image,
             external_cockroach=True,
             environment_extra=self.environment_extra,
-            bootstrap_system_parameters=self.bootstrap_system_parameters,
+            system_parameter_defaults=self.system_parameter_defaults,
         )
 
         with c.override(mz):

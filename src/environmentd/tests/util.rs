@@ -364,7 +364,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         default_storage_cluster_size: None,
         bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
-        bootstrap_system_parameters: Default::default(),
+        system_parameter_defaults: Default::default(),
         availability_zones: Default::default(),
         connection_context,
         tracing_handle,

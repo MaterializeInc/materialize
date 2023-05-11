@@ -192,6 +192,14 @@ impl Coordinator {
                     update_storage_config |= vars::is_storage_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                 }
+                catalog::Op::ResetAllSystemConfiguration => {
+                    // Assume they all need to be updated.
+                    // We could see if the config's have actually changed, but
+                    // this is simpler.
+                    update_compute_config = true;
+                    update_storage_config = true;
+                    update_metrics_retention = true;
+                }
                 _ => (),
             }
         }
