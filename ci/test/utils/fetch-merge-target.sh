@@ -15,9 +15,11 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-ci_collapsed_heading "Configure git"
-run git config --global user.email "buildkite@materialize.com"
-run git config --global user.name "Buildkite"
+if [[ "$BUILDKITE" == "true" ]]; then
+  ci_collapsed_heading "Configure git"
+  run git config --global user.email "buildkite@materialize.com"
+  run git config --global user.name "Buildkite"
+fi
 
 ci_collapsed_heading "Fetch target branch"
 run git fetch "$BUILDKITE_REPO_REF" "$BUILDKITE_PULL_REQUEST_BASE_BRANCH"
