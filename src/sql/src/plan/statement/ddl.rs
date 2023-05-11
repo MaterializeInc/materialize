@@ -2176,17 +2176,17 @@ fn kafka_sink_builder(
         _ => sql_bail!("{} is not a kafka connection", item.name()),
     };
 
-    const SAFE_WITH_OPTIONS: &[KafkaConfigOptionName] = &[KafkaConfigOptionName::Topic];
+    const ALLOWLIST_WITH_OPTIONS: &[KafkaConfigOptionName] = &[KafkaConfigOptionName::Topic];
 
     if with_options
         .iter()
-        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+        .any(|op| !ALLOWLIST_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_feature_flag(&vars::ENABLE_CREATE_KAFKA_CONNECTION_DENYLIST_WITH_OPTIONS)
+        scx.require_feature_flag(&vars::ENABLE_KAFKA_CONFIG_DENYLIST_WITH_OPTIONS)
             .map_err(|_| PlanError::RequiresFeatureFlag {
                 feature: format!(
-                    "creating KAFKA CONNECTION with WITH options other than {}",
-                    comma_separated(SAFE_WITH_OPTIONS)
+                    "sinking into KAFKA CONNECTION using WITH options other than {}",
+                    comma_separated(ALLOWLIST_WITH_OPTIONS)
                 ),
             })?;
     }

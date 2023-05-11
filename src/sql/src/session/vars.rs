@@ -872,8 +872,8 @@ feature_flags!(
         "CREATE SINK with unsafe options"
     ),
     (
-        enable_create_kafka_connection_denylist_with_options,
-        "CREATE KAFKA CONNECTION with unsafe options"
+        enable_kafka_config_denylist_with_options,
+        "KAFKA config using denylist options"
     ),
     (
         enable_unmanaged_cluster_replicas,
