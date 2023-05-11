@@ -29,6 +29,7 @@ pub enum Command {
     Builtin(BuiltinCommand),
     Sql(SqlCommand),
     FailSql(FailSqlCommand),
+    VersionCheck(i32, i32), // min and max versions, both inclusive
 }
 
 #[derive(Debug, Clone)]
@@ -94,7 +95,18 @@ pub(crate) fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, Pos
                 line_reader.next();
                 continue;
             }
-            _ => {
+            Some('(') => {
+                let (cmd, remainder) = parse_version_check(line_reader)?;
+                line_reader.push(&remainder);
+                cmd
+            }
+            Some(x) => {
+                return Err(PosError {
+                    source: anyhow!(format!("unexpected input line at beginning of file: {}", x)),
+                    pos: Some(pos),
+                });
+            }
+            None => {
                 return Err(PosError {
                     source: anyhow!("unexpected input line at beginning of file"),
                     pos: Some(pos),
@@ -160,6 +172,53 @@ pub fn validate_ident(name: &str) -> Result<(), anyhow::Error> {
         );
     }
     Ok(())
+}
+
+fn parse_version_check(line_reader: &mut LineReader) -> Result<(Command, String), PosError> {
+    let (pos, line) = line_reader.next().unwrap();
+    let closed_brace_pos = match line.find(')') {
+        Some(x) => x,
+        None => {
+            return Err(PosError {
+                source: anyhow!("version-check: found no closing brace"),
+                pos: Some(pos),
+            });
+        }
+    };
+    let remainder = line[closed_brace_pos + 1..].to_string();
+    const MIN_VERSION: i32 = 0;
+    const MAX_VERSION: i32 = 9999999;
+    let version_pos = if line.as_bytes()[2].is_ascii_digit() {
+        2
+    } else {
+        3
+    };
+    let version = match line[version_pos..closed_brace_pos].parse::<i32>() {
+        Ok(x) => x,
+        Err(_) => {
+            return Err(PosError {
+                source: anyhow!(
+                    "version-check: invalid version number {}",
+                    line[version_pos..closed_brace_pos].to_string()
+                ),
+                pos: Some(pos),
+            });
+        }
+    };
+    match &line[1..version_pos] {
+        "=" => Ok((Command::VersionCheck(version, version), remainder)),
+        "<=" => Ok((Command::VersionCheck(MIN_VERSION, version), remainder)),
+        "<" => Ok((Command::VersionCheck(MIN_VERSION, version - 1), remainder)),
+        ">=" => Ok((Command::VersionCheck(version, MAX_VERSION), remainder)),
+        ">" => Ok((Command::VersionCheck(version + 1, MAX_VERSION), remainder)),
+        _ => Err(PosError {
+            source: anyhow!(
+                "version-check: unknown comparison operator {}",
+                line[1..version_pos].to_string()
+            ),
+            pos: Some(pos),
+        }),
+    }
 }
 
 fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
@@ -360,7 +419,7 @@ fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
                 // Comment line. Skip.
                 let _ = line_reader.next();
             }
-            Some('$') | Some('>') | Some('!') | Some('?') => return None,
+            Some('$') | Some('>') | Some('!') | Some('?') | Some('(') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
@@ -406,6 +465,10 @@ impl<'a> LineReader<'a> {
     pub fn line_col(&self, pos: usize) -> (usize, usize) {
         let (base_pos, (line, col)) = self.pos_map.range(..=pos).next_back().unwrap();
         (*line, col + (pos - base_pos))
+    }
+
+    fn push(&mut self, text: &String) {
+        self.next = Some(Some((0usize, text.to_string())));
     }
 }
 
@@ -455,7 +518,7 @@ impl<'a> Iterator for LineReader<'a> {
 }
 
 fn is_sigil(c: Option<char>) -> bool {
-    matches!(c, Some('$') | Some('>') | Some('!') | Some('?'))
+    matches!(c, Some('$') | Some('>') | Some('!') | Some('?') | Some('('))
 }
 
 struct BuiltinReader<'a> {

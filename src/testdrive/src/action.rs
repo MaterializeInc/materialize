@@ -55,6 +55,7 @@ mod skip_if;
 mod sleep;
 mod sql;
 mod sql_server;
+mod version_check;
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -152,6 +153,7 @@ pub struct State {
     regex: Option<Regex>,
     regex_replacement: String,
     postgres_factory: StashFactory,
+    skip_next_command: bool,
 
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
@@ -470,6 +472,11 @@ pub(crate) trait Run {
 #[async_trait]
 impl Run for PosCommand {
     async fn run(self, state: &mut State) -> Result<ControlFlow, PosError> {
+        if state.skip_next_command {
+            state.skip_next_command = false;
+            return Ok(ControlFlow::Continue);
+        }
+
         let wrap_err = |e| PosError::new(e, self.pos);
         //         Substitute variables at startup except for the command-specific ones
         // Those will be substituted at runtime
@@ -566,6 +573,9 @@ impl Run for PosCommand {
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
                 sql::run_fail_sql(sql, state).await
+            }
+            Command::VersionCheck(min_version, max_version) => {
+                version_check::run_version_check(min_version, max_version, state).await
             }
         };
 
@@ -778,6 +788,7 @@ pub async fn create_state(
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),
+        skip_next_command: false,
 
         // === Materialize state. ===
         materialize_catalog_postgres_stash,
