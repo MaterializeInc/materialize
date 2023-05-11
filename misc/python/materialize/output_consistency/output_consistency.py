@@ -36,7 +36,7 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 def run_output_consistency_tests(
     cursor: Cursor,
     runtime: int,
-    seed: int,
+    random_seed: int,
     dry_run: bool,
     fail_fast: bool,
     execute_setup: bool,
@@ -45,6 +45,7 @@ def run_output_consistency_tests(
     config.dry_run = dry_run
     config.fail_fast = fail_fast
     config.execute_setup = execute_setup
+    config.random_seed = random_seed
 
     evaluation_strategies = [
         DataFlowRenderingEvaluation(),
