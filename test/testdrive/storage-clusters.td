@@ -9,6 +9,7 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_format_json = true
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
 
 # Clean up cluster manually, since testdrive does not automatically clean up
 # clusters.
