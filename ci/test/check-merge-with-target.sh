@@ -15,12 +15,10 @@
 set -euo pipefail
 
 . misc/shlib/shlib.bash
+. misc/buildkite/git.bash
 
-BUILDKITE_REPO_REF="origin"
-./ci/test/utils/fetch-merge-target.sh
-
-ci_collapsed_heading "Merge target branch"
-run git merge "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"
+fetch_pr_target_branch
+merge_pr_target_branch
 
 ci_collapsed_heading "Conduct checks"
 bin/ci-builder run stable cargo check

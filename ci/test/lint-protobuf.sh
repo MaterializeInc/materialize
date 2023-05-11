@@ -14,9 +14,9 @@
 set -euo pipefail
 
 . misc/shlib/shlib.bash
+. misc/buildkite/git.bash
 
-BUILDKITE_REPO_REF="origin"
-./ci/test/utils/fetch-merge-target.sh
+fetch_pr_target_branch
 
 ci_collapsed_heading "Lint protobuf"
 ci_try buf breaking src --against ".git#branch=$BUILDKITE_PULL_REQUEST_BASE_BRANCH,subdir=src"
