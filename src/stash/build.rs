@@ -190,7 +190,7 @@ fn main() -> anyhow::Result<()> {
     // necessary since the method takes the slice as a generic arg.
     #[allow(clippy::as_conversions)]
     prost_build::Config::new()
-        .btree_map(["."])
+        .btree_map(["src"])
         .bytes(["."])
         .message_attribute(".", "#[derive(Eq, PartialOrd, Ord)]")
         // Note(parkmycar): This is annoying, but we need to manually specify each oneof so we can

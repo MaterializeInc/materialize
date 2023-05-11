@@ -88,7 +88,7 @@ fn main() {
             ".mz_persist_client.internal.state",
             "#[derive(serde::Serialize)]",
         )
-        .btree_map(["."])
+        .btree_map(["src"])
         .bytes([".mz_persist_client.internal.diff.ProtoStateFieldDiffs"])
         .compile_protos(
             &[

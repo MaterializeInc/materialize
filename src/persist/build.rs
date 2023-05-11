@@ -79,7 +79,7 @@ fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
     prost_build::Config::new()
-        .btree_map(["."])
+        .btree_map(["src"])
         .compile_protos(&["src/persist/src/persist.proto"], &["."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

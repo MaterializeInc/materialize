@@ -84,7 +84,7 @@ fn main() {
     prost_build::Config::new()
         .include_file("mod.rs")
         .file_descriptor_set_path(out_dir.join("file_descriptor_set.pb"))
-        .btree_map(["."])
+        .btree_map(["src"])
         .compile_protos(&["benchmark.proto"], &["testdata"])
         .unwrap_or_else(|e| panic!("{e}"))
 }
