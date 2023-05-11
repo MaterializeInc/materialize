@@ -15,13 +15,22 @@ class ConsistencyTestConfiguration:
         max_cols_per_query: int,
         random_seed: int,
         dry_run: bool,
+        fail_fast: bool,
+        execute_setup: bool,
     ):
         self.queries_per_tx = queries_per_tx
         self.max_cols_per_query = max_cols_per_query
         self.random_seed = random_seed
         self.dry_run = dry_run
+        self.fail_fast = fail_fast
+        self.execute_setup = execute_setup
 
 
 DEFAULT_CONFIG = ConsistencyTestConfiguration(
-    queries_per_tx=20, random_seed=0, max_cols_per_query=8, dry_run=False
+    queries_per_tx=20,
+    random_seed=0,
+    max_cols_per_query=8,
+    dry_run=False,
+    fail_fast=False,
+    execute_setup=True,
 )

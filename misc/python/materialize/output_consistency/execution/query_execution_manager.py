@@ -49,6 +49,9 @@ class QueryExecutionManager:
         data_types: list[DataType],
         evaluation_strategies: list[EvaluationStrategy],
     ) -> None:
+        if not self.config.execute_setup:
+            return
+
         ddl_statements = []
         for strategy in evaluation_strategies:
             ddl_statements.extend(strategy.generate_source(data_types))
@@ -65,7 +68,6 @@ class QueryExecutionManager:
             return ConsistencyTestSummary(0, 0, self.config.dry_run)
 
         print(f"Processing {len(queries)} queries.")
-        self.executor.acquire_cursor()
 
         count_passed = 0
 

@@ -6,13 +6,12 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Any, Optional, Sequence
+from typing import Any, Sequence
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError
 
-from materialize.mzcompose import Composition
 from materialize.output_consistency.configuration.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -30,9 +29,6 @@ class SqlExecutor:
     def ddl(self, sql: str) -> None:
         raise RuntimeError("Not implemented")
 
-    def acquire_cursor(self) -> None:
-        raise RuntimeError("Not implemented")
-
     def begin_tx(self, isolation_level: str) -> None:
         raise RuntimeError("Not implemented")
 
@@ -47,24 +43,14 @@ class SqlExecutor:
 
 
 class PgWireDatabaseSqlExecutor(SqlExecutor):
-    def __init__(self, composition: Composition):
-        self.composition = composition
-        self._cursor: Optional[Cursor] = None
-
-    def get_cursor(self) -> Cursor:
-        if self._cursor is None:
-            raise RuntimeError("Cursor not initialized")
-        else:
-            return self._cursor
+    def __init__(self, cursor: Cursor):
+        self.cursor = cursor
 
     def ddl(self, sql: str) -> None:
         try:
-            self.composition.sql(sql)
+            self.cursor.execute(sql)
         except (ProgrammingError, DatabaseError) as err:
             raise SqlExecutionError(err)
-
-    def acquire_cursor(self) -> None:
-        self._cursor = self.composition.sql_cursor()
 
     def begin_tx(self, isolation_level: str) -> None:
         self._execute_with_cursor(f"BEGIN ISOLATION LEVEL {isolation_level};")
@@ -77,15 +63,14 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
 
     def query(self, sql: str) -> Sequence[Sequence[Any]]:
         try:
-            cursor = self.get_cursor()
             self._execute_with_cursor(sql)
-            return cursor.fetchall()
+            return self.cursor.fetchall()
         except (ProgrammingError, DatabaseError) as err:
             raise SqlExecutionError(err)
 
     def _execute_with_cursor(self, sql: str) -> None:
         try:
-            self.get_cursor().execute(sql)
+            self.cursor.execute(sql)
         except (ProgrammingError, DatabaseError) as err:
             raise SqlExecutionError(err)
 
@@ -96,9 +81,6 @@ class DryRunSqlExecutor(SqlExecutor):
 
     def ddl(self, sql: str) -> None:
         self.consume_sql(sql)
-
-    def acquire_cursor(self) -> None:
-        pass
 
     def begin_tx(self, isolation_level: str) -> None:
         self.consume_sql(f"BEGIN ISOLATION LEVEL {isolation_level};")
@@ -115,9 +97,9 @@ class DryRunSqlExecutor(SqlExecutor):
 
 
 def create_sql_executor(
-    config: ConsistencyTestConfiguration, composition: Composition
+    config: ConsistencyTestConfiguration, cursor: Cursor
 ) -> SqlExecutor:
     if config.dry_run:
         return DryRunSqlExecutor()
     else:
-        return PgWireDatabaseSqlExecutor(composition)
+        return PgWireDatabaseSqlExecutor(cursor)

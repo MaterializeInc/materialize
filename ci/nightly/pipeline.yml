@@ -60,6 +60,7 @@ steps:
           - { value: launchdarkly }
           - { value: bounded-memory }
           - { value: cloud-canary }
+          - { value: output-consistency }
           - { value: sqlsmith }
           - { value: sqlsmith-explain }
           - { value: sqlancer-pqs }
@@ -589,6 +590,17 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
+
+  - id: output-consistency
+    label: "Output consistency"
+    timeout_in_minutes: 58
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: output-consistency
+          args: ["--seed=$BUILDKITE_JOB_ID", "--runtime=3300", "--dry-run=False", "--fail-fast=False", "--execute-setup=True"]
 
   - id: sqlsmith
     label: "SQLsmith"

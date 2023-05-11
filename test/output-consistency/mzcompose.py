@@ -8,55 +8,42 @@
 # by the Apache License, Version 2.0.
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Kafka,
-    Localstack,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.services import Cockroach, Materialized
 from materialize.output_consistency.output_consistency import (
     run_output_consistency_tests,
 )
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
-    SchemaRegistry(),
-    Localstack(),
     Cockroach(setup_materialize=True),
-    Clusterd(name="clusterd1"),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
     Materialized(propagate_crashes=False, external_cockroach=True),
-    Testdrive(
-        volume_workdir="../testdrive:/workdir/testdrive",
-        volumes_extra=[".:/workdir/smoke"],
-        materialize_params={"cluster": "cluster1"},
-    ),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    test_name = "test-output-consistency"
-
-    with c.test_case(test_name):
-        c.workflow(test_name)
-
-
-def workflow_test_output_consistency(c: Composition) -> bool:
     """
     Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).
     """
 
-    c.down(destroy_volumes=True)
-    with c.override(
-        Testdrive(no_reset=True),
-    ):
-        c.up("testdrive", persistent=True)
-        c.up("materialized")
+    parser.add_argument("--runtime", default=600, type=int)
+    parser.add_argument("--seed", default=0, type=int)
+    parser.add_argument("--dry-run", default=False, type=bool)
+    parser.add_argument("--fail-fast", default=False, type=bool)
+    parser.add_argument("--execute-setup", default=True, type=bool)
+    args = parser.parse_args()
 
-    test_summary = run_output_consistency_tests(c)
-    return test_summary.all_passed()
+    c.down(destroy_volumes=True)
+
+    c.up("materialized")
+    cursor = c.sql_cursor()
+
+    test_summary = run_output_consistency_tests(
+        cursor,
+        args.runtime,
+        args.seed,
+        args.dry_run,
+        args.fail_fast,
+        args.execute_setup,
+    )
+
+    assert test_summary.all_passed(), "At least one test failed"
