@@ -68,7 +68,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default_size=args.default_size,
         options=[
             "--orchestrator-process-scratch-directory=/mzdata/source_data"
-            "--bootstrap-system-parameter=upsert_source_disk_default=true"
+            "--system-var-default=upsert_source_disk_default=true"
         ],
     )
 

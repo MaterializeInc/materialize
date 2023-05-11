@@ -446,15 +446,15 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_cluster_replica_size: String,
-    /// An list of NAME=VALUE pairs for bootstrapping system parameters that are
-    /// not already modified.
+    /// An list of NAME=VALUE pairs used to override static defaults
+    /// for system parameters.
     #[clap(
         long,
-        env = "BOOTSTRAP_SYSTEM_PARAMETER",
+        env = "SYSTEM_PARAMETER_DEFAULT",
         multiple = true,
         value_delimiter = ';'
     )]
-    bootstrap_system_parameter: Vec<KeyValueArg<String, String>>,
+    system_parameter_default: Vec<KeyValueArg<String, String>>,
     /// Default storage host size
     #[clap(long, env = "DEFAULT_STORAGE_HOST_SIZE")]
     default_storage_host_size: Option<String>,
@@ -796,8 +796,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         default_storage_cluster_size: args.default_storage_host_size,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
-        bootstrap_system_parameters: args
-            .bootstrap_system_parameter
+        system_parameter_defaults: args
+            .system_parameter_default
             .into_iter()
             .map(|kv| (kv.key, kv.value))
             .collect(),

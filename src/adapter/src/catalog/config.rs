@@ -49,9 +49,8 @@ pub struct Config<'a> {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Default storage cluster size. Must be a key from cluster_replica_sizes.
     pub default_storage_cluster_size: Option<String>,
-    /// Values to set for system parameters, if those system parameters have not
-    /// already been set by the system user.
-    pub bootstrap_system_parameters: BTreeMap<String, String>,
+    /// Dynamic defaults for system parameters.
+    pub system_parameter_defaults: BTreeMap<String, String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
     /// A handle to a secrets manager that can only read secrets.

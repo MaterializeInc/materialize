@@ -1056,6 +1056,15 @@ impl CatalogState {
         Ok(self.system_configuration.get(name)?)
     }
 
+    /// Set the default value for `name`, which is the value it will be reset to.
+    fn set_system_configuration_default(
+        &mut self,
+        name: &str,
+        value: VarInput,
+    ) -> Result<(), AdapterError> {
+        Ok(self.system_configuration.set_default(name, value)?)
+    }
+
     /// Insert system configuration `name` with `value`.
     ///
     /// Return a `bool` value indicating whether the configuration was modified
@@ -1078,7 +1087,7 @@ impl CatalogState {
 
     /// Remove all system configurations.
     fn clear_system_configuration(&mut self) {
-        self.system_configuration = SystemVars::default();
+        self.system_configuration.reset_all();
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -2843,7 +2852,7 @@ impl Catalog {
 
         catalog
             .load_system_configuration(
-                config.bootstrap_system_parameters,
+                config.system_parameter_defaults,
                 config.system_parameter_frontend,
             )
             .await?;
@@ -3373,9 +3382,8 @@ impl Catalog {
     ///
     /// 1. Load parameters from the configuration persisted in the catalog
     ///    storage backend.
-    /// 2. Overwrite without persisting selected parameter values from the
-    ///    configuration passed in the provided `bootstrap_system_parameters`
-    ///    map.
+    /// 2. Set defaults from configuration passed in the provided
+    ///    `system_parameter_defaults` map.
     /// 3. Overwrite and persist selected parameter values from the
     ///    configuration that can be pulled from the provided
     ///    `system_parameter_frontend` (if present).
@@ -3384,7 +3392,7 @@ impl Catalog {
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_system_configuration(
         &mut self,
-        bootstrap_system_parameters: BTreeMap<String, String>,
+        system_parameter_defaults: BTreeMap<String, String>,
         system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     ) -> Result<(), AdapterError> {
         let (system_config, boot_ts) = {
@@ -3393,10 +3401,10 @@ impl Catalog {
             let boot_ts = storage.boot_ts();
             (system_config, boot_ts)
         };
-        for (name, value) in &bootstrap_system_parameters {
+        for (name, value) in &system_parameter_defaults {
             match self
                 .state
-                .insert_system_configuration(name, VarInput::Flat(value))
+                .set_system_configuration_default(name, VarInput::Flat(value))
             {
                 Ok(_) => (),
                 Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
@@ -4121,7 +4129,7 @@ impl Catalog {
             metrics_registry,
             cluster_replica_sizes: Default::default(),
             default_storage_cluster_size: None,
-            bootstrap_system_parameters: Default::default(),
+            system_parameter_defaults: Default::default(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],

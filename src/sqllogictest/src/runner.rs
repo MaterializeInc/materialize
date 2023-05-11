@@ -921,7 +921,7 @@ impl RunnerInner {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            bootstrap_system_parameters: Default::default(),
+            system_parameter_defaults: Default::default(),
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,
