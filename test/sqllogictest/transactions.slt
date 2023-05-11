@@ -613,7 +613,7 @@ SELECT * FROM rtr
 1
 
 statement ok
-DROP TABLE t;
+DROP TABLE t CASCADE;
 
 statement ok
 CREATE TABLE t (a INT);
