@@ -2595,7 +2595,6 @@ impl Coordinator {
         plan: ExplainPlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_compute_client::plan::Plan;
         use mz_repr::explain::trace_plan;
         use ExplainStage::*;
 
@@ -2696,8 +2695,20 @@ impl Coordinator {
             })?;
 
             let mut dataflow = DataflowDesc::new("explanation".to_string());
-            self.dataflow_builder(cluster_id)
-                .import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
+            let mut builder = self.dataflow_builder(cluster_id);
+            builder.import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
+
+            // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
+            // timestamp.
+            let style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::Deferred,
+                session,
+            };
+            let state = self.catalog().state();
+            dataflow.visit_children(
+                |r| prep_relation_expr(state, r, style),
+                |s| prep_scalar_expr(state, s, style),
+            )?;
 
             // Execute the `optimize/global` stage.
             catch_unwind(no_errors, "global", || {
@@ -2740,15 +2751,22 @@ impl Coordinator {
                 _ => None,
             };
 
+            if matches!(explainee, Explainee::Query) {
+                // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
+                // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
+                if let Some(as_of) = dataflow.as_of.as_ref() {
+                    if !as_of.is_empty() {
+                        if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1))
+                        {
+                            dataflow.until = timely::progress::Antichain::from_elem(next);
+                        }
+                    }
+                }
+            }
+
             // Execute the `optimize/finalize_dataflow` stage.
             let dataflow_plan = catch_unwind(no_errors, "finalize_dataflow", || {
-                Plan::<mz_repr::Timestamp>::finalize_dataflow(
-                    dataflow,
-                    self.catalog()
-                        .system_config()
-                        .enable_monotonic_oneshot_selects(),
-                )
-                .map_err(AdapterError::Internal)
+                self.finalize_dataflow(dataflow, cluster_id)
             })?;
 
             // Trace the resulting plan for the top-level `optimize` path.
