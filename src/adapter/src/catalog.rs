@@ -2621,7 +2621,9 @@ impl CatalogItemRebuilder {
         id: GlobalId,
         ancestor_ids: &BTreeMap<GlobalId, GlobalId>,
     ) -> Self {
-        if id.is_system() && (entry.is_table() || entry.is_introspection_source()) {
+        if id.is_system()
+            && (entry.is_table() || entry.is_introspection_source() || entry.is_source())
+        {
             Self::SystemSource(entry.item().clone())
         } else {
             let create_sql = entry.create_sql().to_string();

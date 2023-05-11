@@ -77,7 +77,6 @@ mod collection_mgmt;
 mod command_wals;
 mod persist_handles;
 mod rehydration;
-mod remap_migration;
 mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
@@ -1126,17 +1125,13 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     async fn migrate_collections(
         &mut self,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
-        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
-
-        // MIGRATION: v0.44 See comments on remap_shard_migration.
-        let remap_shard_migration_delta =
-            self.remap_shard_migration(&durable_metadata, &collections);
-
-        self.upsert_collection_metadata(&mut durable_metadata, remap_shard_migration_delta)
-            .await;
-
+        // Collection migrations look something like this:
+        // let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+        // do_migration(&mut durable_metadata)?;
+        // self.upsert_collection_metadata(&mut durable_metadata, remap_shard_migration_delta)
+        //     .await;
         Ok(())
     }
 
@@ -1266,6 +1261,7 @@ where
                     .open_data_handles(
                         format!("controller data {}", id).as_str(),
                         metadata.data_shard,
+                        description.since.as_ref(),
                         metadata.relation_desc.clone(),
                         persist_client,
                     )
@@ -2378,12 +2374,16 @@ where
 
     /// Opens a write and critical since handles for the given `shard`.
     ///
-    /// This will `halt!` the process if we cannot successfully acquire a
-    /// critical handle with our current epoch.
+    /// `since` is an optional `since` that the read handle will be forwarded to if it is less than
+    /// its current since.
+    ///
+    /// This will `halt!` the process if we cannot successfully acquire a critical handle with our
+    /// current epoch.
     async fn open_data_handles(
         &self,
         purpose: &str,
         shard: ShardId,
+        since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
     ) -> (
@@ -2409,7 +2409,11 @@ where
                 .await
                 .expect("invalid persist usage");
 
-            let since = handle.since().clone();
+            // Take the join of the handle's since and the provided `since`; this lets materialized
+            // views express the since at which their read handles "start."
+            let since = handle
+                .since()
+                .join(since.unwrap_or(&Antichain::from_elem(T::minimum())));
 
             let our_epoch = self.state.envd_epoch;
 
@@ -2651,20 +2655,20 @@ where
         self.append_to_managed_collection(id, updates).await;
     }
 
-    /// Updates the on-disk and in-memory representation of
-    /// `DurableCollectionMetadata` (i.e. KV pairs in `METADATA_COLLECTION`
-    /// on-disk and `all_current_metadata` as its in-memory representation) to
-    /// include that of `upsert_state`, i.e. upserting the KV pairs in
-    /// `upsert_state` into in `all_current_metadata`, as well as
-    /// `METADATA_COLLECTION`.
+    /// Updates the on-disk and in-memory representation of `DurableCollectionMetadata` (i.e. KV
+    /// pairs in `METADATA_COLLECTION` on-disk and `all_current_metadata` as its in-memory
+    /// representation) to include that of `upsert_state`, i.e. upserting the KV pairs in
+    /// `upsert_state` into in `all_current_metadata`, as well as `METADATA_COLLECTION`.
     ///
     /// Any shards no longer referenced after the upsert will be finalized.
     ///
     /// Note that this function expects to be called:
-    /// - While no source is currently using the shards identified in the
-    ///   current metadata.
-    /// - Before any sources begins using the shards identified in
-    ///   `new_metadata`.
+    /// - While no source is currently using the shards identified in the current metadata.
+    /// - Before any sources begins using the shards identified in `new_metadata`.
+    ///
+    /// We allow this being kept around as dead code because we might want to perform similar
+    /// migration in the future.
+    #[allow(dead_code)]
     async fn upsert_collection_metadata(
         &mut self,
         all_current_metadata: &mut BTreeMap<GlobalId, DurableCollectionMetadata>,
@@ -2779,6 +2783,7 @@ where
             let data_shard = all_current_metadata[&id].data_shard;
             c.collection_metadata.data_shard = data_shard;
 
+            let collection_desc = c.description.clone();
             let relation_desc = c.collection_metadata.relation_desc.clone();
 
             // This will halt! if any of the handles cannot be acquired
@@ -2788,6 +2793,7 @@ where
                 .open_data_handles(
                     format!("controller data for {id}").as_str(),
                     data_shard,
+                    collection_desc.since.as_ref(),
                     relation_desc,
                     &persist_client,
                 )

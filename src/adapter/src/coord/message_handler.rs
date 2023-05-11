@@ -37,7 +37,7 @@ use crate::coord::{
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice};
 
-use super::{PeekStage, PeekStageFinish, TransientPlan};
+use super::{PeekStage, PeekStageFinish, PeekValidity};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
@@ -89,17 +89,9 @@ impl Coordinator {
             Message::RealTimeRecencyTimestamp {
                 conn_id,
                 real_time_recency_ts,
-                replan,
+                validity,
             } => {
-                self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, replan)
-                    .await;
-            }
-            Message::Replan {
-                tx,
-                session,
-                replan,
-            } => {
-                self.sequence_plan(tx, session, replan.plan, replan.depends_on)
+                self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
                     .await;
             }
         }
@@ -658,7 +650,7 @@ impl Coordinator {
         &mut self,
         conn_id: ConnectionId,
         real_time_recency_ts: mz_repr::Timestamp,
-        replan: TransientPlan,
+        mut validity: PeekValidity,
     ) {
         let real_time_recency_context =
             match self.pending_real_time_recency_timestamp.remove(&conn_id) {
@@ -667,16 +659,9 @@ impl Coordinator {
                 None => return,
             };
 
-        if replan.transient_revision != self.catalog().transient_revision() {
-            // Revision change; re plan from the beginning.
+        if let Err(err) = validity.check(self.catalog()) {
             let (tx, session) = real_time_recency_context.take_tx_and_session();
-            self.internal_cmd_tx
-                .send(Message::Replan {
-                    tx,
-                    session,
-                    replan,
-                })
-                .expect("coordinator must exist");
+            tx.send(Err(err), session);
             return;
         }
 
@@ -720,7 +705,7 @@ impl Coordinator {
                     tx,
                     session,
                     PeekStage::Finish(PeekStageFinish {
-                        replan,
+                        validity,
                         finishing,
                         copy_to,
                         dataflow,
