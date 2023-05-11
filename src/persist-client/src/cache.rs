@@ -22,6 +22,8 @@ use differential_dataflow::lattice::Lattice;
 use timely::progress::Timestamp;
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::{Stream, StreamExt};
 use tracing::{debug, instrument};
 
 use mz_ore::metrics::MetricsRegistry;
@@ -290,7 +292,7 @@ async fn consensus_rtt_latency_task(
     })
 }
 
-trait DynState: Debug + Send + Sync {
+pub(crate) trait DynState: Debug + Send + Sync {
     fn codecs(&self) -> (String, String, String, String, Option<CodecConcreteType>);
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
     fn push_diff(&self, diff: VersionedData);
@@ -357,6 +359,7 @@ pub struct StateCache {
     pub(crate) metrics: Arc<Metrics>,
     states: Arc<std::sync::Mutex<BTreeMap<ShardId, Arc<OnceCell<Weak<dyn DynState>>>>>>,
     pubsub_sender: Arc<dyn PubSubSender>,
+    shard_state_ref_tx: tokio::sync::broadcast::Sender<(ShardId, Weak<dyn DynState>)>,
 }
 
 #[derive(Debug)]
@@ -372,11 +375,14 @@ impl StateCache {
         metrics: Arc<Metrics>,
         pubsub_sender: Arc<dyn PubSubSender>,
     ) -> Self {
+        let (shard_state_ref_tx, _) =
+            tokio::sync::broadcast::channel(cfg.pubsub_server_connection_channel_size);
         StateCache {
             cfg: Arc::new(cfg.clone()),
             metrics,
             states: Default::default(),
             pubsub_sender,
+            shard_state_ref_tx,
         }
     }
 
@@ -392,10 +398,11 @@ impl StateCache {
         )
     }
 
-    pub(crate) fn apply_diff(&self, shard_id: &ShardId, diff: VersionedData) {
-        if let Some(state) = self.get_cached(shard_id) {
-            state.push_diff(diff);
-        }
+    pub(crate) fn state_weak_refs(&self) -> impl Stream<Item = (ShardId, Weak<dyn DynState>)> {
+        BroadcastStream::new(self.shard_state_ref_tx.subscribe()).filter_map(|x| match x {
+            Ok(x) => Some(x),
+            Err(_) => None,
+        })
     }
 
     pub(crate) async fn get<K, V, T, D, F, InitFn>(
@@ -452,7 +459,9 @@ impl StateCache {
                         .await?;
                     if let Some(x) = did_init {
                         // We actually did the init work, don't bother casting back
-                        // the type erased and weak version.
+                        // the type erased and weak version. Additionally, inform
+                        // any listeners of this new state.
+                        let _ = self.shard_state_ref_tx.send((shard_id, Weak::clone(state)));
                         return Ok(x);
                     }
                     let Some(state) = state.upgrade() else {
@@ -489,6 +498,16 @@ impl StateCache {
         }
     }
 
+    pub(crate) fn get_state_weak(&self, shard_id: &ShardId) -> Option<Weak<dyn DynState>> {
+        self.states
+            .lock()
+            .expect("lock")
+            .get(shard_id)
+            .and_then(|x| x.get())
+            .map(|x| Weak::clone(x))
+    }
+
+    #[cfg(test)]
     fn get_cached(&self, shard_id: &ShardId) -> Option<Arc<dyn DynState>> {
         self.states
             .lock()

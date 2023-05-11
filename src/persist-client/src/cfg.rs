@@ -117,6 +117,8 @@ pub struct PersistConfig {
     pub pubsub_client_receiver_channel_size: usize,
     /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
     pub pubsub_server_connection_channel_size: usize,
+    /// Size of channel used by the state cache to broadcast shard state references.
+    pub pubsub_state_cache_shard_ref_channel_size: usize,
 }
 
 impl PersistConfig {
@@ -168,6 +170,7 @@ impl PersistConfig {
             pubsub_client_sender_channel_size: 25,
             pubsub_client_receiver_channel_size: 25,
             pubsub_server_connection_channel_size: 25,
+            pubsub_state_cache_shard_ref_channel_size: 25,
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is

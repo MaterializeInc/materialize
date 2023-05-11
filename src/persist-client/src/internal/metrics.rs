@@ -1632,11 +1632,15 @@ impl PubSubGrpcClientConnectionMetrics {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PubSubClientReceiverMetrics {
     pub(crate) push_received: IntCounter,
     pub(crate) unknown_message_received: IntCounter,
     pub(crate) approx_diff_latency_seconds: Histogram,
+
+    pub(crate) state_pushed_diff_fast_path: IntCounter,
+    pub(crate) state_pushed_diff_slow_path_succeeded: IntCounter,
+    pub(crate) state_pushed_diff_slow_path_failed: IntCounter,
 }
 
 impl PubSubClientReceiverMetrics {
@@ -1651,9 +1655,22 @@ impl PubSubClientReceiverMetrics {
             push_received: call_received.with_label_values(&["push"]),
             unknown_message_received: call_received.with_label_values(&["unknown"]),
             approx_diff_latency_seconds: registry.register(metric!(
-                name: "mz_persist_pubsub_client_approx_diff_apply_latency_secons",
+                name: "mz_persist_pubsub_client_approx_diff_apply_latency_seconds",
                 help: "histogram of (approximate) latency between sending a diff and applying it",
                 buckets: prometheus::exponential_buckets(0.0128, 2.0, 16).expect("buckets"),
+            )),
+
+            state_pushed_diff_fast_path: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_state_push_diff_fast_path",
+                help: "count fast-path state push_diff calls",
+            )),
+            state_pushed_diff_slow_path_succeeded: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_state_push_diff_slow_path_succeeded",
+                help: "count of successful slow-path state push_diff calls",
+            )),
+            state_pushed_diff_slow_path_failed: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_state_push_diff_slow_path_failed",
+                help: "count of unsuccessful slow-path state push_diff calls",
             )),
         }
     }
