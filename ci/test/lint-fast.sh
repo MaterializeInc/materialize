@@ -27,8 +27,11 @@ ci_try cargo hakari manage-deps --dry-run
 # discover the failures after a merge to main.
 ci_try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
-fetch_pr_target_branch
-ci_collapsed_heading "Lint protobuf"
-ci_try buf breaking src --against ".git#branch=$BUILDKITE_PULL_REQUEST_BASE_BRANCH,subdir=src"
+
+if [[ "$BUILDKITE_PULL_REQUEST" != "false" ]]; then
+  fetch_pr_target_branch
+  ci_collapsed_heading "Lint protobuf"
+  ci_try buf breaking src --against ".git#branch=$BUILDKITE_PULL_REQUEST_BASE_BRANCH,subdir=src"
+fi
 
 ci_status_report
