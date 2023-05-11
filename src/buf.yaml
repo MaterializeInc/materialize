@@ -16,6 +16,8 @@ breaking:
     - compute-client
     # does currently not require backward-compatibility
     - storage-client
+    # does not currently require backward-compatibility
+    - stash
 lint:
   use:
     - DEFAULT
