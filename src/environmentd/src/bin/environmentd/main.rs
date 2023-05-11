@@ -420,17 +420,15 @@ pub struct Args {
     /// The PostgreSQL URL for the storage stash.
     #[clap(long, env = "STORAGE_STASH_URL", value_name = "POSTGRES_URL")]
     storage_stash_url: String,
-    /// The Persist PubSub service URL.
+    /// The Persist PubSub URL.
     ///
-    /// This URL is passed along with the port specified in `internal_persist_pubsub_listen_addr`
-    /// to `clusterd` for external discovery of the Persist PubSub service hosted within
-    /// `environmentd`.
+    /// This URL is passed to `clusterd` for discovery of the Persist PubSub service.
     #[clap(
         long,
-        env = "PERSIST_PUBSUB_SERVICE_URL",
-        default_value = "http://localhost"
+        env = "PERSIST_PUBSUB_URL",
+        default_value = "http://localhost:6879"
     )]
-    persist_pubsub_service_url: String,
+    persist_pubsub_url: String,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -811,11 +809,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
         scratch_directory: args.orchestrator_process_scratch_directory,
-        persist_pubsub_url: format!(
-            "{}:{}",
-            args.persist_pubsub_service_url,
-            args.internal_persist_pubsub_listen_addr.port()
-        ),
+        persist_pubsub_url: args.persist_pubsub_url,
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
