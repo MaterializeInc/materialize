@@ -14,6 +14,7 @@
 set -euo pipefail
 
 . misc/shlib/shlib.bash
+. misc/buildkite/git.bash
 
 ci_try bin/lint
 ci_try cargo --locked fmt -- --check
@@ -25,5 +26,9 @@ ci_try cargo hakari manage-deps --dry-run
 # don't care about its output in the test pipeline, so that we don't only
 # discover the failures after a merge to main.
 ci_try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
+
+fetch_pr_target_branch
+ci_collapsed_heading "Lint protobuf"
+ci_try buf breaking src --against ".git#branch=$BUILDKITE_PULL_REQUEST_BASE_BRANCH,subdir=src"
 
 ci_status_report

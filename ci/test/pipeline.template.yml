@@ -114,16 +114,6 @@ steps:
       queue: linux-x86_64
     coverage: skip
 
-  - id: lint-protobuf
-    label: Lint protobuf compatibility
-    command: bin/ci-builder run stable ci/test/lint-protobuf.sh
-    inputs:
-      - "**/*.proto"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
-    coverage: skip
-
   - id: lint-docs
     label: Lint docs
     command: bin/ci-builder run stable ci/test/lint-docs.sh
