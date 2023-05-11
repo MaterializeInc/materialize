@@ -7,18 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{
-    collections::BTreeMap,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
 use prometheus::IntCounter;
 use tokio::time;
 
-use mz_ore::{metric, metrics::MetricsRegistry};
+use mz_ore::{
+    metric,
+    metrics::{MetricsRegistry, UIntGauge},
+    now::NowFn,
+};
 use mz_sql::catalog::{CloudProvider, EnvironmentId};
 
 use super::SynchronizedParameters;
@@ -39,6 +39,8 @@ pub struct SystemParameterFrontend {
     ld_key_map: BTreeMap<String, String>,
     /// Frontend metrics.
     ld_metrics: Metrics,
+    /// Function to return the current time.
+    now_fn: NowFn,
 }
 
 impl SystemParameterFrontend {
@@ -48,6 +50,7 @@ impl SystemParameterFrontend {
         registry: &MetricsRegistry,
         ld_sdk_key: &str,
         ld_key_map: BTreeMap<String, String>,
+        now_fn: NowFn,
     ) -> Result<Self, anyhow::Error> {
         let ld_metrics = Metrics::register_into(registry);
         let ld_config = ld::ConfigBuilder::new(ld_sdk_key)
@@ -55,15 +58,9 @@ impl SystemParameterFrontend {
                 let last_known_time_seconds = ld_metrics.last_known_time_seconds.clone();
                 let last_cse_time_seconds = ld_metrics.last_cse_time_seconds.clone();
                 Arc::new(move |result| {
-                    if let Ok(t_next) = u64::try_from(result.time_from_server / 1000) {
-                        let t_curr = last_known_time_seconds.get();
-                        if t_next > t_curr {
-                            last_known_time_seconds.inc_by(t_next - t_curr);
-                        }
-                        let t_curr = last_cse_time_seconds.get();
-                        if t_next > t_curr {
-                            last_cse_time_seconds.inc_by(t_next - t_curr);
-                        }
+                    if let Ok(ts) = u64::try_from(result.time_from_server / 1000) {
+                        last_known_time_seconds.set(ts);
+                        last_cse_time_seconds.set(ts);
                     } else {
                         tracing::warn!("Cannot convert time_from_server / 1000 from u128 to u64");
                     }
@@ -101,6 +98,7 @@ impl SystemParameterFrontend {
             ld_ctx,
             ld_key_map,
             ld_metrics,
+            now_fn,
         })
     }
 
@@ -116,18 +114,10 @@ impl SystemParameterFrontend {
         // received in a Prometheus metric.
         self.ld_client.start_with_default_executor_and_callback({
             let last_sse_time_seconds = self.ld_metrics.last_sse_time_seconds.clone();
+            let now_fn = self.now_fn.clone();
             Arc::new(move |_ev| {
-                if let Ok(t_next) = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|duration| duration.as_secs())
-                {
-                    let t_curr = last_sse_time_seconds.get();
-                    if t_next > t_curr {
-                        last_sse_time_seconds.inc_by(t_next - t_curr);
-                    }
-                } else {
-                    tracing::warn!("Cannot get duration since UNIX_EPOCH as seconds");
-                }
+                let ts = now_fn() / 1000;
+                last_sse_time_seconds.set(ts);
             })
         });
 
@@ -178,9 +168,9 @@ impl SystemParameterFrontend {
 #[derive(Debug, Clone)]
 struct Metrics {
     // TODO: remove this in favor of last_cse_time_seconds.
-    pub last_known_time_seconds: IntCounter,
-    pub last_cse_time_seconds: IntCounter,
-    pub last_sse_time_seconds: IntCounter,
+    pub last_known_time_seconds: UIntGauge,
+    pub last_cse_time_seconds: UIntGauge,
+    pub last_sse_time_seconds: UIntGauge,
     pub params_changed: IntCounter,
 }
 
