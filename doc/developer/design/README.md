@@ -107,8 +107,8 @@ thinking. Err on the side of writing a design document.
 3. "Socialize" the design with relevant stakeholders. Typically, there is a
    small set of people who have a vested interest in the area the design
    touches. If it's not clear who that is, ask your TL, EM, or in #eng-general.
-4. (Optional) Announce that the design doc is ready for review in #eng-announce,
-   if you think it's helpful to surface the design to a larger set of people.
+4. Announce that the design doc is ready for review in #eng-announce, if you
+   think it's helpful to surface the design to a larger set of people.
 
 ### Iteration
 
