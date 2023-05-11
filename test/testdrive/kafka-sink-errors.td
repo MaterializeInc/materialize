@@ -9,6 +9,7 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_format_json = true
+ALTER SYSTEM SET enable_kafka_config_denylist_with_options = true
 
 #
 # Test various errors that can happen at CREATE SINK time and check how they are reported to the user
