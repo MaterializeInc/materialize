@@ -865,13 +865,12 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         let special_spec = match func {
             BinaryFunc::JsonbGetString { stringify } => {
-                right.range.flat_map(Monotonic::No, |datum| match datum {
-                    Ok(Datum::Null) => ResultSpec::null(),
-                    Ok(key) => match &left.range.values {
-                        Values::Empty => ResultSpec::nothing(),
-                        Values::Nested(map_spec) => map_spec.get(&key).cloned().map_or_else(
-                            ResultSpec::anything,
-                            |field_spec| {
+                let values_spec = match (&left.range.values, &right.range.values) {
+                    (Values::Nested(map_spec), Values::Within(key, key2)) if key == key2 => {
+                        map_spec
+                            .get(key)
+                            .cloned()
+                            .map_or_else(ResultSpec::anything, |field_spec| {
                                 if *stringify {
                                     // We only preserve value-range information when stringification
                                     // is a noop. (Common in real queries.)
@@ -892,12 +891,15 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                                 } else {
                                     field_spec
                                 }
-                            },
-                        ),
-                        _ => ResultSpec::anything(),
-                    },
-                    Err(_) => ResultSpec::fails(),
-                })
+                            })
+                    }
+                    _ => ResultSpec::anything(),
+                };
+                ResultSpec {
+                    nullable: left.range.nullable || right.range.nullable || values_spec.nullable,
+                    fallible: left.range.fallible || right.range.fallible || values_spec.fallible,
+                    values: values_spec.values,
+                }
             }
             _ => ResultSpec::anything(),
         };
