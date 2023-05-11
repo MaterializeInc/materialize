@@ -538,7 +538,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             dedent(
                 """
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET repeat_row = true;
+            ALTER SYSTEM SET enable_repeat_row  = true;
             """
             )
         )
@@ -623,7 +623,7 @@ def workflow_test_github_17177(c: Composition) -> None:
             dedent(
                 """
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET repeat_row = true;
+            ALTER SYSTEM SET enable_repeat_row  = true;
 
             # Set data for test up
             > SET cluster = cluster1;
@@ -681,7 +681,7 @@ def workflow_test_github_17510(c: Composition) -> None:
             dedent(
                 """
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET repeat_row = true;
+            ALTER SYSTEM SET enable_repeat_row  = true;
             """
             )
         )
@@ -851,7 +851,7 @@ def workflow_test_github_17509(c: Composition) -> None:
             dedent(
                 """
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET repeat_row = true;
+            ALTER SYSTEM SET enable_repeat_row  = true;
             """
             )
         )

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET repeat_row = true
+ALTER SYSTEM SET enable_repeat_row  = true
 
 > CREATE TABLE base (data bigint, diff bigint)
 > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff)
