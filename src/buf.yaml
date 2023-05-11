@@ -16,6 +16,9 @@ lint:
     - DEFAULT
 build:
   excludes:
+    # does currently not require backward-compatibility
     - compute-client
+    # does currently not require backward-compatibility
     - storage-client
+    # test
     - testdrive
