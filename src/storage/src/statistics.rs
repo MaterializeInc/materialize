@@ -358,19 +358,33 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     /// A positive value will add and a negative value will subtract.
     pub fn update_envelope_state_bytes_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
-        cur.1.envelope_state_bytes = cur.1.envelope_state_bytes.saturating_add_signed(value);
-        let abs_value = value.unsigned_abs();
-        if value > 0 {
-            cur.2.envelope_state_bytes.add(abs_value);
+        if let Some(updated) = cur.1.envelope_state_bytes.checked_add_signed(value) {
+            cur.1.envelope_state_bytes = updated;
+            cur.2.envelope_state_bytes.set(updated);
         } else {
-            cur.2.envelope_state_bytes.sub(abs_value);
+            let envelope_state_bytes = cur.1.envelope_state_bytes;
+            tracing::warn!(
+                "Unexpected u64 overflow while updating envelope_state_bytes value {} with {}",
+                envelope_state_bytes,
+                value
+            );
+            cur.1.envelope_state_bytes = 0;
+            cur.2.envelope_state_bytes.set(0);
         }
     }
 
     /// Set the `envelope_state_bytes` to the given value
     pub fn set_envelope_state_bytes(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
-        let value = if value < 0 { 0 } else { value.unsigned_abs() };
+        let value = if value < 0 {
+            tracing::warn!(
+                "Unexpected negative value for envelope_state_bytes {}",
+                value
+            );
+            0
+        } else {
+            value.unsigned_abs()
+        };
         cur.1.envelope_state_bytes = value;
         cur.2.envelope_state_bytes.set(value);
     }
@@ -379,19 +393,33 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     /// A positive value will add and a negative value will subtract.
     pub fn update_envelope_state_count_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
-        cur.1.envelope_state_count = cur.1.envelope_state_count.saturating_add_signed(value);
-        let abs_value = value.unsigned_abs();
-        if value > 0 {
-            cur.2.envelope_state_count.add(abs_value);
+        if let Some(updated) = cur.1.envelope_state_count.checked_add_signed(value) {
+            cur.1.envelope_state_count = updated;
+            cur.2.envelope_state_count.set(updated);
         } else {
-            cur.2.envelope_state_count.sub(abs_value);
+            let envelope_state_count = cur.1.envelope_state_count;
+            tracing::warn!(
+                "Unexpected u64 overflow while updating envelope_state_count value {} with {}",
+                envelope_state_count,
+                value
+            );
+            cur.1.envelope_state_count = 0;
+            cur.2.envelope_state_count.set(0);
         }
     }
 
     /// Set the `envelope_state_count` to the given value
     pub fn set_envelope_state_count(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
-        let value = if value < 0 { 0 } else { value.unsigned_abs() };
+        let value = if value < 0 {
+            tracing::warn!(
+                "Unexpected negative value for envelope_state_count {}",
+                value
+            );
+            0
+        } else {
+            value.unsigned_abs()
+        };
         cur.1.envelope_state_count = value;
         cur.2.envelope_state_count.set(value);
     }
