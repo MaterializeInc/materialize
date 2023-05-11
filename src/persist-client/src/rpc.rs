@@ -100,7 +100,7 @@ pub trait PubSubSender: std::fmt::Debug + Send + Sync {
     /// shard.
     ///
     /// If the client is already subscribed to the shard, repeated calls will make
-    /// no further calls to the server and instead return clones of the Arc<ShardSubscriptionToken>.
+    /// no further calls to the server and instead return clones of the `Arc<ShardSubscriptionToken>`.
     fn subscribe(self: Arc<Self>, shard_id: &ShardId) -> Arc<ShardSubscriptionToken>;
 }
 
