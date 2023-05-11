@@ -2351,6 +2351,13 @@ query T
 SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
 ----
 
+## Test dropping system objects
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY mz_system CASCADE;
+----
+db error: ERROR: cannot drop objects owned by role "mz_system" because they are required by the database system
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system

@@ -3848,14 +3848,15 @@ pub fn plan_drop_owned(
 
     let system_ids: Vec<_> = drop_ids.iter().filter(|id| id.is_system()).collect();
     if !system_ids.is_empty() {
-        let names: Vec<_> = system_ids
+        let mut owners = system_ids
             .into_iter()
-            .map(|id| scx.catalog.get_object_name(id))
-            .collect();
+            .filter_map(|object_id| scx.catalog.get_owner_id(object_id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted());
         sql_bail!(
-            "cannot drop {} because {} required by the database system",
-            names.join(", "),
-            if names.len() > 1 { "they are" } else { "it is" }
+            "cannot drop objects owned by role {} because they are required by the database system",
+            owners.join(", "),
         );
     }
 
