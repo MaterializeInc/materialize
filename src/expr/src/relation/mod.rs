@@ -1594,11 +1594,44 @@ impl MirRelationExpr {
                     f(expr)?;
                 }
             }
-            Join { equivalences, .. } => {
+            Join {
+                equivalences,
+                implementation,
+                ..
+            } => {
                 for equivalence in equivalences {
                     for expr in equivalence {
                         f(expr)?;
                     }
+                }
+                match implementation {
+                    JoinImplementation::Differential((_, start_key, _), order) => {
+                        for start_key in start_key {
+                            for k in start_key {
+                                f(k)?;
+                            }
+                        }
+                        for (_, lookup_key, _) in order {
+                            for k in lookup_key {
+                                f(k)?;
+                            }
+                        }
+                    }
+                    JoinImplementation::DeltaQuery(paths) => {
+                        for path in paths {
+                            for (_, lookup_key, _) in path {
+                                for k in lookup_key {
+                                    f(k)?;
+                                }
+                            }
+                        }
+                    }
+                    JoinImplementation::IndexedFilter(_, index_key, _) => {
+                        for k in index_key {
+                            f(k)?;
+                        }
+                    }
+                    JoinImplementation::Unimplemented => {} // No scalar exprs
                 }
             }
             ArrangeBy { keys, .. } => {

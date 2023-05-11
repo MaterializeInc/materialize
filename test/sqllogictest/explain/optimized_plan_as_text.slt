@@ -799,3 +799,7 @@ CREATE TABLE t2(x text);
 
 statement ok
 EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
+
+# Regression test for the join visitation part of #19177
+statement ok
+EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
