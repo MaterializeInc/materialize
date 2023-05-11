@@ -40,10 +40,18 @@ Summary of the goals of a design document:
  - Record context and assumptions.
  - Achieve a (reasonable) level of consensus around a design.
  - Record decisions.
- - Document a chosen design and lay out _some_ of the technical details: this
-   is sufficiently vague and requires some _intuition_ from the writer. This
-   point depends on the target audience and the nature of the design/change
-   that is being proposed.
+ - Document a chosen design and lay out _some_ of the technical details.
+
+The last point is intentionally vague and requires some _intuition_ from the
+writer. The appropriate level of technical detail depends on the target
+reviewers and the nature of the design/change that is being proposed.
+
+Ask your tech lead if you are unsure about the right level of technical detail.
+A good rule of thumb is that you should strive for the *minimum* level of
+detail that fully communicates the proposal to your reviewers. Going into too
+much detail has a cost: it takes longer to write the document and longer to
+review the document, plus the finest details are those that are most likely to
+change during implementation.
 
 ## Non-Goals
 
