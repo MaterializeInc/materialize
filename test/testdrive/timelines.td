@@ -10,6 +10,9 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_materialize = true
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+
 # Test various joins and how they interact with timeline checks.
 
 $ kafka-create-topic topic=input-system

@@ -10,6 +10,9 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_materialize = true
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+
 #
 # A test that timelines with objects that have released all write frontiers work
 #
