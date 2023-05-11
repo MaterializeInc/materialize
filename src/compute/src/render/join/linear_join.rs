@@ -444,79 +444,75 @@ where
 
                     // Drain input 1, prepare work.
                     input1.for_each(|capability, data| {
-                        // This test *should* always pass, as we only drop a trace in response to the other input emptying.
-                        if let Some(ref mut trace2) = trace2_option {
-                            let capability = capability.retain();
-                            data.swap(&mut input1_buffer);
-                            for batch1 in input1_buffer.drain(..) {
-                                // Ignore any pre-loaded data.
-                                if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
-                                    if !batch1.is_empty() {
-                                        // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
-                                        // at start-up, and have held back physical compaction ever since.
-                                        let (trace2_cursor, trace2_storage) =
-                                            trace2.cursor_through(acknowledged2.borrow()).unwrap();
-                                        let batch1_cursor = batch1.cursor();
-                                        todo1.push_back(Deferred::new(
-                                            trace2_cursor,
-                                            trace2_storage,
-                                            batch1_cursor,
-                                            batch1.clone(),
-                                            capability.clone(),
-                                        ));
-                                    }
-
-                                    // To update `acknowledged1` we might presume that `batch1.lower` should equal it, but we
-                                    // may have skipped over empty batches. Still, the batches are in-order, and we should be
-                                    // able to just assume the most recent `batch1.upper`
-                                    debug_assert!(PartialOrder::less_equal(
-                                        &acknowledged1,
-                                        batch1.upper()
+                        let trace2 = trace2_option
+                            .as_mut()
+                            .expect("we only drop a trace in response to the other input emptying");
+                        let capability = capability.retain();
+                        data.swap(&mut input1_buffer);
+                        for batch1 in input1_buffer.drain(..) {
+                            // Ignore any pre-loaded data.
+                            if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
+                                if !batch1.is_empty() {
+                                    // It is safe to ask for `ack2` as we validated that it was at least `get_physical_compaction()`
+                                    // at start-up, and have held back physical compaction ever since.
+                                    let (trace2_cursor, trace2_storage) =
+                                        trace2.cursor_through(acknowledged2.borrow()).unwrap();
+                                    let batch1_cursor = batch1.cursor();
+                                    todo1.push_back(Deferred::new(
+                                        trace2_cursor,
+                                        trace2_storage,
+                                        batch1_cursor,
+                                        batch1.clone(),
+                                        capability.clone(),
                                     ));
-                                    acknowledged1.clone_from(batch1.upper());
                                 }
+
+                                // To update `acknowledged1` we might presume that `batch1.lower` should equal it, but we
+                                // may have skipped over empty batches. Still, the batches are in-order, and we should be
+                                // able to just assume the most recent `batch1.upper`
+                                debug_assert!(PartialOrder::less_equal(
+                                    &acknowledged1,
+                                    batch1.upper()
+                                ));
+                                acknowledged1.clone_from(batch1.upper());
                             }
-                        } else {
-                            panic!("`trace2_option` dropped before `input1` emptied!");
                         }
                     });
 
                     // Drain input 2, prepare work.
                     input2.for_each(|capability, data| {
-                        // This test *should* always pass, as we only drop a trace in response to the other input emptying.
-                        if let Some(ref mut trace1) = trace1_option {
-                            let capability = capability.retain();
-                            data.swap(&mut input2_buffer);
-                            for batch2 in input2_buffer.drain(..) {
-                                // Ignore any pre-loaded data.
-                                if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
-                                    if !batch2.is_empty() {
-                                        // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
-                                        // at start-up, and have held back physical compaction ever since.
-                                        let (trace1_cursor, trace1_storage) =
-                                            trace1.cursor_through(acknowledged1.borrow()).unwrap();
-                                        let batch2_cursor = batch2.cursor();
-                                        todo2.push_back(Deferred::new(
-                                            trace1_cursor,
-                                            trace1_storage,
-                                            batch2_cursor,
-                                            batch2.clone(),
-                                            capability.clone(),
-                                        ));
-                                    }
-
-                                    // To update `acknowledged2` we might presume that `batch2.lower` should equal it, but we
-                                    // may have skipped over empty batches. Still, the batches are in-order, and we should be
-                                    // able to just assume the most recent `batch2.upper`
-                                    debug_assert!(PartialOrder::less_equal(
-                                        &acknowledged2,
-                                        batch2.upper()
+                        let trace1 = trace1_option
+                            .as_mut()
+                            .expect("we only drop a trace in response to the other input emptying");
+                        let capability = capability.retain();
+                        data.swap(&mut input2_buffer);
+                        for batch2 in input2_buffer.drain(..) {
+                            // Ignore any pre-loaded data.
+                            if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
+                                if !batch2.is_empty() {
+                                    // It is safe to ask for `ack1` as we validated that it was at least `get_physical_compaction()`
+                                    // at start-up, and have held back physical compaction ever since.
+                                    let (trace1_cursor, trace1_storage) =
+                                        trace1.cursor_through(acknowledged1.borrow()).unwrap();
+                                    let batch2_cursor = batch2.cursor();
+                                    todo2.push_back(Deferred::new(
+                                        trace1_cursor,
+                                        trace1_storage,
+                                        batch2_cursor,
+                                        batch2.clone(),
+                                        capability.clone(),
                                     ));
-                                    acknowledged2.clone_from(batch2.upper());
                                 }
+
+                                // To update `acknowledged2` we might presume that `batch2.lower` should equal it, but we
+                                // may have skipped over empty batches. Still, the batches are in-order, and we should be
+                                // able to just assume the most recent `batch2.upper`
+                                debug_assert!(PartialOrder::less_equal(
+                                    &acknowledged2,
+                                    batch2.upper()
+                                ));
+                                acknowledged2.clone_from(batch2.upper());
                             }
-                        } else {
-                            panic!("`trace1_option` dropped before `input2` emptied!");
                         }
                     });
 
