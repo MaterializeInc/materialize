@@ -21,6 +21,7 @@ use mz_cloud_api::config::DEFAULT_ENDPOINT;
 use tokio::{select, sync::mpsc};
 
 use crate::{
+    config_file::{TomlProfile, GLOBAL_PARAMS},
     context::{Context, ProfileContext},
     error::Error,
     server::server,
@@ -45,8 +46,6 @@ pub async fn init(scx: &mut Context, profile_name: Option<String>) -> Result<(),
 
     let open_url = query_pairs.finish().as_str();
 
-    // curl "localhost:64634?email=joaquin%40materialize.com&clientId=13dec627-0d97-4abe-9a43-b897466ed99d&secret=13dec627-0d97-4abe-9a43-b897466ed99d"
-
     // Open the browser to login user.
     if let Err(_err) = open::that(open_url) {
         println!(
@@ -60,8 +59,20 @@ pub async fn init(scx: &mut Context, profile_name: Option<String>) -> Result<(),
         _ = server => unreachable!("server should not shut down"),
         result = rx.recv() => {
             match result {
-                Some((email, app_password)) => {
-                    println!("{}, {}", email, app_password);
+                Some(app_password) => {
+                    // TODO:
+                    // * Append vault
+                    // * Append region
+                    let new_profile = TomlProfile {
+                        app_password: Some(app_password.to_string()),
+                        vault: None,
+                        region: None,
+                        admin_endpoint: None,
+                        cloud_endpoint: None
+                    };
+                    // TODO:
+                    // * Replace default with env/config value
+                    scx.config_file().save_profile(profile_name.map_or("default".to_string(), |n| n), new_profile).await;
                 },
                 None => { panic!("failed to login via browser") },
             }

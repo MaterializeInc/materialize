@@ -14,7 +14,6 @@ use tokio::sync::mpsc::UnboundedSender;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserAPIToken {
-    email: String,
     client_id: String,
     secret: String,
 }
@@ -24,19 +23,17 @@ struct BrowserAPIToken {
 #[allow(clippy::unused_async)]
 async fn request(
     Query(BrowserAPIToken {
-        email,
         secret,
         client_id,
     }): Query<BrowserAPIToken>,
-    tx: UnboundedSender<(String, AppPassword)>,
+    tx: UnboundedSender<AppPassword>,
 ) -> impl IntoResponse {
-    tx.send((
-        email,
+    tx.send(
         AppPassword {
             client_id: client_id.parse().unwrap(),
             secret_key: secret.parse().unwrap(),
         },
-    ))
+    )
     // TODO: Should we just implement Debug in AppPassword?
     // Custom panic. `AppPassword` doesn't implements Debug
     .unwrap_or_else(|_| panic!("Error communicating login details in the transaction."));
@@ -45,7 +42,7 @@ async fn request(
 
 /// Server for handling login's information.
 pub fn server(
-    tx: UnboundedSender<(String, AppPassword)>,
+    tx: UnboundedSender<AppPassword>,
 ) -> (
     Server<hyper::server::conn::AddrIncoming, IntoMakeService<Router>>,
     u16,

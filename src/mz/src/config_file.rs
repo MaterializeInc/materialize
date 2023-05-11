@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use maplit::btreemap;
 use mz_ore::str::StrExt;
 use once_cell::sync::Lazy;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml_edit::Document;
 
@@ -103,11 +103,26 @@ impl ConfigFile {
         }
     }
 
-    pub fn save_profile<'a>(&self, name: String, profile: TomlProfile) -> Result<(), Error> {
-        // let _cProfiles = self.parsed
-        //     .profiles.or(Some(btreemap! {}));
-            // .
-            // .insert(name, profile);
+    pub async fn save_profile<'a>(&self, name: String, profile: TomlProfile) -> Result<(), Error> {
+        let new_profiles = &mut self
+            .parsed
+            .profiles
+            .clone()
+            .map_or_else(BTreeMap::new, |btree| btree);
+        new_profiles.insert(name, profile);
+
+        let new_config_content = TomlConfigFile {
+            profile: self.parsed.profile.clone(),
+            profiles: Some(new_profiles.clone()),
+            vault: self.parsed.vault.clone(),
+        };
+
+        // TODO: Handle error
+        fs::write(
+            &self.path,
+            toml::to_string_pretty(&new_config_content).unwrap(),
+        )
+        .await?;
         Ok(())
     }
 
@@ -210,7 +225,7 @@ struct ConfigParam<T> {
 type GlobalParam = ConfigParam<TomlConfigFile>;
 type ProfileParam = ConfigParam<TomlProfile>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 struct TomlConfigFile {
@@ -219,13 +234,13 @@ struct TomlConfigFile {
     profiles: Option<BTreeMap<String, TomlProfile>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 #[serde(deny_unknown_fields)]
 pub struct TomlProfile {
-    app_password: Option<String>,
-    region: Option<String>,
-    vault: Option<String>,
-    admin_endpoint: Option<String>,
-    cloud_endpoint: Option<String>,
+    pub app_password: Option<String>,
+    pub region: Option<String>,
+    pub vault: Option<String>,
+    pub admin_endpoint: Option<String>,
+    pub cloud_endpoint: Option<String>,
 }
