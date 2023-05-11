@@ -613,7 +613,10 @@ SELECT * FROM rtr
 1
 
 statement ok
-DELETE FROM t
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t (a INT);
 
 # AS OF should work in the middle of a transaction
 
