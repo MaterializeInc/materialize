@@ -204,6 +204,8 @@ the system are restarted.
 | `updates_staged`       | [`bigint`]     | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
 | `updates_committed`    | [`bigint`]     | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
 | `bytes_received`       | [`bigint`]     | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
+| `envelope_state_bytes` | [`bigint`]     | The number of bytes stored in the source envelope state. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                           |
+| `envelope_state_count` | [`bigint`]     | The number of records stored in the source envelope state.                                                                                                                                                                                                                          |
 
 ### `mz_sink_statistics`
 
