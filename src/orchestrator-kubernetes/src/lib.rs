@@ -644,6 +644,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 name: "init".to_string(),
                 image: Some(image),
                 image_pull_policy: Some(self.config.image_pull_policy.to_string()),
+                resources: Some(ResourceRequirements {
+                    // Set both limits and requests to the same values, to ensure a
+                    // `Guaranteed` QoS class for the pod.
+                    limits: Some(limits.clone()),
+                    requests: Some(limits.clone()),
+                }),
                 env: Some(vec![
                     EnvVar {
                         name: "MZ_NAMESPACE".to_string(),
@@ -750,8 +756,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                             .collect(),
                     ),
                     resources: Some(ResourceRequirements {
-                        limits: Some(limits),
-                        ..Default::default()
+                        // Set both limits and requests to the same values, to ensure a
+                        // `Guaranteed` QoS class for the pod.
+                        limits: Some(limits.clone()),
+                        requests: Some(limits),
                     }),
                     volume_mounts,
                     env,
