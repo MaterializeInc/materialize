@@ -1335,89 +1335,16 @@ where
             match &description.data_source {
                 DataSource::Ingestion(ingestion) => {
                     let storage_dependencies = description.get_storage_dependencies();
-                    let dependency_since =
-                        self.determine_collection_since_joins(&storage_dependencies)?;
 
                     // Install read capability for all non-remap subsources on
                     // remap collection.
                     //
                     // N.B. The "main" collection of the source is included in
                     // `source_exports`.
-                    for id in ingestion.source_exports.keys() {
-                        let collection = self.collection(*id).expect("known to exist");
-
-                        // At the time of collection creation, we did not yet
-                        // have firm guarantees that the since of our
-                        // dependencies was not advanced beyond those of its
-                        // dependents, so we need to patch up the
-                        // implied_capability/since of the collction.
-                        //
-                        // TODO(aljoscha): This comes largely from the fact that
-                        // subsources are created with a `DataSource::Other`, so
-                        // we have no idea (at their creation time) that they
-                        // are a subsource, or that they are a subsource of a
-                        // source where they need a read hold on that
-                        // ingestion's remap collection.
-                        if timely::order::PartialOrder::less_than(
-                            &collection.implied_capability,
-                            &dependency_since,
-                        ) {
-                            assert!(
-                                timely::order::PartialOrder::less_than(
-                                    &dependency_since,
-                                    &collection.write_frontier
-                                ),
-                                "write frontier ({:?}) must be in advance dependency collection's since ({:?})",
-                                collection.write_frontier,
-                                dependency_since,
-                            );
-                            mz_ore::soft_assert!(
-                                matches!(collection.read_policy, ReadPolicy::NoPolicy { .. }),
-                                "subsources should not have external read holds installed until \
-                                their ingestion is created, but {:?} has read policy {:?}",
-                                id,
-                                collection.read_policy
-                            );
-
-                            // This patches up the implied_capability!
-                            self.set_read_policy(vec![(
-                                *id,
-                                ReadPolicy::NoPolicy {
-                                    initial_since: dependency_since.clone(),
-                                },
-                            )]);
-
-                            // We have to re-borrow.
-                            let collection = self.collection(*id).expect("known to exist");
-                            assert!(
-                                collection.implied_capability == dependency_since,
-                                "monkey patching the implied_capability to {:?} did not work, is still {:?}",
-                                dependency_since,
-                                collection.implied_capability,
-                            );
-                        }
-
-                        // Fill in the storage dependencies.
-                        let collection = self.collection_mut(*id).expect("known to exist");
-                        collection
-                            .storage_dependencies
-                            .extend(storage_dependencies.iter().cloned());
-
-                        assert!(
-                            !PartialOrder::less_than(
-                                &collection.read_capabilities.frontier(),
-                                &collection.implied_capability.borrow()
-                            ),
-                            "{id}: at this point, there can be no read holds for any time that is not \
-                            beyond the implied capability \
-                            but we have implied_capability {:?}, read_capabilities {:?}",
-                            collection.implied_capability,
-                            collection.read_capabilities,
-                        );
-
-                        let read_hold = collection.implied_capability.clone();
-                        self.install_read_capabilities(*id, &storage_dependencies, read_hold)?;
-                    }
+                    self.install_dependency_read_holds(
+                        ingestion.source_exports.keys().cloned(),
+                        &storage_dependencies,
+                    )?;
                 }
                 DataSource::Introspection(_) | DataSource::Progress | DataSource::Other => {
                     // No since to patch up and no read holds to install on
@@ -2846,6 +2773,92 @@ where
             self.clear_from_shard_finalization_register(finalized_shards)
                 .await;
         }
+    }
+
+    // Installs a read capability for `storage_dependencies` on each element of `collections`.
+    fn install_dependency_read_holds<I: Iterator<Item = GlobalId>>(
+        &mut self,
+        collections: I,
+        storage_dependencies: &[GlobalId],
+    ) -> Result<(), StorageError> {
+        let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
+        for id in collections {
+            let collection = self.collection(id).expect("known to exist");
+
+            // At the time of collection creation, we did not yet
+            // have firm guarantees that the since of our
+            // dependencies was not advanced beyond those of its
+            // dependents, so we need to patch up the
+            // implied_capability/since of the collction.
+            //
+            // TODO(aljoscha): This comes largely from the fact that
+            // subsources are created with a `DataSource::Other`, so
+            // we have no idea (at their creation time) that they
+            // are a subsource, or that they are a subsource of a
+            // source where they need a read hold on that
+            // ingestion's remap collection.
+            if timely::order::PartialOrder::less_than(
+                &collection.implied_capability,
+                &dependency_since,
+            ) {
+                assert!(
+                    timely::order::PartialOrder::less_than(
+                        &dependency_since,
+                        &collection.write_frontier
+                    ),
+                    "write frontier ({:?}) must be in advance dependency collection's since ({:?})",
+                    collection.write_frontier,
+                    dependency_since,
+                );
+                mz_ore::soft_assert!(
+                    matches!(collection.read_policy, ReadPolicy::NoPolicy { .. }),
+                    "subsources should not have external read holds installed until \
+                                    their ingestion is created, but {:?} has read policy {:?}",
+                    id,
+                    collection.read_policy
+                );
+
+                // This patches up the implied_capability!
+                self.set_read_policy(vec![(
+                    id,
+                    ReadPolicy::NoPolicy {
+                        initial_since: dependency_since.clone(),
+                    },
+                )]);
+
+                // We have to re-borrow.
+                let collection = self.collection(id).expect("known to exist");
+                assert!(
+                    collection.implied_capability == dependency_since,
+                    "monkey patching the implied_capability to {:?} did not work, is still {:?}",
+                    dependency_since,
+                    collection.implied_capability,
+                );
+            }
+
+            // Fill in the storage dependencies.
+            let collection = self.collection_mut(id).expect("known to exist");
+            collection
+                .storage_dependencies
+                .extend(storage_dependencies.iter().cloned());
+
+            assert!(
+                !PartialOrder::less_than(
+                    &collection.read_capabilities.frontier(),
+                    &collection.implied_capability.borrow()
+                ),
+                "{id}: at this point, there can be no read holds for any time that is not \
+                                beyond the implied capability \
+                                but we have implied_capability {:?}, read_capabilities {:?}",
+                collection.implied_capability,
+                collection.read_capabilities,
+            );
+
+            let read_hold = collection.implied_capability.clone();
+            self.install_read_capabilities(id, storage_dependencies, read_hold)?;
+        }
+
+        Ok(())
     }
 
     /// Converts an `IngestionDescription<()>` into `IngestionDescription<CollectionMetadata>`.
