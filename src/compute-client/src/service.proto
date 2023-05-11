@@ -9,8 +9,8 @@
 
 syntax = "proto3";
 
-import "compute-client/src/protocol/command.proto";
-import "compute-client/src/protocol/response.proto";
+import "src/compute-client/src/protocol/command.proto";
+import "src/compute-client/src/protocol/response.proto";
 
 package mz_compute_client.service;
 

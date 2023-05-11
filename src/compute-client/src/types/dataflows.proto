@@ -9,13 +9,13 @@
 
 syntax = "proto3";
 
-import "compute-client/src/plan.proto";
-import "compute-client/src/types/sinks.proto";
-import "compute-client/src/types/sources.proto";
-import "expr/src/scalar.proto";
-import "repr/src/antichain.proto";
-import "repr/src/global_id.proto";
-import "repr/src/relation_and_scalar.proto";
+import "src/compute-client/src/plan.proto";
+import "src/compute-client/src/types/sinks.proto";
+import "src/compute-client/src/types/sources.proto";
+import "src/expr/src/scalar.proto";
+import "src/repr/src/antichain.proto";
+import "src/repr/src/global_id.proto";
+import "src/repr/src/relation_and_scalar.proto";
 
 package mz_compute_client.types.dataflows;
 

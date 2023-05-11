@@ -9,10 +9,10 @@
 
 syntax = "proto3";
 
-import "repr/src/chrono.proto";
-import "repr/src/adt/date.proto";
-import "repr/src/adt/interval.proto";
-import "repr/src/adt/mz_acl_item.proto";
+import "src/repr/src/chrono.proto";
+import "src/repr/src/adt/date.proto";
+import "src/repr/src/adt/interval.proto";
+import "src/repr/src/adt/mz_acl_item.proto";
 
 package mz_repr.row;
 

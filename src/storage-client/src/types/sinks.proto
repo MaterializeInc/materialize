@@ -11,11 +11,11 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "repr/src/antichain.proto";
-import "repr/src/global_id.proto";
-import "repr/src/relation_and_scalar.proto";
-import "storage-client/src/controller.proto";
-import "storage-client/src/types/connections.proto";
+import "src/repr/src/antichain.proto";
+import "src/repr/src/global_id.proto";
+import "src/repr/src/relation_and_scalar.proto";
+import "src/storage-client/src/controller.proto";
+import "src/storage-client/src/types/connections.proto";
 
 package mz_storage_client.types.sinks;
 

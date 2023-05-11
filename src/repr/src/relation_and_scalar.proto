@@ -15,10 +15,10 @@ syntax = "proto3";
 package mz_repr.relation_and_scalar;
 
 import "google/protobuf/empty.proto";
-import "repr/src/adt/char.proto";
-import "repr/src/adt/numeric.proto";
-import "repr/src/adt/varchar.proto";
-import "repr/src/global_id.proto";
+import "src/repr/src/adt/char.proto";
+import "src/repr/src/adt/numeric.proto";
+import "src/repr/src/adt/varchar.proto";
+import "src/repr/src/global_id.proto";
 
 message ProtoRelationType {
     message ProtoKey {

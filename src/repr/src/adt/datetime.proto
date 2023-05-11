@@ -11,7 +11,7 @@ syntax = "proto3";
 
 package mz_repr.adt.datetime;
 
-import "repr/src/chrono.proto";
+import "src/repr/src/chrono.proto";
 import "google/protobuf/empty.proto";
 
 message ProtoTimezone {

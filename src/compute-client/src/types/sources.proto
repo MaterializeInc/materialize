@@ -9,9 +9,9 @@
 
 syntax = "proto3";
 
-import "expr/src/linear.proto";
-import "repr/src/relation_and_scalar.proto";
-import "storage-client/src/controller.proto";
+import "src/expr/src/linear.proto";
+import "src/repr/src/relation_and_scalar.proto";
+import "src/storage-client/src/controller.proto";
 
 package mz_compute_client.types.sources;
 

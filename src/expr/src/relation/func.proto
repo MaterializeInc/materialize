@@ -11,7 +11,7 @@
 
 syntax = "proto3";
 
-import "repr/src/adt/regex.proto";
+import "src/repr/src/adt/regex.proto";
 
 package mz_expr.relation.func;
 

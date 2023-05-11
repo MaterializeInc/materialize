@@ -11,7 +11,7 @@
 
 syntax = "proto3";
 
-import "expr/src/scalar.proto";
+import "src/expr/src/scalar.proto";
 
 package mz_compute_client.plan.threshold;
 

@@ -9,11 +9,11 @@
 
 syntax = "proto3";
 
-import "proto/src/proto.proto";
-import "repr/src/antichain.proto";
-import "repr/src/global_id.proto";
-import "repr/src/row.proto";
-import "storage-client/src/client.proto";
+import "src/proto/src/proto.proto";
+import "src/repr/src/antichain.proto";
+import "src/repr/src/global_id.proto";
+import "src/repr/src/row.proto";
+import "src/storage-client/src/client.proto";
 
 import "google/protobuf/empty.proto";
 

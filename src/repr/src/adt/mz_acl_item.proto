@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-import "repr/src/role_id.proto";
+import "src/repr/src/role_id.proto";
 
 package mz_repr.adt.mz_acl_item;
 

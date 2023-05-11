@@ -13,19 +13,19 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "expr/src/scalar/like_pattern.proto";
+import "src/expr/src/scalar/like_pattern.proto";
 
-import "repr/src/adt/array.proto";
-import "repr/src/adt/char.proto";
-import "repr/src/adt/datetime.proto";
-import "repr/src/adt/numeric.proto";
-import "repr/src/adt/range.proto";
-import "repr/src/adt/regex.proto";
-import "repr/src/adt/varchar.proto";
-import "repr/src/chrono.proto";
-import "repr/src/relation_and_scalar.proto";
-import "repr/src/row.proto";
-import "repr/src/strconv.proto";
+import "src/repr/src/adt/array.proto";
+import "src/repr/src/adt/char.proto";
+import "src/repr/src/adt/datetime.proto";
+import "src/repr/src/adt/numeric.proto";
+import "src/repr/src/adt/range.proto";
+import "src/repr/src/adt/regex.proto";
+import "src/repr/src/adt/varchar.proto";
+import "src/repr/src/chrono.proto";
+import "src/repr/src/relation_and_scalar.proto";
+import "src/repr/src/row.proto";
+import "src/repr/src/strconv.proto";
 
 package mz_expr.scalar;
 

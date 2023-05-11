@@ -13,10 +13,10 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "expr/src/scalar.proto";
-import "expr/src/relation/func.proto";
+import "src/expr/src/scalar.proto";
+import "src/expr/src/relation/func.proto";
 
-import "repr/src/relation_and_scalar.proto";
+import "src/repr/src/relation_and_scalar.proto";
 
 package mz_expr.relation;
 

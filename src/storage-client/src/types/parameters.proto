@@ -9,8 +9,8 @@
 
 syntax = "proto3";
 
-import "proto/src/proto.proto";
-import "persist-client/src/cfg.proto";
+import "src/proto/src/proto.proto";
+import "src/persist-client/src/cfg.proto";
 
 package mz_storage_client.types.parameters;
 

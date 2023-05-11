@@ -11,9 +11,9 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "repr/src/adt/regex.proto";
-import "repr/src/relation_and_scalar.proto";
-import "storage-client/src/types/connections.proto";
+import "src/repr/src/adt/regex.proto";
+import "src/repr/src/relation_and_scalar.proto";
+import "src/storage-client/src/types/connections.proto";
 
 package mz_storage_client.types.sources.encoding;
 

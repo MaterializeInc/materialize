@@ -11,8 +11,8 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "repr/src/global_id.proto";
-import "storage-client/src/types/connections.proto";
+import "src/repr/src/global_id.proto";
+import "src/storage-client/src/types/connections.proto";
 
 package mz_storage_client.types.connections.aws;
 

@@ -11,15 +11,15 @@
 
 syntax = "proto3";
 
-import "compute-client/src/plan/join.proto";
-import "compute-client/src/plan/reduce.proto";
-import "compute-client/src/plan/threshold.proto";
-import "compute-client/src/plan/top_k.proto";
-import "expr/src/id.proto";
-import "expr/src/linear.proto";
-import "expr/src/relation.proto";
-import "expr/src/scalar.proto";
-import "repr/src/row.proto";
+import "src/compute-client/src/plan/join.proto";
+import "src/compute-client/src/plan/reduce.proto";
+import "src/compute-client/src/plan/threshold.proto";
+import "src/compute-client/src/plan/top_k.proto";
+import "src/expr/src/id.proto";
+import "src/expr/src/linear.proto";
+import "src/expr/src/relation.proto";
+import "src/expr/src/scalar.proto";
+import "src/repr/src/row.proto";
 import "google/protobuf/empty.proto";
 
 package mz_compute_client.plan;

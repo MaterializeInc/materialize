@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-import "proto/src/proto.proto";
+import "src/proto/src/proto.proto";
 
 package mz_persist_client.cfg;
 

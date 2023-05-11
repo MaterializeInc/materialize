@@ -11,7 +11,7 @@
 
 syntax = "proto3";
 
-import "repr/src/relation_and_scalar.proto";
+import "src/repr/src/relation_and_scalar.proto";
 
 package mz_storage_client.controller;
 

@@ -9,17 +9,17 @@
 
 syntax = "proto3";
 
-import "compute-client/src/logging.proto";
-import "compute-client/src/types/dataflows.proto";
-import "expr/src/linear.proto";
-import "expr/src/relation.proto";
-import "persist-client/src/cfg.proto";
-import "proto/src/proto.proto";
-import "repr/src/global_id.proto";
-import "repr/src/row.proto";
-import "cluster-client/src/client.proto";
-import "storage-client/src/client.proto";
-import "storage-client/src/types/parameters.proto";
+import "src/compute-client/src/logging.proto";
+import "src/compute-client/src/types/dataflows.proto";
+import "src/expr/src/linear.proto";
+import "src/expr/src/relation.proto";
+import "src/persist-client/src/cfg.proto";
+import "src/proto/src/proto.proto";
+import "src/repr/src/global_id.proto";
+import "src/repr/src/row.proto";
+import "src/cluster-client/src/client.proto";
+import "src/storage-client/src/client.proto";
+import "src/storage-client/src/types/parameters.proto";
 
 import "google/protobuf/empty.proto";
 

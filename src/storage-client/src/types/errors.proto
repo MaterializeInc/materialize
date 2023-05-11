@@ -9,10 +9,10 @@
 
 syntax = "proto3";
 
-import "expr/src/scalar.proto";
-import "expr/src/id.proto";
-import "repr/src/global_id.proto";
-import "repr/src/row.proto";
+import "src/expr/src/scalar.proto";
+import "src/expr/src/id.proto";
+import "src/repr/src/global_id.proto";
+import "src/repr/src/row.proto";
 
 package mz_storage_client.types.errors;
 

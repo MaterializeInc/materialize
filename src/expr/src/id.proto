@@ -10,7 +10,7 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
-import "repr/src/global_id.proto";
+import "src/repr/src/global_id.proto";
 
 package mz_expr.id;
 

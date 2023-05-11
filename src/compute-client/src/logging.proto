@@ -10,9 +10,9 @@
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
-import "repr/src/global_id.proto";
-import "storage-client/src/controller.proto";
-import "proto/src/proto.proto";
+import "src/repr/src/global_id.proto";
+import "src/storage-client/src/controller.proto";
+import "src/proto/src/proto.proto";
 
 package mz_compute_client.logging;
 

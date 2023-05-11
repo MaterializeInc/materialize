@@ -11,19 +11,19 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "postgres-util/src/desc.proto";
-import "proto/src/proto.proto";
-import "repr/src/chrono.proto";
-import "repr/src/global_id.proto";
-import "repr/src/relation_and_scalar.proto";
-import "repr/src/row.proto";
-import "storage-client/src/controller.proto";
-import "storage-client/src/types/connections.proto";
-import "storage-client/src/types/connections/aws.proto";
-import "storage-client/src/types/errors.proto";
-import "storage-client/src/types/instances.proto";
-import "storage-client/src/types/sources/encoding.proto";
-import "expr/src/scalar.proto";
+import "src/postgres-util/src/desc.proto";
+import "src/proto/src/proto.proto";
+import "src/repr/src/chrono.proto";
+import "src/repr/src/global_id.proto";
+import "src/repr/src/relation_and_scalar.proto";
+import "src/repr/src/row.proto";
+import "src/storage-client/src/controller.proto";
+import "src/storage-client/src/types/connections.proto";
+import "src/storage-client/src/types/connections/aws.proto";
+import "src/storage-client/src/types/errors.proto";
+import "src/storage-client/src/types/instances.proto";
+import "src/storage-client/src/types/sources/encoding.proto";
+import "src/expr/src/scalar.proto";
 
 package mz_storage_client.types.sources;
 
