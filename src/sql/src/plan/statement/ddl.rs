@@ -404,7 +404,7 @@ pub fn plan_create_source(
         .iter()
         .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE_UNSAFE_WITH_OPTIONS)
+        scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS)
             .map_err(|_| PlanError::RequiresFeatureFlag {
                 feature: format!(
                     "creating sources with WITH options other than {}",
@@ -1969,7 +1969,7 @@ pub fn plan_create_sink(
         .iter()
         .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_feature_flag(&vars::ENABLE_CREATE_SINK_UNSAFE_WITH_OPTIONS)
+        scx.require_feature_flag(&vars::ENABLE_CREATE_SINK_DENYLIST_WITH_OPTIONS)
             .map_err(|_| PlanError::RequiresFeatureFlag {
                 feature: format!(
                     "creating sinks with WITH options other than {}",
@@ -2182,7 +2182,7 @@ fn kafka_sink_builder(
         .iter()
         .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_feature_flag(&vars::ENABLE_CREATE_KAFKA_CONNECTION_UNSAFE_WITH_OPTIONS)
+        scx.require_feature_flag(&vars::ENABLE_CREATE_KAFKA_CONNECTION_DENYLIST_WITH_OPTIONS)
             .map_err(|_| PlanError::RequiresFeatureFlag {
                 feature: format!(
                     "creating KAFKA CONNECTION with WITH options other than {}",

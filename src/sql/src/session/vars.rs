@@ -854,7 +854,7 @@ feature_flags!(
         "CREATE TABLE with a primary key or unique constraint"
     ),
     (
-        enable_create_source_unsafe_with_options,
+        enable_create_source_denylist_with_options,
         "CREATE SOURCE with unsafe options"
     ),
     (
@@ -868,11 +868,11 @@ feature_flags!(
     (enable_envelope_materialize, "ENVELOPE MATERIALIZE"),
     (enable_primary_key_not_enforced, "PRIMARY KEY NOT ENFORCED"),
     (
-        enable_create_sink_unsafe_with_options,
+        enable_create_sink_denylist_with_options,
         "CREATE SINK with unsafe options"
     ),
     (
-        enable_create_kafka_connection_unsafe_with_options,
+        enable_create_kafka_connection_denylist_with_options,
         "CREATE KAFKA CONNECTION with unsafe options"
     ),
     (
