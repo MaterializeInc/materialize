@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_kafka_config_denylist_with_options = true
 
 $ kafka-create-topic topic=test partitions=1
 $ kafka-ingest topic=test format=bytes
