@@ -986,28 +986,250 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+    use proptest::sample::{select, Index};
 
-    use mz_ore::panic;
     use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
 
-    use crate::func::{AbsInt64, CastInt64ToMzTimestamp, CastJsonbToNumeric};
+    use crate::func::*;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
 
     use super::*;
 
-    fn gen_datums_for_type(typ: &ScalarType) -> impl Strategy<Value = Datum<'static>> {
-        let values: Vec<_> = typ.interesting_datums().collect();
-        prop::sample::select(values).boxed()
+    #[derive(Debug)]
+    struct ExpressionData {
+        relation_type: RelationType,
+        rows: Vec<Row>,
+        expr: MirScalarExpr,
+    }
+
+    // Currently there's no good way to check whether a particular function accepts a particular
+    // type as argument, which means we need to list everything out explicitly here. Restrict our interest
+    // to a reasonable number of functions, to keep things tractable
+    // TODO: replace this with function-level info once it's available.
+    const NUM_TYPE: ScalarType = ScalarType::Numeric { max_scale: None };
+    static SCALAR_TYPES: &[ScalarType] = &[
+        ScalarType::Bool,
+        ScalarType::Jsonb,
+        NUM_TYPE,
+        ScalarType::Timestamp,
+        ScalarType::MzTimestamp,
+        ScalarType::String,
+    ];
+
+    const INTERESTING_UNARY_FUNCS: &[UnaryFunc] = {
+        &[
+            UnaryFunc::CastNumericToMzTimestamp(CastNumericToMzTimestamp),
+            UnaryFunc::NegNumeric(NegNumeric),
+            UnaryFunc::CastJsonbToNumeric(CastJsonbToNumeric(None)),
+            UnaryFunc::CastJsonbToBool(CastJsonbToBool),
+            UnaryFunc::CastJsonbToString(CastJsonbToString),
+            UnaryFunc::DateTruncTimestamp(DateTruncTimestamp(DateTimeUnits::Epoch)),
+            UnaryFunc::ExtractTimestamp(ExtractTimestamp(DateTimeUnits::Epoch)),
+            UnaryFunc::Not(Not),
+            UnaryFunc::IsNull(IsNull),
+            UnaryFunc::IsFalse(IsFalse),
+        ]
+    };
+
+    fn unary_typecheck(func: &UnaryFunc, arg: &ColumnType) -> bool {
+        use UnaryFunc::*;
+        match func {
+            CastNumericToMzTimestamp(_) | NegNumeric(_) => arg.scalar_type.base_eq(&NUM_TYPE),
+            CastJsonbToNumeric(_) | CastJsonbToBool(_) | CastJsonbToString(_) => {
+                arg.scalar_type.base_eq(&ScalarType::Jsonb)
+            }
+            ExtractTimestamp(_) | DateTruncTimestamp(_) => {
+                arg.scalar_type.base_eq(&ScalarType::Timestamp)
+            }
+            Not(_) => arg.scalar_type.base_eq(&ScalarType::Bool),
+            IsNull(_) => true,
+            _ => false,
+        }
+    }
+
+    const INTERESTING_BINARY_FUNCS: &[BinaryFunc] = {
+        use BinaryFunc::*;
+        &[
+            AddTimestampInterval,
+            AddNumeric,
+            SubNumeric,
+            MulNumeric,
+            DivNumeric,
+            Eq,
+            Lt,
+            Gt,
+            Lte,
+            Gte,
+            DateTruncTimestamp,
+            JsonbGetString { stringify: true },
+            JsonbGetString { stringify: false },
+        ]
+    };
+
+    fn binary_typecheck(func: &BinaryFunc, arg0: &ColumnType, arg1: &ColumnType) -> bool {
+        use BinaryFunc::*;
+        match func {
+            AddTimestampInterval => {
+                arg0.scalar_type.base_eq(&ScalarType::Timestamp)
+                    && arg1.scalar_type.base_eq(&ScalarType::Interval)
+            }
+            AddNumeric | SubNumeric | MulNumeric | DivNumeric => {
+                arg0.scalar_type.base_eq(&NUM_TYPE) && arg1.scalar_type.base_eq(&NUM_TYPE)
+            }
+            Eq | Lt | Gt | Lte | Gte => arg0.scalar_type.base_eq(&arg1.scalar_type),
+            DateTruncTimestamp => {
+                arg0.scalar_type.base_eq(&ScalarType::String)
+                    && arg1.scalar_type.base_eq(&ScalarType::Timestamp)
+            }
+            JsonbGetString { .. } => {
+                arg0.scalar_type.base_eq(&ScalarType::Jsonb)
+                    && arg1.scalar_type.base_eq(&ScalarType::String)
+            }
+            _ => false,
+        }
+    }
+
+    const INTERESTING_VARIADIC_FUNCS: &[VariadicFunc] = {
+        use VariadicFunc::*;
+        &[Coalesce, Greatest, Least, And, Or]
+    };
+
+    fn variadic_typecheck(func: &VariadicFunc, args: &[ColumnType]) -> bool {
+        use VariadicFunc::*;
+        match func {
+            Coalesce | Greatest | Least => match args {
+                [] => true,
+                [first, rest @ ..] => rest
+                    .iter()
+                    .all(|t| first.scalar_type.base_eq(&t.scalar_type)),
+            },
+            And | Or => args
+                .iter()
+                .all(|t| t.scalar_type.base_eq(&ScalarType::Bool)),
+            _ => false,
+        }
+    }
+
+    fn gen_datums_for_type(typ: &ColumnType) -> BoxedStrategy<Datum<'static>> {
+        let mut values: Vec<Datum<'static>> = typ.scalar_type.interesting_datums().collect();
+        if typ.nullable {
+            values.push(Datum::Null)
+        }
+        select(values).boxed()
     }
 
     fn gen_column() -> impl Strategy<Value = (ColumnType, Datum<'static>)> {
-        any::<ColumnType>()
+        select(SCALAR_TYPES)
+            .prop_map(|t| t.nullable(true))
             .prop_filter("need at least one value", |c| {
                 c.scalar_type.interesting_datums().count() > 0
             })
             .prop_flat_map(|col| {
-                gen_datums_for_type(&col.scalar_type).prop_map(move |datum| (col.clone(), datum))
+                gen_datums_for_type(&col).prop_map(move |datum| (col.clone(), datum))
             })
+    }
+
+    fn gen_expr_for_relation(
+        relation: &RelationType,
+    ) -> BoxedStrategy<(MirScalarExpr, ColumnType)> {
+        let column_gen = {
+            let column_types = relation.column_types.clone();
+            any::<Index>()
+                .prop_map(move |idx| {
+                    let id = idx.index(column_types.len());
+                    (MirScalarExpr::Column(id), column_types[id].clone())
+                })
+                .boxed()
+        };
+
+        let literal_gen = select(SCALAR_TYPES)
+            .prop_map(|s| s.nullable(true))
+            .prop_flat_map(|ct| {
+                let error_gen = any::<EvalError>().prop_map(Err).boxed();
+                let value_gen = gen_datums_for_type(&ct)
+                    .prop_map(move |datum| Ok(Row::pack_slice(&[datum])))
+                    .boxed();
+                error_gen.prop_union(value_gen).prop_map(move |result| {
+                    (MirScalarExpr::Literal(result, ct.clone()), ct.clone())
+                })
+            })
+            .boxed();
+
+        column_gen
+            .prop_union(literal_gen)
+            .prop_recursive(4, 64, 8, |self_gen| {
+                let unary_gen = (select(INTERESTING_UNARY_FUNCS), self_gen.clone())
+                    .prop_filter_map("unary func", |(func, (expr_in, type_in))| {
+                        if !unary_typecheck(&func, &type_in) {
+                            return None;
+                        }
+                        let type_out = func.output_type(type_in);
+                        let expr_out = MirScalarExpr::CallUnary {
+                            func,
+                            expr: Box::new(expr_in),
+                        };
+                        Some((expr_out, type_out))
+                    })
+                    .boxed();
+                let binary_gen = (
+                    select(INTERESTING_BINARY_FUNCS),
+                    self_gen.clone(),
+                    self_gen.clone(),
+                )
+                    .prop_filter_map(
+                        "binary func",
+                        |(func, (expr_left, type_left), (expr_right, type_right))| {
+                            if !binary_typecheck(&func, &type_left, &type_right) {
+                                return None;
+                            }
+                            let type_out = func.output_type(type_left, type_right);
+                            let expr_out = MirScalarExpr::CallBinary {
+                                func,
+                                expr1: Box::new(expr_left),
+                                expr2: Box::new(expr_right),
+                            };
+                            Some((expr_out, type_out))
+                        },
+                    )
+                    .boxed();
+                let variadic_gen = (
+                    select(INTERESTING_VARIADIC_FUNCS),
+                    prop::collection::vec(self_gen, 1..4),
+                )
+                    .prop_filter_map("variadic func", |(func, exprs)| {
+                        let (exprs_in, type_in): (_, Vec<_>) = exprs.into_iter().unzip();
+                        if !variadic_typecheck(&func, &type_in) {
+                            return None;
+                        }
+                        let type_out = func.output_type(type_in);
+                        let expr_out = MirScalarExpr::CallVariadic {
+                            func,
+                            exprs: exprs_in,
+                        };
+                        Some((expr_out, type_out))
+                    })
+                    .boxed();
+
+                unary_gen
+                    .prop_union(binary_gen)
+                    .boxed()
+                    .prop_union(variadic_gen)
+            })
+            .boxed()
+    }
+
+    fn gen_expr_data() -> impl Strategy<Value = ExpressionData> {
+        let columns = prop::collection::vec(gen_column(), 1..10);
+        columns.prop_flat_map(|data| {
+            let (columns, datums): (Vec<_>, Vec<_>) = data.into_iter().unzip();
+            let relation = RelationType::new(columns);
+            let row = Row::pack_slice(&datums);
+            gen_expr_for_relation(&relation).prop_map(move |(expr, _)| ExpressionData {
+                relation_type: relation.clone(),
+                rows: vec![row.clone()],
+                expr,
+            })
+        })
     }
 
     #[test]
@@ -1031,59 +1253,50 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_equivalence() {
-        fn check(
-            expr: MirScalarExpr,
-            columns: Vec<(ColumnType, Datum<'static>)>,
-        ) -> Result<(), TestCaseError> {
-            let (columns, datums): (Vec<_>, Vec<_>) = columns.into_iter().unzip();
-            let relation = RelationType::new(columns);
+        fn check(data: ExpressionData) -> Result<(), TestCaseError> {
+            let ExpressionData {
+                relation_type,
+                rows,
+                expr,
+            } = data;
+            let num_cols = relation_type.column_types.len();
 
-            // Unfortunately, our expr generator does not guarantee that the generated expr
-            // is safe to eval. (`eval` will often panic on expressions that are impossible to
-            // create normally.) First check that eval does not panic on the given inputs, and
-            // that the expression is well-typed.
-            let maybe_panic = panic::catch_unwind(|| {
-                let arena = RowArena::new();
-                let _ = expr.typ(&relation.column_types);
-                expr.eval(&datums, &arena).map(|_| ())
-            });
-
-            prop_assume!(!matches!(maybe_panic, Err(_)), "skip invalid expressions");
-            prop_assume!(
-                !matches!(maybe_panic, Ok(Err(EvalError::Internal(_)))),
-                "skip internal errors"
-            );
-
-            // From here, we can assume that evaluating the expression with the given props
-            // is safe. We want to ensure that the spec we get when evaluating an expression using
+            // We want to ensure that the spec we get when evaluating an expression using
             // `ColumnSpecs` always contains the _actual_ value of that column when evaluated with
             // eval. (This is an important correctness property of abstract interpretation.)
             let arena = RowArena::new();
-            let eval_result = expr.eval(&datums, &arena);
-
-            let mut interpreter = ColumnSpecs::new(relation, &arena);
-
-            for (id, datum) in datums.iter().enumerate() {
-                interpreter.push_column(id, ResultSpec::value(*datum));
+            let mut interpreter = ColumnSpecs::new(relation_type, &arena);
+            let mut specs = vec![ResultSpec::nothing(); num_cols];
+            for row in &rows {
+                for (id, datum) in row.iter().enumerate() {
+                    specs[id] = specs[id].clone().union(ResultSpec::value(datum));
+                }
             }
+            for (id, spec) in specs.into_iter().enumerate() {
+                interpreter.push_column(id, spec);
+            }
+
             let spec = interpreter.expr(&expr);
 
-            match eval_result {
-                Ok(value) => {
-                    assert!(spec.range.may_contain(value))
-                }
-                Err(_) => {
-                    assert!(spec.range.may_fail());
+            for row in &rows {
+                let datums: Vec<_> = row.iter().collect();
+                let eval_result = expr.eval(&datums, &arena);
+                match eval_result {
+                    Ok(value) => {
+                        assert!(spec.range.may_contain(value))
+                    }
+                    Err(_) => {
+                        assert!(spec.range.may_fail());
+                    }
                 }
             }
 
             Ok(())
         }
 
-        proptest!(|(expr: MirScalarExpr, columns in prop::collection::vec(gen_column(), 0..10))| {
-            check(expr, columns)?;
+        proptest!(|(data in gen_expr_data())| {
+            check(data)?;
         });
     }
 
