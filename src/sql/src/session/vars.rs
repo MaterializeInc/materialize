@@ -884,7 +884,7 @@ feature_flags!(
         enable_logical_compaction_window,
         "LOGICAL COMPACTION WINDOW"
     ),
-    (enable_mfp_pushdown_explain, "`mfp_pushdown` explain flag"),
+    (enable_mfp_pushdown_explain, "`mfp_pushdown` explain"),
     (enable_raise_statement, "RAISE statement"),
     (enable_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
     (enable_format_json, "FORMAT JSON"),

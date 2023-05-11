@@ -131,7 +131,6 @@ class UseClusterdCompute(MzcomposeAction):
             else "STORAGECTL ADDRESS 'clusterd_compute_1:2100'"
         )
 
-
         c.sql(
             "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
             port=6877,
