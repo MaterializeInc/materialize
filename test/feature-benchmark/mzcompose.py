@@ -81,7 +81,7 @@ def make_comparator(name: str) -> Comparator:
     return RelativeThresholdComparator(name, threshold=0.10)
 
 
-default_timeout = "30m"
+default_timeout = "1800s"
 
 SERVICES = [
     Zookeeper(),
@@ -91,6 +91,7 @@ SERVICES = [
     Materialized(),
     Testdrive(
         default_timeout=default_timeout,
+        materialize_params={"statement_timeout": f"'{default_timeout}'"},
     ),
     KgenService(),
     Postgres(),
