@@ -229,6 +229,8 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
 const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
+// Schema can be used an alias for a search path with a single element.
+pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
 static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),

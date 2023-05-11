@@ -4988,14 +4988,18 @@ impl<'a> Parser<'a> {
                     variable = Ident::new("client_encoding");
                     normal = true;
                 }
-                Ok(SCHEMA) => {
-                    variable = Ident::new("search_path");
-                    normal = true;
-                }
                 _ => {}
             }
         }
-        if normal {
+        if variable.as_str().parse() == Ok(SCHEMA) {
+            variable = Ident::new("search_path");
+            let to = self.parse_set_variable_value()?;
+            Ok(Statement::SetVariable(SetVariableStatement {
+                local: modifier == Some(LOCAL),
+                variable,
+                to: SetVariableTo::Values(vec![to]),
+            }))
+        } else if normal {
             let to = self.parse_set_variable_to()?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
