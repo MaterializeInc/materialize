@@ -14,6 +14,11 @@
 # sources. This also serves to verify that logging is correctly cleaned up under
 # active dataflow cancellation.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
+
 > CREATE VIEW divergent AS
   WITH MUTUALLY RECURSIVE
       flip(x int) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip)
