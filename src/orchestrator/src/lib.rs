@@ -189,6 +189,7 @@ pub trait Service: fmt::Debug + Send + Sync {
 pub struct ServiceProcessMetrics {
     pub cpu_nano_cores: Option<u64>,
     pub memory_bytes: Option<u64>,
+    pub disk_usage_bytes: Option<u64>,
 }
 
 /// A simple language for describing assertions about a label's existence and value.

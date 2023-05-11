@@ -95,6 +95,8 @@ where
     (C, R): Partitionable<C, R>,
     Worker: crate::types::AsRunnableWorker<C, R> + Clone + Send + Sync + 'static,
 {
+    // got a sender,
+    // spawn a task to actually send the metrics to the sender
     let tokio_executor = tokio::runtime::Handle::current();
     let timely_container = Arc::new(tokio::sync::Mutex::new(None));
 

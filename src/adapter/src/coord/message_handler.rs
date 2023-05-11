@@ -38,6 +38,7 @@ use crate::{catalog, AdapterNotice};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {
+        println!("***** handling message in Coordinator");
         match msg {
             Message::Command(cmd) => self.message_command(cmd).await,
             Message::ControllerReady => {
@@ -295,6 +296,10 @@ impl Coordinator {
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
+                println!(
+                    "**************************** Got metrics! la la la {:?}",
+                    new
+                );
                 let m = match self
                     .transient_replica_metadata
                     .entry(replica_id)

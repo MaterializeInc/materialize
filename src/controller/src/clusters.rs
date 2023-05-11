@@ -266,6 +266,7 @@ where
                     role,
                     config,
                 } = config;
+                // tx ,rx channel
 
                 match config.location {
                     // This branch doesn't do any async work, so there is a slight performance
@@ -303,7 +304,7 @@ where
                     ReplicaLocation::Managed(m) => {
                         let workers = m.allocation.workers;
                         let (service, metrics_task_join_handle) = this
-                            .provision_replica(cluster_id, replica_id, role, m)
+                            .provision_replica(cluster_id, replica_id, role, m) // pass rx
                             .await?;
                         let storage_location = ClusterReplicaLocation {
                             ctl_addrs: service.addresses("storagectl"),
@@ -365,7 +366,7 @@ where
                 if let Some(jh) = metrics_task_join_handle {
                     self.metrics_tasks.insert(replica_id, jh);
                 }
-                self.active_compute().add_replica_to_instance(
+                self.active_compute().add_replica_to_instance( // the sender
                     cluster_id,
                     replica_id,
                     compute_location,
@@ -579,6 +580,7 @@ where
                     interval.tick().await;
                     match orchestrator.fetch_service_metrics(&service_name).await {
                         Ok(metrics) => {
+                            // TODO combine with disk_usage
                             let _ = tx.send((replica_id, metrics));
                         }
                         Err(e) => {

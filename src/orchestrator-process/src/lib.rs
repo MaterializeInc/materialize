@@ -322,6 +322,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             metrics.push(ServiceProcessMetrics {
                 cpu_nano_cores,
                 memory_bytes,
+                disk_usage_bytes: None,
             });
         }
         Ok(metrics)
