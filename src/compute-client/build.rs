@@ -109,20 +109,20 @@ fn main() {
         .compile_with_config(
             config,
             &[
-                "compute-client/src/logging.proto",
-                "compute-client/src/plan.proto",
-                "compute-client/src/plan/join.proto",
-                "compute-client/src/plan/reduce.proto",
-                "compute-client/src/plan/threshold.proto",
-                "compute-client/src/plan/top_k.proto",
-                "compute-client/src/protocol/command.proto",
-                "compute-client/src/protocol/response.proto",
-                "compute-client/src/service.proto",
-                "compute-client/src/types/dataflows.proto",
-                "compute-client/src/types/sinks.proto",
-                "compute-client/src/types/sources.proto",
+                "src/compute-client/src/logging.proto",
+                "src/compute-client/src/plan.proto",
+                "src/compute-client/src/plan/join.proto",
+                "src/compute-client/src/plan/reduce.proto",
+                "src/compute-client/src/plan/threshold.proto",
+                "src/compute-client/src/plan/top_k.proto",
+                "src/compute-client/src/protocol/command.proto",
+                "src/compute-client/src/protocol/response.proto",
+                "src/compute-client/src/service.proto",
+                "src/compute-client/src/types/dataflows.proto",
+                "src/compute-client/src/types/sinks.proto",
+                "src/compute-client/src/types/sources.proto",
             ],
-            &[".."],
+            &["."],
         )
         .unwrap_or_else(|e| panic!("{e}"));
 }

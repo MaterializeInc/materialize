@@ -95,14 +95,14 @@ fn main() {
         .btree_map(["."])
         .compile_protos(
             &[
-                "expr/src/id.proto",
-                "expr/src/linear.proto",
-                "expr/src/relation.proto",
-                "expr/src/relation/func.proto",
-                "expr/src/scalar.proto",
-                "expr/src/scalar/like_pattern.proto",
+                "src/expr/src/id.proto",
+                "src/expr/src/linear.proto",
+                "src/expr/src/relation.proto",
+                "src/expr/src/relation/func.proto",
+                "src/expr/src/scalar.proto",
+                "src/expr/src/scalar/like_pattern.proto",
             ],
-            &[".."],
+            &["."],
         )
         .unwrap_or_else(|e| panic!("{e}"))
 }

@@ -80,6 +80,6 @@ fn main() {
 
     prost_build::Config::new()
         .btree_map(["."])
-        .compile_protos(&["persist/src/persist.proto"], &[".."])
+        .compile_protos(&["src/persist/src/persist.proto"], &["."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

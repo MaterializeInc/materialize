@@ -81,6 +81,6 @@ fn main() {
     prost_build::Config::new()
         .type_attribute(".", "#[derive(serde::Serialize)]")
         .btree_map(["."])
-        .compile_protos(&["persist-types/src/stats.proto"], &[".."])
+        .compile_protos(&["src/persist-types/src/stats.proto"], &["."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

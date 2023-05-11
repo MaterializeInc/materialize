@@ -92,11 +92,11 @@ fn main() {
         .bytes([".mz_persist_client.internal.diff.ProtoStateFieldDiffs"])
         .compile_protos(
             &[
-                "persist-client/src/cfg.proto",
-                "persist-client/src/internal/state.proto",
-                "persist-client/src/internal/diff.proto",
+                "src/persist-client/src/cfg.proto",
+                "src/persist-client/src/internal/state.proto",
+                "src/persist-client/src/internal/diff.proto",
             ],
-            &[".."],
+            &["."],
         )
         .unwrap_or_else(|e| panic!("{e}"))
 }
