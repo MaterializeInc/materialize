@@ -45,6 +45,7 @@ static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
 });
 
 /// Represents an on-disk configuration file for `mz`.
+#[derive(Clone)]
 pub struct ConfigFile {
     path: PathBuf,
     parsed: TomlConfigFile,
@@ -103,7 +104,7 @@ impl ConfigFile {
         }
     }
 
-    pub async fn save_profile<'a>(&self, name: String, profile: TomlProfile) -> Result<(), Error> {
+    pub async fn add_profile(&self, name: String, profile: TomlProfile) -> Result<(), Error> {
         let new_profiles = &mut self
             .parsed
             .profiles
@@ -111,9 +112,16 @@ impl ConfigFile {
             .map_or_else(BTreeMap::new, |btree| btree);
         new_profiles.insert(name, profile);
 
+        self.save_profiles(new_profiles.clone()).await
+    }
+
+    pub async fn save_profiles<'a>(
+        &self,
+        profiles: BTreeMap<String, TomlProfile>,
+    ) -> Result<(), Error> {
         let new_config_content = TomlConfigFile {
             profile: self.parsed.profile.clone(),
-            profiles: Some(new_profiles.clone()),
+            profiles: Some(profiles),
             vault: self.parsed.vault.clone(),
         };
 
@@ -126,12 +134,27 @@ impl ConfigFile {
         Ok(())
     }
 
+    pub async fn remove_profile<'a>(&self, name: &str) -> Result<(), Error> {
+        let new_profiles = &mut self
+            .parsed
+            .profiles
+            .clone()
+            .map_or_else(BTreeMap::new, |btree| btree);
+        new_profiles.remove(name);
+
+        self.save_profiles(new_profiles.clone()).await
+    }
+
     pub fn profile(&self) -> &str {
         (GLOBAL_PARAMS["profile"].get)(&self.parsed).unwrap()
     }
 
     pub fn vault(&self) -> &str {
         (GLOBAL_PARAMS["profile"].get)(&self.parsed).unwrap()
+    }
+
+    pub fn profiles(&self) -> Option<BTreeMap<String, TomlProfile>> {
+        self.parsed.profiles.clone()
     }
 
     /// Gets the value of a configuration parameter.
@@ -203,18 +226,18 @@ impl Profile<'_> {
         (PROFILE_PARAMS["region"].get)(self.parsed)
     }
 
-    pub fn vault(&self) -> &str {
-        (PROFILE_PARAMS["vault"].get)(self.parsed).unwrap()
+    pub fn vault(&self) -> Option<&str> {
+        (PROFILE_PARAMS["vault"].get)(self.parsed)
     }
 
-    pub fn admin_endpoint(&self) -> &str {
+    pub fn admin_endpoint(&self) -> Option<&str> {
         // TODO: return default admin endpoint if unset.
-        (PROFILE_PARAMS["admin-endpoint"].get)(self.parsed).unwrap()
+        (PROFILE_PARAMS["admin-endpoint"].get)(self.parsed)
     }
 
-    pub fn cloud_endpoint(&self) -> &str {
+    pub fn cloud_endpoint(&self) -> Option<&str> {
         // TODO: return default cloud endpoint if unset.
-        (PROFILE_PARAMS["cloud-endpoint"].get)(self.parsed).unwrap()
+        (PROFILE_PARAMS["cloud-endpoint"].get)(self.parsed)
     }
 }
 
@@ -225,7 +248,7 @@ struct ConfigParam<T> {
 type GlobalParam = ConfigParam<TomlConfigFile>;
 type ProfileParam = ConfigParam<TomlProfile>;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 struct TomlConfigFile {

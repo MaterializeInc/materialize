@@ -75,12 +75,14 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
     match &cmd.subcommand {
         // Initiating a profile doesn't requires an active profile.
         ProfileSubcommand::Init => mz::command::profile::init(&mut cx, profile).await,
+        ProfileSubcommand::List => mz::command::profile::list(&mut cx).await,
+        ProfileSubcommand::Remove => {
+            mz::command::profile::remove(&mut cx).await
+        },
         _ => {
             let mut cx = cx.activate_profile(profile).await?;
 
             match &cmd.subcommand {
-                ProfileSubcommand::List => mz::command::profile::list(&mut cx).await,
-                ProfileSubcommand::Remove => mz::command::profile::remove(&mut cx).await,
                 ProfileSubcommand::Config(cmd) => match cmd {
                     ProfileConfigSubcommand::Get { name } => {
                         mz::command::profile::config_get(&mut cx, ConfigGetArgs { name }).await
@@ -98,6 +100,8 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
                     }
                 },
                 ProfileSubcommand::Init => panic!("invalid command."),
+                ProfileSubcommand::List => panic!("invalid command."),
+                ProfileSubcommand::Remove => panic!("invalid command."),
             }
         }
     }

@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_frontegg_auth::AppPassword;
 use thiserror::Error;
+use url::ParseError;
 
 /// A custom error type for `mz` extending the `Error` enums in
 /// the `mz-frontegg-auth` and `cloud-api` crate.
@@ -20,6 +20,9 @@ pub enum Error {
     /// A Materialize Cloud API error from the [`cloud_api`] crate.
     #[error(transparent)]
     ApiError(#[from] mz_cloud_api::error::Error),
+    /// Indicates an error parsing an endpoint.
+    #[error("Error trying to parse the url: {0}")]
+    UrlParseError(#[from] ParseError),
     /// Error parsing (serializing/deserializing) a JSON.
     #[error("Error parsing JSON: {0}")]
     JsonParseError(#[from] serde_json::Error),

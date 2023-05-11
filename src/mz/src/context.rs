@@ -21,7 +21,7 @@
 
 use std::path::PathBuf;
 
-use crate::config_file::ConfigFile;
+use crate::config_file::{ConfigFile, Profile};
 use crate::error::Error;
 use crate::ui::{OutputFormat, OutputFormatter};
 use mz_cloud_api::client::Client as CloudClient;
@@ -32,6 +32,7 @@ use mz_frontegg_client::client::Client as AdminClient;
 use mz_frontegg_client::config::{
     ClientBuilder as AdminClientBuilder, ClientConfig as AdminClientConfig,
 };
+use url::Url;
 
 /// Arguments for [`Context::load`].
 pub struct ContextLoadArgs {
@@ -46,6 +47,7 @@ pub struct ContextLoadArgs {
 }
 
 /// Context for a basic command.
+#[derive(Clone)]
 pub struct Context {
     config_file: ConfigFile,
     output_formatter: OutputFormatter,
@@ -71,35 +73,54 @@ impl Context {
         })
     }
 
+    fn build_admin_client(
+        &self,
+        endpoint: Option<&str>,
+        app_password: &str,
+    ) -> Result<AdminClient, Error> {
+        let mut admin_client_builder = AdminClientBuilder::default();
+
+        if let Some(admin_endpoint) = endpoint {
+            admin_client_builder = admin_client_builder.endpoint(admin_endpoint.parse()?);
+        }
+
+        let admin_client = admin_client_builder.build(AdminClientConfig {
+            app_password: app_password.parse()?,
+        });
+
+        Ok(admin_client)
+    }
+
     /// Converts this context into a [`ProfileContext`].
     ///
     /// If a profile is not specified, the default profile is activated.
     pub async fn activate_profile(self, name: Option<String>) -> Result<ProfileContext, Error> {
         let profile_name = name.unwrap_or_else(|| self.config_file.profile().into());
-        let profile = self.config_file.load_profile(&profile_name)?;
-        // TODO: Only one client should do the work.
-        let admin_client = AdminClientBuilder::default()
-            .endpoint(profile.admin_endpoint().parse().unwrap())
-            .build(AdminClientConfig {
-                app_password: profile.app_password().parse()?,
-            });
+        let config_file = self.config_file.clone();
+        let profile = config_file.load_profile(&profile_name)?;
 
-        let context_admin_client = AdminClientBuilder::default()
-            .endpoint(profile.admin_endpoint().parse().unwrap())
-            .build(AdminClientConfig {
-                app_password: profile.app_password().parse()?,
-            });
+        // TODO: Only one client should do the work. Remove repeated code;
+        // Build cloud client
+        let mut cloud_client_builder = CloudClientBuilder::default();
 
-        let cloud_client = CloudClientBuilder::default()
-            .endpoint(profile.cloud_endpoint().parse().unwrap())
-            .build(CloudClientConfig {
-                auth_client: admin_client,
-            });
+        if let Some(cloud_endpoint) = profile.cloud_endpoint() {
+            cloud_client_builder = cloud_client_builder.endpoint(cloud_endpoint.parse()?);
+        }
+
+        let cloud_client = cloud_client_builder.build(CloudClientConfig {
+            auth_client: self
+                .build_admin_client(profile.admin_endpoint(), profile.app_password())?,
+        });
+
+        let admin_client = self.build_admin_client(
+            profile.admin_endpoint().clone(),
+            profile.app_password().clone(),
+        )?;
 
         Ok(ProfileContext {
             context: self,
-            profile_name,
-            admin_client: context_admin_client,
+            profile_name: profile_name.clone(),
+            admin_client,
             cloud_client,
         })
     }

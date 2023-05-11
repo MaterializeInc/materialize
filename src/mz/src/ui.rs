@@ -29,6 +29,7 @@ pub enum OutputFormat {
 }
 
 /// Formats terminal output according to the configured [`OutputFormat`].
+#[derive(Clone)]
 pub struct OutputFormatter {
     output_format: OutputFormat,
 }

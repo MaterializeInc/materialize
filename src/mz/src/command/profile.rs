@@ -18,10 +18,12 @@
 //! Consult the user-facing documentation for details.
 
 use mz_cloud_api::config::DEFAULT_ENDPOINT;
+use serde::{Deserialize, Serialize};
+use tabled::Tabled;
 use tokio::{select, sync::mpsc};
 
 use crate::{
-    config_file::{TomlProfile, GLOBAL_PARAMS},
+    config_file::TomlProfile,
     context::{Context, ProfileContext},
     error::Error,
     server::server,
@@ -71,8 +73,9 @@ pub async fn init(scx: &mut Context, profile_name: Option<String>) -> Result<(),
                         cloud_endpoint: None
                     };
                     // TODO:
+
                     // * Replace default with env/config value
-                    scx.config_file().save_profile(profile_name.map_or("default".to_string(), |n| n), new_profile).await;
+                    scx.config_file().add_profile(profile_name.map_or("default".to_string(), |n| n), new_profile).await?;
                 },
                 None => { panic!("failed to login via browser") },
             }
@@ -82,12 +85,29 @@ pub async fn init(scx: &mut Context, profile_name: Option<String>) -> Result<(),
     Ok(())
 }
 
-pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
-    todo!()
+pub async fn list(cx: &mut Context) -> Result<(), Error> {
+    if let Some(profiles) = cx.config_file().profiles() {
+        let output = cx.output_formatter();
+
+        // Structure to format the output. The name of the field equals the column name.
+        #[derive(Clone, Serialize, Deserialize, Tabled)]
+        struct ProfileName<'a> {
+            #[warn(non_snake_case)]
+            Name: &'a str,
+        }
+        output.output_table(
+            profiles
+                .keys()
+                .into_iter()
+                .map(|name| ProfileName { Name: name }),
+        )?;
+    }
+
+    Ok(())
 }
 
-pub async fn remove(cx: &mut ProfileContext) -> Result<(), Error> {
-    todo!()
+pub async fn remove(cx: &mut Context) -> Result<(), Error> {
+    cx.config_file().remove_profile(cx.config_file().profile()).await
 }
 
 pub struct ConfigGetArgs<'a> {

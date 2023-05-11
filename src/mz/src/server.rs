@@ -22,18 +22,13 @@ struct BrowserAPIToken {
 // Axum requires the handler be async even though we don't await
 #[allow(clippy::unused_async)]
 async fn request(
-    Query(BrowserAPIToken {
-        secret,
-        client_id,
-    }): Query<BrowserAPIToken>,
+    Query(BrowserAPIToken { secret, client_id }): Query<BrowserAPIToken>,
     tx: UnboundedSender<AppPassword>,
 ) -> impl IntoResponse {
-    tx.send(
-        AppPassword {
-            client_id: client_id.parse().unwrap(),
-            secret_key: secret.parse().unwrap(),
-        },
-    )
+    tx.send(AppPassword {
+        client_id: client_id.parse().unwrap(),
+        secret_key: secret.parse().unwrap(),
+    })
     // TODO: Should we just implement Debug in AppPassword?
     // Custom panic. `AppPassword` doesn't implements Debug
     .unwrap_or_else(|_| panic!("Error communicating login details in the transaction."));
