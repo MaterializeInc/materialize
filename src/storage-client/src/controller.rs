@@ -58,8 +58,9 @@ use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampMan
 use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
 
 use crate::client::{
-    CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
+    AlterSourceCommand, CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand,
+    ProtoStorageResponse, SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand,
+    StorageResponse, Update,
 };
 use crate::controller::rehydration::RehydratingStorageClient;
 use crate::healthcheck;
@@ -158,8 +159,6 @@ pub struct CollectionDescription<T> {
 impl<T> CollectionDescription<T> {
     /// Returns IDs for all storage objects that this `CollectionDescription`
     /// depends on.
-    ///
-    /// TODO: @sean: This is where the remap shard would slot in.
     fn get_storage_dependencies(&self) -> Vec<GlobalId> {
         let mut result = Vec::new();
 
@@ -309,6 +308,12 @@ pub trait StorageController: Debug + Send {
     async fn create_collections(
         &mut self,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError>;
+
+    async fn alter_collection(
+        &mut self,
+        id: GlobalId,
+        desc: IngestionDescription,
     ) -> Result<(), StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
@@ -1439,6 +1444,70 @@ where
                 DataSource::Progress | DataSource::Other => {}
             }
         }
+
+        Ok(())
+    }
+
+    async fn alter_collection(
+        &mut self,
+        id: GlobalId,
+        ingestion: IngestionDescription,
+    ) -> Result<(), StorageError> {
+        let collection = self.collection_mut(id)?;
+
+        // Get the previous storage dependencies; we need these to understand if something has
+        // changed in what we depend upon.
+        let prev_storage_dependencies = collection.description.get_storage_dependencies();
+
+        // Get the previous subsource IDs, while also placing the updated ingestion in the
+        // collection description.
+        let prev_subsource_ids = {
+            let cur_ingestion = match &mut collection.description.data_source {
+                DataSource::Ingestion(ingestion) => ingestion,
+                _ => {
+                    return Err(StorageError::Generic(anyhow::anyhow!(
+                        "can only alter ingestion-based sources"
+                    )))
+                }
+            };
+
+            let subsource_ids: BTreeSet<_> = ingestion.subsource_ids().collect();
+            *cur_ingestion = ingestion.clone();
+            subsource_ids
+        };
+
+        let storage_dependencies = collection.description.get_storage_dependencies();
+        assert_eq!(
+            prev_storage_dependencies, storage_dependencies,
+            "alter_collection does not yet support modifying storage dependencies/read holds"
+        );
+
+        let new_source_exports = ingestion
+            .source_exports
+            .keys()
+            .filter(|id| !prev_subsource_ids.contains(id))
+            .cloned();
+
+        // Install read capability for all dependencies on new source exports.
+        self.install_dependency_read_holds(new_source_exports, &storage_dependencies)?;
+
+        // Describe the ingestion in terms of collection metadata.
+        let description = self.describe_ingestion(id, ingestion)?;
+
+        // Fetch the client for this ingestion's instance.
+        let client = self
+            .state
+            .clients
+            .get_mut(&description.instance_id)
+            .ok_or_else(|| StorageError::IngestionInstanceMissing {
+                storage_instance_id: description.instance_id,
+                ingestion_id: id,
+            })?;
+
+        client.send(StorageCommand::AlterSource(AlterSourceCommand {
+            id,
+            description,
+        }));
 
         Ok(())
     }
