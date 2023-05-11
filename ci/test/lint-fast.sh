@@ -30,8 +30,10 @@ ci_try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
 if [[ "$BUILDKITE_PULL_REQUEST" != "false" ]]; then
   fetch_pr_target_branch
+
   ci_collapsed_heading "Lint protobuf"
-  ci_try buf breaking src --against ".git#branch=$BUILDKITE_PULL_REQUEST_BASE_BRANCH,subdir=src"
+  COMMON_ANCESTOR="$(run git merge-base HEAD "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH")"
+  ci_try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src"
 fi
 
 ci_status_report
