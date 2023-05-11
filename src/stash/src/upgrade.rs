@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use super::InternalStashError;
 use crate::{StashError, Transaction, TypedCollection};
 
+mod legacy_types;
+
 pub enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.
     Delete(K1),
