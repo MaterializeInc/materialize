@@ -26,6 +26,7 @@ from materialize.cloudtest.k8s.environmentd import (
     MaterializedAliasService,
 )
 from materialize.cloudtest.k8s.minio import Minio
+from materialize.cloudtest.k8s.persist_pubsub import PersistPubSubService
 from materialize.cloudtest.k8s.postgres import POSTGRES_RESOURCES
 from materialize.cloudtest.k8s.redpanda import REDPANDA_RESOURCES
 from materialize.cloudtest.k8s.role_binding import AdminRoleBinding
@@ -150,6 +151,7 @@ class MaterializeApplication(Application):
                 log_filter=log_filter,
                 coverage_mode=self.coverage_mode(),
             ),
+            PersistPubSubService(),
             self.environmentd,
             self.materialized_alias,
             self.testdrive,
