@@ -796,6 +796,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::DiscardedTemp
         | ExecuteResponse::DiscardedAll
         | ExecuteResponse::DroppedObject(_)
+        | ExecuteResponse::DroppedOwned
         | ExecuteResponse::EmptyQuery
         | ExecuteResponse::GrantedPrivilege
         | ExecuteResponse::GrantedRole

@@ -200,6 +200,9 @@ impl Coordinator {
                     session,
                 );
             }
+            Plan::DropOwned(plan) => {
+                tx.send(self.sequence_drop_owned(&mut session, plan).await, session);
+            }
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);
             }

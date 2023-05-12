@@ -482,6 +482,7 @@ impl Coordinator {
                     | Statement::CreateMaterializedView(_)
                     | Statement::Delete(_)
                     | Statement::DropObjects(_)
+                    | Statement::DropOwned(_)
                     | Statement::GrantPrivilege(_)
                     | Statement::GrantRole(_)
                     | Statement::Insert(_)

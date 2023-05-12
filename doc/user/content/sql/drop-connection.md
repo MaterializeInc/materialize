@@ -58,3 +58,4 @@ DROP CONNECTION kafka_connection CASCADE;
 ## Related pages
 
 - [`SHOW CONNECTIONS`](../show-connections)
+- [DROP OWNED](../drop-owned)

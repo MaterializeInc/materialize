@@ -98,3 +98,4 @@ DROP INDEX IF EXISTS q01_geo_idx;
 
 - [`SHOW VIEWS`](../show-views)
 - [`SHOW INDEXES`](../show-indexes)
+- [DROP OWNED](../drop-owned)

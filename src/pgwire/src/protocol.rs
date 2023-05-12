@@ -1405,6 +1405,7 @@ where
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedObject(_)
+            | ExecuteResponse::DroppedOwned
             | ExecuteResponse::GrantedPrivilege
             | ExecuteResponse::GrantedRole
             | ExecuteResponse::Inserted(..)
