@@ -9,7 +9,7 @@
 # Summary
 [summary]: #summary
 
-With PR [#18546](MaterializeInc/materialize#18546), it became possible to enable a feature flag to allow for execution of one-shot `SELECT` queries with plans utilizing, whenever possible, monotonic operators instead of their non-monotonic variants. This feature has a potentially high payoff by reducing query processing time and memory demands of one-shot `SELECT`s that are not supported by indexes or materialized views. However, a few issues remain to be addressed before we can stabilize the feature, the main of which are: (a) Extending the syntax of `EXPLAIN` to produce one-shot as well as indexed / materialized view plans ([#18089](MaterializeInc/materialize#18089)); (b) Managing the impact in our tests, to keep coverage high ([#18734](MaterializeInc/materialize#18734)); (c) Refining the planning of monotonic one-shot `SELECT`s to avoid consolidation when possible ([#18732](MaterializeInc/materialize#118732)) or to otherwise ameliorate its execution ([#18890](MaterializeInc/materialize#18890)). Point (c) can be seen as the remaining work to completely exploit the almost monotonicity of one-shot `SELECT`s ([#17358](MaterializeInc/materialize#17358)).
+With PR MaterializeInc/materialize#18546, it became possible to enable a feature flag to allow for execution of one-shot `SELECT` queries with plans utilizing, whenever possible, monotonic operators instead of their non-monotonic variants. This feature has a potentially high payoff by reducing query processing time and memory demands of one-shot `SELECT`s that are not supported by indexes or materialized views. However, a few issues remain to be addressed before we can stabilize the feature, the main of which are: (a) Extending the syntax of `EXPLAIN` to produce one-shot as well as indexed / materialized view plans (MaterializeInc/materialize#18089); (b) Managing the impact in our tests, to keep coverage high (MaterializeInc/materialize#18734); (c) Refining the planning of monotonic one-shot `SELECT`s to avoid consolidation when possible (MaterializeInc/materialize#18732) or to otherwise ameliorate its execution (MaterializeInc/materialize#18890). Point (c) can be seen as the remaining work to completely exploit the almost monotonicity of one-shot `SELECT`s (MaterializeInc/materialize#17358).
 
 # Motivation
 [motivation]: #motivation
@@ -18,7 +18,7 @@ Interactive queries that cannot exploit a pre-existing index or materialized vie
 
 One-shot `SELECT` queries could be accelerated by use of monotonic operators, exploiting the observation that single-time dataflows operate on logically monotonic input. The latter can be performed safely by selectively adding consolidation to monotonic plan variants, when necessary, to coerce logical into physical monotonicity. In many cases, the resulting queries can require less memory to process as well as execute in much less query processing time.
 
-An MVP version of this approach was introduced in PR [#18546](MaterializeInc/materialize#18546). In an [initial evaluation](https://docs.google.com/spreadsheets/d/1xiGX6gq8JWFgPXc3fOIeQMO8QtWTMtini4M0xtjomG4/edit#gid=0), it was shown that speedups are achieved in a variety of queries. In some queries, speedups can reach up to an order of magnitude. In only one out of 10 queries in the initial evaluation was a slowdown observed, and only when that query was executed with parallelism (for details of why, see issue [#18890](MaterializeInc/materialize#18890)).
+An MVP version of this approach was introduced in PR MaterializeInc/materialize#18546. In an [initial evaluation](https://docs.google.com/spreadsheets/d/1xiGX6gq8JWFgPXc3fOIeQMO8QtWTMtini4M0xtjomG4/edit#gid=0), it was shown that speedups are achieved in a variety of queries. In some queries, speedups can reach up to an order of magnitude. In only one out of 10 queries in the initial evaluation was a slowdown observed, and only when that query was executed with parallelism (for details of why, see issue MaterializeInc/materialize#18890).
 
 The MVP PR gated the execution of monotonic one-shot `SELECT`s behind the feature flag `enable_monotonic_oneshot_selects`, turned off by default. The goal of this design is to outline the necessary steps to stabilize this feature and retire the feature flag.
 
@@ -37,7 +37,7 @@ When planning a one-shot `SELECT`, a `DataflowDescription` is created. A `Datafl
 
 ## MVP of the Feature
 
-The MVP PR [#18546](MaterializeInc/materialize#18546) exploited the fact that one-shot `SELECT`s are almost monotonic, i.e., already exhibit logical monotonicity, to improve their plans. Each `Plan` LIR operator that has a monotonic variant, namely hierarchical reduction and top-k, is given the possibility to convert a non-monotonic operator `Plan` into a monotonic one with forced consolidation, represented by a `must_consolidate` flag. The rendering of these LIR operators then respects the `must_consolidate` flag by either introducing a `consolidate_named` or not on the key-value input obtained after computing group keys and relevant values.
+The MVP PR MaterializeInc/materialize#18546 exploited the fact that one-shot `SELECT`s are almost monotonic, i.e., already exhibit logical monotonicity, to improve their plans. Each `Plan` LIR operator that has a monotonic variant, namely hierarchical reduction and top-k, is given the possibility to convert a non-monotonic operator `Plan` into a monotonic one with forced consolidation, represented by a `must_consolidate` flag. The rendering of these LIR operators then respects the `must_consolidate` flag by either introducing a `consolidate_named` or not on the key-value input obtained after computing group keys and relevant values.
 
 ## Relationship to Monotonicity Analysis in MIR and `EXPLAIN`
 
@@ -49,7 +49,7 @@ Given the mechanic above, consider the output produced by `EXPLAIN OPTIMIZED PLA
 
 ## Relationship to CI Testing
 
-In the MVP PR [#18546](MaterializeInc/materialize#18546), the LIR plan refinement step to employ monotonic operators is gated behind a feature flag called `enable_monotonic_oneshot_selects`. By default, the feature flag is off and thus one-shot `SELECT`s are planned as if they were going to be executed in indexed or materialized views. However, stabilization of the feature implies that we would like to enable the feature by defaul and eventually even retire the feature flag. In this case, the plans for one-shot `SELECTs` will be specialized.
+In the MVP PR MaterializeInc/materialize#18546, the LIR plan refinement step to employ monotonic operators is gated behind a feature flag called `enable_monotonic_oneshot_selects`. By default, the feature flag is off and thus one-shot `SELECT`s are planned as if they were going to be executed in indexed or materialized views. However, stabilization of the feature implies that we would like to enable the feature by defaul and eventually even retire the feature flag. In this case, the plans for one-shot `SELECTs` will be specialized.
 
 Currently, we maintain, but also reuse `sqllogictest` corpora. The reused tests come from other DBMS where the distinction between one-shot `SELECT` planning and planning for indexed or materialized views may not be relevant. Many of these tests thus issue directly one-shot `SELECT`s, and we assume that these tests exercise enough of our planning and execution for indexed or materialized views. Thus, enabling the feature brings about the risk that we will no longer extensively test plans for indexed or materialized views if the tests only employ one-shot `SELECT`s.
 
@@ -62,15 +62,15 @@ When physical monotonicity originating from monotonic sources is recognized in M
 
 In the following, we consider the main outstanding issues to stabilize monotonic one-shot `SELECT`s and propose strategies to address each in turn.
 
-## Revisiting the Output of `EXPLAIN` ([#18089](MaterializeInc/materialize#18089))
+## Revisiting the Output of `EXPLAIN` (MaterializeInc/materialize#18089)
 
 A monotonic one-shot `SELECT` has a physical plan that differs from the one for the same `SELECT` in an indexed or materialized view. We therefore propose that syntax be provided to enable `EXPLAIN`, and in particular `EXPLAIN PHYSICAL PLAN`, to either produce one-shot `SELECT` plans or plans for other optimization paths.
 
-Issue ([#18089](MaterializeInc/materialize#18089)) captures the discussion and design of the syntax for `EXPLAIN` to reflect different optimization paths. We defer the proposal of a concrete syntax to the design originating from that issue.
+Issue MaterializeInc/materialize#18089 captures the discussion and design of the syntax for `EXPLAIN` to reflect different optimization paths. We defer the proposal of a concrete syntax to the design originating from that issue.
 
-Given an adequate syntax, the optimization path for one-shot `SELECT`s in `EXPLAIN` should then include a setting of both `as_of` and `until` prior to invoking `finalize_dataflow`. It is critical that `until` be set to `as_of + 1`, assuming both attributes refer to a single-timestamp, one-dimensional frontier. This proper setting of `as_of` and `until` was already implemented in [#19223](MaterializeInc/materialize#19223).
+Given an adequate syntax, the optimization path for one-shot `SELECT`s in `EXPLAIN` should then include a setting of both `as_of` and `until` prior to invoking `finalize_dataflow`. It is critical that `until` be set to `as_of + 1`, assuming both attributes refer to a single-timestamp, one-dimensional frontier. This proper setting of `as_of` and `until` was already implemented in MaterializeInc/materialize#19223.
 
-## Running Tests in CI with Both Monotonic and Non-Monotonic Plan Variants
+## Running Tests in CI with Both Monotonic and Non-Monotonic Plan Variants (MaterializeInc/materialize#18734)
 
 Reusing `sqllogictest` corpora allows us to get a high coverage of SQL constructs. So it is ideal that we be able to continue reusing corpora designed for other DBMS with low effort, even after the feature flag `enable_monotonic_oneshot_selects` is retired. At the same time, other DBMS may not introduce the same differentiation between one-shot `SELECT` plans and plans for indexed or materialized views as in Materialize. Therefore, their corpora would start to fundamentallly lack coverage of the plans in Materialize that are specialized to view maintenance, once the feature of monotonic one-shot `SELECT`s is enabled.
 
@@ -88,7 +88,7 @@ Another alternative to the above proposal is to not retire the feature flag `ena
 
 There are two strategies that we propose to lower the expense of monotonic operators introduced with forced consolidation during single-time LIR `Plan` refinement.
 
-### Improve `refine_single_time_dataflow` LIR-based Refinement
+### Improve `refine_single_time_dataflow` LIR-based Refinement (MaterializeInc/materialize#18732)
 
 It is not always the case the `must_consolidate` must be set for every operator coverted to monotonic in a one-shot `SELECT`. For example, in a single-time dataflow, some operators may produce physically monotonic output regardless of whether their input was even logically monotonic, e.g., reductions. Furthermore, some operators will convert single-time, logically monotonic input into physically monotonic input, e.g., operators creating an arrangement. So if the input to a monotonic operator with forced consolidation came from a reduction, then this operator's `must_consolidate` flag could instead be toggled to `false`.
 
@@ -108,7 +108,7 @@ All other `Plan` nodes or variations not covered are monotonicity keepers.
 
 Instead of breaking down the single-time LIR-based refinement step into two sub-actions, we could try to achieve both replacement of monotonic plan nodes and correct setting of their `must_consolidate` flags in a single action. This increases the complexity of the code, as analysis of subgraphs needs to be part of applying the action recursively to a given `Plan` node. To avoid the a recursive `Plan` traversal during plan refinement, an alternative would be to integrate the consolidation analysis during MIR-to-LIR lowering itself; however, that would polute the lowering code with considerations only applicable in single-time contexts. A separate recursive traversal in LIR-based refinement would allow us to analyze the single-time physical monotonicity of `Plan::Let` nodes. However, other than code complexity, this strategy is likely to introduce some additional runtime planning cost compared with the proposal above, as it needs to traverse more of the `Plan` graph. Additionally, this strategy would duplicate logic that is implemented at MIR level in the `MonotonicFlag` analysis.
 
-### Selectively Perform In-place Consolidation
+### Selectively Perform In-place Consolidation (MaterializeInc/materialize#18890)
 
 Among the work items to stabilize monotonic one-shot `SELECT`s, this is the least controversial, since it emerges from experimental observation of the cost of forced consolidation in a subset of simple interactive queries, especifically computing `MIN`/`MAX` over an entire collection. The proposed solution is to include optional in-place consolidation with a `ConsolidateBuffer` in the implementation of `consolidate_named_if`. Subsequently, the call sites in monotonic operators can be adapted to request in-place consolidation. The change should be evaluated at a minimum with the same queries and setup used in the detection of the performance issue.
 
@@ -117,12 +117,12 @@ Among the work items to stabilize monotonic one-shot `SELECT`s, this is the leas
 
 As mentioned previously, the feature is now gated behind the flag `enable_monotonic_oneshot_selects`. The proposals in this document assume that we would like to eventually retire this feature flag. Based on this observation, the following lifecycle is proposed:
 
-* Once [#18734](MaterializeInc/materialize#18734) is tackled, we can let the feature be continuously tested in CI and nightlies during at least 2 weeks.
-* Once [#18089](MaterializeInc/materialize#18089) is tackled, we can enable the flag in staging. Ideally, we should let people experiment with the feature in staging for 1-2 weeks. Note that this step can be carried out in paralell with the step above.
-* We consider solutions to [#18732](MaterializeInc/materialize#18732) and [#18890](MaterializeInc/materialize#18890) as highly desirable work items that bring about performance improvements for this feature. We can consider these improvements, however, optional wrt. enablement of the feature in staging. It would be ideal to tackle at a minimum [#18890](MaterializeInc/materialize#18890) before enabling the feature in production, as we observed potential regressions in simple plans (e.g., for `MIN`/`MAX` over an entire collection) that would be ameliorated by a fix. If any of these fixes lands after the observation period for the previous two bullet points, we propose an additional 1 week of observation in staging and CI for derisking.
+* Once MaterializeInc/materialize#18734 is tackled, we can let the feature be continuously tested in CI and nightlies during at least 2 weeks.
+* Once MaterializeInc/materialize#18089 is tackled, we can enable the flag in staging. Ideally, we should let people experiment with the feature in staging for 1-2 weeks. Note that this step can be carried out in paralell with the step above.
+* We consider solutions to MaterializeInc/materialize#18732 and MaterializeInc/materialize#18890 as highly desirable work items that bring about performance improvements for this feature. We can consider these improvements, however, optional wrt. enablement of the feature in staging. It would be ideal to tackle at a minimum MaterializeInc/materialize#18890 before enabling the feature in production, as we observed potential regressions in simple plans (e.g., for `MIN`/`MAX` over an entire collection) that would be ameliorated by a fix. If any of these fixes lands after the observation period for the previous two bullet points, we propose an additional 1 week of observation in staging and CI for derisking.
 * Once the feature is enabled in production, we can monitor for 1-2 weeks, and then plan the retirement of the feature flag in the next release cycle.
 
-The relatively short observation periods above are introduced based on the judgment that this feature is of medium risk. We already render monotonic operators in production at the present time when Materialize is faced with queries that operate on monotonic sources. Additionally, we have a small set of `testdrive` tests that are focused on monotonic operators. However, with this feature, usage of monotonic operators will increase substantially. So we believe that increases in test diversity ([#18734](MaterializeInc/materialize#18734)) and observability ([#18089](MaterializeInc/materialize#18089)) are pre-conditions to move forward safely.
+The relatively short observation periods above are introduced based on the judgment that this feature is of medium risk. We already render monotonic operators in production at the present time when Materialize is faced with queries that operate on monotonic sources. Additionally, we have a small set of `testdrive` tests that are focused on monotonic operators. However, with this feature, usage of monotonic operators will increase substantially. So we believe that increases in test diversity (MaterializeInc/materialize#18734) and observability (MaterializeInc/materialize#18089) are pre-conditions to move forward safely.
 
 # Unresolved questions
 [unresolved-questions]: #unresolved-questions
