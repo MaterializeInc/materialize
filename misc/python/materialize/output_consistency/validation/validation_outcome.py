@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 from typing import Optional
 
+from materialize.output_consistency.common.format_constants import CONTENT_SEPARATOR_2
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -72,7 +73,9 @@ class ValidationOutcome:
         return len(self.warnings) > 0
 
     def error_output(self) -> str:
-        return "\n=====\n".join([str(error) for error in self.errors])
+        return f"\n{CONTENT_SEPARATOR_2}\n".join([str(error) for error in self.errors])
 
     def warning_output(self) -> str:
-        return "\n=====\n".join([str(warning) for warning in self.warnings])
+        return f"\n{CONTENT_SEPARATOR_2}\n".join(
+            [str(warning) for warning in self.warnings]
+        )

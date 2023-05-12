@@ -66,7 +66,10 @@ abs_func = UnaryFunction(
 )
 
 greatest_func = BinaryFunction(
-    "GREATEST", NumericOperationParam(), NumericOperationParam(), DataTypeCategory.DYNAMIC
+    "GREATEST",
+    NumericOperationParam(),
+    NumericOperationParam(),
+    DataTypeCategory.DYNAMIC,
 )
 least_func = BinaryFunction(
     "LEAST", NumericOperationParam(), NumericOperationParam(), DataTypeCategory.DYNAMIC

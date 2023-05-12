@@ -6,7 +6,10 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from materialize.output_consistency.common.format_constants import (
+    COMMENT_PREFIX,
+    CONTENT_SEPARATOR_1,
+)
 from materialize.output_consistency.configuration.configuration import (
     ConsistencyTestConfiguration,
 )
@@ -19,6 +22,7 @@ from materialize.output_consistency.execution.sql_executor import (
     SqlExecutor,
 )
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
+from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
     QueryFailure,
@@ -114,10 +118,12 @@ class QueryExecutionManager:
         query_execution = QueryExecution(query, query_index)
 
         query_no = query_execution.index + 1
-        print(f"Test query {query_no}: {query_execution.generic_sql}")
+        print(CONTENT_SEPARATOR_1)
+        print(f"{COMMENT_PREFIX} Test query #{query_no}:")
+        print(query_execution.generic_sql)
 
         for strategy in evaluation_strategies:
-            sql_query_string = query.to_sql(strategy)
+            sql_query_string = query.to_sql(strategy, QueryOutputFormat.SINGLE_LINE)
 
             try:
                 data = self.executor.query(sql_query_string)
@@ -143,7 +149,7 @@ class QueryExecutionManager:
     ) -> None:
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
 
-        print(f"Test with query #{query_no} {result_desc}.")
+        print(f"{COMMENT_PREFIX} Test with query #{query_no} {result_desc}.")
 
         if validation_outcome.has_errors():
             print(f"Errors:\n{validation_outcome.error_output()}")

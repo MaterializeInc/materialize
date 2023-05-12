@@ -11,6 +11,7 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
 from materialize.output_consistency.expressions.expression import Expression
+from materialize.output_consistency.query.query_format import QueryOutputFormat
 
 
 class QueryTemplate:
@@ -20,11 +21,20 @@ class QueryTemplate:
     def add_select_exp(self, expr: Expression) -> None:
         self.select_expressions.append(expr)
 
-    def to_sql(self, strategy: EvaluationStrategy) -> str:
+    def to_sql(self, strategy: EvaluationStrategy, format: QueryOutputFormat) -> str:
         expressions_as_sql = [expr.to_sql() for expr in self.select_expressions]
-        return f"""
-            SELECT {', '.join(expressions_as_sql)}
-            FROM {strategy.db_object_name};""".strip()
+        col_space_separator = "\n  " if format == QueryOutputFormat.MULTI_LINE else " "
+
+        column_sql = f",{col_space_separator}".join(expressions_as_sql)
+
+        sql = f"""
+SELECT{col_space_separator}{column_sql}
+FROM {strategy.db_object_name};""".strip()
+
+        if format == QueryOutputFormat.SINGLE_LINE:
+            sql = sql.replace("\n", " ")
+
+        return sql
 
     def column_count(self) -> int:
         return len(self.select_expressions)

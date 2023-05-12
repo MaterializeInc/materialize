@@ -12,12 +12,13 @@ from materialize.output_consistency.execution.evaluation_strategy import (
     DummyEvaluation,
     EvaluationStrategy,
 )
+from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
 
 
 class QueryExecution:
     def __init__(self, query: QueryTemplate, index: int):
-        self.generic_sql = query.to_sql(DummyEvaluation())
+        self.generic_sql = query.to_sql(DummyEvaluation(), QueryOutputFormat.MULTI_LINE)
         self.index = index
         self.outcomes: list[QueryOutcome] = []
 

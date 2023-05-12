@@ -22,7 +22,7 @@ class OperationWithNParams:
         self,
         pattern: str,
         params: list[OperationParam],
-            return_type_category: DataTypeCategory,
+        return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
         commutative: bool = False,
     ):
@@ -60,13 +60,17 @@ class OperationWithTwoParams(OperationWithNParams):
         pattern: str,
         param1: OperationParam,
         param2: OperationParam,
-            return_type_category: DataTypeCategory,
+        return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
         commutative: bool = False,
     ):
         self.pattern = pattern
         super().__init__(
-            pattern, [param1, param2], return_type_category, args_validators, commutative
+            pattern,
+            [param1, param2],
+            return_type_category,
+            args_validators,
+            commutative,
         )
 
 
@@ -75,7 +79,7 @@ class UnaryFunction(OperationWithOneParam):
         self,
         name: str,
         param: OperationParam,
-            return_type_category: DataTypeCategory,
+        return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
     ):
         super().__init__(f"{name}($)", param, return_type_category, args_validators)
@@ -87,7 +91,7 @@ class BinaryFunction(OperationWithTwoParams):
         name: str,
         param1: OperationParam,
         param2: OperationParam,
-            return_type_category: DataTypeCategory,
+        return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
         commutative: bool = False,
     ):

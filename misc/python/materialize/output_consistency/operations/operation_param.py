@@ -18,7 +18,7 @@ from materialize.output_consistency.data_type.value_characteristics import (
 class OperationParam:
     def __init__(
         self,
-            type_category: DataTypeCategory,
+        type_category: DataTypeCategory,
         incompatibilities: Optional[set[ValueCharacteristics]] = None,
     ):
         if incompatibilities is None:

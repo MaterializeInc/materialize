@@ -11,6 +11,7 @@ import argparse
 import pg8000
 from pg8000 import Cursor
 
+from materialize.output_consistency.common.format_constants import CONTENT_SEPARATOR_1
 from materialize.output_consistency.configuration.configuration import (
     DEFAULT_CONFIG,
     ConsistencyTestConfiguration,
@@ -73,6 +74,7 @@ def run_output_consistency_tests(
     execution_manager.setup_database_objects(DATA_TYPES, evaluation_strategies)
     test_summary = execution_manager.execute_queries(queries)
 
+    print(CONTENT_SEPARATOR_1)
     print(f"Test summary: {test_summary}")
 
     return test_summary
