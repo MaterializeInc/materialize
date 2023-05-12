@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from typing import Optional
 
-from materialize.output_consistency.common.format_constants import CONTENT_SEPARATOR_2
+from materialize.output_consistency.common.format_constants import LI_PREFIX
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -16,6 +16,7 @@ from materialize.output_consistency.query.query_result import QueryExecution
 from materialize.output_consistency.validation.problem_marker import (
     ValidationError,
     ValidationErrorType,
+    ValidationProblemMarker,
     ValidationWarning,
 )
 
@@ -73,9 +74,13 @@ class ValidationOutcome:
         return len(self.warnings) > 0
 
     def error_output(self) -> str:
-        return f"\n{CONTENT_SEPARATOR_2}\n".join([str(error) for error in self.errors])
+        return self._problem_marker_output(self.errors)
 
     def warning_output(self) -> str:
-        return f"\n{CONTENT_SEPARATOR_2}\n".join(
-            [str(warning) for warning in self.warnings]
-        )
+        return self._problem_marker_output(self.warnings)
+
+    def _problem_marker_output(self, entries: list[ValidationProblemMarker]) -> str:
+        if len(entries) == 0:
+            return ""
+
+        return LI_PREFIX + f"\n{LI_PREFIX}\n".join([str(entry) for entry in entries])

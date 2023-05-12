@@ -12,3 +12,4 @@ CONTENT_SEPARATOR_2 = "*****"
 CONTENT_SEPARATOR_3 = "-----"
 
 COMMENT_PREFIX = "--"
+LI_PREFIX = "* "
