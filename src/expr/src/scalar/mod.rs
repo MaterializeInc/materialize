@@ -1719,6 +1719,201 @@ impl MirScalarExpr {
         }
     }
 
+    /// Returns all columns that *must* be non-NULL for the boolean `expr`
+    /// to be `NULL` or `FALSE`.
+    ///
+    /// An expression `expr` rejects nulls in a set of column references
+    /// `C` if it evaluates to either `FALSE` or `NULL` whenever some
+    /// `c` in `C` is null.
+    ///
+    /// An expression `expr` propagates nulls in a set of column references
+    /// `C` if it evaluates to `NULL` whenever some `c` in `C` is null.
+    ///
+    /// Consequently, results returned by [`propagated_nulls`] must be
+    /// included in [`rejected_nulls`].
+    ///
+    /// Unfortunately, boolean functions such as "and" and "or" are not
+    /// propagating nulls in their inputs, but we still need to handle
+    /// them here, as they are used quite frequently in predicates.
+    /// The procedure for doing this is derived below.
+    ///
+    /// Observe the truth values for the following terms:
+    ///
+    /// For `AND(A, B)`:
+    ///
+    /// |   | F | N | T |
+    /// |   |:-:|:-:|:-:|
+    /// | F | F | F | F |
+    /// | N | F | N | N |
+    /// | T | F | N | T |
+    ///
+    /// For `OR(A, B)`:
+    ///
+    /// |   | F | N | T |
+    /// |   |:-:|:-:|:-:|
+    /// | F | F | N | T |
+    /// | N | N | N | T |
+    /// | T | T | T | T |
+    ///
+    /// For `NOT(AND(A, B))`:
+    ///
+    /// |   | F | N | T |
+    /// |   |:-:|:-:|:-:|
+    /// | F | T | T | T |
+    /// | N | T | N | N |
+    /// | T | T | N | F |
+    ///
+    /// For `NOT(OR(A, B))`:
+    ///
+    /// |   | F | N | T |
+    /// |   |:-:|:-:|:-:|
+    /// | F | T | N | F |
+    /// | N | N | N | F |
+    /// | T | F | F | F |
+    ///
+    /// Based on the above truth tables, we can establish the following
+    /// statements are always true:
+    /// 1. If either `A` or `B` rejects nulls in `C`,
+    ///    then `AND(A, B)` rejects nulls in `C`.
+    /// 2. If both `A` and `B` reject nulls in `C`,
+    ///    then `OR(A, B)` rejects nulls in `C`.
+    /// 3. If both `A` and `B` propagate nulls in `C`,
+    ///    then `NOT(AND(A, B))` rejects nulls in `C`.
+    /// 4. If either `A` or `B` propagates nulls in `C`,
+    ///    then `NOT(OR(A, B))` rejects nulls in `C`.
+    ///
+    /// Based on the above statements, the algorithm implemented by
+    /// this function can be described by the following pseudo-code:
+    ///
+    /// ```text
+    /// def rejected_nulls(expr: Expr, sign: bool = true) -> Set[Expr]:
+    ///     match expr:
+    ///         case NOT(ISNULL(c)):
+    ///             { c }
+    ///         case NOT(expr):
+    ///             rejected_nulls(expr, !sign)
+    ///         case AND(lhs, rhs):
+    ///             if sign > 0:
+    ///                 rejected_nulls(lhs, sign) ∪ rejected_nulls(rhs, sign)
+    ///             else:
+    ///                 propagated_nulls(lhs) ∩ propagated_nulls(rhs)
+    ///         case OR(lhs, rhs):
+    ///             if sign > 0:
+    ///                 rejected_nulls(lhs, sign) ∩ rejected_nulls(rhs, sign)
+    ///             else:
+    ///                 propagated_nulls(lhs) ∪ propagated_nulls(rhs)
+    ///         case expr:
+    ///             propagated_nulls(expr)
+    /// ```
+    /// 
+    /// This analysis is thorough, but not complete: it doesn't reason transitively.
+    /// 
+    /// materialize=> create table a(x int, y int);
+    /// CREATE TABLE
+    /// materialize=> explain with(types) select x from a where (y=x and y is not null) or x is not null;
+    /// Optimized Plan
+    /// --------------------------------------------------------------------------------------------------------
+    /// Explained Query:                                                                                      +
+    /// Project (#0) // { types: "(integer?)" }                                                               +
+    /// Filter ((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))) // { types: "(integer?, integer?)" }    +
+    /// Get materialize.public.a // { types: "(integer?, integer?)" }                                         +
+    ///                                                                                                       +
+    /// Source materialize.public.a                                                                           +
+    /// filter=(((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))))                                       +
+    ///
+    /// (1 row)
+    pub fn rejected_nulls(&self, set: &mut BTreeSet<usize>) {
+        fn unions<I, T>(sets: I) -> BTreeSet<T>
+        where
+            I: Iterator<Item = BTreeSet<T>>,
+            T: Ord,
+        {
+            sets.into_iter()
+                .reduce(|mut s1, mut s2| {
+                    s1.append(&mut s2);
+                    s1
+                })
+                .unwrap_or_else(|| BTreeSet::new())
+        }
+
+        fn intersections<I, T>(sets: I) -> BTreeSet<T>
+        where
+            I: Iterator<Item = BTreeSet<T>>,
+            T: Ord,
+        {
+            sets.into_iter()
+                .reduce(|mut s1, s2| {
+                    s1.retain(|v| s2.contains(v));
+                    s1
+                })
+                .unwrap_or_else(|| BTreeSet::new())
+        }
+
+        fn rejected_nulls(expr: &MirScalarExpr, sign: bool) -> BTreeSet<usize> {
+            mz_ore::stack::maybe_grow(|| {
+                match expr {
+                    MirScalarExpr::CallUnary {
+                        func: UnaryFunc::Not(crate::scalar::func::Not),
+                        expr,
+                    } => {
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::IsNull(crate::scalar::func::IsNull),
+                            expr,
+                        } = &**expr
+                        {
+                            // case NOT(ISNULL(c))
+                            if let MirScalarExpr::Column(c) = &**expr {
+                                BTreeSet::from([*c])
+                            } else {
+                                rejected_nulls(expr, !sign)
+                            }
+                        } else {
+                            // case NOT(...)
+                            rejected_nulls(expr, !sign)
+                        }
+                    }
+                    MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::And,
+                        exprs,
+                    } => {
+                        // case AND(...)
+                        if sign {
+                            unions(exprs.iter().map(|expr| rejected_nulls(expr, sign)))
+                        } else {
+                            intersections(exprs.iter().map(|expr| {
+                                let mut set = BTreeSet::new();
+                                expr.non_null_requirements(&mut set);
+                                set
+                            }))
+                        }
+                    }
+                    MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::Or,
+                        exprs,
+                    } => {
+                        // case OR(...)
+                        if sign {
+                            intersections(exprs.iter().map(|expr| rejected_nulls(expr, sign)))
+                        } else {
+                            unions(exprs.iter().map(|expr| {
+                                let mut set = BTreeSet::new();
+                                expr.non_null_requirements(&mut set);
+                                set
+                            }))
+                        }
+                    }
+                    _ => {
+                        let mut set = BTreeSet::new();
+                        expr.non_null_requirements(&mut set);
+                        set
+                    }
+                }
+            })
+        }
+
+        set.extend(rejected_nulls(self, true))
+    }
+
     pub fn typ(&self, column_types: &[ColumnType]) -> ColumnType {
         match self {
             MirScalarExpr::Column(i) => column_types[*i].clone(),
