@@ -236,7 +236,7 @@ async fn migrate(
                 SchemaValue {
                     database_id: None,
                     database_ns: None,
-                    name: "mz_catalog".into(),
+                    name: mz_repr::namespaces::MZ_CATALOG_SCHEMA.into(),
                     owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
@@ -255,7 +255,7 @@ async fn migrate(
                 SchemaValue {
                     database_id: None,
                     database_ns: None,
-                    name: "pg_catalog".into(),
+                    name: mz_repr::namespaces::PG_CATALOG_SCHEMA.into(),
                     owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
@@ -316,7 +316,7 @@ async fn migrate(
                 SchemaValue {
                     database_id: None,
                     database_ns: None,
-                    name: "mz_internal".into(),
+                    name: mz_repr::namespaces::MZ_INTERNAL_SCHEMA.into(),
                     owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),
@@ -335,7 +335,7 @@ async fn migrate(
                 SchemaValue {
                     database_id: None,
                     database_ns: None,
-                    name: "information_schema".into(),
+                    name: mz_repr::namespaces::INFORMATION_SCHEMA.into(),
                     owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
                         rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema),

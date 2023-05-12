@@ -2778,7 +2778,10 @@ fn invent_column_name(
                         .qcx
                         .scx
                         .catalog
-                        .resolve_schema(Some("materialize"), "mz_internal")
+                        .resolve_schema(
+                            Some("materialize"),
+                            mz_repr::namespaces::MZ_INTERNAL_SCHEMA,
+                        )
                         .expect("mz_internal schema must exist")
                         .id()
                 {
@@ -3954,7 +3957,7 @@ fn plan_collate(
     collation: &UnresolvedItemName,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     if collation.0.len() == 2
-        && collation.0[0] == Ident::new("pg_catalog")
+        && collation.0[0] == Ident::new(mz_repr::namespaces::PG_CATALOG_SCHEMA)
         && collation.0[1] == Ident::new("default")
     {
         plan_expr(ecx, expr)

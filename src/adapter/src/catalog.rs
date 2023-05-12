@@ -8157,7 +8157,11 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("pg_catalog"), false)
+                .set(
+                    "search_path",
+                    VarInput::Flat(mz_repr::namespaces::PG_CATALOG_SCHEMA),
+                    false,
+                )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -8184,7 +8188,11 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("mz_catalog"), false)
+                .set(
+                    "search_path",
+                    VarInput::Flat(mz_repr::namespaces::MZ_CATALOG_SCHEMA),
+                    false,
+                )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -8211,7 +8219,11 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("mz_temp"), false)
+                .set(
+                    "search_path",
+                    VarInput::Flat(mz_repr::namespaces::MZ_TEMP_SCHEMA),
+                    false,
+                )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(

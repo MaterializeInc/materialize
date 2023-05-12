@@ -90,7 +90,8 @@ pub fn unresolved_schema_name(
 /// Qualified operators outside of the pg_catalog schema are rejected.
 pub fn op(op: &Op) -> Result<&str, PlanError> {
     if !op.namespace.is_empty()
-        && (op.namespace.len() != 1 || op.namespace[0].as_str() != "pg_catalog")
+        && (op.namespace.len() != 1
+            || op.namespace[0].as_str() != mz_repr::namespaces::PG_CATALOG_SCHEMA)
     {
         sql_bail!(
             "operator does not exist: {}.{}",

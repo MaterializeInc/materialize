@@ -16,7 +16,7 @@
 use uuid::Uuid;
 
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
-use mz_repr::namespaces::PG_CATALOG_SCHEMA;
+use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
@@ -92,7 +92,7 @@ impl<'a> FuncRewriter<'a> {
     fn int32_data_type(&self) -> ResolvedDataType {
         self.resolve_known_valid_data_type(&PartialItemName {
             database: None,
-            schema: Some("pg_catalog".into()),
+            schema: Some(PG_CATALOG_SCHEMA.into()),
             item: "int4".into(),
         })
     }
@@ -136,7 +136,8 @@ impl<'a> FuncRewriter<'a> {
     ) -> Expr<Aug> {
         let sum = self
             .plan_agg(
-                self.scx.dangerous_resolve_name(vec!["pg_catalog", "sum"]),
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
                 expr.clone(),
                 vec![],
                 filter.clone(),
@@ -144,10 +145,11 @@ impl<'a> FuncRewriter<'a> {
             )
             .call_unary(
                 self.scx
-                    .dangerous_resolve_name(vec!["mz_internal", "mz_avg_promotion"]),
+                    .dangerous_resolve_name(vec![MZ_INTERNAL_SCHEMA, "mz_avg_promotion"]),
             );
         let count = self.plan_agg(
-            self.scx.dangerous_resolve_name(vec!["pg_catalog", "count"]),
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "count"]),
             expr,
             vec![],
             filter,
@@ -179,18 +181,20 @@ impl<'a> FuncRewriter<'a> {
         //
         let expr = expr.call_unary(
             self.scx
-                .dangerous_resolve_name(vec!["mz_internal", "mz_avg_promotion"]),
+                .dangerous_resolve_name(vec![MZ_INTERNAL_SCHEMA, "mz_avg_promotion"]),
         );
         let expr_squared = expr.clone().multiply(expr.clone());
         let sum_squares = self.plan_agg(
-            self.scx.dangerous_resolve_name(vec!["pg_catalog", "sum"]),
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
             expr_squared,
             vec![],
             filter.clone(),
             distinct,
         );
         let sum = self.plan_agg(
-            self.scx.dangerous_resolve_name(vec!["pg_catalog", "sum"]),
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
             expr.clone(),
             vec![],
             filter.clone(),
@@ -198,7 +202,8 @@ impl<'a> FuncRewriter<'a> {
         );
         let sum_squared = sum.clone().multiply(sum);
         let count = self.plan_agg(
-            self.scx.dangerous_resolve_name(vec!["pg_catalog", "count"]),
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "count"]),
             expr,
             vec![],
             filter,
@@ -222,7 +227,10 @@ impl<'a> FuncRewriter<'a> {
         sample: bool,
     ) -> Expr<Aug> {
         self.plan_variance(expr, filter, distinct, sample)
-            .call_unary(self.scx.dangerous_resolve_name(vec!["pg_catalog", "sqrt"]))
+            .call_unary(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sqrt"]),
+            )
     }
 
     fn plan_bool_and(
@@ -243,7 +251,8 @@ impl<'a> FuncRewriter<'a> {
         // would perform an explicit cast, and to match PostgreSQL we must
         // perform only an implicit cast.
         let sum = self.plan_agg(
-            self.scx.dangerous_resolve_name(vec!["pg_catalog", "sum"]),
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
             expr.negate().cast(self.int32_data_type()),
             vec![],
             filter,
@@ -270,7 +279,8 @@ impl<'a> FuncRewriter<'a> {
         // but that performs an explicit cast, and to match PostgreSQL we must
         // perform only an implicit cast.
         let sum = self.plan_agg(
-            self.scx.dangerous_resolve_name(vec!["pg_catalog", "sum"]),
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
             expr.or(Expr::Value(Value::Boolean(false)))
                 .cast(self.int32_data_type()),
             vec![],
@@ -329,7 +339,8 @@ impl<'a> FuncRewriter<'a> {
                     match name.as_str() {
                         "mod" => lhs.modulo(rhs),
                         "pow" => Expr::call(
-                            self.scx.dangerous_resolve_name(vec!["pg_catalog", "power"]),
+                            self.scx
+                                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "power"]),
                             vec![lhs, rhs],
                         ),
                         _ => return None,
@@ -356,7 +367,7 @@ impl<'a> FuncRewriter<'a> {
                     Some(fn_ident) => {
                         let expr = Expr::call_nullary(
                             self.scx
-                                .dangerous_resolve_name(vec!["pg_catalog", fn_ident]),
+                                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, fn_ident]),
                         );
                         Some((Ident::new(ident), expr))
                     }
@@ -495,7 +506,7 @@ impl<'a> Desugarer<'a> {
                             function: TableFunction {
                                 name: self
                                     .scx
-                                    .dangerous_resolve_name(vec!["mz_catalog", "unnest"]),
+                                    .dangerous_resolve_name(vec![MZ_CATALOG_SCHEMA, "unnest"]),
                                 args: FunctionArgs::args(vec![right.take()]),
                             },
                             alias: Some(TableAlias {
@@ -576,8 +587,8 @@ impl<'a> Desugarer<'a> {
                             },
                         )
                         .call_unary(self.scx.dangerous_resolve_name(match expr {
-                            Expr::AnySubquery { .. } => vec!["mz_internal", "mz_any"],
-                            Expr::AllSubquery { .. } => vec!["mz_internal", "mz_all"],
+                            Expr::AnySubquery { .. } => vec![MZ_INTERNAL_SCHEMA, "mz_any"],
+                            Expr::AllSubquery { .. } => vec![MZ_INTERNAL_SCHEMA, "mz_all"],
                             _ => unreachable!(),
                         })),
                     alias: None,
