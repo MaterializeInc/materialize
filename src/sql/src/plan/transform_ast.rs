@@ -16,6 +16,7 @@
 use uuid::Uuid;
 
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::namespaces::PG_CATALOG_SCHEMA;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
@@ -298,7 +299,7 @@ impl<'a> FuncRewriter<'a> {
                             != self
                                 .scx
                                 .catalog
-                                .resolve_schema(None, "pg_catalog")
+                                .resolve_schema(None, PG_CATALOG_SCHEMA)
                                 .expect("pg_catalog schema exists")
                                 .id()
                         {
