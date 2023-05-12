@@ -651,7 +651,6 @@ impl Typecheck {
                             // before JoinImplementation runs, nullability should match.
                             // but afterwards, some nulls may appear that are actually being filtered out elsewhere
                             if self.strict_join_equivalences {
-                                // TODO(mgree) find a more consistent way to handle this invariant
                                 if t_expr.nullable != t_first.nullable {
                                     let sub = t_expr.clone();
                                     let sup = t_first.clone();
@@ -664,11 +663,8 @@ impl Typecheck {
                                         message: "equivalence class members have different nullability (and join equivalence checking is strict)".to_string(),
                                     };
 
-                                    ::tracing::warn!("{err}");
-
-                                    if false {
-                                        return Err(err);
-                                    }
+                                    // TODO(mgree) this imprecision should be resolved, but we need to fix the optimizer
+                                    ::tracing::debug!("{err}");
                                 }
                             }
                         }
@@ -683,11 +679,8 @@ impl Typecheck {
                             message: "all expressions were nullable (and join equivalence checking is strict)".to_string(),
                         };
 
-                        ::tracing::warn!("{err}");
-
-                        if false {
-                            return Err(err);
-                        }
+                        // TODO(mgree) this imprecision should be resolved, but we need to fix the optimizer
+                        ::tracing::debug!("{err}");
                     }
                 }
 
@@ -1146,15 +1139,12 @@ impl Typecheck {
 /// type_error(severity, ...) logs a type warning; if `severity` is `true`, it will also log an error (visible in Sentry)
 macro_rules! type_error {
     ($severity:expr, $($arg:tt)+) => {{
-        ::tracing::warn!($($arg)+);
-
-//        if mz_ore::assert::SOFT_ASSERTIONS.load(::std::sync::atomic::Ordering::Relaxed) {
-//            return Err(TransformError::Internal("type error in MIR optimization (details in warning)".to_string()));
-//        } else {
         if $severity {
+          ::tracing::warn!($($arg)+);
           ::tracing::error!("type error in MIR optimization (details in warning; see 'Type error omnibus' issue #19101 <https://github.com/MaterializeInc/materialize/issues/19101>)");
+        } else {
+          ::tracing::debug!($($arg)+);
         }
-//        }
     }}
 }
 
