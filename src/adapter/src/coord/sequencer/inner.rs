@@ -1224,6 +1224,11 @@ impl Coordinator {
         let id_bundle = self
             .index_oracle(cluster_id)
             .sufficient_collections(&depends_on);
+
+        // Hold sinces in place as far back as possible. THESE HOLDS MUST BE MANUALLY RELEASED!
+        // Otherwise, we will hold back compaction.
+        let read_holds = self.acquire_read_holds(Timestamp::minimum(), &id_bundle);
+
         let as_of = self.least_valid_read(&id_bundle);
 
         let mut ops = Vec::new();
@@ -1282,19 +1287,25 @@ impl Coordinator {
                 df.set_as_of(as_of);
                 self.must_ship_dataflow(df, cluster_id).await;
 
+                self.release_read_hold(&read_holds);
+
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_, _),
                 ..
             })) if if_not_exists => {
+                self.release_read_hold(&read_holds);
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
                     ty: "materialized view",
                 });
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                self.release_read_hold(&read_holds);
+                Err(err)
+            }
         }
     }
 
