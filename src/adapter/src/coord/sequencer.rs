@@ -56,7 +56,7 @@ impl Coordinator {
         &mut self,
         mut tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
-        mut plan: Plan,
+        plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
@@ -87,7 +87,7 @@ impl Coordinator {
         if let Err(e) = rbac::check_plan(
             &session_catalog,
             &session,
-            &mut plan,
+            &plan,
             target_cluster_id,
             &depends_on,
         ) {
