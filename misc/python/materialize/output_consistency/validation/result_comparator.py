@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import re
 from typing import cast
 
 from materialize.output_consistency.query.query_result import (
@@ -125,17 +126,27 @@ class ResultComparator:
         failure2: QueryFailure,
         validation_outcome: ValidationOutcome,
     ) -> None:
-        if failure1.error_message != failure2.error_message:
+        norm_error_message_1 = self.normalize_error_message(failure1.error_message)
+        norm_error_message_2 = self.normalize_error_message(failure2.error_message)
+
+        if norm_error_message_1 != norm_error_message_2:
             validation_outcome.add_error(
                 ValidationErrorType.ERROR_MISMATCH,
-                "Error differs",
-                value1=failure1.error_message,
-                value2=failure2.error_message,
+                "Error message differs",
+                value1=norm_error_message_1,
+                value2=norm_error_message_2,
                 strategy1=failure1.strategy,
                 strategy2=failure2.strategy,
                 sql1=failure1.sql,
                 sql2=failure2.sql,
             )
+
+    def normalize_error_message(self, error_message: str) -> str:
+        # replace source prefix in column
+        normalized_message = re.sub(
+            'column "[^.]*\\.', 'column "<source>.', error_message
+        )
+        return normalized_message
 
     def warn_on_failure_with_multiple_columns(
         self,
