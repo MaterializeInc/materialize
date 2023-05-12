@@ -9,7 +9,10 @@
 
 //! Check that the visible type of each query has not been changed
 
-use std::{cell::RefCell, collections::BTreeMap, fmt::Write, rc::Rc};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::fmt::Write;
+use std::rc::Rc;
 
 use itertools::Itertools;
 use mz_expr::{
@@ -17,10 +20,8 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{
-    explain::{DummyHumanizer, ExprHumanizer},
-    ColumnName, ColumnType, RelationType, Row, ScalarBaseType, ScalarType,
-};
+use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
+use mz_repr::{ColumnName, ColumnType, RelationType, Row, ScalarBaseType, ScalarType};
 
 /// Typechecking contexts as shared by various typechecking passes.
 ///

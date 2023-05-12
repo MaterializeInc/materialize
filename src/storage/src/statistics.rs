@@ -13,8 +13,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use mz_ore::metric;
-use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use mz_ore::metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{
+    CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec,
+    MetricsRegistry, UIntGaugeVec,
+};
 use mz_repr::GlobalId;
 use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use prometheus::core::AtomicU64;

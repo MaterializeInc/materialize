@@ -76,10 +76,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs::File;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::process;
 use std::time::Duration;
+use std::{io, process};
 
 use aws_credential_types::Credentials;
 use aws_types::region::Region;

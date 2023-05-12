@@ -101,14 +101,12 @@
 #![warn(missing_docs)]
 
 use std::ffi::{CString, NulError};
-use std::fmt;
 use std::fs::{OpenOptions, Permissions};
-use std::io;
 use std::io::{BufRead, BufReader};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::ptr;
+use std::{fmt, io, ptr};
 
 use libc::FD_CLOEXEC;
 use mz_ore::option::OptionExt;

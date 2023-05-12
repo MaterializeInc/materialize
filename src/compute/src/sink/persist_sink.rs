@@ -35,8 +35,7 @@ use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
 };
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
 use tracing::trace;
 

@@ -9,11 +9,9 @@
 
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
-use std::fmt;
-use std::iter;
 use std::ops::{BitOrAssign, Deref};
-use std::str;
 use std::str::FromStr;
+use std::{fmt, iter, str};
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
@@ -45,7 +43,8 @@ use mz_repr::chrono::any_naive_datetime;
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 use num::traits::CheckedNeg;
-use proptest::{prelude::*, strategy::*};
+use proptest::prelude::*;
+use proptest::strategy::*;
 use proptest_derive::Arbitrary;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};

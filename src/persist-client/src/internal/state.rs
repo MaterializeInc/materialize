@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::iter::Peekable;
 use std::marker::PhantomData;
-use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
+use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::slice;
 use std::sync::Arc;

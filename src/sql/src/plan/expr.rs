@@ -13,15 +13,13 @@
 //! representation via a call to lower().
 
 use std::collections::BTreeMap;
-use std::fmt;
-use std::mem;
 use std::num::NonZeroU64;
+use std::{fmt, mem};
 
 use itertools::Itertools;
 use mz_expr::func;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
-use mz_expr::visit::Visit;
-use mz_expr::visit::VisitChildren;
+use mz_expr::visit::{Visit, VisitChildren};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
 use mz_ore::stack::RecursionLimitError;

@@ -75,34 +75,27 @@
 
 //! Debug utility for stashes.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::File,
-    io::{self, Write},
-    path::PathBuf,
-    process,
-    str::FromStr,
-    sync::{Arc, Mutex},
-};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::process;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use clap::Parser;
-use mz_adapter::{
-    catalog::{
-        storage::{self as catalog, BootstrapArgs},
-        Catalog, ClusterReplicaSizeMap, Config,
-    },
-    DUMMY_AVAILABILITY_ZONE,
-};
+use mz_adapter::catalog::storage::{self as catalog, BootstrapArgs};
+use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
+use mz_adapter::DUMMY_AVAILABILITY_ZONE;
 use mz_build_info::{build_info, BuildInfo};
-use mz_ore::{
-    cli::{self, CliConfig},
-    error::ErrorExt,
-    metrics::MetricsRegistry,
-    now::SYSTEM_TIME,
-};
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use mz_secrets::InMemorySecretsController;
-use mz_sql::{catalog::EnvironmentId, session::vars::ConnectionCounter};
+use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller as storage;
 use once_cell::sync::Lazy;

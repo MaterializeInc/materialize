@@ -75,9 +75,9 @@
 
 //! Generated protobuf code and companion impls.
 
+use std::char::CharTryFromError;
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroU64;
-use std::{char::CharTryFromError, num::TryFromIntError};
+use std::num::{NonZeroU64, TryFromIntError};
 
 use mz_ore::cast::CastFrom;
 use proptest::prelude::Strategy;

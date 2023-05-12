@@ -87,8 +87,7 @@ use mz_ore::error::ErrorExt;
 
 use self::action::ControlFlow;
 use self::error::{ErrorLocation, PosError};
-use self::parser::LineReader;
-use self::parser::{BuiltinCommand, Command};
+use self::parser::{BuiltinCommand, Command, LineReader};
 
 mod action;
 mod error;

@@ -40,8 +40,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use futures::stream::FuturesUnordered;
-use futures::FutureExt;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};

@@ -12,7 +12,8 @@
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
-use mz_compute_client::{plan::Plan, types::dataflows::DataflowDescription};
+use mz_compute_client::plan::Plan;
+use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat};
@@ -20,7 +21,8 @@ use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
 use tracing::dispatcher::{self, with_default};
 use tracing_subscriber::prelude::*;
 
-use crate::{catalog::ConnCatalog, coord::peek::FastPathPlan};
+use crate::catalog::ConnCatalog;
+use crate::coord::peek::FastPathPlan;
 
 use super::{ExplainContext, Explainable, UsedIndexes};
 

@@ -88,9 +88,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_adapter::{
-    catalog::CatalogState, session::Session, CollectionIdBundle, TimelineContext, TimestampProvider,
-};
+use mz_adapter::catalog::CatalogState;
+use mz_adapter::session::Session;
+use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_repr::{Datum, GlobalId, ScalarType, Timestamp};

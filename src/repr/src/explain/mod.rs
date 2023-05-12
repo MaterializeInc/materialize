@@ -33,7 +33,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mz_ore::{stack::RecursionLimitError, str::Indent};
+use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::Indent;
 
 use crate::{ColumnType, GlobalId, ScalarType};
 

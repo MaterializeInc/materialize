@@ -15,8 +15,7 @@ use std::collections::BTreeMap;
 
 use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::difference::Multiply;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
@@ -34,7 +33,8 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::reduce::ReduceExt;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
-use timely::progress::{timestamp::Refines, Timestamp};
+use timely::progress::timestamp::Refines;
+use timely::progress::Timestamp;
 use tracing::warn;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context, KeyArrangement};

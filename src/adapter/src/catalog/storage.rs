@@ -40,8 +40,10 @@ use crate::catalog::builtin::{
     MZ_INTROSPECTION_ROLE, MZ_SYSTEM_CLUSTER, MZ_SYSTEM_ROLE,
 };
 use crate::catalog::error::{Error, ErrorKind};
-use crate::catalog::{is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping};
-use crate::catalog::{SerializedReplicaConfig, DEFAULT_CLUSTER_REPLICA_NAME};
+use crate::catalog::{
+    is_reserved_name, RoleMembership, SerializedReplicaConfig, SerializedRole, SystemObjectMapping,
+    DEFAULT_CLUSTER_REPLICA_NAME,
+};
 use crate::coord::timeline;
 use crate::{catalog, rbac};
 

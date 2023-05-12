@@ -21,9 +21,9 @@ use deadpool_postgres::tokio_postgres::config::SslMode;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{
-    Hook, HookError, HookErrorCause, ManagerConfig, Object, PoolError, RecyclingMethod,
+    Hook, HookError, HookErrorCause, Manager, ManagerConfig, Object, Pool, PoolError,
+    RecyclingMethod,
 };
-use deadpool_postgres::{Manager, Pool};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;

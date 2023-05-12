@@ -18,7 +18,8 @@ use mz_repr::{strconv, ColumnType, ScalarType};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::EagerUnaryFunc;
-use crate::{scalar::DomainLimit, EvalError};
+use crate::scalar::DomainLimit;
+use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "-"]

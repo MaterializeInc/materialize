@@ -22,7 +22,8 @@ use mz_storage_client::source::persist_source;
 use mz_storage_client::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
 };
-use mz_storage_client::types::sources::{encoding::*, *};
+use mz_storage_client::types::sources::encoding::*;
+use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{self, Exchange, OkErr};

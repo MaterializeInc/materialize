@@ -86,8 +86,9 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
-use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
-use mz_storage_client::client::{StorageCommand, StorageResponse};
+use mz_storage_client::client::{
+    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
+};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};

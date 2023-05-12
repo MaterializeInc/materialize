@@ -27,7 +27,8 @@ use chrono::NaiveDateTime;
 use fmt::{Debug, Display};
 
 use crate::types::ScalarKind;
-use crate::{util::TsUnit, ParseSchemaError, SchemaResolutionError};
+use crate::util::TsUnit;
+use crate::{ParseSchemaError, SchemaResolutionError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DecodeError {

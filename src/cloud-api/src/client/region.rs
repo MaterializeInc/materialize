@@ -18,7 +18,8 @@ use reqwest::Method;
 use serde::Deserialize;
 use url::Url;
 
-use super::{cloud_provider::CloudProvider, Client, Error};
+use super::cloud_provider::CloudProvider;
+use super::{Client, Error};
 
 /// Represents the region
 #[derive(Debug, Deserialize, Clone)]

@@ -20,7 +20,8 @@ use mz_compute_client::plan::threshold::{
 use mz_expr::MirScalarExpr;
 use mz_repr::{Diff, Row};
 use timely::dataflow::Scope;
-use timely::progress::{timestamp::Refines, Timestamp};
+use timely::progress::timestamp::Refines;
+use timely::progress::Timestamp;
 
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::typedefs::{RowKeySpine, RowSpine};

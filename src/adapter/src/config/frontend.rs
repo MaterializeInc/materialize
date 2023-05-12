@@ -7,15 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
-use mz_ore::{
-    metric,
-    metrics::{MetricsRegistry, UIntGauge},
-    now::NowFn,
-};
+use mz_ore::metric;
+use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+use mz_ore::now::NowFn;
 use mz_sql::catalog::{CloudProvider, EnvironmentId};
 use prometheus::IntCounter;
 use tokio::time;

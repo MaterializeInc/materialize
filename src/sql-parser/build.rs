@@ -79,9 +79,8 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::env;
-use std::fs;
 use std::path::PathBuf;
+use std::{env, fs};
 
 use anyhow::{bail, Context, Result};
 use mz_ore::codegen::CodegenBuf;

@@ -73,8 +73,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::io;
-use std::iter;
+use std::{io, iter};
 
 use aws_sdk_s3::operation::create_bucket::CreateBucketError;
 use aws_sdk_s3::types::{BucketLocationConstraint, CreateBucketConfiguration};
@@ -83,8 +82,7 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use tracing::event;
-use tracing::{error, info, Level};
+use tracing::{error, event, info, Level};
 use tracing_subscriber::filter::EnvFilter;
 
 /// Generate meaningless data in S3 to test download speeds

@@ -24,9 +24,8 @@ use mz_repr::explain::{
 };
 
 use crate::interpret::{Interpreter, Pushdownable, RelationTrace, Trace};
-use crate::{
-    visit::Visit, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
-};
+use crate::visit::Visit;
+use crate::{Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 
 mod json;
 mod text;

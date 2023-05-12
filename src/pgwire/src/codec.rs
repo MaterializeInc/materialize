@@ -16,8 +16,7 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::fmt;
-use std::str;
+use std::{fmt, str};
 
 use async_trait::async_trait;
 use byteorder::{ByteOrder, NetworkEndian};

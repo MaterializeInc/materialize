@@ -19,8 +19,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
-use differential_dataflow::AsCollection;
-use differential_dataflow::Collection;
+use differential_dataflow::{AsCollection, Collection};
 use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };

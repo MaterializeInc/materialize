@@ -78,18 +78,13 @@
 //! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
 //! on port 6876.
 
-use std::cmp;
-use std::env;
 use std::ffi::CStr;
-use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use std::{cmp, env, iter, process, thread};
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};

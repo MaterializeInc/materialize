@@ -230,8 +230,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use mz_avro::types::Value;
-    use mz_avro::AvroDeserializer;
-    use mz_avro::GeneralDeserializer;
+    use mz_avro::{AvroDeserializer, GeneralDeserializer};
     use mz_repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
 
     use crate::avro::encode_datums_as_avro;

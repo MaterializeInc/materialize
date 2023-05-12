@@ -15,8 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
-use futures::future::{self, BoxFuture};
-use futures::future::{FutureExt, TryFutureExt};
+use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;

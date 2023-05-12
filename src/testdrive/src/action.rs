@@ -8,12 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::env;
-use std::fs;
 use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{env, fs};
 
 use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;

@@ -18,8 +18,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use timely::progress::Timestamp;
-use tokio::sync::mpsc;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tracing::debug;
 
 use crate::client::TimestamplessUpdate;

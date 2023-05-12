@@ -14,14 +14,11 @@ use std::collections::BTreeMap;
 use std::rc::Weak;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::{Arrange, Arranged};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use differential_dataflow::trace::BatchReader;
-use differential_dataflow::trace::{Cursor, TraceReader};
-use differential_dataflow::Collection;
-use differential_dataflow::Data;
+use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::{Collection, Data};
 use mz_compute_client::plan::AvailableCollections;
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -34,7 +31,8 @@ use timely::container::columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::Capability;
-use timely::dataflow::{scopes::Child, Scope, ScopeParent};
+use timely::dataflow::scopes::Child;
+use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 

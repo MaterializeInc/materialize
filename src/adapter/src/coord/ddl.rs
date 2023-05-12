@@ -36,8 +36,7 @@ use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
 use serde_json::json;
 use timely::progress::Antichain;
-use tracing::Level;
-use tracing::{event, warn};
+use tracing::{event, warn, Level};
 
 use crate::catalog::{
     CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,

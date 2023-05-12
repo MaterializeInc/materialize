@@ -435,7 +435,8 @@ impl RustType<ProtoTimezone> for Timezone {
 // We need to implement Serialize and Deserialize traits to include Timezone in the UnaryFunc enum.
 // FixedOffset doesn't implement these, even with the "serde" feature enabled.
 mod fixed_offset_serde {
-    use serde::{de::Error, Deserializer, Serializer};
+    use serde::de::Error;
+    use serde::{Deserializer, Serializer};
 
     use super::*;
 

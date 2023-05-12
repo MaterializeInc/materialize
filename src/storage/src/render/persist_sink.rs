@@ -96,8 +96,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::AsCollection;
-use differential_dataflow::{lattice::Lattice, Collection, Hashable};
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use either::Either;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;

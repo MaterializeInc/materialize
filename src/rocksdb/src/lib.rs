@@ -92,13 +92,13 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropHistogram;
 use rocksdb::{Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
 pub mod tuning;
 
-pub use tuning::defaults;
-pub use tuning::RocksDBTuningParameters;
+pub use tuning::{defaults, RocksDBTuningParameters};
 
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]

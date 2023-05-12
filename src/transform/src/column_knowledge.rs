@@ -18,8 +18,7 @@ use mz_expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURS
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
-use mz_repr::{ColumnType, RelationType, ScalarType};
-use mz_repr::{Datum, Row};
+use mz_repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 
 use crate::{TransformArgs, TransformError};
 

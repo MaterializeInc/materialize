@@ -42,7 +42,6 @@ use std::iter::repeat;
 use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
-use mz_repr::RelationType;
 use mz_repr::*;
 
 use crate::plan::expr::{
@@ -1818,8 +1817,7 @@ pub(crate) fn derive_equijoin_cols(
     ra: usize,
     on: Vec<mz_expr::MirScalarExpr>,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
-    use mz_expr::BinaryFunc;
-    use mz_expr::VariadicFunc;
+    use mz_expr::{BinaryFunc, VariadicFunc};
     // TODO: Replace this predicate deconstruction with
     // `mz_expr::canonicalize::canonicalize_predicates`, which will also enable
     // treating select * from lhs left join rhs on lhs.id = rhs.id and true as

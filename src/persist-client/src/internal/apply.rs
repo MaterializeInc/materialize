@@ -10,7 +10,7 @@
 //! Implementation of persist command application.
 
 use std::fmt::Debug;
-use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
+use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::Instant;
 

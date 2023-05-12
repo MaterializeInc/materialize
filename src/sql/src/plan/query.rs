@@ -35,9 +35,8 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
-use std::iter;
-use std::mem;
 use std::num::NonZeroU64;
+use std::{iter, mem};
 
 use itertools::Itertools;
 use mz_expr::virtual_syntax::AlgExcept;
@@ -82,8 +81,7 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidIterationLimit;
-use crate::plan::{transform_ast, PlanContext, ShowCreatePlan};
-use crate::plan::{Params, QueryWhen};
+use crate::plan::{transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan};
 
 use super::statement::show;
 

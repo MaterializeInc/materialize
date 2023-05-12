@@ -35,10 +35,8 @@ use crate::schema::{
     SchemaPieceOrNamed,
 };
 use crate::types::{Scalar, Value};
-use crate::{
-    util::{safe_len, zag_i32, zag_i64, TsUnit},
-    TrivialDecoder, ValueDecoder,
-};
+use crate::util::{safe_len, zag_i32, zag_i64, TsUnit};
+use crate::{TrivialDecoder, ValueDecoder};
 
 pub trait StatefulAvroDecodable: Sized {
     type Decoder: AvroDecode<Out = Self>;

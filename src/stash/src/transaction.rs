@@ -7,28 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{
-    cmp,
-    collections::{btree_map::Entry, BTreeMap},
-    sync::{Arc, Mutex},
-};
+use std::cmp;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
-use futures::{
-    future::{self, try_join, try_join3, try_join_all, BoxFuture},
-    TryFutureExt,
-};
+use futures::future::{self, try_join, try_join3, try_join_all, BoxFuture};
+use futures::TryFutureExt;
 use mz_ore::collections::CollectionExt;
 use serde_json::Value;
-use timely::{progress::Antichain, PartialOrder};
+use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::sync::mpsc;
-use tokio_postgres::{types::ToSql, Client};
+use tokio_postgres::types::ToSql;
+use tokio_postgres::Client;
 use tracing::info;
 
+use crate::postgres::{ConsolidateRequest, CountedStatements};
 use crate::{
-    consolidate_kv, consolidate_updates_kv,
-    postgres::{ConsolidateRequest, CountedStatements},
-    AntichainFormatter, AppendBatch, Data, Diff, Id, InternalStashError, Stash, StashCollection,
-    StashError, Timestamp,
+    consolidate_kv, consolidate_updates_kv, AntichainFormatter, AppendBatch, Data, Diff, Id,
+    InternalStashError, Stash, StashCollection, StashError, Timestamp,
 };
 
 // The limit AFTER which to split an update batch (that is, we will ship an update that

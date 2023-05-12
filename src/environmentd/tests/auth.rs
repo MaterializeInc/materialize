@@ -83,8 +83,7 @@ use std::io::{Read, Write};
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -102,8 +101,7 @@ use mz_frontegg_auth::{
     AuthenticationConfig as FronteggConfig, Claims, RefreshToken, REFRESH_SUFFIX,
 };
 use mz_ore::assert_contains;
-use mz_ore::now::NowFn;
-use mz_ore::now::SYSTEM_TIME;
+use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task::RuntimeExt;
 use mz_sql::names::PUBLIC_ROLE_NAME;

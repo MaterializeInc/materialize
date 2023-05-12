@@ -228,8 +228,7 @@ mod tests {
     use ssh_key::public::Ed25519PublicKey;
     use ssh_key::{LineEnding, PrivateKey};
 
-    use super::SshKeyPair;
-    use super::SshKeyPairSet;
+    use super::{SshKeyPair, SshKeyPairSet};
 
     #[test]
     fn test_key_pair_generation() -> anyhow::Result<()> {

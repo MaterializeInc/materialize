@@ -10,10 +10,8 @@
 //! Provides tooling to handle `WITH` options.
 
 use mz_repr::adt::interval::Interval;
-use mz_repr::strconv;
-use mz_repr::GlobalId;
-use mz_sql_parser::ast::KafkaBroker;
-use mz_sql_parser::ast::ReplicaDefinition;
+use mz_repr::{strconv, GlobalId};
+use mz_sql_parser::ast::{KafkaBroker, ReplicaDefinition};
 use mz_storage_client::types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
 

@@ -8,9 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use std::mem;
 use std::ops::BitOrAssign;
+use std::{fmt, mem};
 
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
@@ -19,17 +18,15 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
-use mz_proto::IntoRustIfSome;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::date::DateError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::TimestampError;
-use mz_repr::arb_datum;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
+use mz_repr::{arb_datum, ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};

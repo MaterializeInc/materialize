@@ -22,21 +22,22 @@ use differential_dataflow::operators::arrange::agent::ShutdownButton;
 use futures_util::task::ArcWake;
 use futures_util::FutureExt;
 use polonius_the_crab::{polonius, WithLifetime};
-use timely::communication::{message::RefOrMut, Pull, Push};
+use timely::communication::message::RefOrMut;
+use timely::communication::{Pull, Push};
 use timely::dataflow::channels::pact::ParallelizationContractCore;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::counter::CounterCore as PushCounter;
 use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::channels::BundleCore;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::generic::OutputHandleCore;
-use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputWrapper};
+use timely::dataflow::operators::generic::{
+    InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
+};
 use timely::dataflow::operators::{Capability, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
-use timely::Data;
-use timely::{Container, PartialOrder};
+use timely::{Container, Data, PartialOrder};
 
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<G: Scope> {

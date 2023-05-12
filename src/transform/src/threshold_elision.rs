@@ -18,8 +18,7 @@
 use mz_expr::visit::{Visit, Visitor, VisitorMut};
 use mz_expr::MirRelationExpr;
 
-use crate::attribute::{DerivedAttributes, RequiredAttributes};
-use crate::attribute::{NonNegative, SubtreeSize};
+use crate::attribute::{DerivedAttributes, NonNegative, RequiredAttributes, SubtreeSize};
 use crate::TransformArgs;
 
 /// Remove Threshold operators that have no effect.

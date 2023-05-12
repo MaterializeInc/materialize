@@ -12,10 +12,11 @@
 //! (1) Turn jemalloc profiling on and off, and dump heap profiles (`PROF_CTL`)
 //! (2) Parse jemalloc heap files and make them into a hierarchical format (`parse_jeheap` and `collate_stacks`)
 
+use std::ffi::CString;
+use std::io::BufRead;
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
-use std::time::Duration;
-use std::{ffi::CString, io::BufRead, time::Instant};
+use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use mz_ore::cast::CastFrom;

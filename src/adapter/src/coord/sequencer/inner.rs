@@ -41,10 +41,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
-    CatalogTypeDetails, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogRole, CatalogSchema, CatalogTypeDetails, SessionCatalog,
 };
-use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
 use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
@@ -60,10 +59,9 @@ use mz_sql::plan::{
     SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, OwnedVarInput, Var, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
-use mz_sql::session::vars::{Var, SCHEMA_ALIAS};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;

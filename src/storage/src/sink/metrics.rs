@@ -9,10 +9,8 @@
 
 //! Metrics that sinks report.
 
-use mz_ore::{
-    metric,
-    metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec},
-};
+use mz_ore::metric;
+use mz_ore::metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec};
 
 /// Metrics reported by each kafka sink.
 #[derive(Clone)]

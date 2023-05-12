@@ -9,8 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::io;
-use std::str;
+use std::{io, str};
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};

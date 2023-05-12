@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-use std::iter;
-use std::vec;
+use std::{fmt, iter, vec};
 
 use anyhow::bail;
 use mz_lowertest::MzReflect;

@@ -29,7 +29,8 @@
 //!    .to_owned();
 //! ```
 
-use std::{fmt::Display, str::FromStr};
+use std::fmt::Display;
+use std::str::FromStr;
 
 use reqwest::Method;
 use serde::{Deserialize, Serialize};

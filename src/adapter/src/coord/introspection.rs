@@ -24,15 +24,12 @@ use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
+use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE};
 use crate::catalog::Catalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
-use crate::rbac;
 use crate::session::Session;
-use crate::{
-    catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE},
-    AdapterError,
-};
+use crate::{rbac, AdapterError};
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.

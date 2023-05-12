@@ -32,8 +32,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{query, with_options};
-use crate::plan::{Params, Plan, PlanContext, PlanKind};
+use crate::plan::{query, with_options, Params, Plan, PlanContext, PlanKind};
 use crate::session::vars::SystemVars;
 
 pub(crate) mod ddl;

@@ -27,8 +27,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
-use mz_repr::strconv;
-use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterOwnerStatement, AlterRoleStatement, AlterSinkAction, AlterSinkStatement,

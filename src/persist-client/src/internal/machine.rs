@@ -11,7 +11,7 @@
 
 use std::fmt::Debug;
 use std::future::Future;
-use std::ops::{ControlFlow, ControlFlow::Continue};
+use std::ops::ControlFlow::{self, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 

@@ -24,10 +24,8 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::Instrument;
 
-use crate::client::StorageResponse;
-use crate::client::{TimestamplessUpdate, Update};
-use crate::controller::PersistEpoch;
-use crate::controller::StorageError;
+use crate::client::{StorageResponse, TimestamplessUpdate, Update};
+use crate::controller::{PersistEpoch, StorageError};
 use crate::types::sources::SourceData;
 
 /// A wrapper that holds on to backing persist shards/collections that the

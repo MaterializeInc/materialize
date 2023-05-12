@@ -14,8 +14,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use itertools::Itertools;
-use mz_expr::func;
-use mz_expr::VariadicFunc;
+use mz_expr::{func, VariadicFunc};
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 use once_cell::sync::Lazy;
 

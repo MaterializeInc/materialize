@@ -17,22 +17,18 @@
 //! This implementation strategy allows us to re-use existing arrangements, and
 //! not create any new stateful operators.
 
-use mz_expr::permutation_for_arrangement;
-use mz_expr::JoinInputMapper;
-use mz_expr::MapFilterProject;
-use mz_expr::MirScalarExpr;
-use mz_expr::{join_permutations, JoinInputCharacteristics};
+use mz_expr::{
+    join_permutations, permutation_for_arrangement, JoinInputCharacteristics, JoinInputMapper,
+    MapFilterProject, MirScalarExpr,
+};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::join::JoinBuildState;
-use crate::plan::join::JoinClosure;
+use crate::plan::join::{JoinBuildState, JoinClosure};
 use crate::plan::AvailableCollections;
 
-use super::ProtoDeltaJoinPlan;
-use super::ProtoDeltaPathPlan;
-use super::ProtoDeltaStagePlan;
+use super::{ProtoDeltaJoinPlan, ProtoDeltaPathPlan, ProtoDeltaStagePlan};
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///

@@ -16,9 +16,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{consolidation, AsCollection, Collection};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;

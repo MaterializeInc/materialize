@@ -40,8 +40,7 @@ use crate::adt::range::{
     self, InvalidRangeError, Range, RangeBound, RangeInner, RangeLowerBound, RangeUpperBound,
 };
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::arb_datum;
-use crate::scalar::DatumKind;
+use crate::scalar::{arb_datum, DatumKind};
 use crate::{Datum, Timestamp};
 
 pub(crate) mod encoding;

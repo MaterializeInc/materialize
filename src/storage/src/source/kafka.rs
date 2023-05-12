@@ -24,7 +24,8 @@ use mz_kafka_util::client::{
 };
 use mz_ore::error::ErrorExt;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
-use mz_repr::{adt::jsonb::Jsonb, Diff, GlobalId};
+use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::{Diff, GlobalId};
 use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
 use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;

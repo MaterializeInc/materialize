@@ -88,9 +88,8 @@
 #![warn(missing_debug_implementations)]
 
 use std::error::Error;
-use std::fmt;
-use std::iter;
 use std::rc::Rc;
+use std::{fmt, iter};
 
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};

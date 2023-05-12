@@ -17,9 +17,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sources::GeneratorMessageType;
 use mz_storage_client::types::sources::{
-    Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
+    Generator, GeneratorMessageType, LoadGenerator, LoadGeneratorSourceConnection, MzOffset,
+    SourceTimestamp,
 };
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 use timely::dataflow::operators::ToStream;

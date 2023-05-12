@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::num::NonZeroI64;
 use std::time::Duration;
-use std::{collections::BTreeMap, num::NonZeroI64};
 
 use anyhow::Context;
 use bytes::Bytes;
@@ -19,7 +20,8 @@ use mz_ore::cast::CastFrom;
 use serde::Deserialize;
 use timely::progress::Antichain;
 use tokio::time::sleep;
-use tokio_postgres::{types::ToSql, Client, Row};
+use tokio_postgres::types::ToSql;
+use tokio_postgres::{Client, Row};
 use tracing::error;
 
 use super::legacy_types::{

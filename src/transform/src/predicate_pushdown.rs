@@ -212,8 +212,7 @@ impl PredicatePushdown {
                             let mut pred_not_translated = Vec::new();
 
                             for mut predicate in predicates.drain(..) {
-                                use mz_expr::BinaryFunc;
-                                use mz_expr::UnaryFunc;
+                                use mz_expr::{BinaryFunc, UnaryFunc};
                                 if let MirScalarExpr::CallBinary {
                                     func: BinaryFunc::Eq,
                                     expr1,

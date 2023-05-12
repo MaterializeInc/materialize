@@ -8,13 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
-use mz_repr::DatumVec;
-use mz_repr::{Row, RowArena};
+use mz_repr::{DatumVec, Row, RowArena};
 use mz_timely_util::operator::StreamExt;
 use timely::dataflow::Scope;
 
-use crate::render::context::CollectionBundle;
-use crate::render::context::Context;
+use crate::render::context::{CollectionBundle, Context};
 
 impl<G> Context<G, Row>
 where

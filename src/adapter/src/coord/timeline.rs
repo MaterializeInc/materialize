@@ -9,12 +9,10 @@
 
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
-use std::cmp;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::future::Future;
-use std::thread;
 use std::time::Duration;
+use std::{cmp, fmt, thread};
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;

@@ -11,8 +11,7 @@
 
 use std::cmp::Ordering;
 use std::error::Error;
-use std::fmt;
-use std::mem;
+use std::{fmt, mem};
 
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};

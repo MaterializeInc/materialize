@@ -13,8 +13,7 @@ use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
 };
 use mz_controller::clusters::ClusterId;
-use mz_ore::halt;
-use mz_ore::soft_assert;
+use mz_ore::{halt, soft_assert};
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;

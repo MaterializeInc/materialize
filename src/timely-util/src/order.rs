@@ -18,7 +18,8 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::PartialOrder;

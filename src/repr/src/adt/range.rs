@@ -21,8 +21,7 @@ use mz_proto::{RustType, TryFromProtoError};
 use postgres_protocol::types;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use tokio_postgres::types::FromSql;
-use tokio_postgres::types::Type as PgType;
+use tokio_postgres::types::{FromSql, Type as PgType};
 
 use crate::scalar::DatumKind;
 use crate::Datum;

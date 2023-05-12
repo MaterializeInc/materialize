@@ -377,8 +377,9 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
+        use proto_storage_response::Kind::*;
         use proto_storage_response::{
-            Kind::*, ProtoDroppedIds, ProtoSinkStatisticsUpdate, ProtoSourceStatisticsUpdate,
+            ProtoDroppedIds, ProtoSinkStatisticsUpdate, ProtoSourceStatisticsUpdate,
             ProtoStatisticsUpdates,
         };
         ProtoStorageResponse {
@@ -421,7 +422,8 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     }
 
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
-        use proto_storage_response::{Kind::*, ProtoDroppedIds};
+        use proto_storage_response::Kind::*;
+        use proto_storage_response::ProtoDroppedIds;
         match proto.kind {
             Some(DroppedIds(ProtoDroppedIds { ids })) => {
                 Ok(StorageResponse::DroppedIds(ids.into_rust()?))

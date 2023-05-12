@@ -28,10 +28,10 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::protocol::command::ComputeParameters;
-use mz_controller::clusters::ClusterRole;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation,
-    ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
+    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaLocation, ProcessId,
+    ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
+    UnmanagedReplicaLocation,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
@@ -43,11 +43,12 @@ use mz_ore::soft_assert;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
@@ -8005,9 +8006,8 @@ mod tests {
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
-    use mz_sql::names;
     use mz_sql::names::{
-        DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
+        self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;

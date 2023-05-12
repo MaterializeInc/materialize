@@ -15,7 +15,8 @@
 
 use anyhow::Result;
 use clap::Parser;
-use serde::{de::Visitor, Deserialize, Serialize};
+use serde::de::Visitor;
+use serde::{Deserialize, Serialize};
 
 use crate::configuration::FronteggAPIToken;
 

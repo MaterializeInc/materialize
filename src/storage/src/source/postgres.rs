@@ -46,8 +46,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_postgres::error::DbError;
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
-use tokio_postgres::SimpleQueryMessage;
+use tokio_postgres::{Client, SimpleQueryMessage};
 use tracing::{info, warn};
 
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics, SourceRender};

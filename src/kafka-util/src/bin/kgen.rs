@@ -88,9 +88,8 @@ use mz_avro::Schema;
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::retry::Retry;
-use rand::distributions::{
-    uniform::SampleUniform, Alphanumeric, Bernoulli, Uniform, WeightedIndex,
-};
+use rand::distributions::uniform::SampleUniform;
+use rand::distributions::{Alphanumeric, Bernoulli, Uniform, WeightedIndex};
 use rand::prelude::{Distribution, ThreadRng};
 use rand::thread_rng;
 use rdkafka::error::KafkaError;

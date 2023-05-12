@@ -33,13 +33,11 @@ use crate::decode::{decode, AvroRead};
 use crate::error::{DecodeError, Error as AvroError};
 use crate::schema::{
     resolve_schemas, FullName, NamedSchemaPiece, ParseSchemaError, RecordField,
-    ResolvedDefaultValueField, SchemaNodeOrNamed, SchemaPiece, SchemaPieceOrNamed,
-    SchemaPieceRefOrNamed,
+    ResolvedDefaultValueField, ResolvedRecordField, Schema, SchemaNodeOrNamed, SchemaPiece,
+    SchemaPieceOrNamed, SchemaPieceRefOrNamed,
 };
-use crate::schema::{ResolvedRecordField, Schema};
 use crate::types::Value;
-use crate::util;
-use crate::{Codec, SchemaResolutionError};
+use crate::{util, Codec, SchemaResolutionError};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Header {
