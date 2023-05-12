@@ -13,7 +13,7 @@ from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.expressions.expression_with_args import (
     ExpressionWithNArgs,
 )
-from materialize.output_consistency.operations.operation import OperationWithNParams
+from materialize.output_consistency.operations.operation import DbOperation
 from materialize.output_consistency.operations.operation_provider import OPERATION_TYPES
 
 
@@ -89,7 +89,7 @@ class ExpressionGenerator:
 
     # checks if the data type is appropriate for the operation
     def satisfies_data_types(
-        self, operation: OperationWithNParams, args: list[Expression]
+        self, operation: DbOperation, args: list[Expression]
     ) -> bool:
         if operation.param_count != len(args):
             raise RuntimeError(
@@ -127,7 +127,7 @@ class ExpressionGenerator:
 
     # checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max data_type)
     def is_expected_to_cause_error(
-        self, operation: OperationWithNParams, args: list[Expression]
+        self, operation: DbOperation, args: list[Expression]
     ) -> bool:
         if operation.param_count != len(args):
             raise RuntimeError(

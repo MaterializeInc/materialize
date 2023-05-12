@@ -17,7 +17,7 @@ from materialize.output_consistency.operations.operation_param import OperationP
 EXPRESSION_PLACEHOLDER = "$"
 
 
-class OperationWithNParams:
+class DbOperation:
     def __init__(
         self,
         pattern: str,
@@ -42,63 +42,19 @@ class OperationWithNParams:
             )
 
 
-class OperationWithOneParam(OperationWithNParams):
+class DbFunction(DbOperation):
     def __init__(
         self,
-        pattern: str,
-        param: OperationParam,
-        return_type_category: DataTypeCategory,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
-    ):
-        self.pattern = pattern
-        super().__init__(pattern, [param], return_type_category, args_validators, False)
-
-
-class OperationWithTwoParams(OperationWithNParams):
-    def __init__(
-        self,
-        pattern: str,
-        param1: OperationParam,
-        param2: OperationParam,
+        name: str,
+        params: list[OperationParam],
         return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
         commutative: bool = False,
     ):
-        self.pattern = pattern
+        args_pattern = ", ".join(["$"] * len(params))
         super().__init__(
-            pattern,
-            [param1, param2],
-            return_type_category,
-            args_validators,
-            commutative,
-        )
-
-
-class UnaryFunction(OperationWithOneParam):
-    def __init__(
-        self,
-        name: str,
-        param: OperationParam,
-        return_type_category: DataTypeCategory,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
-    ):
-        super().__init__(f"{name}($)", param, return_type_category, args_validators)
-
-
-class BinaryFunction(OperationWithTwoParams):
-    def __init__(
-        self,
-        name: str,
-        param1: OperationParam,
-        param2: OperationParam,
-        return_type_category: DataTypeCategory,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
-        commutative: bool = False,
-    ):
-        super().__init__(
-            f"{name}($, $)",
-            param1,
-            param2,
+            f"{name}({args_pattern})",
+            params,
             return_type_category,
             args_validators,
             commutative,

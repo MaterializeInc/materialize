@@ -11,13 +11,7 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.data_type.value_characteristics import (
     ValueCharacteristics,
 )
-from materialize.output_consistency.operations.operation import (
-    BinaryFunction,
-    OperationWithNParams,
-    OperationWithOneParam,
-    OperationWithTwoParams,
-    UnaryFunction,
-)
+from materialize.output_consistency.operations.operation import DbFunction, DbOperation
 from materialize.output_consistency.operations.operation_args_validator import (
     ValueGrowsArgsValidator,
 )
@@ -25,38 +19,32 @@ from materialize.output_consistency.operations.operation_param import (
     NumericOperationParam,
 )
 
-OPERATION_TYPES: list[OperationWithNParams] = []
+OPERATION_TYPES: list[DbOperation] = []
 
 # ===== BEGIN GENERIC =====
 
 OPERATION_TYPES.append(
-    BinaryFunction(
+    DbFunction(
         "GREATEST",
-        NumericOperationParam(),
-        NumericOperationParam(),
+        [
+            NumericOperationParam(),
+            NumericOperationParam(),
+            NumericOperationParam(optional=True),
+        ],
         DataTypeCategory.DYNAMIC,
+        commutative=True,
     )
 )
 OPERATION_TYPES.append(
-    BinaryFunction(
+    DbFunction(
         "LEAST",
-        NumericOperationParam(),
-        NumericOperationParam(),
+        [
+            NumericOperationParam(),
+            NumericOperationParam(),
+            NumericOperationParam(optional=True),
+        ],
         DataTypeCategory.DYNAMIC,
-    )
-)
-OPERATION_TYPES.append(
-    OperationWithNParams(
-        "GREATEST($, $, $)",
-        [NumericOperationParam(), NumericOperationParam(), NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
-    )
-)
-OPERATION_TYPES.append(
-    OperationWithNParams(
-        "LEAST($, $, $)",
-        [NumericOperationParam(), NumericOperationParam(), NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        commutative=True,
     )
 )
 
@@ -65,99 +53,110 @@ OPERATION_TYPES.append(
 # ===== BEGIN NUMBER OPERATORS =====
 
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ + $",
-        NumericOperationParam(),
-        NumericOperationParam(),
+        [NumericOperationParam(), NumericOperationParam()],
         DataTypeCategory.NUMERIC,
         {ValueGrowsArgsValidator()},
         commutative=True,
     )
 )
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ - $",
-        NumericOperationParam(),
-        NumericOperationParam(),
+        [NumericOperationParam(), NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ * $",
-        NumericOperationParam(),
-        NumericOperationParam(),
+        [NumericOperationParam(), NumericOperationParam()],
         DataTypeCategory.NUMERIC,
         {ValueGrowsArgsValidator()},
         commutative=True,
     )
 )
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ / $",
-        NumericOperationParam(),
-        NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+        [
+            NumericOperationParam(),
+            NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ % $",
-        NumericOperationParam(),
-        NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+        [
+            NumericOperationParam(),
+            NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 # Bitwise AND
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ & $",
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        [
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 # Bitwise OR
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ | $",
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        [
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 # Bitwise XOR
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ # $",
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        [
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 # Bitwise NOT
 OPERATION_TYPES.append(
-    OperationWithOneParam(
+    DbOperation(
         "~$",
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        [NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL})],
         DataTypeCategory.NUMERIC,
     )
 )
 # Bitwise left shift
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ << $",
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        [
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 # Bitwise right shift
 OPERATION_TYPES.append(
-    OperationWithTwoParams(
+    DbOperation(
         "$ >> $",
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        [
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
@@ -167,13 +166,13 @@ OPERATION_TYPES.append(
 # ===== BEGIN AGGREGATES =====
 
 OPERATION_TYPES.append(
-    UnaryFunction("SUM", NumericOperationParam(), DataTypeCategory.NUMERIC)
+    DbFunction("SUM", [NumericOperationParam()], DataTypeCategory.NUMERIC)
 )
 OPERATION_TYPES.append(
-    UnaryFunction("MIN", NumericOperationParam(), DataTypeCategory.NUMERIC)
+    DbFunction("MIN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
 )
 OPERATION_TYPES.append(
-    UnaryFunction("MAX", NumericOperationParam(), DataTypeCategory.NUMERIC)
+    DbFunction("MAX", [NumericOperationParam()], DataTypeCategory.NUMERIC)
 )
 
 # ===== END AGGREGATES =====
@@ -181,112 +180,133 @@ OPERATION_TYPES.append(
 # ===== BEGIN NUMBERS =====
 
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "ABS",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "CBRT",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 # CEIL == CEILING
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "CEIL",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "EXP",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
         {ValueGrowsArgsValidator()},
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "FLOOR",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "LN",
-        NumericOperationParam(
-            incompatibilities={ValueCharacteristics.NEGATIVE, ValueCharacteristics.ZERO}
-        ),
+        [
+            NumericOperationParam(
+                incompatibilities={
+                    ValueCharacteristics.NEGATIVE,
+                    ValueCharacteristics.ZERO,
+                }
+            )
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "LOG10",
-        NumericOperationParam(
-            incompatibilities={ValueCharacteristics.NEGATIVE, ValueCharacteristics.ZERO}
-        ),
+        [
+            NumericOperationParam(
+                incompatibilities={
+                    ValueCharacteristics.NEGATIVE,
+                    ValueCharacteristics.ZERO,
+                }
+            )
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    BinaryFunction(
+    DbFunction(
         "LOG",
-        NumericOperationParam(
-            incompatibilities={ValueCharacteristics.NEGATIVE, ValueCharacteristics.ZERO}
-        ),
-        # do not mark this param as optional because if not present the operation is equal to LOG10, which is separate
-        NumericOperationParam(
-            incompatibilities={ValueCharacteristics.NEGATIVE, ValueCharacteristics.ZERO}
-        ),
+        [
+            NumericOperationParam(
+                incompatibilities={
+                    ValueCharacteristics.NEGATIVE,
+                    ValueCharacteristics.ZERO,
+                }
+            ),
+            # not marked as optional because if not present the operation is equal to LOG10, which is separate
+            NumericOperationParam(
+                incompatibilities={
+                    ValueCharacteristics.NEGATIVE,
+                    ValueCharacteristics.ZERO,
+                }
+            ),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    BinaryFunction(
+    DbFunction(
         "MOD",
-        NumericOperationParam(),
-        NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+        [
+            NumericOperationParam(),
+            NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 # POW == POWER
 OPERATION_TYPES.append(
-    BinaryFunction(
+    DbFunction(
         "POW",
-        NumericOperationParam(),
-        NumericOperationParam(),
+        [NumericOperationParam(), NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    BinaryFunction(
+    DbFunction(
         "ROUND",
-        NumericOperationParam(),
-        # negative values are allowed
-        NumericOperationParam(
-            optional=True, incompatibilities={ValueCharacteristics.DECIMAL}
-        ),
+        [
+            NumericOperationParam(),
+            # negative values are allowed
+            NumericOperationParam(
+                optional=True, incompatibilities={ValueCharacteristics.DECIMAL}
+            ),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "SQRT",
-        NumericOperationParam(incompatibilities={ValueCharacteristics.NEGATIVE}),
+        [NumericOperationParam(incompatibilities={ValueCharacteristics.NEGATIVE})],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "TRUNC",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
@@ -295,118 +315,129 @@ OPERATION_TYPES.append(
 
 # ===== BEGIN TRIGONOMETRIC =====
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "COS",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 # only for numbers [-1, +1]
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "ACOS",
-        NumericOperationParam(
-            incompatibilities={
-                ValueCharacteristics.LARGE_VALUE,
-                ValueCharacteristics.MAX_VALUE,
-            }
-        ),
+        [
+            NumericOperationParam(
+                incompatibilities={
+                    ValueCharacteristics.LARGE_VALUE,
+                    ValueCharacteristics.MAX_VALUE,
+                }
+            )
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "COSH",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
         {ValueGrowsArgsValidator()},
     )
 )
 # only for numbers [1,)
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "ACOSH",
-        NumericOperationParam(
-            incompatibilities={ValueCharacteristics.ZERO, ValueCharacteristics.NEGATIVE}
-        ),
+        [
+            NumericOperationParam(
+                incompatibilities={
+                    ValueCharacteristics.ZERO,
+                    ValueCharacteristics.NEGATIVE,
+                }
+            )
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction("COT", NumericOperationParam(), DataTypeCategory.NUMERIC)
+    DbFunction("COT", [NumericOperationParam()], DataTypeCategory.NUMERIC)
 )
 OPERATION_TYPES.append(
-    UnaryFunction("SIN", NumericOperationParam(), DataTypeCategory.NUMERIC)
+    DbFunction("SIN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
 )
 # only for numbers [-1, +1]
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "ASIN",
-        NumericOperationParam(
-            incompatibilities={
-                ValueCharacteristics.LARGE_VALUE,
-                ValueCharacteristics.MAX_VALUE,
-            }
-        ),
+        [
+            NumericOperationParam(
+                incompatibilities={
+                    ValueCharacteristics.LARGE_VALUE,
+                    ValueCharacteristics.MAX_VALUE,
+                }
+            )
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "SINH",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
         {ValueGrowsArgsValidator()},
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "ASINH",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction("TAN", NumericOperationParam(), DataTypeCategory.NUMERIC)
+    DbFunction("TAN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "ATAN",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "TANH",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 # only for numbers [-1, +1]
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "ATANH",
-        NumericOperationParam(
-            incompatibilities={
-                ValueCharacteristics.LARGE_VALUE,
-                ValueCharacteristics.MAX_VALUE,
-            }
-        ),
+        [
+            NumericOperationParam(
+                incompatibilities={
+                    ValueCharacteristics.LARGE_VALUE,
+                    ValueCharacteristics.MAX_VALUE,
+                }
+            )
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "RADIANS",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
 OPERATION_TYPES.append(
-    UnaryFunction(
+    DbFunction(
         "DEGREES",
-        NumericOperationParam(),
+        [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )

@@ -10,14 +10,14 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.operations.operation import (
     EXPRESSION_PLACEHOLDER,
-    OperationWithNParams,
+    DbOperation,
 )
 
 
 class ExpressionWithNArgs(Expression):
     def __init__(
         self,
-        operation: OperationWithNParams,
+        operation: DbOperation,
         args: list[Expression],
         is_expect_error: bool = False,
     ):
