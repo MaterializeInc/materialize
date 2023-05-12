@@ -103,6 +103,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(
                 name="MZ_AWS_PRIVATELINK_AVAILABILITY_ZONES", value="use1-az1,use1-az2"
             ),
+            # TODO: these should be the same as in mzcompose
+            V1EnvVar(
+                name="MZ_SYSTEM_PARAMETER_DEFAULT",
+                value="enable_envelope_upsert_in_subscribe=true",
+            ),
         ]
 
         if self.coverage_mode:
