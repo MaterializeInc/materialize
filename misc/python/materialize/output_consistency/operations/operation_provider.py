@@ -106,6 +106,7 @@ OPERATION_TYPES.append(
             NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
         ],
         DataTypeCategory.NUMERIC,
+        commutative=True,
     )
 )
 # Bitwise OR
@@ -117,6 +118,7 @@ OPERATION_TYPES.append(
             NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
         ],
         DataTypeCategory.NUMERIC,
+        commutative=True,
     )
 )
 # Bitwise XOR
@@ -128,6 +130,7 @@ OPERATION_TYPES.append(
             NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
         ],
         DataTypeCategory.NUMERIC,
+        commutative=True,
     )
 )
 # Bitwise NOT
