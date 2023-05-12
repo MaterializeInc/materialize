@@ -777,17 +777,22 @@ impl<'a> ColumnSpecs<'a> {
         }
     }
 
-    fn set_literal(expr: &mut MirScalarExpr, value: Result<Datum, EvalError>) {
+    fn set_literal(expr: &mut MirScalarExpr, update: Result<Datum, EvalError>) {
         match expr {
-            MirScalarExpr::Literal(row, col_type) => {
-                *row = value.map(|d| {
+            MirScalarExpr::Literal(literal, col_type) => match update {
+                Err(error) => *literal = Err(error),
+                Ok(datum) => {
                     assert!(
-                        d.is_instance_of(col_type),
-                        "{d:?} must be an instance of {col_type:?}"
+                        datum.is_instance_of(col_type),
+                        "{datum:?} must be an instance of {col_type:?}"
                     );
-                    Row::pack_slice(&[d])
-                })
-            }
+                    match literal {
+                        // Reuse the allocation if we can
+                        Ok(row) => row.packer().push(datum),
+                        literal => *literal = Ok(Row::pack_slice(&[datum])),
+                    }
+                }
+            },
             _ => panic!("not a literal"),
         }
     }
