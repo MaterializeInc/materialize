@@ -173,13 +173,19 @@ OPERATION_TYPES.append(
 # ===== BEGIN AGGREGATES =====
 
 OPERATION_TYPES.append(
-    DbFunction("SUM", [NumericOperationParam()], DataTypeCategory.NUMERIC)
+    DbFunction(
+        "SUM", [NumericOperationParam()], DataTypeCategory.NUMERIC, aggregation=True
+    ),
 )
 OPERATION_TYPES.append(
-    DbFunction("MIN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
+    DbFunction(
+        "MIN", [NumericOperationParam()], DataTypeCategory.NUMERIC, aggregation=True
+    )
 )
 OPERATION_TYPES.append(
-    DbFunction("MAX", [NumericOperationParam()], DataTypeCategory.NUMERIC)
+    DbFunction(
+        "MAX", [NumericOperationParam()], DataTypeCategory.NUMERIC, aggregation=True
+    )
 )
 
 # ===== END AGGREGATES =====
@@ -318,7 +324,7 @@ OPERATION_TYPES.append(
     )
 )
 
-# ===== END NUMERS =====
+# ===== END NUMBERS =====
 
 # ===== BEGIN TRIGONOMETRIC =====
 OPERATION_TYPES.append(

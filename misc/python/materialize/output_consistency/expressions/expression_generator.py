@@ -27,6 +27,10 @@ class ExpressionGenerator:
                 continue
 
             for operation in OPERATION_TYPES:
+                if operation.aggregation:
+                    # currently not supported
+                    continue
+
                 # TODO: data_type of all data types combined with data_type of all data types
                 combinations = self.generate_combinations(
                     data_type.raw_values,
