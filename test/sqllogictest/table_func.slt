@@ -17,7 +17,7 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET repeat_row = true
+ALTER SYSTEM SET enable_repeat_row = true
 ----
 COMPLETE 0
 

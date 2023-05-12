@@ -9,7 +9,7 @@
 
 # bin_date
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET binary_date_bin = true
+ALTER SYSTEM SET enable_binary_date_bin = true
 ----
 COMPLETE 0
 
@@ -203,7 +203,7 @@ SELECT '99999-01-01'::TIMESTAMP + '162145 y';
 
 # date_bin_hopping
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET date_bin_hopping = true
+ALTER SYSTEM SET enable_date_bin_hopping = true
 ----
 COMPLETE 0
 

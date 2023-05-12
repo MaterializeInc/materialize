@@ -737,7 +737,7 @@ SELECT list_cat(LIST[1], LIST[[2]])
 
 # 🔬🔬 list_n_layers
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET list_n_layers = true
+ALTER SYSTEM SET enable_list_n_layers = true
 ----
 COMPLETE 0
 
@@ -888,7 +888,7 @@ SELECT list_length(NULL)
 
 # 🔬🔬 list_length_max
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET list_length_max = true
+ALTER SYSTEM SET enable_list_length_max = true
 ----
 COMPLETE 0
 
@@ -2471,7 +2471,7 @@ SELECT sum(a ORDER BY b) FROM t2
 
 # list_remove
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET list_remove = true
+ALTER SYSTEM SET enable_list_remove = true
 ----
 COMPLETE 0
 
