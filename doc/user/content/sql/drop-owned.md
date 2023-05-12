@@ -10,7 +10,7 @@ menu:
 
 {{< note >}}
 Unlike [PostgreSQL](https://www.postgresql.org/docs/current/sql-drop-owned.html), Materialize drops
-all objects across all databases.
+all objects across all databases, including the database itself.
 {{< /note >}}
 
 ## Syntax
