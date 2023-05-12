@@ -18,5 +18,8 @@ class ValueCharacteristics(Enum):
     MAX_VALUE = 4
     OVERSIZE = 5
     NEGATIVE = 6
+    # value is not an integer
     DECIMAL = 7
-    NON_EMPTY = 8
+    # value may or may not be an integer but is of a decimal type
+    DECIMAL_TYPED = 8
+    NON_EMPTY = 9

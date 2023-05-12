@@ -106,8 +106,12 @@ OPERATION_TYPES.append(
     DbOperation(
         "$ & $",
         [
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
         ],
         DataTypeCategory.NUMERIC,
         commutative=True,
@@ -118,8 +122,12 @@ OPERATION_TYPES.append(
     DbOperation(
         "$ | $",
         [
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
         ],
         DataTypeCategory.NUMERIC,
         commutative=True,
@@ -130,8 +138,12 @@ OPERATION_TYPES.append(
     DbOperation(
         "$ # $",
         [
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
         ],
         DataTypeCategory.NUMERIC,
         commutative=True,
@@ -141,7 +153,7 @@ OPERATION_TYPES.append(
 OPERATION_TYPES.append(
     DbOperation(
         "~$",
-        [NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL})],
+        [NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL_TYPED})],
         DataTypeCategory.NUMERIC,
     )
 )
@@ -150,8 +162,12 @@ OPERATION_TYPES.append(
     DbOperation(
         "$ << $",
         [
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
         ],
         DataTypeCategory.NUMERIC,
     )
@@ -161,8 +177,12 @@ OPERATION_TYPES.append(
     DbOperation(
         "$ >> $",
         [
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
-            NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+            ),
         ],
         DataTypeCategory.NUMERIC,
     )
@@ -303,7 +323,7 @@ OPERATION_TYPES.append(
             NumericOperationParam(),
             # negative values are allowed
             NumericOperationParam(
-                optional=True, incompatibilities={ValueCharacteristics.DECIMAL}
+                optional=True, incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
             ),
         ],
         DataTypeCategory.NUMERIC,

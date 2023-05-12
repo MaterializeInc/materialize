@@ -136,3 +136,8 @@ for num_data_type in NUMERIC_DATA_TYPES:
             "DECIMAL",
             {ValueCharacteristics.DECIMAL, ValueCharacteristics.NON_EMPTY},
         )
+
+for num_data_type in NUMERIC_DATA_TYPES:
+    if num_data_type.is_decimal:
+        for raw_value in num_data_type.raw_values:
+            raw_value.characteristics.add(ValueCharacteristics.DECIMAL_TYPED)
