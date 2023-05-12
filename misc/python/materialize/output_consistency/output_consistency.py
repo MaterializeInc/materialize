@@ -47,6 +47,7 @@ def run_output_consistency_tests(
     config.fail_fast = fail_fast
     config.execute_setup = execute_setup
     config.random_seed = random_seed
+    num_expressions_to_select = 20
 
     evaluation_strategies = [
         DataFlowRenderingEvaluation(),
@@ -58,7 +59,9 @@ def run_output_consistency_tests(
     print(f"Created {len(expressions)} expressions.")
 
     randomized_picker = RandomizedPicker(config)
-    expressions = randomized_picker.select(expressions, num_elements=10)
+    expressions = randomized_picker.select(
+        expressions, num_elements=num_expressions_to_select
+    )
     print(f"Selected {len(expressions)} expressions.")
 
     query_generator = QueryGenerator(config)
