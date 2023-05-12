@@ -101,7 +101,7 @@ pub use id::{ProtoId, ProtoLocalId, ProtoPartitionId};
 pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace};
 pub use linear::{
     memoize_expr,
-    plan::{MfpPlan, MfpPushdown, SafeMfpPlan},
+    plan::{MfpPlan, SafeMfpPlan},
     util::{join_permutations, permutation_for_arrangement},
     MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
 };
