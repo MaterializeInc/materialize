@@ -89,6 +89,15 @@ def alter_system_set(name: str, value: str) -> str:
         """
     ).strip()
 
+def alter_system_reset(name: str) -> str:
+    """Generate a TD command that atlers a system parameter."""
+    return dedent(
+        f"""
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM RESET {name};
+        """
+    ).strip()
+
 
 class FeatureTestScenario:
     """
@@ -139,6 +148,24 @@ class FeatureTestScenario:
         )
 
     @classmethod
+    def phase3(cls) -> str:
+        return "\n\n".join(
+            [
+                # Include the header.
+                header(f"{cls.__name__} (phase 3)", drop_schema=False),
+                # Because we have restarted, we need to ensure that we're getting
+                # the parameter's default value, which will be "on".
+                alter_system_reset(cls.feature_name()),
+                cls.initialize(),
+                # The feature is immediately turned on because it's a default parameter.
+                statement_ok(cls.create_item(ordinal=1)),
+                query_ok(cls.query_item(ordinal=1)),
+                # We can drop item #1.
+                statement_ok(cls.drop_item(ordinal=1)),
+            ]
+        )
+
+    @classmethod
     def feature_name(cls) -> str:
         """The name of the feature flag under test."""
         assert False, "feature_name() must be overriden"
@@ -176,7 +203,7 @@ class WithMutuallyRecursive(FeatureTestScenario):
 
     @classmethod
     def feature_error(cls) -> str:
-        return "`WITH MUTUALLY RECURSIVE` syntax is not enabled"
+        return "WITH MUTUALLY RECURSIVE is not supported"
 
     @classmethod
     def create_item(cls, ordinal: int) -> str:
@@ -205,7 +232,7 @@ class FormatJson(FeatureTestScenario):
 
     @classmethod
     def feature_error(cls) -> str:
-        return "`FORMAT JSON` is not enabled"
+        return "FORMAT JSON is not supported"
 
     @classmethod
     def initialize(cls) -> str:
@@ -265,6 +292,26 @@ def run_test(c: Composition, args: argparse.Namespace) -> None:
             tmp.write(scenario.phase2())
             tmp.flush()
             c.exec("testdrive", os.path.basename(tmp.name))
+
+        materialized = Materialized(
+            unsafe_mode=False,
+            additional_system_parameter_defaults=[
+                "{}=on".format(scenario.feature_name()),
+            ],
+        )
+
+        with c.override(materialized):
+            c.stop("materialized")
+            c.up("materialized")
+
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=c.path,
+                prefix=f"{scenario.__name__}-phase3-",
+            ) as tmp:
+                tmp.write(scenario.phase3())
+                tmp.flush()
+                c.exec("testdrive", os.path.basename(tmp.name))
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:

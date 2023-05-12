@@ -530,7 +530,7 @@ pub fn plan_subscribe(
     let output = match output {
         SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
         SubscribeOutput::EnvelopeUpsert { key_columns } => {
-            scx.require_feature_flag(&vars::ENABLE_ENEVELOPE_UPSERT_IN_SUBSCRIBE)?;
+            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)?;
             let order_by = key_columns
                 .iter()
                 .map(|ident| OrderByExpr {

@@ -899,10 +899,6 @@ feature_flags!(
         "`WITHIN TIMESTAMP ORDER BY ..`"
     ),
     (
-        enable_enevelope_upsert_in_subscribe,
-        "ENVELOPE UPSERT in SUBSCRIBE"
-    ),
-    (
         enable_upsert_source_disk,
         "`WITH (DISK)` for `UPSERT/DEBEZIUM` sources"
     ),

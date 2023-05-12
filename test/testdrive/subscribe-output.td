@@ -9,7 +9,7 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_within_timestamp_order_by_in_subscribe = true
-ALTER SYSTEM SET enable_enevelope_upsert_in_subscribe = true
+ALTER SYSTEM SET enable_envelope_upsert_in_subscribe = true
 
 $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
