@@ -14,6 +14,7 @@ from materialize.output_consistency.data_type.value_characteristics import (
 from materialize.output_consistency.operations.operation import (
     BinaryFunction,
     OperationWithNParams,
+    OperationWithOneParam,
     OperationWithTwoParams,
     UnaryFunction,
 )
@@ -24,84 +25,390 @@ from materialize.output_consistency.operations.operation_param import (
     NumericOperationParam,
 )
 
-add_op = OperationWithTwoParams(
-    "$ + $",
-    NumericOperationParam(),
-    NumericOperationParam(),
-    DataTypeCategory.NUMERIC,
-    {ValueGrowsArgsValidator()},
-    commutative=True,
+OPERATION_TYPES: list[OperationWithNParams] = []
+
+# ===== BEGIN GENERIC =====
+
+OPERATION_TYPES.append(
+    BinaryFunction(
+        "GREATEST",
+        NumericOperationParam(),
+        NumericOperationParam(),
+        DataTypeCategory.DYNAMIC,
+    )
 )
-subt_op = OperationWithTwoParams(
-    "$ - $", NumericOperationParam(), NumericOperationParam(), DataTypeCategory.NUMERIC
+OPERATION_TYPES.append(
+    BinaryFunction(
+        "LEAST",
+        NumericOperationParam(),
+        NumericOperationParam(),
+        DataTypeCategory.DYNAMIC,
+    )
 )
-mult_op = OperationWithTwoParams(
-    "$ * $",
-    NumericOperationParam(),
-    NumericOperationParam(),
-    DataTypeCategory.NUMERIC,
-    {ValueGrowsArgsValidator()},
-    commutative=True,
+OPERATION_TYPES.append(
+    OperationWithNParams(
+        "GREATEST($, $, $)",
+        [NumericOperationParam(), NumericOperationParam(), NumericOperationParam()],
+        DataTypeCategory.NUMERIC,
+    )
 )
-div_op = OperationWithTwoParams(
-    "$ / $",
-    NumericOperationParam(),
-    NumericOperationParam({ValueCharacteristics.ZERO}),
-    DataTypeCategory.NUMERIC,
+OPERATION_TYPES.append(
+    OperationWithNParams(
+        "LEAST($, $, $)",
+        [NumericOperationParam(), NumericOperationParam(), NumericOperationParam()],
+        DataTypeCategory.NUMERIC,
+    )
 )
 
-sum_func = UnaryFunction("SUM", NumericOperationParam(), DataTypeCategory.NUMERIC)
-min_func = UnaryFunction("MIN", NumericOperationParam(), DataTypeCategory.NUMERIC)
-max_func = UnaryFunction("MAX", NumericOperationParam(), DataTypeCategory.NUMERIC)
+# ===== END GENERIC =====
 
-sqrt_func = UnaryFunction(
-    "SQRT",
-    NumericOperationParam({ValueCharacteristics.NEGATIVE}),
-    DataTypeCategory.NUMERIC,
+# ===== BEGIN NUMBER OPERATORS =====
+
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ + $",
+        NumericOperationParam(),
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+        {ValueGrowsArgsValidator()},
+        commutative=True,
+    )
 )
-abs_func = UnaryFunction(
-    "ABS",
-    NumericOperationParam(),
-    DataTypeCategory.NUMERIC,
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ - $",
+        NumericOperationParam(),
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ * $",
+        NumericOperationParam(),
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+        {ValueGrowsArgsValidator()},
+        commutative=True,
+    )
+)
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ / $",
+        NumericOperationParam(),
+        NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ % $",
+        NumericOperationParam(),
+        NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# Bitwise AND
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ & $",
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# Bitwise OR
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ | $",
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# Bitwise XOR
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ # $",
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# Bitwise NOT
+OPERATION_TYPES.append(
+    OperationWithOneParam(
+        "~$",
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# Bitwise left shift
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ << $",
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# Bitwise right shift
+OPERATION_TYPES.append(
+    OperationWithTwoParams(
+        "$ >> $",
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL}),
+        DataTypeCategory.NUMERIC,
+    )
 )
 
-greatest_func = BinaryFunction(
-    "GREATEST",
-    NumericOperationParam(),
-    NumericOperationParam(),
-    DataTypeCategory.DYNAMIC,
+# ===== END NUMBER OPERATORS =====
+
+# ===== BEGIN AGGREGATES =====
+
+OPERATION_TYPES.append(
+    UnaryFunction("SUM", NumericOperationParam(), DataTypeCategory.NUMERIC)
 )
-least_func = BinaryFunction(
-    "LEAST", NumericOperationParam(), NumericOperationParam(), DataTypeCategory.DYNAMIC
+OPERATION_TYPES.append(
+    UnaryFunction("MIN", NumericOperationParam(), DataTypeCategory.NUMERIC)
 )
-greatest3_func = OperationWithNParams(
-    "GREATEST($, $, $)",
-    [NumericOperationParam(), NumericOperationParam(), NumericOperationParam()],
-    DataTypeCategory.NUMERIC,
-)
-least3_func = OperationWithNParams(
-    "LEAST($, $, $)",
-    [NumericOperationParam(), NumericOperationParam(), NumericOperationParam()],
-    DataTypeCategory.NUMERIC,
+OPERATION_TYPES.append(
+    UnaryFunction("MAX", NumericOperationParam(), DataTypeCategory.NUMERIC)
 )
 
+# ===== END AGGREGATES =====
 
-OPERATION_TYPES: list[OperationWithNParams] = [
-    # arithmetic operators
-    add_op,
-    subt_op,
-    mult_op,
-    div_op,
-    # aggregation
-    sum_func,
-    min_func,
-    max_func,
-    # math operations
-    sqrt_func,
-    abs_func,
-    # other
-    greatest_func,
-    least_func,
-    greatest3_func,
-    least3_func,
-]
+# ===== BEGIN NUMBERS =====
+
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "ABS",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "CBRT",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# CEIL == CEILING
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "CEIL",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "EXP",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+        {ValueGrowsArgsValidator()},
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "FLOOR",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "LN",
+        NumericOperationParam(
+            incompatibilities={ValueCharacteristics.NEGATIVE, ValueCharacteristics.ZERO}
+        ),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "LOG10",
+        NumericOperationParam(
+            incompatibilities={ValueCharacteristics.NEGATIVE, ValueCharacteristics.ZERO}
+        ),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    BinaryFunction(
+        "LOG",
+        NumericOperationParam(
+            incompatibilities={ValueCharacteristics.NEGATIVE, ValueCharacteristics.ZERO}
+        ),
+        # do not mark this param as optional because if not present the operation is equal to LOG10, which is separate
+        NumericOperationParam(
+            incompatibilities={ValueCharacteristics.NEGATIVE, ValueCharacteristics.ZERO}
+        ),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    BinaryFunction(
+        "MOD",
+        NumericOperationParam(),
+        NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# POW == POWER
+OPERATION_TYPES.append(
+    BinaryFunction(
+        "POW",
+        NumericOperationParam(),
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    BinaryFunction(
+        "ROUND",
+        NumericOperationParam(),
+        # negative values are allowed
+        NumericOperationParam(
+            optional=True, incompatibilities={ValueCharacteristics.DECIMAL}
+        ),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "SQRT",
+        NumericOperationParam(incompatibilities={ValueCharacteristics.NEGATIVE}),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "TRUNC",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+
+# ===== END NUMERS =====
+
+# ===== BEGIN TRIGONOMETRIC =====
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "COS",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# only for numbers [-1, +1]
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "ACOS",
+        NumericOperationParam(
+            incompatibilities={
+                ValueCharacteristics.LARGE_VALUE,
+                ValueCharacteristics.MAX_VALUE,
+            }
+        ),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "COSH",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+        {ValueGrowsArgsValidator()},
+    )
+)
+# only for numbers [1,)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "ACOSH",
+        NumericOperationParam(
+            incompatibilities={ValueCharacteristics.ZERO, ValueCharacteristics.NEGATIVE}
+        ),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction("COT", NumericOperationParam(), DataTypeCategory.NUMERIC)
+)
+OPERATION_TYPES.append(
+    UnaryFunction("SIN", NumericOperationParam(), DataTypeCategory.NUMERIC)
+)
+# only for numbers [-1, +1]
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "ASIN",
+        NumericOperationParam(
+            incompatibilities={
+                ValueCharacteristics.LARGE_VALUE,
+                ValueCharacteristics.MAX_VALUE,
+            }
+        ),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "SINH",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+        {ValueGrowsArgsValidator()},
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "ASINH",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction("TAN", NumericOperationParam(), DataTypeCategory.NUMERIC)
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "ATAN",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "TANH",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+# only for numbers [-1, +1]
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "ATANH",
+        NumericOperationParam(
+            incompatibilities={
+                ValueCharacteristics.LARGE_VALUE,
+                ValueCharacteristics.MAX_VALUE,
+            }
+        ),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "RADIANS",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+OPERATION_TYPES.append(
+    UnaryFunction(
+        "DEGREES",
+        NumericOperationParam(),
+        DataTypeCategory.NUMERIC,
+    )
+)
+
+# ===== END TRIGONOMETRIC =====

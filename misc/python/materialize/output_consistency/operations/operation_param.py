@@ -19,18 +19,21 @@ class OperationParam:
     def __init__(
         self,
         type_category: DataTypeCategory,
+        optional: bool = False,
         incompatibilities: Optional[set[ValueCharacteristics]] = None,
     ):
         if incompatibilities is None:
             incompatibilities = set()
 
         self.type_category = type_category
+        self.optional = optional
         self.incompatibilities: set[ValueCharacteristics] = incompatibilities
 
 
 class NumericOperationParam(OperationParam):
     def __init__(
         self,
+        optional: bool = False,
         incompatibilities: Optional[set[ValueCharacteristics]] = None,
     ):
         if incompatibilities is None:
@@ -38,4 +41,4 @@ class NumericOperationParam(OperationParam):
 
         incompatibilities.add(ValueCharacteristics.OVERSIZE)
 
-        super().__init__(DataTypeCategory.NUMERIC, incompatibilities)
+        super().__init__(DataTypeCategory.NUMERIC, optional, incompatibilities)

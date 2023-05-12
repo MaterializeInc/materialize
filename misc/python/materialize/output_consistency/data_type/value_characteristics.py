@@ -14,8 +14,9 @@ class ValueCharacteristics(Enum):
     NULL = 0
     ZERO = 1
     ONE = 2
-    MAX_VALUE = 3
-    OVERSIZE = 4
-    NEGATIVE = 5
-    DECIMAL = 6
-    NON_EMPTY = 7
+    LARGE_VALUE = 3
+    MAX_VALUE = 4
+    OVERSIZE = 5
+    NEGATIVE = 6
+    DECIMAL = 7
+    NON_EMPTY = 8
