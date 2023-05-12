@@ -475,6 +475,7 @@ where
             ClusterRole::System => "system",
             ClusterRole::User => "user",
         };
+        let persist_pubsub_url = self.persist_pubsub_url.clone();
         let service = self
             .orchestrator
             .ensure_service(
@@ -495,6 +496,7 @@ where
                             format!("--internal-http-listen-addr={}", assigned["internal-http"]),
                             format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
+                            format!("--persist-pubsub-url={}", persist_pubsub_url),
                         ]
                     },
                     ports: vec![

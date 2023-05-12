@@ -901,20 +901,6 @@ where
             Err(seqno) => seqno,
         };
 
-        // Our state might just be out of date. Fetch the newest state
-        // immediately and try again.
-        //
-        // TODO: Once we have state pubsub, we probably want to remove this
-        // optimization and jump straight to watch+sleep.
-        self.machine
-            .applier
-            .fetch_and_update_state(Some(seqno))
-            .await;
-        seqno = match self.machine.next_listen_batch(frontier) {
-            Ok(b) => return b,
-            Err(seqno) => seqno,
-        };
-
         // The latest state still doesn't have a new frontier for us:
         // watch+sleep in a loop until it does.
         let sleeps = self.metrics.retries.next_listen_batch.stream(
@@ -1165,6 +1151,7 @@ mod tests {
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::cache::StateCache;
     use crate::internal::metrics::Metrics;
+    use crate::rpc::NoopPubSubSender;
     use crate::tests::{all_ok, new_test_client};
     use crate::{PersistClient, PersistConfig, ShardId};
 
@@ -1410,6 +1397,7 @@ mod tests {
         unreliable.totally_available();
         let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()));
         let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+        let pubsub_sender = Arc::new(NoopPubSubSender);
         let (mut write, mut read) = PersistClient::new(
             cfg,
             blob,
@@ -1417,6 +1405,7 @@ mod tests {
             metrics,
             Arc::new(CpuHeavyRuntime::new()),
             Arc::new(StateCache::new_no_metrics()),
+            pubsub_sender,
         )
         .expect("client construction failed")
         .expect_open::<String, String, u64, i64>(ShardId::new())

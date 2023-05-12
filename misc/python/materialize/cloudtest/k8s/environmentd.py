@@ -185,6 +185,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 "--bootstrap-role",
                 "materialize",
             ]
+        if self._meets_minimum_version("0.54.0"):
+            args += [
+                "--internal-persist-pubsub-listen-addr=0.0.0.0:6879",
+                "--persist-pubsub-url=http://persist-pubsub",
+            ]
         container = V1Container(
             name="environmentd",
             image=self.image(

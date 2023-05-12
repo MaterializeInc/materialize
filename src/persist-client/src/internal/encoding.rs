@@ -1225,9 +1225,9 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-    fn state_diff_migration_rollups() {
+    async fn state_diff_migration_rollups() {
         let r1_rollup = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
             encoded_size_bytes: None,

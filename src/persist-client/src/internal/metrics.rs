@@ -75,6 +75,8 @@ pub struct Metrics {
     pub locks: LocksMetrics,
     /// Metrics for StateWatch.
     pub watch: WatchMetrics,
+    /// Metrics for PubSub client.
+    pub pubsub_client: PubSubClientMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -117,6 +119,7 @@ impl Metrics {
             audit: UsageAuditMetrics::new(registry),
             locks: vecs.locks_metrics(),
             watch: WatchMetrics::new(registry),
+            pubsub_client: PubSubClientMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -1115,6 +1118,8 @@ pub struct ShardsMetrics {
     pushdown_parts_filtered_bytes: mz_ore::metrics::IntCounterVec,
     pushdown_parts_fetched_count: mz_ore::metrics::IntCounterVec,
     pushdown_parts_fetched_bytes: mz_ore::metrics::IntCounterVec,
+    pubsub_push_diff_applied: mz_ore::metrics::IntCounterVec,
+    pubsub_push_diff_not_applied: mz_ore::metrics::IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1247,6 +1252,16 @@ impl ShardsMetrics {
                 help: "total size of parts not filtered by pushdown in bytes",
                 var_labels: ["shard"],
             )),
+            pubsub_push_diff_applied: registry.register(metric!(
+                name: "mz_persist_shard_pubsub_diff_applied",
+                help: "number of diffs received via pubsub that applied",
+                var_labels: ["shard"],
+            )),
+            pubsub_push_diff_not_applied: registry.register(metric!(
+                name: "mz_persist_shard_pubsub_diff_not_applied",
+                help: "number of diffs received via pubsub that did not apply",
+                var_labels: ["shard"],
+            )),
             shards,
         }
     }
@@ -1308,8 +1323,9 @@ pub struct ShardMetrics {
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-
     pub pushdown: PushdownMetrics,
+    pub pubsub_push_diff_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
 
 impl ShardMetrics {
@@ -1372,6 +1388,12 @@ impl ShardMetrics {
                 .usage_leaked_bytes
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             pushdown: PushdownMetrics::for_shard(&shard, shards_metrics),
+            pubsub_push_diff_applied: shards_metrics
+                .pubsub_push_diff_applied
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            pubsub_push_diff_not_applied: shards_metrics
+                .pubsub_push_diff_not_applied
+                .get_delete_on_drop_counter(vec![shard]),
         }
     }
 
@@ -1495,6 +1517,217 @@ impl AlertsMetrics {
     }
 }
 
+/// Metrics for the PubSubServer implementation.
+#[derive(Debug)]
+pub struct PubSubServerMetrics {
+    pub(crate) active_connections: UIntGauge,
+    pub(crate) broadcasted_diff_count: IntCounter,
+    pub(crate) broadcasted_diff_bytes: IntCounter,
+    pub(crate) broadcasted_diff_dropped_channel_full: IntCounter,
+
+    pub(crate) push_seconds: Counter,
+    pub(crate) subscribe_seconds: Counter,
+    pub(crate) unsubscribe_seconds: Counter,
+    pub(crate) connection_cleanup_seconds: Counter,
+
+    pub(crate) push_call_count: IntCounter,
+    pub(crate) subscribe_call_count: IntCounter,
+    pub(crate) unsubscribe_call_count: IntCounter,
+}
+
+impl PubSubServerMetrics {
+    pub(crate) fn new(registry: &MetricsRegistry) -> Self {
+        let op_timings: CounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_server_operation_seconds",
+                help: "time spent in pubsub server performing each operation",
+                var_labels: ["op"],
+        ));
+        let call_count: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_server_call_count",
+                help: "count of each pubsub server message received",
+                var_labels: ["call"],
+        ));
+
+        Self {
+            active_connections: registry.register(metric!(
+                    name: "mz_persist_pubsub_server_active_connections",
+                    help: "number of active connections to server",
+            )),
+            broadcasted_diff_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_server_broadcasted_diff_count",
+                    help: "count of total broadcast diff messages sent",
+            )),
+            broadcasted_diff_bytes: registry.register(metric!(
+                    name: "mz_persist_pubsub_server_broadcasted_diff_bytes",
+                    help: "count of total broadcast diff bytes sent",
+            )),
+            broadcasted_diff_dropped_channel_full: registry.register(metric!(
+                    name: "mz_persist_pubsub_server_broadcasted_diff_dropped_channel_full",
+                    help: "count of diffs dropped due to full connection channel",
+            )),
+
+            push_seconds: op_timings.with_label_values(&["push"]),
+            subscribe_seconds: op_timings.with_label_values(&["subscribe"]),
+            unsubscribe_seconds: op_timings.with_label_values(&["unsubscribe"]),
+            connection_cleanup_seconds: op_timings.with_label_values(&["cleanup"]),
+
+            push_call_count: call_count.with_label_values(&["push"]),
+            subscribe_call_count: call_count.with_label_values(&["subscribe"]),
+            unsubscribe_call_count: call_count.with_label_values(&["unsubscribe"]),
+        }
+    }
+}
+
+/// Metrics for the PubSubClient implementation.
+#[derive(Debug)]
+pub struct PubSubClientMetrics {
+    pub sender: PubSubClientSenderMetrics,
+    pub receiver: PubSubClientReceiverMetrics,
+    pub grpc_connection: PubSubGrpcClientConnectionMetrics,
+}
+
+impl PubSubClientMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        PubSubClientMetrics {
+            sender: PubSubClientSenderMetrics::new(registry),
+            receiver: PubSubClientReceiverMetrics::new(registry),
+            grpc_connection: PubSubGrpcClientConnectionMetrics::new(registry),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PubSubGrpcClientConnectionMetrics {
+    pub(crate) connected: UIntGauge,
+    pub(crate) connection_established_count: IntCounter,
+    pub(crate) connect_call_attempt_count: IntCounter,
+    pub(crate) broadcast_recv_lagged_count: IntCounter,
+    pub(crate) grpc_error_count: IntCounter,
+}
+
+impl PubSubGrpcClientConnectionMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        Self {
+            connected: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_connected",
+                    help: "whether the grpc client is currently connected",
+            )),
+            connection_established_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_connection_established_count",
+                    help: "count of grpc connection establishments to pubsub server",
+            )),
+            connect_call_attempt_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_connect_call_attempt_count",
+                    help: "count of connection call attempts (including retries) to pubsub server",
+            )),
+            broadcast_recv_lagged_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_broadcast_recv_lagged_count",
+                    help: "times a message was missed by broadcast receiver due to lag",
+            )),
+            grpc_error_count: registry.register(metric!(
+                    name: "mz_persist_pubsub_client_grpc_error_count",
+                    help: "count of grpc errors received",
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PubSubClientReceiverMetrics {
+    pub(crate) push_received: IntCounter,
+    pub(crate) unknown_message_received: IntCounter,
+    pub(crate) approx_diff_latency_seconds: Histogram,
+
+    pub(crate) state_pushed_diff_fast_path: IntCounter,
+    pub(crate) state_pushed_diff_slow_path_succeeded: IntCounter,
+    pub(crate) state_pushed_diff_slow_path_failed: IntCounter,
+}
+
+impl PubSubClientReceiverMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let call_received: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_client_call_received",
+                help: "times a pubsub client call was received",
+                var_labels: ["call"],
+        ));
+
+        Self {
+            push_received: call_received.with_label_values(&["push"]),
+            unknown_message_received: call_received.with_label_values(&["unknown"]),
+            approx_diff_latency_seconds: registry.register(metric!(
+                name: "mz_persist_pubsub_client_approx_diff_apply_latency_seconds",
+                help: "histogram of (approximate) latency between sending a diff and applying it",
+                buckets: prometheus::exponential_buckets(0.0128, 2.0, 16).expect("buckets"),
+            )),
+
+            state_pushed_diff_fast_path: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_state_push_diff_fast_path",
+                help: "count fast-path state push_diff calls",
+            )),
+            state_pushed_diff_slow_path_succeeded: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_state_push_diff_slow_path_succeeded",
+                help: "count of successful slow-path state push_diff calls",
+            )),
+            state_pushed_diff_slow_path_failed: registry.register(metric!(
+                name: "mz_persist_pubsub_client_receiver_state_push_diff_slow_path_failed",
+                help: "count of unsuccessful slow-path state push_diff calls",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PubSubClientSenderMetrics {
+    pub push: PubSubClientCallMetrics,
+    pub subscribe: PubSubClientCallMetrics,
+    pub unsubscribe: PubSubClientCallMetrics,
+}
+
+#[derive(Debug)]
+pub struct PubSubClientCallMetrics {
+    pub(crate) succeeded: IntCounter,
+    pub(crate) bytes_sent: IntCounter,
+    pub(crate) failed: IntCounter,
+}
+
+impl PubSubClientSenderMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let call_bytes_sent: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_client_call_bytes_sent",
+                help: "number of bytes sent for a given pubsub client call",
+                var_labels: ["call"],
+        ));
+        let call_succeeded: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_client_call_succeeded",
+                help: "times a pubsub client call succeeded",
+                var_labels: ["call"],
+        ));
+        let call_failed: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_pubsub_client_call_failed",
+                help: "times a pubsub client call failed",
+                var_labels: ["call"],
+        ));
+
+        Self {
+            push: PubSubClientCallMetrics {
+                succeeded: call_succeeded.with_label_values(&["push"]),
+                failed: call_failed.with_label_values(&["push"]),
+                bytes_sent: call_bytes_sent.with_label_values(&["push"]),
+            },
+            subscribe: PubSubClientCallMetrics {
+                succeeded: call_succeeded.with_label_values(&["subscribe"]),
+                failed: call_failed.with_label_values(&["subscribe"]),
+                bytes_sent: call_bytes_sent.with_label_values(&["subscribe"]),
+            },
+            unsubscribe: PubSubClientCallMetrics {
+                succeeded: call_succeeded.with_label_values(&["unsubscribe"]),
+                failed: call_failed.with_label_values(&["unsubscribe"]),
+                bytes_sent: call_bytes_sent.with_label_values(&["unsubscribe"]),
+            },
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct LocksMetrics {
     pub(crate) applier_read_cacheable: LockMetrics,
@@ -1503,7 +1736,7 @@ pub struct LocksMetrics {
     pub(crate) watch: LockMetrics,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LockMetrics {
     pub(crate) acquire_count: IntCounter,
     pub(crate) blocking_acquire_count: IntCounter,
