@@ -10,26 +10,21 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.operations.operation import (
     EXPRESSION_PLACEHOLDER,
-    DbOperation,
+    DbOperationOrFunction,
 )
 
 
 class ExpressionWithNArgs(Expression):
     def __init__(
         self,
-        operation: DbOperation,
+        operation: DbOperationOrFunction,
         args: list[Expression],
         is_expect_error: bool = False,
     ):
         super().__init__(set(), is_expect_error)
-        self.pattern = operation.pattern
+        self.pattern = operation.to_pattern(len(args))
         self.return_type_category = operation.return_type_category
         self.args = args
-
-        if len(args) != operation.param_count:
-            raise RuntimeError(
-                f"Expected {operation.param_count} arguments but got {len(args)}"
-            )
 
     def to_sql(self) -> str:
         sql: str = self.pattern

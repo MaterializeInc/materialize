@@ -13,7 +13,7 @@ from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.expressions.expression_with_args import (
     ExpressionWithNArgs,
 )
-from materialize.output_consistency.operations.operation import DbOperation
+from materialize.output_consistency.operations.operation import DbOperationOrFunction
 from materialize.output_consistency.operations.operation_provider import OPERATION_TYPES
 
 
@@ -31,7 +31,7 @@ class ExpressionGenerator:
                 combinations = self.generate_combinations(
                     data_type.raw_values,
                     offset_value=data_type.raw_values[0],
-                    length=operation.param_count,
+                    length=operation.max_param_count,
                     with_self=True,
                     with_earlier=not operation.commutative,
                 )
@@ -89,14 +89,11 @@ class ExpressionGenerator:
 
     # checks if the data type is appropriate for the operation
     def satisfies_data_types(
-        self, operation: DbOperation, args: list[Expression]
+        self, operation: DbOperationOrFunction, args: list[Expression]
     ) -> bool:
-        if operation.param_count != len(args):
-            raise RuntimeError(
-                f"Unexpected combination: {operation.pattern} with {operation.param_count} params, but only {len(args)} args"
-            )
+        operation.validate_args_count_in_range(len(args))
 
-        for param_index in range(operation.param_count):
+        for param_index in range(operation.max_param_count):
             param = operation.params[param_index]
             arg = args[param_index]
 
@@ -127,18 +124,15 @@ class ExpressionGenerator:
 
     # checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max data_type)
     def is_expected_to_cause_error(
-        self, operation: DbOperation, args: list[Expression]
+        self, operation: DbOperationOrFunction, args: list[Expression]
     ) -> bool:
-        if operation.param_count != len(args):
-            raise RuntimeError(
-                f"Unexpected combination: {operation.pattern} with {operation.param_count} params, but only {len(args)} args"
-            )
+        operation.validate_args_count_in_range(len(args))
 
         for validator in operation.args_validators:
             if validator.is_expected_to_cause_error(args):
                 return True
 
-        for param_index in range(operation.param_count):
+        for param_index in range(operation.max_param_count):
             incompatibility = operation.params[param_index].incompatibilities
             characteristics = args[param_index].characteristics
             overlap = incompatibility & characteristics
