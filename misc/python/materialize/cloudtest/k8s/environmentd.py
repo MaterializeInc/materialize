@@ -148,8 +148,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=adapter",
             "--storage-stash-url=postgres://root@cockroach.default:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",
-            "--internal-persist-pubsub-listen-addr=0.0.0.0:6879",
-            "--persist-pubsub-url=http://persist-pubsub",
             "--unsafe-mode",
             # cloudtest may be called upon to spin up older versions of
             # Materialize too! If you are adding a command-line option that is
@@ -186,6 +184,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             args += [
                 "--bootstrap-role",
                 "materialize",
+            ]
+        if self._meets_minimum_version("0.54.0"):
+            args += [
+                "--internal-persist-pubsub-listen-addr=0.0.0.0:6879",
+                "--persist-pubsub-url=http://persist-pubsub",
             ]
         container = V1Container(
             name="environmentd",
