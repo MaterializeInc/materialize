@@ -127,11 +127,13 @@ class QueryExecutionManager:
 
             try:
                 data = self.executor.query(sql_query_string)
-                result = QueryResult(strategy, sql_query_string, data)
+                result = QueryResult(
+                    strategy, sql_query_string, query.column_count(), data
+                )
                 query_execution.outcomes.append(result)
             except SqlExecutionError as err:
                 failure = QueryFailure(
-                    strategy, sql_query_string, str(err), query.column_count()
+                    strategy, sql_query_string, query.column_count(), str(err)
                 )
                 query_execution.outcomes.append(failure)
                 self.rollback_tx(start_new_tx=True)

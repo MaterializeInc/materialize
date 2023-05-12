@@ -27,10 +27,17 @@ class QueryExecution:
 
 
 class QueryOutcome:
-    def __init__(self, strategy: EvaluationStrategy, sql: str, successful: bool):
+    def __init__(
+        self,
+        strategy: EvaluationStrategy,
+        sql: str,
+        successful: bool,
+        query_column_count: int,
+    ):
         self.strategy = strategy
         self.sql = sql
         self.successful = successful
+        self.query_column_count = query_column_count
 
 
 class QueryResult(QueryOutcome):
@@ -38,9 +45,10 @@ class QueryResult(QueryOutcome):
         self,
         strategy: EvaluationStrategy,
         sql: str,
+        query_column_count: int,
         result_rows: Sequence[Sequence[Any]],
     ):
-        super().__init__(strategy, sql, True)
+        super().__init__(strategy, sql, True, query_column_count)
         self.result_rows = result_rows
 
     def __str__(self) -> str:
@@ -52,12 +60,11 @@ class QueryFailure(QueryOutcome):
         self,
         strategy: EvaluationStrategy,
         sql: str,
-        error_message: str,
         query_column_count: int,
+        error_message: str,
     ):
-        super().__init__(strategy, sql, False)
+        super().__init__(strategy, sql, False, query_column_count)
         self.error_message = error_message
-        self.query_column_count = query_column_count
 
     def __str__(self) -> str:
         return f"Failure({self.error_message}) with strategy '{self.strategy.name}'"

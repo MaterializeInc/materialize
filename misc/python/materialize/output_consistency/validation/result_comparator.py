@@ -82,6 +82,9 @@ class ResultComparator:
                 validation_outcome,
             )
 
+            # this needs will no longer be sensible when more than two evaluation strategies are used
+            self.warn_on_success_with_single_column(outcome1, validation_outcome)
+
         if both_failed:
             self.validate_error_messages(
                 cast(QueryFailure, outcome1),
@@ -91,9 +94,7 @@ class ResultComparator:
 
         if not both_successful:
             any_failure = outcome1 if not outcome1.successful else outcome2
-            self.warn_on_failure_with_multiple_columns(
-                cast(QueryFailure, any_failure), validation_outcome
-            )
+            self.warn_on_failure_with_multiple_columns(any_failure, validation_outcome)
 
     def validate_row_count(
         self,
@@ -138,7 +139,7 @@ class ResultComparator:
 
     def warn_on_failure_with_multiple_columns(
         self,
-        failure: QueryFailure,
+        failure: QueryOutcome,
         validation_outcome: ValidationOutcome,
     ) -> None:
         if failure.query_column_count > 1:
@@ -146,6 +147,18 @@ class ResultComparator:
                 "Query error with multiple columns",
                 "Queries expected to return an error should contain only one colum.",
                 sql=failure.sql,
+            )
+
+    def warn_on_success_with_single_column(
+        self,
+        result: QueryOutcome,
+        validation_outcome: ValidationOutcome,
+    ) -> None:
+        if result.query_column_count > 1:
+            validation_outcome.add_warning(
+                "Query success with single column",
+                "Queries successfully returning a value should be run with other queries.",
+                sql=result.sql,
             )
 
     def validate_outcomes_data(

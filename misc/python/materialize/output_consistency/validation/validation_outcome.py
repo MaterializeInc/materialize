@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Optional
+from typing import Optional, Sequence
 
 from materialize.output_consistency.common.format_constants import LI_PREFIX
 from materialize.output_consistency.execution.evaluation_strategy import (
@@ -79,7 +79,7 @@ class ValidationOutcome:
     def warning_output(self) -> str:
         return self._problem_marker_output(self.warnings)
 
-    def _problem_marker_output(self, entries: list[ValidationProblemMarker]) -> str:
+    def _problem_marker_output(self, entries: Sequence[ValidationProblemMarker]) -> str:
         if len(entries) == 0:
             return ""
 
