@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml_edit::Document;
 
-use crate::error::Error;
+use crate::{error::Error, command::profile::ConfigArg};
 
 static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
     btreemap! {
@@ -115,7 +115,7 @@ impl ConfigFile {
         self.save_profiles(new_profiles.clone()).await
     }
 
-    pub async fn save_profiles<'a>(
+    async fn save_profiles<'a>(
         &self,
         profiles: BTreeMap<String, TomlProfile>,
     ) -> Result<(), Error> {
@@ -150,11 +150,52 @@ impl ConfigFile {
     }
 
     pub fn vault(&self) -> &str {
-        (GLOBAL_PARAMS["profile"].get)(&self.parsed).unwrap()
+        (GLOBAL_PARAMS["vault"].get)(&self.parsed).unwrap()
     }
 
     pub fn profiles(&self) -> Option<BTreeMap<String, TomlProfile>> {
         self.parsed.profiles.clone()
+    }
+
+    pub fn list_profile_params(&self) -> Vec<(&str, Option<&str>)> {
+        let profiles = self.editable.get("profiles").unwrap();
+        let profile = profiles.get(self.profile()).unwrap().as_table().unwrap();
+
+        let mut out = vec![];
+        for (name, value) in profile {
+            out.push((name, value.as_str()));
+        }
+        out
+    }
+
+    /// Gets the value of a profile's configuration parameter.
+    pub fn get_profile_param(&self, name: ConfigArg) -> Result<Option<String>, Error> {
+        let profiles = self.parsed.clone().profiles.unwrap();
+        let value = profiles.get(self.profile()).unwrap().clone().get(name);
+
+        Ok(value)
+    }
+
+    /// Sets the value of a profile's configuration parameter.
+    pub async fn set_profile_param(&self, name: ConfigArg, value: Option<&str>) -> Result<(), Error> {
+        // // TODO: Replace unwraps with custom errors
+        let mut editable = self.editable.clone();
+        let mut table = editable.get("profiles").unwrap().clone();
+        let mut profile_table = table.get(self.profile()).unwrap().as_table().unwrap().clone();
+
+        match value {
+            None => {
+                if profile_table.contains_key(&name.to_string()) {
+                    profile_table.remove(&name.to_string());
+                }
+            }
+            Some(value) => profile_table[&name.to_string()] = toml_edit::value(value),
+        }
+
+        table[self.profile()] = toml_edit::Item::Table(profile_table.clone());
+        editable["profiles"] = table.clone();
+        fs::write(&self.path, editable.to_string()).await?;
+        Ok(())
     }
 
     /// Gets the value of a configuration parameter.
@@ -266,4 +307,26 @@ pub struct TomlProfile {
     pub vault: Option<String>,
     pub admin_endpoint: Option<String>,
     pub cloud_endpoint: Option<String>,
+}
+
+impl TomlProfile {
+    pub fn update(mut self, name: ConfigArg, value: Option<String>) {
+        match name {
+            ConfigArg::AdminAPI => self.admin_endpoint = value,
+            ConfigArg::AppPassword => self.app_password = value,
+            ConfigArg::CloudAPI => self.cloud_endpoint = value,
+            ConfigArg::Region => self.region = value,
+            ConfigArg::Vault => self.vault = value,
+        }
+    }
+
+    pub fn get(self, name: ConfigArg) -> Option<String> {
+        match name {
+            ConfigArg::AdminAPI => self.admin_endpoint,
+            ConfigArg::AppPassword => self.app_password,
+            ConfigArg::CloudAPI => self.cloud_endpoint,
+            ConfigArg::Region => self.region,
+            ConfigArg::Vault => self.vault,
+        }
+    }
 }

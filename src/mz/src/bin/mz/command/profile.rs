@@ -15,7 +15,7 @@
 
 //! Driver for the `mz profile` command.
 
-use mz::command::profile::{ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs};
+use mz::command::profile::{ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs, ConfigArg};
 use mz::context::Context;
 use mz::error::Error;
 
@@ -49,7 +49,7 @@ pub enum ProfileConfigSubcommand {
     /// Get a configuration parameter in an authentication profile.
     Get {
         /// The name of the configuration parameter to get.
-        name: String,
+        name: ConfigArg,
     },
     /// List all configuration parameters in an authentication profile.
     #[clap(alias = "ls")]
@@ -57,7 +57,7 @@ pub enum ProfileConfigSubcommand {
     /// Set a configuration parameter in an authentication profile.
     Set {
         /// The name of the configuration parameter to set.
-        name: String,
+        name: ConfigArg,
         /// The value to set the configuration parameter to.
         value: String,
     },
@@ -65,7 +65,7 @@ pub enum ProfileConfigSubcommand {
     #[clap(alias = "rm")]
     Remove {
         /// The name of the configuration parameter to remove.
-        name: String,
+        name: ConfigArg,
     },
 }
 

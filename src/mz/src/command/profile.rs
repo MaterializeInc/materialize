@@ -17,6 +17,8 @@
 //!
 //! Consult the user-facing documentation for details.
 
+use std::{str::FromStr};
+
 use mz_cloud_api::config::DEFAULT_ENDPOINT;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
@@ -111,22 +113,78 @@ pub async fn remove(cx: &mut Context) -> Result<(), Error> {
 }
 
 pub struct ConfigGetArgs<'a> {
-    pub name: &'a str,
+    pub name: &'a ConfigArg,
+}
+
+#[derive(Clone, Debug)]
+pub enum ConfigArg {
+    AdminAPI,
+    AppPassword,
+    CloudAPI,
+    Region,
+    Vault,
+}
+
+impl FromStr for ConfigArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "admin-api" => Ok(ConfigArg::AdminAPI),
+            "app-password" => Ok(ConfigArg::AppPassword),
+            "cloud-api" => Ok(ConfigArg::CloudAPI),
+            "region" => Ok(ConfigArg::Region),
+            "vault" => Ok(ConfigArg::Vault),
+            _ => Err("Invalid profile configuration parameter.".to_string())
+        }
+    }
+}
+
+impl ToString for ConfigArg {
+    fn to_string(&self) -> String {
+        match self {
+            ConfigArg::AdminAPI => "admin-api".to_string(),
+            ConfigArg::AppPassword => "app-password".to_string(),
+            ConfigArg::CloudAPI => "cloud-api".to_string(),
+            ConfigArg::Region => "region".to_string(),
+            ConfigArg::Vault => "vault".to_string(),
+        }
+    }
 }
 
 pub async fn config_get(
     cx: &mut ProfileContext,
     ConfigGetArgs { name }: ConfigGetArgs<'_>,
 ) -> Result<(), Error> {
-    todo!()
+    let value = cx.config_file().get_profile_param(name.clone()).unwrap();
+    cx.output_formatter().output_scalar(value.as_deref())?;
+    Ok(())
 }
 
 pub async fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
-    todo!()
+    let profile_params = cx.config_file().list_profile_params();
+    let output = cx.output_formatter();
+
+    // Structure to format the output. The name of the field equals the column name.
+    #[derive(Clone, Serialize, Deserialize, Tabled)]
+    struct ProfileParam<'a> {
+        #[warn(non_snake_case)]
+        Name: &'a str,
+        #[warn(non_snake_case)]
+        Value: &'a str,
+    }
+
+    // TODO: Improve map?
+    output.output_table(
+        profile_params
+            .iter()
+            .map(|(name, value)| ProfileParam { Name: name, Value: value.or(Some("")).unwrap() }),
+    )?;
+    Ok(())
 }
 
 pub struct ConfigSetArgs<'a> {
-    pub name: &'a str,
+    pub name: &'a ConfigArg,
     pub value: &'a str,
 }
 
@@ -134,16 +192,16 @@ pub async fn config_set(
     cx: &mut ProfileContext,
     ConfigSetArgs { name, value }: ConfigSetArgs<'_>,
 ) -> Result<(), Error> {
-    todo!()
+    cx.config_file().set_profile_param(name.clone(), Some(value)).await
 }
 
 pub struct ConfigRemoveArgs<'a> {
-    pub name: &'a str,
+    pub name: &'a ConfigArg,
 }
 
 pub async fn config_remove(
     cx: &mut ProfileContext,
     ConfigRemoveArgs { name }: ConfigRemoveArgs<'_>,
 ) -> Result<(), Error> {
-    todo!()
+    cx.config_file().set_profile_param(name.clone(), None).await
 }
