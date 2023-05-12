@@ -76,4 +76,4 @@ depending on your consistency and performance requirements.
 ## Learn more
 
 - [Key concepts](/get-started/key-concepts)
-- [Get started with Materialize](/get-started/)
+- [Get started with Materialize](/get-started/quickstart)
