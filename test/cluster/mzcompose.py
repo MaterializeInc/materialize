@@ -1007,7 +1007,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(
             options=[
-                "--system-var-default=allowed_cluster_replica_sizes='1', '2', 'oops'"
+                "--bootstrap-system-parameter=allowed_cluster_replica_sizes='1', '2', 'oops'"
             ],
         ),
     ):
@@ -1019,7 +1019,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(
             environment_extra=[
-                """ MZ_SYSTEM_PARAMETER_DEFAULT=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
+                """ MZ_BOOTSTRAP_SYSTEM_PARAMETER=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
             ],
         ),
     ):
@@ -1456,8 +1456,6 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
             WORKERS 2
         ));
         SET cluster = cluster1;
-        CREATE TABLE t (a int);
-        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
         """
     )
 
@@ -1466,12 +1464,20 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
         (since,) = j["determination"]["since"]["elements"]
         return int(since)
 
-    # Verify that there are no empty frontiers.
-    output = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t")
-    t_since = extract_since_ts(output[0][0])
-    output = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mv")
-    mv_since = extract_since_ts(output[0][0])
+    # Currently fails sporadically, so retry a few times to make it fail reliably
+    cursor = c.sql_cursor()
+    for i in range(20):
+        cursor.execute("CREATE TABLE t (a int)")
+        cursor.execute("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t")
 
-    assert (
-        mv_since >= t_since
-    ), f'"since" timestamp of mv ({mv_since}) is less than "since" timestamp of its source table ({t_since})'
+        # Verify that there are no empty frontiers.
+        cursor.execute("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t")
+        t_since = extract_since_ts(cursor.fetchall()[0][0])
+        cursor.execute("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mv")
+        mv_since = extract_since_ts(cursor.fetchall()[0][0])
+
+        assert (
+            mv_since >= t_since
+        ), f'"since" timestamp of mv ({mv_since}) is less than "since" timestamp of its source table ({t_since})'
+
+        cursor.execute("DROP TABLE t CASCADE")
