@@ -25,6 +25,14 @@ _variable&lowbar;value_ | The value to assign to the session variable.
 
 {{% session-variables %}}
 
+## Special Syntax
+
+There are a few session variables that act as aliases for other session variables. 
+
+- `SCHEMA`: `SCHEMA` is an alias for `search_path`. Only one schema can be specified using this syntax. The `TO` and `=` syntax are optional.
+- `NAMES`: `NAMES` is an alias for `client_encoding`. The `TO` and `=` syntax must be omitted.
+- `TIME ZONE`: `TIME ZONE` is an alias for `timezone`. The `TO` and `=` syntax must be omitted.
+
 ## Examples
 
 ### Set active cluster
