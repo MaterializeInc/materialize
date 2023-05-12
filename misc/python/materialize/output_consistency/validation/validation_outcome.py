@@ -6,17 +6,14 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Optional, Sequence
+from typing import Sequence
 
 from materialize.output_consistency.common.format_constants import LI_PREFIX
-from materialize.output_consistency.execution.evaluation_strategy import (
-    EvaluationStrategy,
-)
 from materialize.output_consistency.query.query_result import QueryExecution
-from materialize.output_consistency.validation.problem_marker import (
+from materialize.output_consistency.validation.validation_message import (
     ValidationError,
-    ValidationErrorType,
-    ValidationProblemMarker,
+    ValidationMessage,
+    ValidationRemark,
     ValidationWarning,
 )
 
@@ -25,44 +22,17 @@ class ValidationOutcome:
     def __init__(self, query_execution: QueryExecution) -> None:
         self.errors: list[ValidationError] = []
         self.warnings: list[ValidationWarning] = []
+        self.remarks: list[ValidationRemark] = []
         self.query_execution = query_execution.index
 
-    def add_error(
-        self,
-        error_type: ValidationErrorType,
-        message: str,
-        description: Optional[str] = None,
-        value1: Optional[str] = None,
-        value2: Optional[str] = None,
-        strategy1: Optional[EvaluationStrategy] = None,
-        strategy2: Optional[EvaluationStrategy] = None,
-        sql1: Optional[str] = None,
-        sql2: Optional[str] = None,
-        location: Optional[str] = None,
-    ) -> None:
-        error = ValidationError(
-            error_type,
-            message,
-            description,
-            value1,
-            value2,
-            strategy1,
-            strategy2,
-            sql1,
-            sql2,
-            location,
-        )
+    def add_error(self, error: ValidationError) -> None:
         self.errors.append(error)
 
-    def add_warning(
-        self,
-        message: str,
-        description: Optional[str] = None,
-        strategy: Optional[EvaluationStrategy] = None,
-        sql: Optional[str] = None,
-    ) -> None:
-        warning = ValidationWarning(message, description, strategy, sql)
+    def add_warning(self, warning: ValidationWarning) -> None:
         self.warnings.append(warning)
+
+    def add_remark(self, remark: ValidationRemark) -> None:
+        self.remarks.append(remark)
 
     def success(self) -> bool:
         return not self.has_errors()
@@ -73,13 +43,19 @@ class ValidationOutcome:
     def has_warnings(self) -> bool:
         return len(self.warnings) > 0
 
+    def has_remarks(self) -> bool:
+        return len(self.remarks) > 0
+
     def error_output(self) -> str:
         return self._problem_marker_output(self.errors)
 
     def warning_output(self) -> str:
         return self._problem_marker_output(self.warnings)
 
-    def _problem_marker_output(self, entries: Sequence[ValidationProblemMarker]) -> str:
+    def remark_output(self) -> str:
+        return self._problem_marker_output(self.remarks)
+
+    def _problem_marker_output(self, entries: Sequence[ValidationMessage]) -> str:
         if len(entries) == 0:
             return ""
 

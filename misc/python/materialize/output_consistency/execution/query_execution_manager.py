@@ -159,3 +159,6 @@ class QueryExecutionManager:
 
         if validation_outcome.has_warnings():
             print(f"Warnings:\n{validation_outcome.warning_output()}")
+
+        if validation_outcome.has_remarks():
+            print(f"Remarks:\n{validation_outcome.remark_output()}")

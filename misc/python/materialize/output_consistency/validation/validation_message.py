@@ -21,19 +21,30 @@ class ValidationErrorType(Enum):
     ERROR_MISMATCH = 4
 
 
-class ValidationProblemMarker:
+class ValidationMessage:
     def __init__(
         self,
-        problem_severity: str,
         message: str,
         description: Optional[str] = None,
     ):
-        self.problem_severity = problem_severity
         self.message = message
         self.description = description
 
 
-class ValidationWarning(ValidationProblemMarker):
+class ValidationRemark(ValidationMessage):
+    def __init__(
+        self,
+        message: str,
+        description: Optional[str] = None,
+    ):
+        super().__init__(message, description)
+
+    def __str__(self) -> str:
+        remark_desc = f" ({self.description})" if self.description else ""
+        return f"{self.message}{remark_desc}"
+
+
+class ValidationWarning(ValidationMessage):
     def __init__(
         self,
         message: str,
@@ -41,7 +52,7 @@ class ValidationWarning(ValidationProblemMarker):
         strategy: Optional[EvaluationStrategy] = None,
         sql: Optional[str] = None,
     ):
-        super().__init__("Warning", message, description)
+        super().__init__(message, description)
         self.strategy = strategy
         self.sql = sql
 
@@ -50,10 +61,10 @@ class ValidationWarning(ValidationProblemMarker):
         strategy_desc = f" with strategy '{self.strategy}'" if self.strategy else ""
         query_desc = f"\n  Query: {self.sql}"
 
-        return f"{self.problem_severity}: {self.message}{strategy_desc}{warning_desc}{query_desc}"
+        return f"{self.message}{strategy_desc}{warning_desc}{query_desc}"
 
 
-class ValidationError(ValidationProblemMarker):
+class ValidationError(ValidationMessage):
     def __init__(
         self,
         error_type: ValidationErrorType,
@@ -67,7 +78,7 @@ class ValidationError(ValidationProblemMarker):
         sql2: Optional[str] = None,
         location: Optional[str] = None,
     ):
-        super().__init__("Error", message, description)
+        super().__init__(message, description)
         self.error_type = error_type
         self.value1 = value1
         self.value2 = value2
@@ -113,4 +124,4 @@ class ValidationError(ValidationProblemMarker):
         if self.sql2 is not None:
             sql_desc += f"\n  Query 2: {self.sql2}"
 
-        return f"{self.problem_severity} ({self.error_type}): {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}{sql_desc}"
+        return f"{self.error_type}: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}{sql_desc}"

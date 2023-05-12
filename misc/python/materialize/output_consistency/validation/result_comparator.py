@@ -15,7 +15,12 @@ from materialize.output_consistency.query.query_result import (
     QueryOutcome,
     QueryResult,
 )
-from materialize.output_consistency.validation.problem_marker import ValidationErrorType
+from materialize.output_consistency.validation.validation_message import (
+    ValidationError,
+    ValidationErrorType,
+    ValidationRemark,
+    ValidationWarning,
+)
 from materialize.output_consistency.validation.validation_outcome import (
     ValidationOutcome,
 )
@@ -41,6 +46,10 @@ class ResultComparator:
 
         if queries_succeeded:
             self.validate_outcomes_data(query_execution.outcomes, validation_outcome)
+            validation_outcome.add_remark(ValidationRemark("Result data matches"))
+        else:
+            # error messages were already validated at metadata validation
+            validation_outcome.add_remark(ValidationRemark("Error message matches"))
 
         return validation_outcome
 
@@ -62,14 +71,16 @@ class ResultComparator:
     ) -> None:
         if outcome1.successful != outcome2.successful:
             validation_outcome.add_error(
-                ValidationErrorType.SUCCESS_MISMATCH,
-                "Outcome differs",
-                value1=outcome1.__class__.__name__,
-                value2=outcome2.__class__.__name__,
-                strategy1=outcome1.strategy,
-                strategy2=outcome2.strategy,
-                sql1=outcome1.sql,
-                sql2=outcome2.sql,
+                ValidationError(
+                    ValidationErrorType.SUCCESS_MISMATCH,
+                    "Outcome differs",
+                    value1=outcome1.__class__.__name__,
+                    value2=outcome2.__class__.__name__,
+                    strategy1=outcome1.strategy,
+                    strategy2=outcome2.strategy,
+                    sql1=outcome1.sql,
+                    sql2=outcome2.sql,
+                )
             )
             return
 
@@ -110,14 +121,16 @@ class ResultComparator:
 
         if num_rows1 != num_rows2:
             validation_outcome.add_error(
-                ValidationErrorType.ROW_COUNT_MISMATCH,
-                "Row count differs",
-                value1=str(num_rows1),
-                value2=str(num_rows2),
-                strategy1=result1.strategy,
-                strategy2=result2.strategy,
-                sql1=result1.sql,
-                sql2=result2.sql,
+                ValidationError(
+                    ValidationErrorType.ROW_COUNT_MISMATCH,
+                    "Row count differs",
+                    value1=str(num_rows1),
+                    value2=str(num_rows2),
+                    strategy1=result1.strategy,
+                    strategy2=result2.strategy,
+                    sql1=result1.sql,
+                    sql2=result2.sql,
+                )
             )
 
     def validate_error_messages(
@@ -131,14 +144,16 @@ class ResultComparator:
 
         if norm_error_message_1 != norm_error_message_2:
             validation_outcome.add_error(
-                ValidationErrorType.ERROR_MISMATCH,
-                "Error message differs",
-                value1=norm_error_message_1,
-                value2=norm_error_message_2,
-                strategy1=failure1.strategy,
-                strategy2=failure2.strategy,
-                sql1=failure1.sql,
-                sql2=failure2.sql,
+                ValidationError(
+                    ValidationErrorType.ERROR_MISMATCH,
+                    "Error message differs",
+                    value1=norm_error_message_1,
+                    value2=norm_error_message_2,
+                    strategy1=failure1.strategy,
+                    strategy2=failure2.strategy,
+                    sql1=failure1.sql,
+                    sql2=failure2.sql,
+                )
             )
 
     def normalize_error_message(self, error_message: str) -> str:
@@ -155,9 +170,11 @@ class ResultComparator:
     ) -> None:
         if failure.query_column_count > 1:
             validation_outcome.add_warning(
-                "Query error with multiple columns",
-                "Query expected to return an error should contain only one colum.",
-                sql=failure.sql,
+                ValidationWarning(
+                    "Query error with multiple columns",
+                    "Query expected to return an error should contain only one colum.",
+                    sql=failure.sql,
+                )
             )
 
     def warn_on_success_with_single_column(
@@ -167,9 +184,11 @@ class ResultComparator:
     ) -> None:
         if result.query_column_count > 1:
             validation_outcome.add_warning(
-                "Query success with single column",
-                "Query successfully returning a value should be run with other queries.",
-                sql=result.sql,
+                ValidationWarning(
+                    "Query success with single column",
+                    "Query successfully returning a value should be run with other queries.",
+                    sql=result.sql,
+                )
             )
 
     def validate_outcomes_data(
@@ -220,13 +239,15 @@ class ResultComparator:
 
             if result_value1 != result_value2:
                 validation_outcome.add_error(
-                    ValidationErrorType.CONTENT_MISMATCH,
-                    "Value differs",
-                    value1=result_value1,
-                    value2=result_value2,
-                    strategy1=result1.strategy,
-                    strategy2=result2.strategy,
-                    sql1=result1.sql,
-                    sql2=result2.sql,
-                    location=f"row index {row_index}, column index {col_index}",
+                    ValidationError(
+                        ValidationErrorType.CONTENT_MISMATCH,
+                        "Value differs",
+                        value1=result_value1,
+                        value2=result_value2,
+                        strategy1=result1.strategy,
+                        strategy2=result2.strategy,
+                        sql1=result1.sql,
+                        sql2=result2.sql,
+                        location=f"row index {row_index}, column index {col_index}",
+                    ),
                 )
