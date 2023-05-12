@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -21,6 +22,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::assert::SOFT_ASSERTIONS;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
@@ -203,7 +205,8 @@ impl From<&PersistConfig> for BatchBuilderConfig {
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
-            stats_collection_enabled: value.dynamic.stats_collection_enabled(),
+            stats_collection_enabled: SOFT_ASSERTIONS.load(Ordering::Relaxed)
+                || value.dynamic.stats_collection_enabled(),
             // TODO(mfp): Make a dynamic config for this? This initial constant
             // is the rough upper bound on what we see for the total serialized
             // batch size in prod, so it will at worst double it.

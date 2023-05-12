@@ -623,6 +623,10 @@ pub enum SubscribeOutput {
         /// Order by with just keys
         order_by_keys: Vec<ColumnOrder>,
     },
+    EnvelopeDebezium {
+        /// Order by with just keys
+        order_by_keys: Vec<ColumnOrder>,
+    },
 }
 
 #[derive(Debug)]
@@ -863,8 +867,8 @@ pub struct GrantPrivilegePlan {
     pub acl_mode: AclMode,
     /// The ID of the object.
     pub object_id: ObjectId,
-    /// The role that will granted the privileges.
-    pub grantee: RoleId,
+    /// The roles that will granted the privileges.
+    pub grantees: Vec<RoleId>,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
 }
@@ -875,8 +879,8 @@ pub struct RevokePrivilegePlan {
     pub acl_mode: AclMode,
     /// The ID of the object.
     pub object_id: ObjectId,
-    /// The role that will have privileges revoked.
-    pub revokee: RoleId,
+    /// The roles that will have privileges revoked.
+    pub revokees: Vec<RoleId>,
     /// The role that will revoke the privileges.
     pub grantor: RoleId,
 }
@@ -966,7 +970,7 @@ pub struct Type {
 }
 
 /// Specifies when a `Peek` or `Subscribe` should occur.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
@@ -1018,8 +1022,8 @@ impl QueryWhen {
     /// Returns whether the candidate can be advanced to the timeline's timestamp.
     pub fn can_advance_to_timeline_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
-            QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the timeline's timestamp.
@@ -1029,6 +1033,13 @@ impl QueryWhen {
             QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
                 false
             }
+        }
+    }
+    /// Returns whether the selected timestamp should be tracked within the current transaction.
+    pub fn is_transactional(&self) -> bool {
+        match self {
+            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
         }
     }
 }

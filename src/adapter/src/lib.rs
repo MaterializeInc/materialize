@@ -123,8 +123,12 @@ pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{
     Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupMessage, StartupResponse,
 };
+pub use crate::coord::id_bundle::CollectionIdBundle;
 pub use crate::coord::peek::PeekResponseUnary;
-pub use crate::coord::timestamp_selection::{TimestampContext, TimestampExplanation};
+pub use crate::coord::timeline::TimelineContext;
+pub use crate::coord::timestamp_selection::{
+    TimestampContext, TimestampExplanation, TimestampProvider,
+};
 pub use crate::coord::{serve, Config, DUMMY_AVAILABILITY_ZONE};
 pub use crate::error::AdapterError;
 pub use crate::notice::AdapterNotice;

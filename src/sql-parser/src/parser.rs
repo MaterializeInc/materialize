@@ -2572,7 +2572,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP])? {
+        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP, DISK])? {
             IGNORE => {
                 self.expect_keyword(KEYS)?;
                 CreateSourceOptionName::IgnoreKeys
@@ -2583,6 +2583,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(INTERVAL)?;
                 CreateSourceOptionName::TimestampInterval
             }
+            DISK => CreateSourceOptionName::Disk,
             _ => unreachable!(),
         };
         Ok(name)
@@ -5689,11 +5690,16 @@ impl<'a> Parser<'a> {
         };
         let as_of = self.parse_optional_as_of()?;
         let up_to = self.parse_optional_up_to()?;
-        let output = if self.parse_keywords(&[ENVELOPE, UPSERT]) {
+        let output = if self.parse_keywords(&[ENVELOPE]) {
+            let keyword = self.expect_one_of_keywords(&[UPSERT, DEBEZIUM])?;
             self.expect_token(&Token::LParen)?;
             self.expect_keyword(KEY)?;
             let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
-            let output = SubscribeOutput::EnvelopeUpsert { key_columns };
+            let output = match keyword {
+                UPSERT => SubscribeOutput::EnvelopeUpsert { key_columns },
+                DEBEZIUM => SubscribeOutput::EnvelopeDebezium { key_columns },
+                _ => unreachable!("no other keyword allowed"),
+            };
             self.expect_token(&Token::RParen)?;
             output
         } else if self.parse_keywords(&[WITHIN, TIMESTAMP, ORDER, BY]) {
@@ -5935,7 +5941,7 @@ impl<'a> Parser<'a> {
     /// Parse a `GRANT` statement, assuming that the `GRANT` token
     /// has already been consumed.
     fn parse_grant(&mut self) -> Result<Statement<Raw>, ParserError> {
-        match self.parse_privileges() {
+        match self.parse_privilege_specification() {
             Some(privileges) => {
                 self.expect_keyword(ON)?;
                 // If the object type is omitted, then it is assumed to be a table.
@@ -5969,19 +5975,18 @@ impl<'a> Parser<'a> {
                 }
                 let name = self.parse_object_name(object_type)?;
                 self.expect_keyword(TO)?;
-                let role = self.parse_identifier()?;
+                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::GrantPrivilege(GrantPrivilegeStatement {
                     privileges,
                     object_type,
                     name,
-                    role,
+                    roles,
                 }))
             }
             None => {
                 let role_name = self.parse_identifier()?;
                 self.expect_keyword(TO)?;
-                let _ = self.parse_keyword(GROUP);
-                let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
+                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::GrantRole(GrantRoleStatement {
                     role_name,
                     member_names,
@@ -5993,7 +5998,7 @@ impl<'a> Parser<'a> {
     /// Parse a `REVOKE` statement, assuming that the `REVOKE` token
     /// has already been consumed.
     fn parse_revoke(&mut self) -> Result<Statement<Raw>, ParserError> {
-        match self.parse_privileges() {
+        match self.parse_privilege_specification() {
             Some(privileges) => {
                 self.expect_keyword(ON)?;
                 // If the object type is omitted, then it is assumed to be a table.
@@ -6027,19 +6032,18 @@ impl<'a> Parser<'a> {
                 }
                 let name = self.parse_object_name(object_type)?;
                 self.expect_keyword(FROM)?;
-                let role = self.parse_identifier()?;
+                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::RevokePrivilege(RevokePrivilegeStatement {
                     privileges,
                     object_type,
                     name,
-                    role,
+                    roles,
                 }))
             }
             None => {
                 let role_name = self.parse_identifier()?;
                 self.expect_keyword(FROM)?;
-                let _ = self.parse_keyword(GROUP);
-                let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
+                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::RevokeRole(RevokeRoleStatement {
                     role_name,
                     member_names,
@@ -6217,7 +6221,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse one or more privileges separated by a ','.
-    fn parse_privileges(&mut self) -> Option<Vec<Privilege>> {
+    fn parse_privilege_specification(&mut self) -> Option<PrivilegeSpecification> {
+        if self.parse_keyword(ALL) {
+            let _ = self.parse_keyword(PRIVILEGES);
+            return Some(PrivilegeSpecification::All);
+        }
+
         let mut privileges = Vec::new();
         while let Some(privilege) = self.parse_privilege() {
             privileges.push(privilege);
@@ -6229,8 +6238,14 @@ impl<'a> Parser<'a> {
         if privileges.is_empty() {
             None
         } else {
-            Some(privileges)
+            Some(PrivilegeSpecification::Privileges(privileges))
         }
+    }
+
+    /// Bail out if the current token is not a role specification, or consume and return it if it is.
+    fn expect_role_specification(&mut self) -> Result<Ident, ParserError> {
+        let _ = self.parse_keyword(GROUP);
+        self.parse_identifier()
     }
 }
 

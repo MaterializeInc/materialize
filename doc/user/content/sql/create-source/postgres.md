@@ -13,7 +13,7 @@ aliases:
 ---
 
 {{< warning >}}
-Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source).
+Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/).
 {{< /warning >}}
 
 {{% create-source/intro %}}
@@ -54,7 +54,7 @@ Field                                | Value     | Description
 
 This source uses PostgreSQL's native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database — a process also known as _change data capture_.
 
-For this reason, you must configure the upstream PostgreSQL database to support logical replication before creating a source in Materialize. Follow the step-by-step instructions in the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source) to get logical replication set up.
+For this reason, you must configure the upstream PostgreSQL database to support logical replication before creating a source in Materialize. Follow the step-by-step instructions in the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/) to get logical replication set up.
 
 #### Creating a source
 
@@ -176,7 +176,7 @@ DELETE FROM t;
 ## Examples
 
 {{< warning >}}
-Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source).
+Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/).
 {{< /warning >}}
 
 ### Creating a connection
@@ -312,7 +312,7 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-- [PostgreSQL CDC guide](/integrations/cdc-postgres/#direct-postgres-source)
+- [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/)
 
 [`enum`]: https://www.postgresql.org/docs/current/datatype-enum.html
 [`money`]: https://www.postgresql.org/docs/current/datatype-money.html

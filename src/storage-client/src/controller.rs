@@ -43,6 +43,7 @@ use tracing::{debug, info};
 
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -53,7 +54,7 @@ use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
 
 use crate::client::{
@@ -64,6 +65,7 @@ use crate::controller::rehydration::RehydratingStorageClient;
 use crate::healthcheck;
 use crate::metrics::StorageControllerMetrics;
 use crate::types::errors::DataflowError;
+use crate::types::instances::StorageInstanceContext;
 use crate::types::instances::StorageInstanceId;
 use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
@@ -75,7 +77,6 @@ mod collection_mgmt;
 mod command_wals;
 mod persist_handles;
 mod rehydration;
-mod remap_migration;
 mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
@@ -778,6 +779,8 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances.
     config: StorageParameters,
+    /// Additional context used to validate sources being created.
+    instance_context: StorageInstanceContext,
 }
 
 /// A storage controller for a storage instance.
@@ -934,6 +937,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         now: NowFn,
         factory: &StashFactory,
         envd_epoch: NonZeroI64,
+        instance_context: StorageInstanceContext,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
@@ -1022,6 +1026,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             clients: BTreeMap::new(),
             initialized: false,
             config: StorageParameters::default(),
+            instance_context,
         }
     }
 }
@@ -1120,17 +1125,13 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     async fn migrate_collections(
         &mut self,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
-        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
-
-        // MIGRATION: v0.44 See comments on remap_shard_migration.
-        let remap_shard_migration_delta =
-            self.remap_shard_migration(&durable_metadata, &collections);
-
-        self.upsert_collection_metadata(&mut durable_metadata, remap_shard_migration_delta)
-            .await;
-
+        // Collection migrations look something like this:
+        // let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+        // do_migration(&mut durable_metadata)?;
+        // self.upsert_collection_metadata(&mut durable_metadata, remap_shard_migration_delta)
+        //     .await;
         Ok(())
     }
 
@@ -1260,6 +1261,7 @@ where
                     .open_data_handles(
                         format!("controller data {}", id).as_str(),
                         metadata.data_shard,
+                        description.since.as_ref(),
                         metadata.relation_desc.clone(),
                         persist_client,
                     )
@@ -1440,6 +1442,11 @@ where
                         source_imports.insert(id, metadata);
                     }
 
+                    ingestion
+                        .desc
+                        .validate_against_context(&self.state.instance_context)
+                        .map_err(|e| StorageError::InvalidUsage(e.to_string_with_causes()))?;
+
                     // The ingestion metadata is simply the collection metadata of the collection with
                     // the associated ingestion
                     let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
@@ -1530,8 +1537,10 @@ where
                             // dropped, so that the internal task will stop.
                             self.state.introspection_tokens.insert(id, scraper_token);
                         }
-                        IntrospectionType::SourceStatusHistory
-                        | IntrospectionType::SinkStatusHistory => {
+                        IntrospectionType::SourceStatusHistory => {
+                            self.reconcile_source_status_history().await;
+                        }
+                        IntrospectionType::SinkStatusHistory => {
                             // nothing to do: these collections are append only
                         }
                     }
@@ -2253,13 +2262,21 @@ where
         postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
+        initialize_context: StorageInstanceContext,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
             build_info,
-            state: StorageControllerState::new(postgres_url, tx, now, postgres_factory, envd_epoch)
-                .await,
+            state: StorageControllerState::new(
+                postgres_url,
+                tx,
+                now,
+                postgres_factory,
+                envd_epoch,
+                initialize_context,
+            )
+            .await,
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
@@ -2357,12 +2374,16 @@ where
 
     /// Opens a write and critical since handles for the given `shard`.
     ///
-    /// This will `halt!` the process if we cannot successfully acquire a
-    /// critical handle with our current epoch.
+    /// `since` is an optional `since` that the read handle will be forwarded to if it is less than
+    /// its current since.
+    ///
+    /// This will `halt!` the process if we cannot successfully acquire a critical handle with our
+    /// current epoch.
     async fn open_data_handles(
         &self,
         purpose: &str,
         shard: ShardId,
+        since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
         persist_client: &PersistClient,
     ) -> (
@@ -2388,7 +2409,11 @@ where
                 .await
                 .expect("invalid persist usage");
 
-            let since = handle.since().clone();
+            // Take the join of the handle's since and the provided `since`; this lets materialized
+            // views express the since at which their read handles "start."
+            let since = handle
+                .since()
+                .join(since.unwrap_or(&Antichain::from_elem(T::minimum())));
 
             let our_epoch = self.state.envd_epoch;
 
@@ -2505,6 +2530,84 @@ where
         self.reconcile_managed_collection(id, updates).await;
     }
 
+    /// Effectively truncates the source status history shard except for the most recent updates
+    /// from each ID.
+    async fn reconcile_source_status_history(&mut self) {
+        let id = self.state.introspection_ids[&IntrospectionType::SourceStatusHistory];
+
+        let rows = match self.state.collections[&id]
+            .write_frontier
+            .elements()
+            .iter()
+            .min()
+        {
+            Some(f) if f > &T::minimum() => {
+                let as_of = f.step_back().unwrap();
+
+                self.snapshot(id, as_of).await.expect("snapshot succeeds")
+            }
+            // If collection is closed or the frontier is the minimum, we cannot
+            // or don't need to truncate (respectively).
+            _ => return,
+        };
+
+        let (occurred_at, _) = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("occurred_at"))
+            .expect("schema has not changed");
+
+        let (source_id, _) = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("source_id"))
+            .expect("schema has not changed");
+
+        // BTreeMap<SourceId, BTreeMap<OccurredAt, Row>>
+        let mut last_n_entries_per_id: BTreeMap<Datum, BTreeMap<Datum, Vec<Datum>>> =
+            BTreeMap::new();
+
+        let mut deletions = vec![];
+
+        for (row, diff) in rows.iter() {
+            mz_ore::soft_assert!(
+                *diff == 1,
+                "only know how to operate over consolidated data"
+            );
+
+            let d = row.unpack();
+            let source_id = d[source_id];
+            let occurred_at = d[occurred_at];
+
+            let entries = last_n_entries_per_id.entry(source_id).or_default();
+
+            let old = entries.insert(occurred_at, d.clone());
+            mz_ore::soft_assert!(
+                old.is_none(),
+                "expected only one status at each time, but got multiple at {:?}",
+                occurred_at
+            );
+
+            // Retain some number of entries, using pop_first to mark the oldest entries for
+            // deletion.
+            while entries.len() > self.state.config.keep_n_source_status_history_entries {
+                if let Some((_, r)) = entries.pop_first() {
+                    deletions.push(r);
+                }
+            }
+        }
+
+        let mut row_buf = Row::default();
+        // Updates are only deletes because everything else is already in the shard.
+        let updates = deletions
+            .into_iter()
+            .map(|unpacked_row| {
+                // Re-pack all rows
+                let mut packer = row_buf.packer();
+                packer.extend(unpacked_row.into_iter());
+                (row_buf.clone(), -1)
+            })
+            .collect();
+
+        self.append_to_managed_collection(id, updates).await;
+    }
+
     /// Appends a new global ID, shard ID pair to the appropriate collection.
     /// Use a `diff` of 1 to append a new entry; -1 to retract an existing
     /// entry.
@@ -2552,20 +2655,20 @@ where
         self.append_to_managed_collection(id, updates).await;
     }
 
-    /// Updates the on-disk and in-memory representation of
-    /// `DurableCollectionMetadata` (i.e. KV pairs in `METADATA_COLLECTION`
-    /// on-disk and `all_current_metadata` as its in-memory representation) to
-    /// include that of `upsert_state`, i.e. upserting the KV pairs in
-    /// `upsert_state` into in `all_current_metadata`, as well as
-    /// `METADATA_COLLECTION`.
+    /// Updates the on-disk and in-memory representation of `DurableCollectionMetadata` (i.e. KV
+    /// pairs in `METADATA_COLLECTION` on-disk and `all_current_metadata` as its in-memory
+    /// representation) to include that of `upsert_state`, i.e. upserting the KV pairs in
+    /// `upsert_state` into in `all_current_metadata`, as well as `METADATA_COLLECTION`.
     ///
     /// Any shards no longer referenced after the upsert will be finalized.
     ///
     /// Note that this function expects to be called:
-    /// - While no source is currently using the shards identified in the
-    ///   current metadata.
-    /// - Before any sources begins using the shards identified in
-    ///   `new_metadata`.
+    /// - While no source is currently using the shards identified in the current metadata.
+    /// - Before any sources begins using the shards identified in `new_metadata`.
+    ///
+    /// We allow this being kept around as dead code because we might want to perform similar
+    /// migration in the future.
+    #[allow(dead_code)]
     async fn upsert_collection_metadata(
         &mut self,
         all_current_metadata: &mut BTreeMap<GlobalId, DurableCollectionMetadata>,
@@ -2680,6 +2783,7 @@ where
             let data_shard = all_current_metadata[&id].data_shard;
             c.collection_metadata.data_shard = data_shard;
 
+            let collection_desc = c.description.clone();
             let relation_desc = c.collection_metadata.relation_desc.clone();
 
             // This will halt! if any of the handles cannot be acquired
@@ -2689,6 +2793,7 @@ where
                 .open_data_handles(
                     format!("controller data for {id}").as_str(),
                     data_shard,
+                    collection_desc.since.as_ref(),
                     relation_desc,
                     &persist_client,
                 )

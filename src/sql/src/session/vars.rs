@@ -520,6 +520,25 @@ const ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// The default for the `DISK` option in `UPSERT` sources.
+const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("upsert_source_disk_default"),
+    value: &false,
+    description: "The default for the `DISK` option in `UPSERT` sources.",
+    internal: true,
+    safe: true,
+};
+
+/// Whether or not the `DISK` option in available `UPSERT` sources.
+const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_upsert_source_disk"),
+    value: &false,
+    description: "Feature flag indicating availability of the `DISK` \
+                  option in `UPSERT/DEBEZIUM` sources (Materialize).",
+    internal: true,
+    safe: true,
+};
+
 /// Controls the connect_timeout setting when connecting to PG via replication.
 const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_connect_timeout"),
@@ -776,6 +795,14 @@ pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_envelope_debezium_in_subscribe"),
+    value: &false,
+    description: "Feature flag indicating whether `ENVELOPE DEBEZIUM` can be used in `SUBSCRIBE` queries (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_within_timestamp_order_by_in_subscribe"),
     value: &false,
@@ -789,6 +816,15 @@ pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of concurrent connections (Materialize).",
     internal: false,
+    safe: true,
+};
+
+/// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_source_status_history_entries`].
+const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("keep_n_source_status_history_entries"),
+    value: &5,
+    description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
+    internal: true,
     safe: true,
 };
 
@@ -1506,6 +1542,8 @@ impl Default for SystemVars {
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
+            .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
+            .with_var(&ENABLE_UPSERT_SOURCE_DISK)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
@@ -1532,8 +1570,10 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
+            .with_var(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
+            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
     }
 }
 
@@ -1753,6 +1793,16 @@ impl SystemVars {
         *self.expect_value(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
     }
 
+    /// Returns the `upsert_source_disk_default` configuration parameter.
+    pub fn upsert_source_disk_default(&self) -> bool {
+        *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
+    }
+
+    /// Returns the `enable_upsert_source_disk` configuration parameter.
+    pub fn enable_upsert_source_disk(&self) -> bool {
+        *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
+    }
+
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
@@ -1896,6 +1946,11 @@ impl SystemVars {
         *self.expect_value(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
     }
 
+    /// Returns the `enable_envelope_debezium_in_subscribe` configuration parameter.
+    pub fn enable_envelope_debezium_in_subscribe(&self) -> bool {
+        *self.expect_value(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
+    }
+
     /// Returns the `enable_within_timestamp_order_by` configuration parameter.
     pub fn enable_within_timestamp_order_by(&self) -> bool {
         *self.expect_value(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
@@ -1904,6 +1959,10 @@ impl SystemVars {
     /// Returns the `max_connections` configuration parameter.
     pub fn max_connections(&self) -> u32 {
         *self.expect_value(&MAX_CONNECTIONS)
+    }
+
+    pub fn keep_n_source_status_history_entries(&self) -> usize {
+        *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
     }
 }
 

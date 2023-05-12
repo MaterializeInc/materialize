@@ -7,7 +7,7 @@ menu:
 
 ---
 
-`SHOW CLUSTER REPLICAS` lists the [replicas](/overview/key-concepts/#cluster-replicas) for each cluster configured in Materialize. A cluster named `default` with a single replica named `r1` will exist in every environment; this cluster can be dropped at any time.
+`SHOW CLUSTER REPLICAS` lists the [replicas](/get-started/key-concepts/#cluster-replicas) for each cluster configured in Materialize. A cluster named `default` with a single replica named `r1` will exist in every environment; this cluster can be dropped at any time.
 
 ## Syntax
 

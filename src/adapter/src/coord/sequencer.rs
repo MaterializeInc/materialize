@@ -275,7 +275,7 @@ impl Coordinator {
                 self.sequence_copy_rows(tx, session, id, columns, rows);
             }
             Plan::Explain(plan) => {
-                self.sequence_explain(tx, session, plan, depends_on);
+                self.sequence_explain(tx, session, plan, depends_on, target_cluster);
             }
             Plan::Insert(plan) => {
                 self.sequence_insert(tx, session, plan, depends_on).await;
@@ -476,8 +476,8 @@ impl Coordinator {
     }
 
     pub(crate) fn sequence_explain_timestamp_finish(
-        &self,
-        session: &Session,
+        &mut self,
+        session: &mut Session,
         format: ExplainFormat,
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,

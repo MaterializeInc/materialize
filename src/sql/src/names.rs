@@ -15,6 +15,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
@@ -677,7 +678,9 @@ impl AstInfo for Aug {
 }
 
 /// The identifier for a schema.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum SchemaId {
     User(u64),
     System(u64),
@@ -725,7 +728,9 @@ impl FromStr for SchemaId {
 }
 
 /// The identifier for a database.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum DatabaseId {
     User(u64),
     System(u64),

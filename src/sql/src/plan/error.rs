@@ -179,6 +179,7 @@ pub enum PlanError {
         schemas: Vec<String>,
     },
     InvalidKeysInSubscribeEnvelopeUpsert,
+    InvalidKeysInSubscribeEnvelopeDebezium,
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
@@ -273,6 +274,9 @@ impl PlanError {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             }
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
+                Some("All keys must be columns on the underlying relation.".into())
+            }
+            Self::InvalidKeysInSubscribeEnvelopeDebezium => {
                 Some("All keys must be columns on the underlying relation.".into())
             }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
@@ -461,6 +465,9 @@ impl fmt::Display for PlanError {
             }
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
                 write!(f, "invalid keys in SUBSCRIBE ENVELOPE UPSERT (KEY (..))")
+            }
+            Self::InvalidKeysInSubscribeEnvelopeDebezium => {
+                write!(f, "invalid keys in SUBSCRIBE ENVELOPE DEBEZIUM (KEY (..))")
             }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 write!(f, "invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY")

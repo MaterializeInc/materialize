@@ -38,6 +38,7 @@ _role_name_   | The role name that is gaining privileges. Use the `PUBLIC` pseud
 **DELETE**    | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
 **CREATE**    | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
 **USAGE**     | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
+**ALL**       | All applicable privileges for the provided object type.
 
 ## Details
 
@@ -69,11 +70,15 @@ type for sources, views, and materialized views, or omit the object type.
 ## Examples
 
 ```sql
-GRANT SELECT ON mv TO joe;
+GRANT SELECT ON mv TO joe, mike;
 ```
 
 ```sql
 GRANT USAGE, CREATE ON DATABASE materialize TO joe;
+```
+
+```sql
+GRANT ALL ON CLUSTER dev TO joe;
 ```
 
 ## Related pages

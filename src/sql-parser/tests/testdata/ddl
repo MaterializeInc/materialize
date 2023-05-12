@@ -837,6 +837,48 @@ SUBSCRIBE foo.bar ENVELOPE UPSERT (KEY (a, b, c, d, e))
 =>
 Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, output: EnvelopeUpsert { key_columns: [Ident("a"), Ident("b"), Ident("c"), Ident("d"), Ident("e")] } })
 
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM KEY (a)
+----
+error: Expected left parenthesis, found KEY
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM KEY (a)
+                                    ^
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM KEY (a, b, c, d, e)
+----
+error: Expected left parenthesis, found KEY
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM KEY (a, b, c, d, e)
+                                    ^
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM (KEY (c))
+----
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM (KEY (c))
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, output: EnvelopeDebezium { key_columns: [Ident("c")] } })
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM (KEY (a, b, c, d, e))
+----
+SUBSCRIBE foo.bar ENVELOPE DEBEZIUM (KEY (a, b, c, d, e))
+=>
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: None, output: EnvelopeDebezium { key_columns: [Ident("a"), Ident("b"), Ident("c"), Ident("d"), Ident("e")] } })
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE blah
+----
+error: Expected one of UPSERT or DEBEZIUM, found identifier "blah"
+SUBSCRIBE foo.bar ENVELOPE blah
+                           ^
+
+parse-statement
+SUBSCRIBE foo.bar ENVELOPE
+----
+error: Expected one of UPSERT or DEBEZIUM, found EOF
+SUBSCRIBE foo.bar ENVELOPE
+                          ^
+
 
 parse-statement
 SUBSCRIBE foo.bar WITHIN TIMESTAMP ORDER BY a ASC NULLS LAST, b, c DESC
@@ -963,7 +1005,7 @@ ALTER INDEX name RESET (property = true)
 parse-statement
 ALTER SOURCE name SET (property = true)
 ----
-error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP, found identifier "property"
+error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP or DISK, found identifier "property"
 ALTER SOURCE name SET (property = true)
                        ^
 
@@ -1464,7 +1506,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (START OFFSET=1, START TIMESTAMP=
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
 ----
-error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP, found START
+error: Expected one of IGNORE or SIZE or TIMELINE or TIMESTAMP or DISK, found START
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 WITH (START OFFSET="hmm") TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
                                                      ^
 
@@ -1698,6 +1740,20 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') 
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: Some(Deferred(UnresolvedItemName([Ident("foo"), Ident("bar")]))) })
 
 parse-statement
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') WITH (DISK);
+----
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (DISK)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Disk, value: None }], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') WITH (DISK = true);
+----
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (DISK = true)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Disk, value: Some(Value(Boolean(true))) }], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
 GRANT admin TO joe
 ----
 GRANT admin TO joe
@@ -1726,6 +1782,27 @@ GRANT scientist TO joseph, michael
 GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
 
 parse-statement
+GRANT scientist TO GROUP joseph, GROUP michael
+----
+GRANT scientist TO joseph, michael
+=>
+GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+GRANT scientist TO joseph, GROUP michael
+----
+GRANT scientist TO joseph, michael
+=>
+GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+GRANT scientist TO GROUP joseph, GROUP michael, GROUP yisachar
+----
+GRANT scientist TO joseph, michael, yisachar
+=>
+GrantRole(GrantRoleStatement { role_name: Ident("scientist"), member_names: [Ident("joseph"), Ident("michael"), Ident("yisachar")] })
+
+parse-statement
 REVOKE doctor FROM joe
 ----
 REVOKE doctor FROM joe
@@ -1752,6 +1829,27 @@ REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, michael
 REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
 =>
 RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+REVOKE ability_to_practice_law_in_arkansas FROM joseph, GROUP michael
+----
+REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
+=>
+RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, GROUP michael
+----
+REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael
+=>
+RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael")] })
+
+parse-statement
+REVOKE ability_to_practice_law_in_arkansas FROM GROUP joseph, GROUP michael, GROUP yisachar
+----
+REVOKE ability_to_practice_law_in_arkansas FROM joseph, michael, yisachar
+=>
+RevokeRole(RevokeRoleStatement { role_name: Ident("ability_to_practice_law_in_arkansas"), member_names: [Ident("joseph"), Ident("michael"), Ident("yisachar")] })
 
 parse-statement
 ALTER CLUSTER foo OWNER TO joe
@@ -1940,7 +2038,7 @@ GRANT USAGE, CREATE ON CLUSTER foo TO joe
 ----
 GRANT USAGE, CREATE ON CLUSTER foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE, CREATE], object_type: Cluster, name: Cluster(Ident("foo")), role: Ident("joe") })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE, CREATE]), object_type: Cluster, name: Cluster(Ident("foo")), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE, CREATE ON CLUSTER REPLICA foo.r TO joe
@@ -1954,28 +2052,28 @@ GRANT CREATE ON DATABASE foo TO joe
 ----
 GRANT CREATE ON DATABASE foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [CREATE], object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), role: Ident("joe") })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE ON SCHEMA foo TO joe
 ----
 GRANT USAGE ON SCHEMA foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), role: Ident("joe") })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
 ----
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [SELECT, INSERT, UPDATE, DELETE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([SELECT, INSERT, UPDATE, DELETE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE ON foo TO joe
 ----
 GRANT USAGE ON TABLE foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE ON SINK foo TO joe
@@ -2003,14 +2101,14 @@ GRANT USAGE ON SECRET foo TO joe
 ----
 GRANT USAGE ON SECRET foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT USAGE ON CONNECTION foo TO joe
 ----
 GRANT USAGE ON CONNECTION foo TO joe
 =>
-GrantPrivilege(GrantPrivilegeStatement { privileges: [USAGE], object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), role: Ident("joe") })
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
 
 parse-statement
 GRANT SELECT ON VIEW foo TO joe
@@ -2032,3 +2130,199 @@ GRANT FAKE ON TABLE t TO joe
 error: Expected TO, found ON
 GRANT FAKE ON TABLE t TO joe
            ^
+
+parse-statement
+GRANT SELECT, INSERT ON t TO joe, mike
+----
+GRANT SELECT, INSERT ON TABLE t TO joe, mike
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([SELECT, INSERT]), object_type: Table, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT USAGE ON DATABASE d TO joe, mike
+----
+GRANT USAGE ON DATABASE d TO joe, mike
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([USAGE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT ALL ON DATABASE d TO joe, mike
+----
+GRANT ALL ON DATABASE d TO joe, mike
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: All, object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT ALL PRIVILEGES ON TYPE t TO joe
+----
+GRANT ALL ON TYPE t TO joe
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: All, object_type: Type, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe")] })
+
+parse-statement
+GRANT CREATE ON CLUSTER c TO GROUP joe, GROUP mike
+----
+GRANT CREATE ON CLUSTER c TO joe, mike
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT CREATE ON CLUSTER c TO joe, GROUP mike
+----
+GRANT CREATE ON CLUSTER c TO joe, mike
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+GRANT CREATE ON CLUSTER c TO joe, GROUP mike, GROUP yisachar
+----
+GRANT CREATE ON CLUSTER c TO joe, mike, yisachar
+=>
+GrantPrivilege(GrantPrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike"), Ident("yisachar")] })
+
+parse-statement
+REVOKE USAGE, CREATE ON CLUSTER foo FROM joe
+----
+REVOKE USAGE, CREATE ON CLUSTER foo FROM joe
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE, CREATE]), object_type: Cluster, name: Cluster(Ident("foo")), roles: [Ident("joe")] })
+
+parse-statement
+REVOKE USAGE, CREATE ON CLUSTER REPLICA foo.r FROM joe
+----
+error: Unsupported REVOKE on CLUSTER REPLICA
+REVOKE USAGE, CREATE ON CLUSTER REPLICA foo.r FROM joe
+                                ^
+
+parse-statement
+REVOKE CREATE ON DATABASE foo FROM joe
+----
+REVOKE CREATE ON DATABASE foo FROM joe
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("foo"))), roles: [Ident("joe")] })
+
+parse-statement
+REVOKE USAGE ON SCHEMA foo FROM joe
+----
+REVOKE USAGE ON SCHEMA foo FROM joe
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Schema, name: Schema(UnresolvedSchemaName([Ident("foo")])), roles: [Ident("joe")] })
+
+parse-statement
+REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE foo FROM joe
+----
+REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE foo FROM joe
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([SELECT, INSERT, UPDATE, DELETE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+
+parse-statement
+REVOKE USAGE ON foo FROM joe
+----
+REVOKE USAGE ON TABLE foo FROM joe
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Table, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+
+parse-statement
+REVOKE USAGE ON SINK foo FROM joe
+----
+error: Unsupported REVOKE on SINK
+REVOKE USAGE ON SINK foo FROM joe
+                ^
+
+parse-statement
+REVOKE USAGE ON SOURCE foo FROM joe
+----
+error: For object type SOURCE, you must specify 'TABLE' or omit the object type
+REVOKE USAGE ON SOURCE foo FROM joe
+                ^
+
+parse-statement
+REVOKE USAGE ON INDEX foo FROM joe
+----
+error: Unsupported REVOKE on INDEX
+REVOKE USAGE ON INDEX foo FROM joe
+                ^
+
+parse-statement
+REVOKE USAGE ON SECRET foo FROM joe
+----
+REVOKE USAGE ON SECRET foo FROM joe
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Secret, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+
+parse-statement
+REVOKE USAGE ON CONNECTION foo FROM joe
+----
+REVOKE USAGE ON CONNECTION foo FROM joe
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Connection, name: Item(UnresolvedItemName([Ident("foo")])), roles: [Ident("joe")] })
+
+parse-statement
+REVOKE SELECT ON VIEW foo FROM joe
+----
+error: For object type VIEW, you must specify 'TABLE' or omit the object type
+REVOKE SELECT ON VIEW foo FROM joe
+                 ^
+
+parse-statement
+REVOKE SELECT ON MATERIALIZED VIEW foo FROM joe
+----
+error: For object type MATERIALIZED VIEW, you must specify 'TABLE' or omit the object type
+REVOKE SELECT ON MATERIALIZED VIEW foo FROM joe
+                              ^
+
+parse-statement
+REVOKE FAKE ON TABLE t FROM joe
+----
+error: Expected FROM, found ON
+REVOKE FAKE ON TABLE t FROM joe
+            ^
+
+parse-statement
+REVOKE SELECT, INSERT ON t FROM joe, mike
+----
+REVOKE SELECT, INSERT ON TABLE t FROM joe, mike
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([SELECT, INSERT]), object_type: Table, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE USAGE ON DATABASE d FROM joe, mike
+----
+REVOKE USAGE ON DATABASE d FROM joe, mike
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([USAGE]), object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE ALL ON DATABASE d FROM joe, mike
+----
+REVOKE ALL ON DATABASE d FROM joe, mike
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: All, object_type: Database, name: Database(UnresolvedDatabaseName(Ident("d"))), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE ALL PRIVILEGES ON TYPE t FROM joe
+----
+REVOKE ALL ON TYPE t FROM joe
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: All, object_type: Type, name: Item(UnresolvedItemName([Ident("t")])), roles: [Ident("joe")] })
+
+parse-statement
+REVOKE CREATE ON CLUSTER c FROM GROUP joe, GROUP mike
+----
+REVOKE CREATE ON CLUSTER c FROM joe, mike
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE CREATE ON CLUSTER c FROM joe, GROUP mike
+----
+REVOKE CREATE ON CLUSTER c FROM joe, mike
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike")] })
+
+parse-statement
+REVOKE CREATE ON CLUSTER c FROM joe, GROUP mike, GROUP yisachar
+----
+REVOKE CREATE ON CLUSTER c FROM joe, mike, yisachar
+=>
+RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike"), Ident("yisachar")] })

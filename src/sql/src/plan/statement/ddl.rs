@@ -38,9 +38,9 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    GrantPrivilegeStatement, GrantRoleStatement, Privilege, RevokePrivilegeStatement,
-    RevokeRoleStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    GrantPrivilegeStatement, GrantRoleStatement, Privilege, PrivilegeSpecification,
+    RevokePrivilegeStatement, RevokeRoleStatement, SshConnectionOption, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -364,7 +364,8 @@ generate_extracted_config!(
     (IgnoreKeys, bool),
     (Size, String),
     (Timeline, String),
-    (TimestampInterval, Interval)
+    (TimestampInterval, Interval),
+    (Disk, bool)
 );
 
 generate_extracted_config!(
@@ -874,9 +875,20 @@ pub fn plan_create_source(
         conn.table_casts.retain(|pos, _| used_pos.contains(pos));
     }
 
+    let CreateSourceOptionExtracted {
+        size,
+        timeline,
+        timestamp_interval,
+        ignore_keys,
+        disk,
+        seen: _,
+    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
+
     let (key_desc, value_desc) = encoding.desc()?;
 
     let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
+
+    let disk_default = scx.catalog.system_vars().upsert_source_disk_default();
 
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
@@ -894,9 +906,10 @@ pub fn plan_create_source(
             let (_before_idx, after_idx) = typecheck_debezium(&value_desc)?;
 
             match mode {
-                DbzMode::Plain => {
-                    UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
-                }
+                DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
+                    style: UpsertStyle::Debezium { after_idx },
+                    disk: disk.unwrap_or(disk_default),
+                },
             }
         }
         mz_sql_parser::ast::Envelope::Upsert => {
@@ -911,7 +924,10 @@ pub fn plan_create_source(
             if key_envelope == KeyEnvelope::None {
                 key_envelope = get_unnamed_key_envelope(key_encoding)?;
             }
-            UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
+            UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::Default(key_envelope),
+                disk: disk.unwrap_or(disk_default),
+            }
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
             scx.require_unsafe_mode("ENVELOPE MATERIALIZE")?;
@@ -924,18 +940,20 @@ pub fn plan_create_source(
         }
     };
 
+    if disk.is_some() {
+        scx.require_upsert_source_disk_available()?;
+        match &envelope {
+            UnplannedSourceEnvelope::Upsert { .. } => {}
+            _ => {
+                bail_unsupported!("ON DISK used with non-UPSERT/DEBEZIUM ENVELOPE");
+            }
+        }
+    }
+
     let metadata_columns = external_connection.metadata_columns();
     let metadata_column_types = external_connection.metadata_column_types();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
-
-    let CreateSourceOptionExtracted {
-        size,
-        timeline,
-        timestamp_interval,
-        ignore_keys,
-        seen: _,
-    } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
     if ignore_keys.unwrap_or(false) {
         desc = desc.without_keys();
@@ -4144,6 +4162,7 @@ pub fn plan_alter_source(
                 timeline: timeline_opt,
                 timestamp_interval: timestamp_interval_opt,
                 ignore_keys: ignore_keys_opt,
+                disk: disk_opt,
             } = CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(value) = size_opt {
@@ -4157,6 +4176,9 @@ pub fn plan_alter_source(
             }
             if let Some(_) = ignore_keys_opt {
                 sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
+            }
+            if let Some(_) = disk_opt {
+                sql_bail!("Cannot modify the DISK property of a SOURCE.");
             }
         }
         AlterSourceAction::ResetOptions(reset) => {
@@ -4173,6 +4195,9 @@ pub fn plan_alter_source(
                     }
                     CreateSourceOptionName::IgnoreKeys => {
                         sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
+                    }
+                    CreateSourceOptionName::Disk => {
+                        sql_bail!("Cannot modify the DISK property of a SOURCE.");
                     }
                 }
             }
@@ -4358,17 +4383,11 @@ pub fn plan_grant_privilege(
         privileges,
         object_type,
         name,
-        role,
+        roles,
     }: GrantPrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let (acl_mode, object_id, grantee, grantor) =
-        plan_update_privilege(scx, privileges, object_type, name, role)?;
-    Ok(Plan::GrantPrivilege(GrantPrivilegePlan {
-        acl_mode,
-        object_id,
-        grantee,
-        grantor,
-    }))
+    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
+    Ok(Plan::GrantPrivilege(plan.into()))
 }
 
 pub fn describe_revoke_privilege(
@@ -4384,34 +4403,75 @@ pub fn plan_revoke_privilege(
         privileges,
         object_type,
         name,
-        role,
+        roles,
     }: RevokePrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let (acl_mode, object_id, revokee, grantor) =
-        plan_update_privilege(scx, privileges, object_type, name, role)?;
-    Ok(Plan::RevokePrivilege(RevokePrivilegePlan {
-        acl_mode,
-        object_id,
-        revokee,
-        grantor,
-    }))
+    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
+    Ok(Plan::RevokePrivilege(plan.into()))
+}
+
+struct UpdatePrivilegePlan {
+    acl_mode: AclMode,
+    object_id: ObjectId,
+    grantees: Vec<RoleId>,
+    grantor: RoleId,
+}
+
+impl From<UpdatePrivilegePlan> for GrantPrivilegePlan {
+    fn from(
+        UpdatePrivilegePlan {
+            acl_mode,
+            object_id,
+            grantees,
+            grantor,
+        }: UpdatePrivilegePlan,
+    ) -> GrantPrivilegePlan {
+        GrantPrivilegePlan {
+            acl_mode,
+            object_id,
+            grantees,
+            grantor,
+        }
+    }
+}
+
+impl From<UpdatePrivilegePlan> for RevokePrivilegePlan {
+    fn from(
+        UpdatePrivilegePlan {
+            acl_mode,
+            object_id,
+            grantees,
+            grantor,
+        }: UpdatePrivilegePlan,
+    ) -> RevokePrivilegePlan {
+        RevokePrivilegePlan {
+            acl_mode,
+            object_id,
+            revokees: grantees,
+            grantor,
+        }
+    }
 }
 
 fn plan_update_privilege(
     scx: &StatementContext,
-    privileges: Vec<Privilege>,
+    privileges: PrivilegeSpecification,
     object_type: ObjectType,
     name: ResolvedObjectName,
-    role: ResolvedRoleName,
-) -> Result<(AclMode, ObjectId, RoleId, RoleId), PlanError> {
-    let mut acl_mode = AclMode::empty();
-    // PostgreSQL doesn't care about duplicate privileges, so we don't either.
-    for privilege in privileges {
-        acl_mode |= privilege_to_acl_mode(privilege);
-    }
+    roles: Vec<ResolvedRoleName>,
+) -> Result<UpdatePrivilegePlan, PlanError> {
     let object_id = name
         .try_into()
         .expect("name resolution should handle invalid objects");
+    let actual_object_type = scx.get_object_type(&object_id);
+    let acl_mode = match privileges {
+        PrivilegeSpecification::All => scx.catalog.all_object_privileges(actual_object_type),
+        PrivilegeSpecification::Privileges(privileges) => privileges
+            .into_iter()
+            .map(privilege_to_acl_mode)
+            // PostgreSQL doesn't care about duplicate privileges, so we don't either.
+            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode)),
+    };
     if let ObjectId::Item(id) = &object_id {
         let item = scx.get_item(id);
         let item_type: ObjectType = item.item_type().into();
@@ -4431,7 +4491,6 @@ fn plan_update_privilege(
         }
     }
 
-    let actual_object_type = scx.get_object_type(&object_id);
     let all_object_privileges = scx.catalog.all_object_privileges(actual_object_type);
     let invalid_acl_mode = acl_mode.difference(all_object_privileges);
     if !invalid_acl_mode.is_empty() {
@@ -4452,8 +4511,14 @@ fn plan_update_privilege(
         .catalog
         .get_owner_id(&object_id)
         .expect("cannot revoke privileges on objects without owners");
+    let grantees = roles.into_iter().map(|role| role.id).collect();
 
-    Ok((acl_mode, object_id, role.id, grantor))
+    Ok(UpdatePrivilegePlan {
+        acl_mode,
+        object_id,
+        grantees,
+        grantor,
+    })
 }
 
 fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {

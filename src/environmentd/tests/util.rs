@@ -286,6 +286,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             command_wrapper: vec![],
             propagate_crashes: config.propagate_crashes,
             tcp_proxy: None,
+            scratch_directory: None,
         }))?,
     );
     // Messing with the clock causes persist to expire leases, causing hangs and
@@ -344,6 +345,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             now: SYSTEM_TIME.clone(),
             postgres_factory,
             metrics_registry: metrics_registry.clone(),
+            scratch_directory: None,
         },
         secrets_controller,
         cloud_resource_controller: None,

@@ -62,10 +62,11 @@ class StartMz(MzcomposeAction):
                 version_cargo == mz_version
             ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
 
+        e.current_mz_version = mz_version
+
 
 class ConfigureMz(MzcomposeAction):
     def __init__(self, scenario: "Scenario") -> None:
-        self.base_version = scenario.base_version()
         self.handle: Optional[Any] = None
 
     def execute(self, e: Executor) -> None:
@@ -86,18 +87,18 @@ class ConfigureMz(MzcomposeAction):
             """
         )
 
-        if self.base_version >= MzVersion(0, 45, 0):
+        if e.current_mz_version >= MzVersion(0, 45, 0):
             # Since we already test with RBAC enabled, we have to give materialize
             # user the relevant attributes so the existing tests keep working.
             input += "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;\n"
 
-        if self.base_version >= MzVersion(0, 47, 0):
+        if e.current_mz_version >= MzVersion(0, 47, 0):
             input += "ALTER SYSTEM SET enable_rbac_checks TO true;\n"
 
-        if self.base_version >= MzVersion.parse("0.51.0-dev"):
+        if e.current_mz_version >= MzVersion.parse("0.51.0-dev"):
             input += "ALTER SYSTEM SET enable_ld_rbac_checks TO true;\n"
 
-        if self.base_version >= MzVersion.parse("0.53.0-dev"):
+        if e.current_mz_version >= MzVersion.parse("0.52.0-dev"):
             # Since we already test with RBAC enabled, we have to give materialize
             # user the relevant privileges so the existing tests keep working.
             input += "GRANT CREATE ON DATABASE materialize TO materialize;\n"

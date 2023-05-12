@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -373,7 +374,7 @@ pub trait CatalogSchema {
 // TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
 //  then switch this to a bitflag (https://docs.rs/bitflags/latest/bitflags/)
 /// Attributes belonging to a [`CatalogRole`].
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,

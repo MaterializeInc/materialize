@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
+from textwrap import dedent
 from typing import Any, Optional
 
 import pg8000
@@ -33,10 +34,23 @@ from materialize import ROOT, mzbuild, ui
 
 
 class K8sResource:
-    def kubectl(self, *args: str) -> str:
-        return subprocess.check_output(
-            ["kubectl", "--context", self.context(), *args]
-        ).decode("ascii")
+    def kubectl(self, *args: str, input: Optional[str] = None) -> str:
+        try:
+            return subprocess.check_output(
+                ["kubectl", "--context", self.context(), *args], text=True, input=input
+            )
+        except subprocess.CalledProcessError as e:
+            print(
+                dedent(
+                    f"""
+                    cmd: {e.cmd}
+                    returncode: {e.returncode}
+                    stdout: {e.stdout}
+                    stderr: {e.stderr}
+                    """
+                )
+            )
+            raise e
 
     def api(self) -> CoreV1Api:
         api_client = new_client_from_config(context=self.context())

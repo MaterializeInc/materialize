@@ -32,6 +32,8 @@ use timely::progress::{Antichain, Timestamp};
 use crate::source::types::UpsertMetrics;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_client::types::instances::StorageInstanceContext;
+use mz_storage_client::types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 
 use self::types::{InMemoryHashMap, StatsState, UpsertState};
@@ -126,14 +128,86 @@ impl<H: Digest> Hasher for DigestHasher<H> {
 /// and the collection of the previous output of this operator.
 pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
-    mut key_indices: Vec<usize>,
+    upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<G::Timestamp>,
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,
     source_config: crate::source::RawSourceCreationConfig,
+    instance_context: &StorageInstanceContext,
 ) -> Collection<G, Result<Row, DataflowError>, Diff>
 where
     G::Timestamp: TotalOrder,
+{
+    let upsert_metrics = UpsertMetrics::new(
+        &source_config.base_metrics,
+        source_config.id,
+        source_config.worker_id,
+    );
+
+    if upsert_envelope.disk {
+        tracing::info!(
+            "timely-{} rendering {} with rocksdb-backed upsert state",
+            source_config.worker_id,
+            source_config.id
+        );
+        let rocksdb_metrics = Arc::clone(&upsert_metrics.rocksdb);
+        let rocksdb_dir = instance_context
+            .scratch_directory
+            .as_ref()
+            .expect("instance directory to be there if rendering an ON DISK source")
+            .join(source_config.id.to_string())
+            .join(source_config.worker_id.to_string());
+        upsert_inner(
+            input,
+            upsert_envelope.key_indices,
+            resume_upper,
+            previous,
+            previous_token,
+            upsert_metrics,
+            move || async move {
+                rocksdb::RocksDB::new(
+                    mz_rocksdb::RocksDBInstance::new(
+                        &rocksdb_dir,
+                        mz_rocksdb::Options::new_with_defaults().unwrap(),
+                        rocksdb_metrics,
+                    )
+                    .await
+                    .unwrap(),
+                )
+            },
+        )
+    } else {
+        tracing::info!(
+            "timely-{} rendering {} with memory-backed upsert state",
+            source_config.worker_id,
+            source_config.id
+        );
+        upsert_inner(
+            input,
+            upsert_envelope.key_indices,
+            resume_upper,
+            previous,
+            previous_token,
+            upsert_metrics,
+            || async { InMemoryHashMap::default() },
+        )
+    }
+}
+
+fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
+    input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
+    mut key_indices: Vec<usize>,
+    resume_upper: Antichain<G::Timestamp>,
+    previous: Collection<G, Result<Row, DataflowError>, Diff>,
+    previous_token: Option<Rc<dyn Any>>,
+    upsert_metrics: UpsertMetrics,
+    state: F,
+) -> Collection<G, Result<Row, DataflowError>, Diff>
+where
+    G::Timestamp: TotalOrder,
+    F: FnOnce() -> Fut + 'static,
+    Fut: std::future::Future<Output = US>,
+    US: UpsertState,
 {
     // Sort key indices to ensure we can construct the key by iterating over the datums of the row
     key_indices.sort_unstable();
@@ -163,11 +237,6 @@ where
     );
     let (mut output_handle, output) = builder.new_output();
 
-    let upsert_metrics = UpsertMetrics::new(
-        &source_config.base_metrics,
-        source_config.id,
-        source_config.worker_id,
-    );
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     builder.build(move |caps| async move {
         let mut output_cap = caps.into_element();
@@ -201,7 +270,7 @@ where
         consolidation::consolidate(&mut snapshot);
 
         // The main key->value used to store previous values.
-        let mut state = StatsState::new(InMemoryHashMap::default(), upsert_shared_metrics);
+        let mut state = StatsState::new(state().await, upsert_shared_metrics);
 
         // A re-usable buffer of changes, per key. This is
         // an `IndexMap` because it has to be `drain`-able

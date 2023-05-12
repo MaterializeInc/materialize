@@ -248,7 +248,6 @@ where
     let _shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
-        let mut current_ts = timely::progress::Timestamp::minimum();
         let mut inflight_bytes = 0;
         let mut inflight_parts: Vec<(Antichain<G::Timestamp>, usize)> = Vec::new();
 
@@ -263,7 +262,10 @@ where
             return;
         }
 
-        let create_subscribe = async {
+        let token_is_dropped = token_tx.closed();
+        tokio::pin!(token_is_dropped);
+
+        let create_read_handle = async {
             let client = clients
                 .open(location)
                 .await
@@ -277,8 +279,59 @@ where
                 )
                 .await
                 .expect("could not open persist shard");
-            let as_of = as_of.unwrap_or_else(|| read.since().clone());
-            (read.subscribe(as_of.clone()).await, as_of)
+
+            read
+        };
+
+        tokio::pin!(create_read_handle);
+
+        // Creating a ReadHandle can take indefinitely long, so we race its creation with our token
+        // to ensure any async work is dropped once the token is dropped.
+        //
+        // NB: Reading from a channel (token_is_dropped) is cancel-safe. `create_read_handle` is NOT
+        // cancel-safe, but we will not retry it if it is dropped.
+        let read = match futures::future::select(token_is_dropped, create_read_handle).await {
+            Either::Left(_) => {
+                // The token dropped before we finished creating our `ReadHandle.
+                // We can return immediately, as we could not have emitted any
+                // parts to fetch.
+                cap_set.downgrade(&[]);
+                return;
+            }
+            Either::Right((read, _)) => {
+                read
+            }
+        };
+
+        let as_of = as_of.unwrap_or_else(|| read.since().clone());
+
+
+        // Eagerly downgrade our frontier to the initial as_of. This makes sure
+        // that the output frontier of the `persist_source` closely tracks the
+        // `upper` frontier of the persist shard. It might be that the snapshot
+        // for `as_of` is not initially available yet, but this makes sure we
+        // already downgrade to it.
+        //
+        // Downstream consumers might rely on close frontier tracking for making
+        // progress. For example, the `persist_sink` needs to know the
+        // up-to-date upper of the output shard to make progress because it will
+        // only write out new data once it knows that earlier writes went
+        // through, including the initial downgrade of the shard upper to the
+        // `as_of`.
+        //
+        // NOTE: We have to do this before our `subscribe()` call (which
+        // internally calls `snapshot()` because that call will block when there
+        // is no data yet available in the shard.
+        cap_set.downgrade(as_of.clone());
+        let mut current_ts = match as_of.clone().into_option() {
+            Some(ts) => ts,
+            None => {
+                return;
+            }
+        };
+
+        let create_subscribe = async {
+            read.subscribe(as_of.clone()).await
         };
         tokio::pin!(create_subscribe);
         let token_is_dropped = token_tx.closed();
@@ -290,7 +343,7 @@ where
         //
         // NB: reading from a channel (token_is_dropped) is cancel-safe.
         //     create_subscribe is NOT cancel-safe, but we will not retry it if it is dropped.
-        let (subscription, as_of) = match futures::future::select(token_is_dropped, create_subscribe).await {
+        let subscription = match futures::future::select(token_is_dropped, create_subscribe).await {
             Either::Left(_) => {
                 // the token dropped before we finished creating our Subscribe.
                 // we can return immediately, as we could not have emitted any
@@ -298,8 +351,8 @@ where
                 cap_set.downgrade(&[]);
                 return;
             }
-            Either::Right(((subscription, as_of), _)) => {
-                (subscription, as_of)
+            Either::Right((subscription, _)) => {
+                subscription
             }
         };
 
@@ -314,19 +367,6 @@ where
         let mut lease_returner = subscription.lease_returner().clone();
         let (_keep_subscribe_alive_tx, keep_subscribe_alive_rx) = tokio::sync::oneshot::channel::<()>();
         let subscription_stream = async_stream::stream! {
-            // Eagerly yield the initial as_of. This makes sure that the output
-            // frontier of the `persist_source` closely tracks the `upper` frontier
-            // of the persist shard. It might be that the snapshot for `as_of` is
-            // not initially available yet, but this makes sure we already downgrade
-            // to it.
-            //
-            // Downstream consumers might rely on close frontier tracking for making
-            // progress. For example, the `persist_sink` needs to know the
-            // up-to-date upper of the output shard to make progress because it
-            // will only write out new data once it knows that earlier writes went
-            // through, including the initial downgrade of the shard upper to the
-            // `as_of`.
-            yield ListenEvent::Progress(as_of.clone());
 
             let mut done = false;
             while !done {
@@ -413,7 +453,7 @@ where
                                 let mut bytes_emitted = 0;
                                 for mut part_desc in std::mem::take(&mut batch_parts) {
                                     // TODO(mfp): Push the filter down into the Subscribe?
-                                    if cfg.dynamic.stats_filter_enabled() {
+                                    if cfg.dynamic.stats_filter_enabled() || SOFT_ASSERTIONS.load(Ordering::Relaxed) {
                                         let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| should_fetch_part(stats));
                                         let bytes = u64::cast_from(part_desc.encoded_size_bytes);
                                         if should_fetch {
@@ -621,4 +661,168 @@ where
         completed_fetches_stream,
         Rc::new(shutdown_button.press_on_drop()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use timely::dataflow::operators::Probe;
+    use timely::progress::Antichain;
+
+    use crate::cache::PersistClientCache;
+    use crate::operators::shard_source::shard_source;
+    use crate::{PersistLocation, ShardId};
+
+    /// Verifies that a `shard_source` will downgrade it's output frontier to
+    /// the `since` of the shard when no explicit `as_of` is given. Even if
+    /// there is no data/no snapshot available in the
+    /// shard.
+    ///
+    /// NOTE: This test is weird: if everything is good it will pass. If we
+    /// break the assumption that we test this will time out and we will notice.
+    #[tokio::test]
+    async fn test_shard_source_implicit_initial_as_of() {
+        let (persist_clients, location) = new_test_client_cache_and_location();
+
+        let expected_frontier = 42;
+        let shard_id = ShardId::new();
+
+        initialize_shard(
+            &persist_clients,
+            location.clone(),
+            shard_id,
+            Antichain::from_elem(expected_frontier),
+        )
+        .await;
+
+        let res = timely::execute::execute_directly(move |worker| {
+            let until = Antichain::new();
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
+                let (stream, token) = shard_source::<String, String, u64, _, _>(
+                    scope,
+                    "test_source",
+                    persist_clients,
+                    location,
+                    shard_id,
+                    None, // No explicit as_of!
+                    until,
+                    None,
+                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                    |_fetch| true,
+                );
+
+                let probe = stream.probe();
+
+                (probe, token)
+            });
+
+            while probe.less_than(&expected_frontier) {
+                worker.step();
+            }
+
+            let mut probe_frontier = Antichain::new();
+            probe.with_frontier(|f| probe_frontier.extend(f.iter().cloned()));
+
+            probe_frontier
+        });
+
+        assert_eq!(res, Antichain::from_elem(expected_frontier));
+    }
+
+    /// Verifies that a `shard_source` will downgrade it's output frontier to
+    /// the given `as_of`. Even if there is no data/no snapshot available in the
+    /// shard.
+    ///
+    /// NOTE: This test is weird: if everything is good it will pass. If we
+    /// break the assumption that we test this will time out and we will notice.
+    #[tokio::test]
+    async fn test_shard_source_explicit_initial_as_of() {
+        let (persist_clients, location) = new_test_client_cache_and_location();
+
+        let expected_frontier = 42;
+        let shard_id = ShardId::new();
+
+        initialize_shard(
+            &persist_clients,
+            location.clone(),
+            shard_id,
+            Antichain::from_elem(expected_frontier),
+        )
+        .await;
+
+        let res = timely::execute::execute_directly(move |worker| {
+            let as_of = Antichain::from_elem(expected_frontier);
+            let until = Antichain::new();
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
+                let (stream, token) = shard_source::<String, String, u64, _, _>(
+                    scope,
+                    "test_source",
+                    persist_clients,
+                    location,
+                    shard_id,
+                    Some(as_of), // We specify the as_of explicitly!
+                    until,
+                    None,
+                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                    |_fetch| true,
+                );
+
+                let probe = stream.probe();
+
+                (probe, token)
+            });
+
+            while probe.less_than(&expected_frontier) {
+                worker.step();
+            }
+
+            let mut probe_frontier = Antichain::new();
+            probe.with_frontier(|f| probe_frontier.extend(f.iter().cloned()));
+
+            probe_frontier
+        });
+
+        assert_eq!(res, Antichain::from_elem(expected_frontier));
+    }
+
+    async fn initialize_shard(
+        persist_clients: &Arc<PersistClientCache>,
+        location: PersistLocation,
+        shard_id: ShardId,
+        since: Antichain<u64>,
+    ) {
+        let persist_client = persist_clients
+            .open(location.clone())
+            .await
+            .expect("client construction failed");
+
+        let mut read_handle = persist_client
+            .open_leased_reader::<String, String, u64, u64>(
+                shard_id,
+                "tests",
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+            )
+            .await
+            .expect("invalid usage");
+
+        read_handle.downgrade_since(&since).await;
+    }
+
+    fn new_test_client_cache_and_location() -> (Arc<PersistClientCache>, PersistLocation) {
+        let persist_clients = PersistClientCache::new_no_metrics();
+
+        let persist_clients = Arc::new(persist_clients);
+        let location = PersistLocation {
+            blob_uri: "mem://".to_owned(),
+            consensus_uri: "mem://".to_owned(),
+        };
+
+        (persist_clients, location)
+    }
 }

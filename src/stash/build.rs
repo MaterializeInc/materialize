@@ -192,6 +192,19 @@ fn main() -> anyhow::Result<()> {
     prost_build::Config::new()
         .btree_map(["."])
         .bytes(["."])
+        .message_attribute(".", "#[derive(Eq, PartialOrd, Ord)]")
+        // Note(parkmycar): This is annoying, but we need to manually specify each oneof so we can
+        // get them to implement Eq, PartialEq, and Ord. If you define a new oneof you should add
+        // it here.
+        .enum_attribute("CatalogItem.value", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("GlobalId.value", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("ClusterId.value", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("DatabaseId.value", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("SchemaId.value", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("RoleId.value", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("ReplicaConfig.location", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("AuditLogEventV1.details", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("AuditLogKey.event", "#[derive(Eq, PartialOrd, Ord)]")
         .compile_protos(
             &paths,
             &[ /*

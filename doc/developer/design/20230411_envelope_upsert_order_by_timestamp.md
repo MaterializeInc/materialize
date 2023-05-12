@@ -28,18 +28,18 @@ Make it possible with unsafe-mode to provide custom ORDER BY clause which will o
 
 The option will be part of the `ENVELOPE UPSERT` clause with the following grammar:
 
-`ENVELOPE UPSERT [(ORDER BY (<expr>) [ASC])]`
+`ENVELOPE UPSERT [(ORDER BY (<expr> [ASC], ...))]`
 
 The `ASC` modifier is optional noise for specifying ascending ordering, for symmetry with the `ORDER BY` clause in `SELECT` statements.
 
 Examples of valid syntax and semantics:
-- `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP, OFFSET ) ASC )`
+- `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP  ASC, OFFSET ASC) )`
 - `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts, OFFSET AS o ENVELOPE UPSERT ( ORDER BY ( ts, o ) )`
 - `CREATE SOURCE ... INCLUDE OFFSET AS o ENVELOPE UPSERT ( ORDER BY ( o ) )` (equivalent to default ordering by offset behavior)
 
 Examples that are syntactically invalid:
 - `CREATE SOURCE ... INCLUDE TIMESTAMP ENVELOPE UPSERT ( ORDER BY TIMESTAMP, OFFSET )` (missing parentheses around order by columns)
-- `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts, OFFSET AS o ENVELOPE UPSERT ( ORDER BY ( ts, o ) DESC )` (DESC ordering is not allowed, will be rejected at parsing)
+- `CREATE SOURCE ... INCLUDE TIMESTAMP AS ts, OFFSET AS o ENVELOPE UPSERT ( ORDER BY ( ts DESC, o ASC ) )` (DESC ordering is not allowed, will be rejected at parsing)
 
 Examples that are syntactically valid but semantically invalid:
 - `CREATE SOURCE ... INCLUDE OFFSET ENVELOPE UPSERT ( ORDER BY ( TIMESTAMP ) )` (OFFSET is not specified as one of the order by columns)

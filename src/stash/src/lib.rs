@@ -88,11 +88,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use timely::progress::Antichain;
 
+pub mod objects;
+
 mod postgres;
 mod transaction;
+mod upgrade;
 
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
 pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
+
+/// The current version of the [`Stash`].
+///
+/// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
+/// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
+/// change, we need to bump this version.
+pub const STASH_VERSION: u64 = 14;
 
 pub type Diff = i64;
 pub type Timestamp = i64;

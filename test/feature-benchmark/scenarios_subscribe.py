@@ -17,7 +17,8 @@ from materialize.feature_benchmark.scenario import Scenario
 class SubscribeParallel(Scenario):
     """Feature benchmarks related to SUBSCRIBE"""
 
-    SCALE = 2  # So 100 concurrent SUBSCRIBEs by default, limited by #18354
+    SCALE = 2  # So 100 concurrent SUBSCRIBEs by default, limited by #18261
+    FIXED_SCALE = True
 
     def benchmark(self) -> MeasurementSource:
         return Td(

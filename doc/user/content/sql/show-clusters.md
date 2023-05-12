@@ -7,7 +7,7 @@ menu:
 
 ---
 
-`SHOW CLUSTERS` lists the [clusters](/overview/key-concepts/#clusters) configured in Materialize.
+`SHOW CLUSTERS` lists the [clusters](/get-started/key-concepts/#clusters) configured in Materialize.
 
 ## Syntax
 
@@ -21,7 +21,7 @@ pre-installed.
 
 ### `default` cluster
 
-A cluster named `default` with a single `xsmall` [replica](/overview/key-concepts/#cluster-replicas)
+A cluster named `default` with a single `xsmall` [replica](/get-started/key-concepts/#cluster-replicas)
 named `r1` will be pre-installed in every environment. You can modify or drop
 this cluster or its replicas at any time.
 

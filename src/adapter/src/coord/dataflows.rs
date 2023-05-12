@@ -39,6 +39,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_sql::catalog::SessionCatalog;
 
+use super::timestamp_selection::TimestampProvider;
 use crate::catalog::{
     Catalog, CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View,
 };

@@ -13,6 +13,9 @@ statement ok
 CREATE TABLE t (a int, b int)
 
 statement ok
+CREATE TABLE t2 (a int, b int, c int)
+
+statement ok
 BEGIN
 
 statement ok
@@ -79,6 +82,77 @@ query IIII colnames
 FETCH 0 c
 ----
 mz_timestamp mz_state b a
+
+statement ok
+COMMIT
+
+# ENVELOPE DEBEZIUM
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t ENVELOPE DEBEZIUM (KEY (a))
+
+query IIIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_state a before_b after_b
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t WITH (PROGRESS) ENVELOPE DEBEZIUM (KEY (a))
+
+query IIIIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_progressed mz_state a before_b after_b
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t ENVELOPE DEBEZIUM (KEY (b))
+
+query IIIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_state b before_a after_a
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t2 ENVELOPE DEBEZIUM (KEY (b))
+
+query IIIIIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_state b before_a before_c after_a after_c
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE t2 ENVELOPE DEBEZIUM (KEY (c, b))
+
+query IIIIII colnames
+FETCH 0 c
+----
+mz_timestamp mz_state c b before_a after_a
 
 statement ok
 COMMIT
