@@ -89,6 +89,23 @@ impl OutputFormatter {
         Ok(())
     }
 
+    // /// Outputs with tab
+    // pub fn output_tab<'a, I, R>(&self, rows: I) -> Result<(), Error>
+    // where
+    //     I: IntoIterator<Item = R>,
+    //     R: Deserialize<'a> + Serialize + Tabled,
+    // {
+    //     match self.output_format {
+    //         OutputFormat::Text => {
+    //             let table = Table::new(rows).with(Style::blank()).to_string();
+    //             println!("{table}");
+    //         }
+    //         OutputFormat::Json => self.output_table(rows),
+    //         OutputFormat::Csv => self.output_table(rows)
+    //     }
+    //     Ok(())
+    // }
+
     // TODO: add progress bar helper.
 }
 

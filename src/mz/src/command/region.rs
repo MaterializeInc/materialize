@@ -19,17 +19,55 @@
 
 use crate::{context::RegionContext, error::Error};
 
+use mz_cloud_api::client::cloud_provider::CloudProvider;
+use serde::{Deserialize, Serialize};
+use tabled::Tabled;
+
 pub async fn enable(cx: &mut RegionContext) -> Result<(), Error> {
-    // cx.cloud_client().create_environment().await
+    cx.cloud_client().create_environment(None, vec![], cx.get_region().await?).await?;
     todo!()
 }
 
 pub async fn list(cx: &mut RegionContext) -> Result<(), Error> {
-    cx.cloud_client().get_all_environments().await?;
+    #[derive(Deserialize, Serialize, Tabled)]
+    pub struct Region<'a> {
+        #[tabled(rename = "Region")]
+        region: String,
+        #[tabled(rename = "Status")]
+        status: &'a str,
+    }
+
+    // TODO: Should this be in the cloud-api rather than here?
+    let cloud_providers: Vec<CloudProvider> = cx.cloud_client().list_cloud_providers().await?;
+    let mut regions: Vec<Region> = vec![];
+
+    for cloud_provider in cloud_providers {
+        match cx.cloud_client().get_region(cloud_provider.clone()).await {
+            Ok(_) => regions.push(Region {
+                region: cloud_provider.id,
+                status: "enabled",
+            }),
+            Err(mz_cloud_api::error::Error::InvalidEnvironmentAssignment) => regions.push(Region {
+                region: cloud_provider.id,
+                status: "disabled",
+            }),
+            // TODO: Handle error
+            Err(_) => {}
+        }
+    }
+
+    let output_formatter = cx.output_formatter();
+    output_formatter.output_table(regions)?;
     Ok(())
 }
 
 pub async fn show(cx: &mut RegionContext) -> Result<(), Error> {
-    // cx.cloud_client().create_environment().await
-    todo!()
+    let region = cx.get_region().await?;
+    let environment = cx.get_environment(region.clone()).await?;
+    let output_formatter = cx.output_formatter();
+    // TODO: Display region is healthy after the psql work is done.
+    // output_formatter.output_scalar(Some(format!("Healthy: \t", region.cluster)));
+    output_formatter.output_scalar(Some(&format!("SQL address: \t{}", environment.environmentd_pgwire_address)))?;
+    output_formatter.output_scalar(Some(&format!("HTTP URL: \t{}", environment.environmentd_https_address)))?;
+    Ok(())
 }

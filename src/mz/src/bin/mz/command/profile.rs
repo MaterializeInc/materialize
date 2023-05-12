@@ -15,7 +15,7 @@
 
 //! Driver for the `mz profile` command.
 
-use mz::command::profile::{ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs, ConfigArg};
+use mz::command::profile::{ConfigArg, ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs};
 use mz::context::Context;
 use mz::error::Error;
 
@@ -76,9 +76,7 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
         // Initiating a profile doesn't requires an active profile.
         ProfileSubcommand::Init => mz::command::profile::init(&mut cx, profile).await,
         ProfileSubcommand::List => mz::command::profile::list(&mut cx).await,
-        ProfileSubcommand::Remove => {
-            mz::command::profile::remove(&mut cx).await
-        },
+        ProfileSubcommand::Remove => mz::command::profile::remove(&mut cx).await,
         _ => {
             let mut cx = cx.activate_profile(profile).await?;
 

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml_edit::Document;
 
-use crate::{error::Error, command::profile::ConfigArg};
+use crate::{command::profile::ConfigArg, error::Error};
 
 static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
     btreemap! {
@@ -177,11 +177,20 @@ impl ConfigFile {
     }
 
     /// Sets the value of a profile's configuration parameter.
-    pub async fn set_profile_param(&self, name: ConfigArg, value: Option<&str>) -> Result<(), Error> {
+    pub async fn set_profile_param(
+        &self,
+        name: ConfigArg,
+        value: Option<&str>,
+    ) -> Result<(), Error> {
         // // TODO: Replace unwraps with custom errors
         let mut editable = self.editable.clone();
         let mut table = editable.get("profiles").unwrap().clone();
-        let mut profile_table = table.get(self.profile()).unwrap().as_table().unwrap().clone();
+        let mut profile_table = table
+            .get(self.profile())
+            .unwrap()
+            .as_table()
+            .unwrap()
+            .clone();
 
         match value {
             None => {

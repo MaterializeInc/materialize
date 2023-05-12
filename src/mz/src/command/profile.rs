@@ -17,7 +17,7 @@
 //!
 //! Consult the user-facing documentation for details.
 
-use std::{str::FromStr};
+use std::str::FromStr;
 
 use mz_cloud_api::config::DEFAULT_ENDPOINT;
 use serde::{Deserialize, Serialize};
@@ -109,7 +109,9 @@ pub async fn list(cx: &mut Context) -> Result<(), Error> {
 }
 
 pub async fn remove(cx: &mut Context) -> Result<(), Error> {
-    cx.config_file().remove_profile(cx.config_file().profile()).await
+    cx.config_file()
+        .remove_profile(cx.config_file().profile())
+        .await
 }
 
 pub struct ConfigGetArgs<'a> {
@@ -135,7 +137,7 @@ impl FromStr for ConfigArg {
             "cloud-api" => Ok(ConfigArg::CloudAPI),
             "region" => Ok(ConfigArg::Region),
             "vault" => Ok(ConfigArg::Vault),
-            _ => Err("Invalid profile configuration parameter.".to_string())
+            _ => Err("Invalid profile configuration parameter.".to_string()),
         }
     }
 }
@@ -175,11 +177,10 @@ pub async fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
     }
 
     // TODO: Improve map?
-    output.output_table(
-        profile_params
-            .iter()
-            .map(|(name, value)| ProfileParam { Name: name, Value: value.or(Some("")).unwrap() }),
-    )?;
+    output.output_table(profile_params.iter().map(|(name, value)| ProfileParam {
+        Name: name,
+        Value: value.or(Some("")).unwrap(),
+    }))?;
     Ok(())
 }
 
@@ -192,7 +193,9 @@ pub async fn config_set(
     cx: &mut ProfileContext,
     ConfigSetArgs { name, value }: ConfigSetArgs<'_>,
 ) -> Result<(), Error> {
-    cx.config_file().set_profile_param(name.clone(), Some(value)).await
+    cx.config_file()
+        .set_profile_param(name.clone(), Some(value))
+        .await
 }
 
 pub struct ConfigRemoveArgs<'a> {
