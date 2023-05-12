@@ -19,6 +19,7 @@ use mz_repr::adt::numeric::{
     InvalidNumericMaxScaleError, NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION,
 };
 use mz_repr::adt::varchar::{InvalidVarCharMaxLengthError, VarCharMaxLength};
+use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::ScalarType;
 
 use crate::oid;
@@ -358,7 +359,7 @@ pub static LIST: Lazy<postgres_types::Type> = Lazy::new(|| {
         // https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
         oid::TYPE_LIST_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -369,7 +370,7 @@ pub static MAP: Lazy<postgres_types::Type> = Lazy::new(|| {
         // OID chosen to follow our "LIST" type.
         oid::TYPE_MAP_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -379,7 +380,7 @@ pub static ANYCOMPATIBLELIST: Lazy<postgres_types::Type> = Lazy::new(|| {
         "anycompatiblelist".to_owned(),
         oid::TYPE_ANYCOMPATIBLELIST_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -389,7 +390,7 @@ pub static ANYCOMPATIBLEMAP: Lazy<postgres_types::Type> = Lazy::new(|| {
         "anycompatiblemap".to_owned(),
         oid::TYPE_ANYCOMPATIBLEMAP_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -399,7 +400,7 @@ pub static UINT2: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint2".to_owned(),
         oid::TYPE_UINT2_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -409,7 +410,7 @@ pub static UINT4: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint4".to_owned(),
         oid::TYPE_UINT4_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -419,7 +420,7 @@ pub static UINT8: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint8".to_owned(),
         oid::TYPE_UINT8_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -429,7 +430,7 @@ pub static UINT2_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint2_array".to_owned(),
         oid::TYPE_UINT2_ARRAY_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -439,7 +440,7 @@ pub static UINT4_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint4_array".to_owned(),
         oid::TYPE_UINT4_ARRAY_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -449,7 +450,7 @@ pub static UINT8_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
         "uint8_array".to_owned(),
         oid::TYPE_UINT8_ARRAY_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -459,7 +460,7 @@ pub static MZ_TIMESTAMP: Lazy<postgres_types::Type> = Lazy::new(|| {
         "mz_timestamp".to_owned(),
         oid::TYPE_MZ_TIMESTAMP_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -469,7 +470,7 @@ pub static MZ_TIMESTAMP_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
         "mz_timestamp_array".to_owned(),
         oid::TYPE_MZ_TIMESTAMP_ARRAY_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -479,7 +480,7 @@ pub static MZ_ACL_ITEM: Lazy<postgres_types::Type> = Lazy::new(|| {
         "mz_aclitem".to_owned(),
         oid::TYPE_MZ_ACL_ITEM_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 
@@ -489,7 +490,7 @@ pub static MZ_ACL_ITEM_ARRAY: Lazy<postgres_types::Type> = Lazy::new(|| {
         "mz_aclitem_array".to_owned(),
         oid::TYPE_MZ_ACL_ITEM_ARRAY_OID,
         postgres_types::Kind::Pseudo,
-        "mz_catalog".to_owned(),
+        MZ_CATALOG_SCHEMA.to_owned(),
     )
 });
 

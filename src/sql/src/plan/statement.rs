@@ -506,7 +506,9 @@ impl<'a> StatementContext<'a> {
     pub fn allocate_temporary_full_name(&self, name: PartialItemName) -> FullItemName {
         FullItemName {
             database: RawDatabaseSpecifier::Ambient,
-            schema: name.schema.unwrap_or_else(|| "mz_temp".to_owned()),
+            schema: name
+                .schema
+                .unwrap_or_else(|| mz_repr::namespaces::MZ_TEMP_SCHEMA.to_owned()),
             item: name.item,
         }
     }
