@@ -271,6 +271,13 @@ pub trait StorageController: Debug + Send {
     /// storage instance).
     fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation);
 
+    /// Disconnects the storage instance from the specified replica.
+    fn drop_replica(
+        &mut self,
+        instance_id: StorageInstanceId,
+        replica_id: mz_cluster_client::ReplicaId,
+    );
+
     /// Acquire a mutable reference to the collection state, should it exist.
     fn collection_mut(
         &mut self,
@@ -1109,6 +1116,19 @@ where
             .get_mut(&id)
             .unwrap_or_else(|| panic!("instance {id} does not exist"));
         client.connect(location);
+    }
+
+    fn drop_replica(
+        &mut self,
+        instance_id: StorageInstanceId,
+        _replica_id: mz_cluster_client::ReplicaId,
+    ) {
+        let client = self
+            .state
+            .clients
+            .get_mut(&instance_id)
+            .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
+        client.reset();
     }
 
     // Add new migrations below and precede them with a short summary of the
