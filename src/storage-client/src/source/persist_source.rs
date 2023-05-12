@@ -155,7 +155,7 @@ where
         Arc::new(UnitSchema),
         move |stats| {
             if let Some(plan) = &filter_plan {
-                let stats = PersistSourceDataStatsImpl {
+                let stats = PersistSourceDataStats {
                     desc: &fake_desc,
                     stats,
                 };
@@ -172,7 +172,7 @@ where
 fn filter_may_match(
     relation_type: &RelationType,
     time_range: ResultSpec,
-    stats: PersistSourceDataStatsImpl,
+    stats: PersistSourceDataStats,
     plan: &MfpPlan,
 ) -> bool {
     let arena = RowArena::new();
@@ -381,7 +381,7 @@ impl PendingWork {
 }
 
 #[derive(Debug)]
-pub(crate) struct PersistSourceDataStatsImpl<'a> {
+pub(crate) struct PersistSourceDataStats<'a> {
     pub(crate) desc: &'a RelationDescHack,
     pub(crate) stats: &'a PartStats,
 }
@@ -400,7 +400,7 @@ fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> 
     }
 }
 
-impl PersistSourceDataStatsImpl<'_> {
+impl PersistSourceDataStats<'_> {
     fn json_spec(stats: &JsonStats) -> ResultSpec {
         match stats {
             JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
@@ -578,11 +578,11 @@ mod tests {
     };
     use proptest::prelude::*;
 
-    use crate::source::persist_source::PersistSourceDataStatsImpl;
+    use crate::source::persist_source::PersistSourceDataStats;
     use crate::types::sources::{RelationDescHack, SourceData};
 
     fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
-        struct ValidateStatsSome<'a>(PersistSourceDataStatsImpl<'a>, &'a RowArena, Datum<'a>);
+        struct ValidateStatsSome<'a>(PersistSourceDataStats<'a>, &'a RowArena, Datum<'a>);
         impl<'a> DatumToPersistFn<()> for ValidateStatsSome<'a> {
             fn call<T: DatumToPersist>(self) -> () {
                 let ValidateStatsSome(stats, arena, datum) = self;
@@ -596,7 +596,7 @@ mod tests {
             }
         }
 
-        struct ValidateStatsNone<'a>(PersistSourceDataStatsImpl<'a>, &'a RowArena);
+        struct ValidateStatsNone<'a>(PersistSourceDataStats<'a>, &'a RowArena);
         impl<'a> DatumToPersistFn<()> for ValidateStatsNone<'a> {
             fn call<T: DatumToPersist>(self) -> () {
                 let ValidateStatsNone(stats, arena) = self;
@@ -621,7 +621,7 @@ mod tests {
             let stats = part.key_stats::<SourceData, _>(&schema)?;
 
             let schema_hack = RelationDescHack::new(&schema);
-            let stats = PersistSourceDataStatsImpl {
+            let stats = PersistSourceDataStats {
                 stats: &PartStats { key: stats },
                 desc: &schema_hack,
             };
