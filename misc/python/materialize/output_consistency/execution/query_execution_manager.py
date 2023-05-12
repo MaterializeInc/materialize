@@ -56,12 +56,13 @@ class QueryExecutionManager:
         if not self.config.execute_setup:
             return
 
-        ddl_statements = []
         for strategy in evaluation_strategies:
-            ddl_statements.extend(strategy.generate_source(data_types))
+            print(f"{COMMENT_PREFIX} Setup for evaluation strategy '{strategy.name}'")
+            ddl_statements = strategy.generate_source(data_types)
 
-        for sql_statement in ddl_statements:
-            self.executor.ddl(sql_statement)
+            for sql_statement in ddl_statements:
+                print(sql_statement)
+                self.executor.ddl(sql_statement)
 
     def execute_queries(
         self,
