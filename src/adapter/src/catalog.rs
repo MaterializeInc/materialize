@@ -711,7 +711,8 @@ impl CatalogState {
         let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer = Optimizer::logical_optimizer();
+                let optimizer =
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let optimized_expr = optimizer.optimize(view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -6589,7 +6590,8 @@ impl Catalog {
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer = Optimizer::logical_optimizer();
+                let optimizer =
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let optimized_expr = optimizer.optimize(view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -6603,7 +6605,8 @@ impl Catalog {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
-                let optimizer = Optimizer::logical_optimizer();
+                let optimizer =
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let optimized_expr = optimizer.optimize(materialized_view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
                 CatalogItem::MaterializedView(MaterializedView {
