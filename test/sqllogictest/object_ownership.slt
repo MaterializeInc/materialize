@@ -2358,6 +2358,14 @@ DROP OWNED BY mz_system CASCADE;
 ----
 db error: ERROR: cannot drop objects owned by role "mz_system" because they are required by the database system
 
+## Test dropping PUBLIC objects
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY PUBLIC;
+----
+db error: ERROR: role name "public" is reserved
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system

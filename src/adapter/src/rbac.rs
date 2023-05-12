@@ -16,7 +16,6 @@ use mz_controller::clusters::ClusterId;
 use mz_expr::{CollectionPlan, MirRelationExpr};
 
 use mz_ore::str::StrExt;
-use mz_ore::vec::VecExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
@@ -44,7 +43,7 @@ use crate::catalog::storage::MZ_SYSTEM_ROLE_ID;
 use crate::catalog::Catalog;
 use crate::command::Command;
 use crate::session::Session;
-use crate::{AdapterError, AdapterNotice};
+use crate::AdapterError;
 
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
@@ -146,7 +145,7 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
 pub fn check_plan(
     catalog: &impl SessionCatalog,
     session: &Session,
-    plan: &mut Plan,
+    plan: &Plan,
     target_cluster_id: Option<ClusterId>,
     depends_on: &Vec<GlobalId>,
 ) -> Result<(), AdapterError> {
@@ -184,18 +183,6 @@ pub fn check_plan(
         return Err(AdapterError::Unauthorized(
             UnauthorizedError::RoleMembership { role_names },
         ));
-    }
-
-    // DROP OWNED cannot revoke privileges granted by other roles.
-    if let Plan::DropOwned(DropOwnedPlan { revokes, .. }) = plan {
-        let invalid_revokes: BTreeSet<_> = revokes
-            .drain_filter_swapping(|(_, privilege)| !role_membership.contains(&privilege.grantor))
-            .map(|(object_id, _)| object_id)
-            .collect();
-        for invalid_revoke in invalid_revokes {
-            let name = catalog.get_object_name(&invalid_revoke);
-            session.add_notice(AdapterNotice::CannotRevoke { name });
-        }
     }
 
     // Validate that the current session has the required attributes to execute the provided plan.

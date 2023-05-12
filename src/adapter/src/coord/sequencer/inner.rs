@@ -38,6 +38,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
+use mz_ore::vec::VecExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
@@ -113,6 +114,7 @@ macro_rules! return_if_err {
     };
 }
 
+use crate::rbac::is_rbac_enabled_for_session;
 pub(super) use return_if_err;
 
 struct DropOps {
@@ -1565,8 +1567,32 @@ impl Coordinator {
         session: &mut Session,
         plan: DropOwnedPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops: Vec<_> = plan
-            .revokes
+        for role_id in &plan.role_ids {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
+
+        let mut revokes = plan.revokes;
+
+        // Make sure this stays in sync with the beginning of `rbac::check_plan`.
+        let session_catalog = self.catalog().for_session(session);
+        if is_rbac_enabled_for_session(session_catalog.system_vars(), session)
+            && !session.is_superuser()
+        {
+            // Obtain all roles that the current session is a member of.
+            let role_membership = session_catalog.collect_role_membership(session.role_id());
+            let invalid_revokes: BTreeSet<_> = revokes
+                .drain_filter_swapping(|(_, privilege)| {
+                    !role_membership.contains(&privilege.grantor)
+                })
+                .map(|(object_id, _)| object_id)
+                .collect();
+            for invalid_revoke in invalid_revokes {
+                let name = session_catalog.get_object_name(&invalid_revoke);
+                session.add_notice(AdapterNotice::CannotRevoke { name });
+            }
+        }
+
+        let mut ops: Vec<_> = revokes
             .into_iter()
             .map(|(object_id, privilege)| catalog::Op::UpdatePrivilege {
                 object_id,
