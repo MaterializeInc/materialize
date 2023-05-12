@@ -221,6 +221,7 @@ mod tests {
         }
     }
 
+    #[tracing::instrument(skip(cat, args, test_type))]
     fn run_single_view_testcase(
         s: &str,
         cat: &TestCatalog,
