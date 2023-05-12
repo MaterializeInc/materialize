@@ -187,21 +187,11 @@ fn filter_may_match(
     }
 
     let total_count = stats.len();
-    for (id, col_type) in relation_type.column_types.iter().enumerate() {
+    for (id, _) in relation_type.column_types.iter().enumerate() {
         let min = stats.col_min(id, &arena);
         let max = stats.col_max(id, &arena);
         let nulls = stats.col_null_count(id);
-        let json_range = match col_type {
-            ColumnType {
-                scalar_type: ScalarType::Jsonb,
-                nullable: false,
-            } => stats.col_json(id, &arena),
-            ColumnType {
-                scalar_type: ScalarType::Jsonb,
-                nullable: true,
-            } => stats.col_opt_json(id, &arena),
-            _ => ResultSpec::anything(),
-        };
+        let json_range = stats.col_json(id, &arena);
 
         let value_range = match (total_count, min, max, nulls) {
             (Some(total_count), _, _, Some(nulls)) if total_count == nulls => ResultSpec::nothing(),
@@ -453,41 +443,51 @@ impl PersistSourceDataStatsImpl<'_> {
 
     fn col_json<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> ResultSpec<'a> {
         let name = self.desc.0.get_name(idx);
-        let stats = self
-            .stats
-            .key
-            .col::<Vec<u8>>(name.as_str())
-            .expect("stats type should match column");
-        if let Some(byte_stats) = stats {
-            let value_range = match byte_stats {
-                BytesStats::Json(json_stats) => Self::json_spec(json_stats),
-                BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
-            };
-            value_range
-        } else {
-            ResultSpec::anything()
-        }
-    }
-
-    fn col_opt_json<'a>(&'a self, idx: usize, _arena: &'a RowArena) -> ResultSpec<'a> {
-        let name = self.desc.0.get_name(idx);
-        let stats = self
-            .stats
-            .key
-            .col::<Option<Vec<u8>>>(name.as_str())
-            .expect("stats type should match column");
-        if let Some(option_stats) = stats {
-            let null_range = match option_stats.none {
-                0 => ResultSpec::nothing(),
-                _ => ResultSpec::null(),
-            };
-            let value_range = match &option_stats.some {
-                BytesStats::Json(json_stats) => Self::json_spec(json_stats),
-                BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
-            };
-            null_range.union(value_range)
-        } else {
-            ResultSpec::anything()
+        let typ = &self.desc.0.typ().column_types[idx];
+        match typ {
+            ColumnType {
+                scalar_type: ScalarType::Jsonb,
+                nullable: false,
+            } => {
+                let stats = self
+                    .stats
+                    .key
+                    .col::<Vec<u8>>(name.as_str())
+                    .expect("stats type should match column");
+                if let Some(byte_stats) = stats {
+                    let value_range = match byte_stats {
+                        BytesStats::Json(json_stats) => Self::json_spec(json_stats),
+                        BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                    };
+                    value_range
+                } else {
+                    ResultSpec::anything()
+                }
+            }
+            ColumnType {
+                scalar_type: ScalarType::Jsonb,
+                nullable: true,
+            } => {
+                let stats = self
+                    .stats
+                    .key
+                    .col::<Option<Vec<u8>>>(name.as_str())
+                    .expect("stats type should match column");
+                if let Some(option_stats) = stats {
+                    let null_range = match option_stats.none {
+                        0 => ResultSpec::nothing(),
+                        _ => ResultSpec::null(),
+                    };
+                    let value_range = match &option_stats.some {
+                        BytesStats::Json(json_stats) => Self::json_spec(json_stats),
+                        BytesStats::Primitive(_) | BytesStats::Atomic(_) => ResultSpec::anything(),
+                    };
+                    null_range.union(value_range)
+                } else {
+                    ResultSpec::anything()
+                }
+            }
+            _ => ResultSpec::anything(),
         }
     }
 }
