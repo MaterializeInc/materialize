@@ -172,6 +172,7 @@ class ResultComparator:
         normalized_message = re.sub(
             'column "[^.]*\\.', 'column "<source>.', error_message
         )
+        normalized_message = normalized_message.replace("Evaluation error: ", "")
         return normalized_message
 
     def warn_on_failure_with_multiple_columns(
