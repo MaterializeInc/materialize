@@ -341,6 +341,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         let ld_key_map = config.launchdarkly_key_map;
         let env_id = config.environment_id.clone();
         let metrics_registry = config.metrics_registry.clone();
+        let now = config.now.clone();
         // The `SystemParameterFrontend::new` call needs to be wrapped in a
         // spawn_blocking call because the LaunchDarkly SDK initialization uses
         // `reqwest::blocking::client`. This should be revisited after the SDK
@@ -353,6 +354,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                     &metrics_registry,
                     ld_sdk_key.as_str(),
                     ld_key_map,
+                    now,
                 )
             },
         )
