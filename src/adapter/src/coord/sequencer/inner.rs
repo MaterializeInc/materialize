@@ -17,11 +17,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use maplit::btreeset;
-use rand::seq::SliceRandom;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
-use tracing::{event, warn, Level};
-
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
@@ -74,6 +69,10 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolic
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 use mz_transform::Optimizer;
+use rand::seq::SliceRandom;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
+use tracing::{event, warn, Level};
 
 use crate::catalog::{
     self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
@@ -97,12 +96,13 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
+use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{
     send_immediate_rows, viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt,
 };
-use crate::{guard_write_critical_section, rbac, PeekResponseUnary, TimestampExplanation};
+use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
 /// Attempts to execute an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
@@ -115,7 +115,6 @@ macro_rules! return_if_err {
     };
 }
 
-use crate::rbac::is_rbac_enabled_for_session;
 pub(super) use return_if_err;
 
 struct DropOps {

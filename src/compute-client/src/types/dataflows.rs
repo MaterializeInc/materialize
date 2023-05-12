@@ -11,25 +11,24 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{GlobalId, RelationType};
+use mz_storage_client::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationType};
-use mz_storage_client::controller::CollectionMetadata;
-
 use crate::plan::Plan;
-
-use super::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use super::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 use self::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
+
+use super::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use super::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -619,10 +618,9 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
-
-    use mz_proto::protobuf_roundtrip;
 
     use crate::types::dataflows::DataflowDescription;
 

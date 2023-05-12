@@ -15,12 +15,12 @@
 //! The Subset(X) notation means that the collection is a multiset subset of X:
 //! multiplicities of each record in Subset(X) are at most that of X.
 
+use mz_expr::visit::{Visit, Visitor, VisitorMut};
+use mz_expr::MirRelationExpr;
+
 use crate::attribute::{DerivedAttributes, RequiredAttributes};
 use crate::attribute::{NonNegative, SubtreeSize};
 use crate::TransformArgs;
-
-use mz_expr::visit::{Visit, Visitor, VisitorMut};
-use mz_expr::MirRelationExpr;
 
 /// Remove Threshold operators that have no effect.
 #[derive(Debug)]

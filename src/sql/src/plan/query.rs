@@ -35,14 +35,11 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
-
 use std::iter;
 use std::mem;
 use std::num::NonZeroU64;
 
 use itertools::Itertools;
-use uuid::Uuid;
-
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
@@ -66,6 +63,7 @@ use mz_sql_parser::ast::{
     SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedItemName,
     UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
+use uuid::Uuid;
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};

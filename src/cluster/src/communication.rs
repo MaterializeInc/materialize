@@ -42,13 +42,12 @@ use anyhow::Context;
 use futures::stream::FuturesUnordered;
 use futures::FutureExt;
 use futures::StreamExt;
-use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
-use timely::communication::allocator::GenericBuilder;
-use tracing::{debug, info, warn};
-
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
+use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
+use timely::communication::allocator::GenericBuilder;
+use tracing::{debug, info, warn};
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking(

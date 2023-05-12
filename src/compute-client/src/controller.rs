@@ -37,12 +37,6 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::{future, FutureExt};
-use serde::{Deserialize, Serialize};
-use timely::progress::frontier::{AntichainRef, MutableAntichain};
-use timely::progress::{Antichain, Timestamp};
-use tracing::warn;
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_expr::RowSetFinishing;
@@ -52,6 +46,11 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 use mz_storage_client::types::instances::StorageInstanceId;
+use serde::{Deserialize, Serialize};
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
+use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
+use uuid::Uuid;
 
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;

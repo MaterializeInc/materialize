@@ -35,13 +35,12 @@ use futures_util::future::join_all;
 use futures_util::FutureExt;
 use futures_util::TryFutureExt;
 use mz_ore::bytes::SegmentedBytes;
-use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, debug_span, trace, trace_span, Instrument};
-use uuid::Uuid;
-
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
+use tokio::runtime::Handle as AsyncHandle;
+use tracing::{debug, debug_span, trace, trace_span, Instrument};
+use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
 use crate::error::Error;
@@ -920,8 +919,9 @@ fn openssl_sys_hack() {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::blob_impl_test;
     use tracing::info;
+
+    use crate::location::tests::blob_impl_test;
 
     use super::*;
 

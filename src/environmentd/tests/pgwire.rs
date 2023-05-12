@@ -85,7 +85,10 @@ use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::future;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
+use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_pgrepr::{Numeric, Record};
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
@@ -93,10 +96,6 @@ use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
-
-use mz_ore::collections::CollectionExt;
-use mz_ore::task;
-use mz_pgrepr::{Numeric, Record};
 
 use crate::util::PostgresErrorExt;
 

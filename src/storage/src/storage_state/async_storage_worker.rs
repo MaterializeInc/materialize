@@ -18,11 +18,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
-use timely::order::PartialOrder;
-use timely::progress::{Antichain, Timestamp};
-use tokio::sync::mpsc;
-use tracing::Instrument;
-
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -36,6 +31,10 @@ use mz_storage_client::types::sources::{
     LoadGeneratorSourceConnection, PostgresSourceConnection, SourceConnection, SourceData,
     SourceTimestamp, TestScriptSourceConnection,
 };
+use timely::order::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
+use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::source::reclock::{ReclockBatch, ReclockFollower};
 use crate::source::types::SourceRender;

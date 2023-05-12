@@ -12,19 +12,17 @@ use std::iter;
 use std::vec;
 
 use anyhow::bail;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-
-use crate::{Datum, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
 pub use crate::relation_and_scalar::{
     ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
 };
+use crate::{Datum, ScalarType};
 
 /// The type of a [`Datum`](crate::Datum).
 ///

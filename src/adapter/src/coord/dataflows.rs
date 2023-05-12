@@ -17,10 +17,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
-use timely::progress::Antichain;
-use timely::PartialOrder;
-use tracing::warn;
-
 use mz_compute_client::controller::{ComputeInstanceId, ComputeInstanceRef};
 use mz_compute_client::types::dataflows::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc,
@@ -38,8 +34,10 @@ use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimit
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_sql::catalog::SessionCatalog;
+use timely::progress::Antichain;
+use timely::PartialOrder;
+use tracing::warn;
 
-use super::timestamp_selection::TimestampProvider;
 use crate::catalog::{
     Catalog, CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View,
 };
@@ -49,6 +47,8 @@ use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
 use crate::{rbac, AdapterError};
+
+use super::timestamp_selection::TimestampProvider;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a, T> {

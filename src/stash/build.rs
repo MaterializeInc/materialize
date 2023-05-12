@@ -73,14 +73,14 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use anyhow::Context;
-use md5::{Digest, Md5};
-use serde::{Deserialize, Serialize};
-
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{BufReader, Write};
+
+use anyhow::Context;
+use md5::{Digest, Md5};
+use serde::{Deserialize, Serialize};
 
 /// The path of a protobuf file and its [`md5`] hash.
 ///

@@ -11,14 +11,13 @@ use std::time::{Duration, Instant};
 use differential_dataflow::logging::DifferentialEvent;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::Collection;
-use timely::communication::Allocate;
-use timely::logging::{Logger, TimelyEvent};
-use timely::progress::reachability::logging::TrackerEvent;
-
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_repr::{Diff, Timestamp};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::communication::Allocate;
+use timely::logging::{Logger, TimelyEvent};
+use timely::progress::reachability::logging::TrackerEvent;
 
 use crate::arrangement::manager::TraceBundle;
 

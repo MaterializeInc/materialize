@@ -14,14 +14,13 @@
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
-use timely::dataflow::Scope;
-use timely::progress::{timestamp::Refines, Timestamp};
-
 use mz_compute_client::plan::threshold::{
     BasicThresholdPlan, RetractionsThresholdPlan, ThresholdPlan,
 };
 use mz_expr::MirScalarExpr;
 use mz_repr::{Diff, Row};
+use timely::dataflow::Scope;
+use timely::progress::{timestamp::Refines, Timestamp};
 
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::typedefs::{RowKeySpine, RowSpine};

@@ -11,15 +11,16 @@ use std::mem;
 use std::str::FromStr;
 
 use derivative::Derivative;
+use mz_lowertest::MzReflect;
+use mz_ore::fmt::FormatBuffer;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{Arbitrary, Strategy};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
-use mz_lowertest::MzReflect;
-use mz_ore::fmt::FormatBuffer;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use proto_matcher_impl::ProtoSubpatternVec;
+
+use self::proto_matcher_impl::ProtoSubpatternVec;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
 

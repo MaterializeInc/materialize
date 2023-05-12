@@ -9,7 +9,11 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use crate::cfg::ConsensusKnobs;
+use std::fmt::Formatter;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -27,12 +31,9 @@ use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use std::fmt::Formatter;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tracing::debug;
 
+use crate::cfg::ConsensusKnobs;
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use crate::metrics::PostgresConsensusMetrics;
@@ -494,9 +495,10 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::consensus_impl_test;
     use tracing::info;
     use uuid::Uuid;
+
+    use crate::location::tests::consensus_impl_test;
 
     use super::*;
 

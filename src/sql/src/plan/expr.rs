@@ -18,18 +18,17 @@ use std::mem;
 use std::num::NonZeroU64;
 
 use itertools::Itertools;
-use mz_expr::visit::Visit;
-use mz_expr::visit::VisitChildren;
-use mz_ore::stack::RecursionLimitError;
-use serde::{Deserialize, Serialize};
-
 use mz_expr::func;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
+use mz_expr::visit::Visit;
+use mz_expr::visit::VisitChildren;
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
+use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::*;
+use serde::{Deserialize, Serialize};
 
 use crate::plan::error::PlanError;
 use crate::plan::query::ExprContext;

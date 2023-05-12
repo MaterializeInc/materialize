@@ -479,8 +479,9 @@ impl ColumnarRecordsBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_persist_types::Codec64;
+
+    use super::*;
 
     /// Smoke test some edge cases around empty sets of records and empty keys/vals
     ///

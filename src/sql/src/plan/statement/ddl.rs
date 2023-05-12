@@ -17,10 +17,6 @@ use std::fmt::Write;
 use std::iter;
 
 use itertools::Itertools;
-use prost::Message;
-use regex::Regex;
-use tracing::warn;
-
 use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
@@ -62,6 +58,9 @@ use mz_storage_client::types::sources::{
     ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
     TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
+use prost::Message;
+use regex::Regex;
+use tracing::warn;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{

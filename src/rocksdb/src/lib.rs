@@ -88,13 +88,12 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use itertools::Itertools;
-use rocksdb::{Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB};
-use serde::{de::DeserializeOwned, Serialize};
-use tokio::sync::{mpsc, oneshot};
-
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropHistogram;
+use rocksdb::{Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB};
+use serde::{de::DeserializeOwned, Serialize};
+use tokio::sync::{mpsc, oneshot};
 
 pub mod tuning;
 

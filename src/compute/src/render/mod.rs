@@ -110,6 +110,16 @@ use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::izip;
+use mz_compute_client::plan::Plan;
+use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
+use mz_expr::Id;
+use mz_repr::{GlobalId, Row};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::source::persist_source;
+use mz_storage_client::source::persist_source::FlowControl;
+use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::probe::{self, ProbeNotify};
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::BranchWhen;
@@ -121,25 +131,12 @@ use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 use timely::PartialOrder;
 
-use mz_compute_client::plan::Plan;
-use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
-use mz_expr::Id;
-use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::source::persist_source;
-use mz_storage_client::source::persist_source::FlowControl;
-use mz_storage_client::types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
-use mz_timely_util::probe::{self, ProbeNotify};
-
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::logging::compute::LogImportFrontiers;
 use crate::typedefs::{ErrSpine, RowKeySpine};
-pub use context::CollectionBundle;
-use context::{ArrangementFlavor, Context};
 
-use self::context::ShutdownToken;
+use self::context::{ArrangementFlavor, Context, ShutdownToken};
 
 pub mod context;
 mod errors;
@@ -149,6 +146,8 @@ mod reduce;
 pub mod sinks;
 mod threshold;
 mod top_k;
+
+pub use context::CollectionBundle;
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
@@ -628,9 +627,8 @@ where
             // At that point, all subsequent uses should have access to the object itself.
             let mut variables = BTreeMap::new();
             for id in ids.iter() {
-                use differential_dataflow::operators::iterate::Variable;
-
                 use differential_dataflow::dynamic::feedback_summary;
+                use differential_dataflow::operators::iterate::Variable;
                 let inner = feedback_summary::<u64>(level + 1, 1);
                 let oks_v = Variable::new(
                     &mut self.scope,

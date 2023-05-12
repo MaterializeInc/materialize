@@ -16,6 +16,7 @@ use std::mem::{size_of, transmute};
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
+use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
 use mz_persist_types::Codec64;
@@ -26,8 +27,6 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
-
-use mz_ore::cast::{CastFrom, ReinterpretCast};
 
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
@@ -169,8 +168,9 @@ impl Ord for Row {
 #[allow(missing_debug_implementations)]
 mod columnation {
 
-    use super::Row;
     use columnation::{Columnation, Region, StableRegion};
+
+    use super::Row;
 
     /// Region allocation for `Row` data.
     ///

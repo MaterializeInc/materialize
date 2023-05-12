@@ -37,15 +37,16 @@ use mz_ore::{stack::RecursionLimitError, str::Indent};
 
 use crate::{ColumnType, GlobalId, ScalarType};
 
+use self::dot::{dot_string, DisplayDot};
+use self::json::{json_string, DisplayJson};
+use self::text::{text_string, DisplayText};
+
 pub mod dot;
 pub mod json;
 pub mod text;
 #[cfg(feature = "tracing_")]
 pub mod tracing;
 
-use self::dot::{dot_string, DisplayDot};
-use self::json::{json_string, DisplayJson};
-use self::text::{text_string, DisplayText};
 #[cfg(feature = "tracing_")]
 pub use self::tracing::trace_plan;
 

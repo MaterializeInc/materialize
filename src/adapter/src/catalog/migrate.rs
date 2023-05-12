@@ -7,15 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::future::BoxFuture;
-use semver::Version;
 use std::collections::BTreeMap;
-use tracing::info;
 
+use futures::future::BoxFuture;
 use mz_ore::collections::CollectionExt;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, Value};
 use mz_storage_client::types::connections::ConnectionContext;
+use semver::Version;
+use tracing::info;
 
 use crate::catalog::{storage, Catalog, SerializedCatalogItem};
 
@@ -140,15 +140,14 @@ async fn pg_source_table_metadata_rewrite(
     connection_context: &ConnectionContext,
     stmt: &mut mz_sql::ast::Statement<Raw>,
 ) {
-    use prost::Message;
-    use tracing::warn;
-
     use mz_proto::RustType;
     use mz_sql::ast::{CreateSourceConnection, PgConfigOption, PgConfigOptionName};
     use mz_sql::plan::StatementContext;
     use mz_storage_client::types::sources::{
         PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
     };
+    use prost::Message;
+    use tracing::warn;
 
     if let Statement::CreateSource(mz_sql::ast::CreateSourceStatement {
         name,

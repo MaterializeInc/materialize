@@ -17,11 +17,10 @@ use std::time::Instant;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
+use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
-
-use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
 
 use crate::cache::{LockingTypedState, StateCache};
 use crate::error::CodecMismatch;

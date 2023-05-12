@@ -22,7 +22,21 @@ use bytes::BufMut;
 use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_expr::{MirScalarExpr, PartitionId};
+use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::{DataType, PartDecoder, PartEncoder, Schema};
 use mz_persist_types::stats::StatsFn;
+use mz_persist_types::{Codec, Codec64};
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
+use mz_repr::{
+    ColumnName, ColumnType, Datum, DatumDecoderT, DatumEncoderT, Diff, GlobalId, RelationDesc,
+    RelationType, Row, RowArena, RowDecoder, RowEncoder, ScalarType,
+};
+use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -35,29 +49,14 @@ use timely::progress::{PathSummary, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use uuid::Uuid;
 
-use mz_expr::{MirScalarExpr, PartitionId};
-use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::write::WriteHandle;
-use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{DataType, PartDecoder, PartEncoder, Schema};
-use mz_persist_types::{Codec, Codec64};
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
-use mz_repr::{
-    ColumnName, ColumnType, Datum, DatumDecoderT, DatumEncoderT, Diff, GlobalId, RelationDesc,
-    RelationType, Row, RowArena, RowDecoder, RowEncoder, ScalarType,
-};
-use mz_timely_util::order::{Interval, Partitioned, RangeBound};
-
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::{DataflowError, ProtoDataflowError};
 use crate::types::instances::StorageInstanceId;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
-use proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
-use proto_load_generator_source_connection::Generator as ProtoGenerator;
+use self::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
+use self::proto_load_generator_source_connection::Generator as ProtoGenerator;
 
 pub mod encoding;
 

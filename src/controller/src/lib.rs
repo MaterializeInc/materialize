@@ -96,13 +96,6 @@ use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::{Peekable, StreamExt};
-use serde::{Deserialize, Serialize};
-use timely::order::TotalOrder;
-use timely::progress::Timestamp;
-use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_compute_client::controller::{
     ActiveComputeController, ComputeController, ComputeControllerResponse, ReplicaId,
@@ -124,6 +117,12 @@ use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
 use mz_storage_client::controller::StorageController;
+use serde::{Deserialize, Serialize};
+use timely::order::TotalOrder;
+use timely::progress::Timestamp;
+use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use uuid::Uuid;
 
 pub mod clusters;
 

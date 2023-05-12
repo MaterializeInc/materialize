@@ -12,6 +12,8 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `BEGIN` and `COMMIT`.
 
+use mz_sql_parser::ast::TransactionIsolationLevel;
+
 use crate::ast::{
     CommitStatement, RollbackStatement, SetTransactionStatement, StartTransactionStatement,
     TransactionAccessMode, TransactionMode,
@@ -21,7 +23,6 @@ use crate::plan::{
     AbortTransactionPlan, CommitTransactionPlan, Plan, PlanError, StartTransactionPlan,
     TransactionType,
 };
-use mz_sql_parser::ast::TransactionIsolationLevel;
 
 pub fn describe_start_transaction(
     _: &StatementContext,

@@ -16,6 +16,12 @@ use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
+use mz_compute_client::logging::LoggingConfig;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_ore::cast::CastFrom;
+use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
+use mz_timely_util::buffer::ConsolidateBuffer;
+use mz_timely_util::replay::MzReplay;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::container::columnation::{CloneRegion, Columnation};
@@ -28,13 +34,6 @@ use timely::logging::{
     TimelyEvent,
 };
 use tracing::error;
-
-use mz_compute_client::logging::LoggingConfig;
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_ore::cast::CastFrom;
-use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
-use mz_timely_util::buffer::ConsolidateBuffer;
-use mz_timely_util::replay::MzReplay;
 
 use crate::logging::{LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};

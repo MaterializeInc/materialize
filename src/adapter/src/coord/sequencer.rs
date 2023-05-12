@@ -12,8 +12,6 @@
 
 //! Logic for executing a planned SQL query.
 
-use tracing::{event, Level};
-
 use inner::return_if_err;
 use mz_controller::clusters::ClusterId;
 use mz_expr::OptimizedMirRelationExpr;
@@ -24,6 +22,7 @@ use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, FetchPlan, Plan,
     PlanKind, RaisePlan, RotateKeysPlan,
 };
+use tracing::{event, Level};
 
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::id_bundle::CollectionIdBundle;

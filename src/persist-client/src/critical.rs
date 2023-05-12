@@ -304,13 +304,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use serde::{Deserialize, Serialize};
-    use serde_json::json;
     use std::str::FromStr;
 
-    use super::*;
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+
     use crate::tests::new_test_client;
     use crate::{PersistClient, ShardId};
+
+    use super::*;
 
     #[test]
     fn reader_id_human_readable_serde() {

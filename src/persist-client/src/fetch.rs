@@ -19,14 +19,13 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
-
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::internal::encoding::Schemas;

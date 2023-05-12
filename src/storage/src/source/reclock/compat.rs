@@ -18,11 +18,6 @@ use anyhow::{anyhow, Context};
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::{stream::LocalBoxStream, StreamExt};
-use mz_persist_types::codec_impls::UnitSchema;
-use timely::order::PartialOrder;
-use timely::progress::frontier::Antichain;
-use timely::progress::Timestamp;
-
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
@@ -30,12 +25,16 @@ use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistClient;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_client::types::sources::{SourceData, SourceTimestamp};
 use mz_storage_client::util::remap_handle::{RemapHandle, RemapHandleReader};
+use timely::order::PartialOrder;
+use timely::progress::frontier::Antichain;
+use timely::progress::Timestamp;
 
 /// A handle to a persist shard that stores remap bindings
 pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattice + Codec64> {

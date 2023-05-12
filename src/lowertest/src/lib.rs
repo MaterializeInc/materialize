@@ -79,11 +79,10 @@
 
 use std::collections::BTreeMap;
 
+use mz_ore::{result::ResultExt, str::separated, str::StrExt};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-
-use mz_ore::{result::ResultExt, str::separated, str::StrExt};
 
 pub use mz_lowertest_derive::MzReflect;
 

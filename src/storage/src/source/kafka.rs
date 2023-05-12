@@ -18,6 +18,18 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use maplit::btreemap;
+use mz_kafka_util::client::{
+    get_partitions, BrokerRewritingClientContext, MzClientContext, PartitionId,
+    DEFAULT_FETCH_METADATA_TIMEOUT,
+};
+use mz_ore::error::ErrorExt;
+use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
+use mz_repr::{adt::jsonb::Jsonb, Diff, GlobalId};
+use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
+use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset, SourceTimestamp};
+use mz_timely_util::antichain::AntichainExt;
+use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use mz_timely_util::order::Partitioned;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -31,22 +43,10 @@ use timely::progress::Antichain;
 use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
-use mz_kafka_util::client::{
-    get_partitions, BrokerRewritingClientContext, MzClientContext, PartitionId,
-    DEFAULT_FETCH_METADATA_TIMEOUT,
-};
-use mz_ore::error::ErrorExt;
-use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
-use mz_repr::{adt::jsonb::Jsonb, Diff, GlobalId};
-use mz_storage_client::types::connections::{ConnectionContext, StringOrSecret};
-use mz_storage_client::types::sources::{KafkaSourceConnection, MzOffset, SourceTimestamp};
-use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
-use mz_timely_util::order::Partitioned;
-
-use self::metrics::KafkaPartitionMetrics;
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+
+use self::metrics::KafkaPartitionMetrics;
 
 mod metrics;
 
@@ -920,11 +920,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use mz_kafka_util::client::create_new_client_config_simple;
     use rdkafka::consumer::{BaseConsumer, Consumer};
     use rdkafka::{Message, Offset, TopicPartitionList};
     use uuid::Uuid;
-
-    use mz_kafka_util::client::create_new_client_config_simple;
 
     // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to
     // lead to a race condition where sometimes we receive messages from polling the main consumer

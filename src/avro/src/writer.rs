@@ -370,10 +370,11 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
 
-    use super::*;
     use crate::types::Record;
     use crate::util::zig_i64;
     use crate::Reader;
+
+    use super::*;
 
     static SCHEMA: &str = r#"
             {

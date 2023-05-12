@@ -40,7 +40,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
 use itertools::Itertools;
-
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::RelationType;
@@ -183,6 +182,7 @@ impl HirRelationExpr {
         maybe_grow(|| {
             use self::HirRelationExpr::*;
             use mz_expr::MirRelationExpr as SR;
+
             if let mz_expr::MirRelationExpr::Get { .. } = &get_outer {
             } else {
                 panic!(

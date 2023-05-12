@@ -14,8 +14,6 @@ use std::rc::Rc;
 
 use anyhow::anyhow;
 use differential_dataflow::capture::{Message, Progress};
-use serde_json::json;
-
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::schema::{FullName, Schema, SchemaNode};
 use mz_avro::types::Scalar;
@@ -25,6 +23,7 @@ use mz_avro::{
 };
 use mz_avro_derive::AvroDecodable;
 use mz_repr::{Diff, Row, Timestamp};
+use serde_json::json;
 
 use super::decode::RowWrapper;
 
@@ -235,10 +234,11 @@ mod tests {
     use mz_avro::GeneralDeserializer;
     use mz_repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
 
-    use super::*;
     use crate::avro::encode_datums_as_avro;
     use crate::encode::column_names_and_types;
     use crate::json::build_row_schema_json;
+
+    use super::*;
 
     /// Collected state to encode update batches and progress statements.
     #[derive(Debug)]

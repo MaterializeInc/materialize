@@ -17,10 +17,6 @@ use std::time::Duration;
 
 use const_format::concatcp;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use serde::Serialize;
-use uncased::UncasedStr;
-
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_ore::cast::CastFrom;
@@ -28,6 +24,9 @@ use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use uncased::UncasedStr;
 
 use crate::ast::Ident;
 use crate::session::user::{ExternalUserMetadata, User, SYSTEM_USER};

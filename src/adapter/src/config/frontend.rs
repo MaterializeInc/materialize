@@ -11,15 +11,14 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
-use prometheus::IntCounter;
-use tokio::time;
-
 use mz_ore::{
     metric,
     metrics::{MetricsRegistry, UIntGauge},
     now::NowFn,
 };
 use mz_sql::catalog::{CloudProvider, EnvironmentId};
+use prometheus::IntCounter;
+use tokio::time;
 
 use super::SynchronizedParameters;
 

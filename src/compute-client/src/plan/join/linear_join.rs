@@ -11,19 +11,19 @@
 
 use std::collections::BTreeMap;
 
-use crate::plan::join::JoinBuildState;
-use crate::plan::join::JoinClosure;
-use crate::plan::AvailableCollections;
-use mz_expr::{JoinInputCharacteristics, MapFilterProject};
-
 use mz_expr::join_permutations;
 use mz_expr::permutation_for_arrangement;
 use mz_expr::MirScalarExpr;
+use mz_expr::{JoinInputCharacteristics, MapFilterProject};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::result::Probability;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+
+use crate::plan::join::JoinBuildState;
+use crate::plan::join::JoinClosure;
+use crate::plan::AvailableCollections;
 
 use super::ProtoLinearJoinPlan;
 use super::ProtoLinearStagePlan;

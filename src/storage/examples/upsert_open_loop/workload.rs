@@ -16,9 +16,8 @@ use std::io::Write;
 use std::mem::size_of;
 
 use mz_ore::cast::CastFrom;
-use mz_persist_types::Codec64;
-
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use mz_persist_types::Codec64;
 
 /// A configurable data generator for benchmarking.
 #[derive(Clone, Debug)]

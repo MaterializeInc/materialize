@@ -7,15 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use timely::dataflow::Scope;
-
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
+use mz_repr::DatumVec;
 use mz_repr::{Row, RowArena};
+use mz_timely_util::operator::StreamExt;
+use timely::dataflow::Scope;
 
 use crate::render::context::CollectionBundle;
 use crate::render::context::Context;
-use mz_repr::DatumVec;
-use mz_timely_util::operator::StreamExt;
 
 impl<G> Context<G, Row>
 where

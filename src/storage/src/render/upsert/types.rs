@@ -11,12 +11,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use itertools::Itertools;
-
 use mz_ore::cast::CastLossy;
 use mz_ore::collections::HashMap;
 
-use super::{UpsertKey, UpsertValue};
 use crate::source::metrics::UpsertSharedMetrics;
+
+use super::{UpsertKey, UpsertValue};
 
 /// A trait that defines the fundamental primitives required by a state-backing of
 /// the `upsert` operator.

@@ -16,17 +16,6 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
-use serde::{Deserialize, Serialize};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{
-    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
-};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::progress::Timestamp as TimelyTimestamp;
-use timely::PartialOrder;
-use tracing::trace;
-
 use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
@@ -40,6 +29,16 @@ use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::probe::{self, ProbeNotify};
+use serde::{Deserialize, Serialize};
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::{
+    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
+};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
+use timely::progress::Timestamp as TimelyTimestamp;
+use timely::PartialOrder;
+use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;

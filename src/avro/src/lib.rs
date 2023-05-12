@@ -399,11 +399,11 @@
 
 mod codec;
 mod decode;
-pub mod encode;
 mod reader;
 mod util;
 mod writer;
 
+pub mod encode;
 pub mod error;
 pub mod schema;
 pub mod types;
@@ -426,10 +426,11 @@ pub use crate::writer::{to_avro_datum, write_avro_datum, ValidationError, Writer
 mod tests {
     use std::str::FromStr;
 
-    use super::*;
     use crate::reader::Reader;
     use crate::schema::Schema;
     use crate::types::{Record, Value};
+
+    use super::*;
 
     //TODO: move where it fits better
     #[test]

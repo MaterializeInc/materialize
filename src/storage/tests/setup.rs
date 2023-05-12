@@ -82,8 +82,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use timely::progress::{Antichain, Timestamp as _};
-
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
@@ -104,6 +102,7 @@ use mz_storage_client::types::sources::{
     encoding::SourceDataEncoding, GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope,
     SourceTimestamp, TestScriptSourceConnection,
 };
+use timely::progress::{Antichain, Timestamp as _};
 
 pub fn run_script_source(
     source: Vec<ScriptCommand>,

@@ -9,18 +9,20 @@
 
 //! A Materialize specific access control list abstract data type.
 
-use crate::role_id::RoleId;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::mem::size_of;
+use std::ops::BitOrAssign;
+use std::str::FromStr;
+
 use anyhow::{anyhow, Error};
 use bitflags::bitflags;
 use columnation::{CloneRegion, Columnation};
 use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::fmt;
-use std::mem::size_of;
-use std::ops::BitOrAssign;
-use std::str::FromStr;
+
+use crate::role_id::RoleId;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.mz_acl_item.rs"));
 

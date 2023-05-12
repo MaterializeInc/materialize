@@ -23,6 +23,12 @@ use differential_dataflow::trace::{Cursor, TraceReader};
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
 use mz_compute_client::plan::AvailableCollections;
+use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
 use timely::communication::message::RefOrMut;
 use timely::container::columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -31,13 +37,6 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{scopes::Child, Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
-
-use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_expr::{Id, MapFilterProject, MirScalarExpr};
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
 
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 

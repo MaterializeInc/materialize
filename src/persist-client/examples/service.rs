@@ -16,9 +16,6 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use tracing::{info, Span};
-
-use crate::BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{SeqNo, VersionedData};
@@ -28,6 +25,9 @@ use mz_persist_client::rpc::{
     GrpcPubSubClient, PersistGrpcPubSubServer, PersistPubSubClient, PersistPubSubClientConfig,
 };
 use mz_persist_client::ShardId;
+use tracing::{info, Span};
+
+use crate::BUILD_INFO;
 
 #[derive(clap::ArgEnum, Copy, Clone, Debug)]
 pub enum Role {

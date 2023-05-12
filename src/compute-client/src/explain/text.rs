@@ -23,7 +23,6 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
 use itertools::{izip, Itertools};
-
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};

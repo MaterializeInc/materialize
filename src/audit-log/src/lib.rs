@@ -87,9 +87,8 @@
 //! be in different processes and production is not allowed to specify private
 //! data structures unknown to the reader.
 
-use serde::{Deserialize, Serialize};
-
 use mz_ore::now::EpochMillis;
+use serde::{Deserialize, Serialize};
 
 /// New version variants should be added if fields need to be added, changed, or removed.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash)]

@@ -26,9 +26,10 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
-use self::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
 use crate::{TransformArgs, TransformError};
+
+use self::index_map::IndexMap;
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -495,10 +496,10 @@ mod delta_queries {
 }
 
 mod differential {
-    use crate::join_implementation::{FilterCharacteristics, JoinInputCharacteristics};
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
     use mz_ore::soft_assert;
 
+    use crate::join_implementation::{FilterCharacteristics, JoinInputCharacteristics};
     use crate::TransformError;
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.

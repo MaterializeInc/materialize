@@ -11,6 +11,10 @@
 //! with protobuf messages. These types only exist to facilitate the migration to protobuf, and can
 //! be deleted post upgrade.
 
+use std::collections::BTreeMap;
+use std::str::FromStr;
+use std::time::Duration;
+
 use bitflags::bitflags;
 use proptest::arbitrary::any;
 use proptest::strategy::{BoxedStrategy, Strategy};
@@ -18,10 +22,6 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 use timely::progress::Antichain;
 use uuid::Uuid;
-
-use std::collections::BTreeMap;
-use std::str::FromStr;
-use std::time::Duration;
 
 const SYSTEM_CHAR: char = 's';
 const USER_CHAR: char = 'u';

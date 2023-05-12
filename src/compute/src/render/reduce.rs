@@ -22,11 +22,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::Collection;
-use serde::{Deserialize, Serialize};
-use timely::dataflow::Scope;
-use timely::progress::{timestamp::Refines, Timestamp};
-use tracing::warn;
-
 use mz_compute_client::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType,
@@ -37,6 +32,10 @@ use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::reduce::ReduceExt;
+use serde::{Deserialize, Serialize};
+use timely::dataflow::Scope;
+use timely::progress::{timestamp::Refines, Timestamp};
+use tracing::warn;
 
 use crate::render::context::{Arrangement, CollectionBundle, Context, KeyArrangement};
 use crate::render::errors::MaybeValidatingRow;
@@ -1775,11 +1774,10 @@ pub mod monoids {
     // negative infinity, which we do not represent).
 
     use differential_dataflow::difference::{Multiply, Semigroup};
-    use serde::{Deserialize, Serialize};
-
     use mz_expr::AggregateFunc;
     use mz_ore::soft_panic_or_log;
     use mz_repr::{Datum, Diff, Row};
+    use serde::{Deserialize, Serialize};
 
     /// A monoid containing a single-datum row.
     #[derive(Ord, PartialOrd, Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]

@@ -11,11 +11,6 @@ use std::borrow::Cow;
 use std::fmt;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
-use once_cell::sync::Lazy;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
@@ -31,6 +26,10 @@ use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{strconv, ColumnType, Datum, Row, RowArena, ScalarType};
+use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};

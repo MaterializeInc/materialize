@@ -208,9 +208,10 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         V: mz_persist_types::Codec + std::fmt::Debug,
         D: differential_dataflow::difference::Semigroup + Codec64,
     {
-        use crate::internal::state::ProtoStateDiff;
         use mz_proto::RustType;
         use prost::Message;
+
+        use crate::internal::state::ProtoStateDiff;
 
         let mut roundtrip_state =
             from_state.clone(to_state.applier_version.clone(), to_state.hostname.clone());

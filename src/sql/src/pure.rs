@@ -18,17 +18,11 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use itertools::Itertools;
-use mz_repr::adt::system::Oid;
-use prost::Message;
-use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
-use protobuf_native::MessageLite;
-use tracing::info;
-use uuid::Uuid;
-
 use mz_ccsr::Schema as CcsrSchema;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
+use mz_repr::adt::system::Oid;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -39,6 +33,11 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_client::types::connections::{Connection, ConnectionContext};
 use mz_storage_client::types::sources::PostgresSourcePublicationDetails;
+use prost::Message;
+use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
+use protobuf_native::MessageLite;
+use tracing::info;
+use uuid::Uuid;
 
 use crate::ast::{
     AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,

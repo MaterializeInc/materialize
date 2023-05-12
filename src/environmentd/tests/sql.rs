@@ -92,6 +92,13 @@ use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use itertools::Itertools;
+use mz_adapter::{TimestampContext, TimestampExplanation};
+use mz_ore::assert_contains;
+use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::retry::{Retry, RetryResult};
+use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_repr::Timestamp;
+use mz_sql::session::user::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 use mz_storage_client::types::sources::Timeline;
 use postgres::Row;
 use regex::Regex;
@@ -100,14 +107,6 @@ use timely::order::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::{DbError, SqlState};
 use tracing::{debug, info};
-
-use mz_adapter::{TimestampContext, TimestampExplanation};
-use mz_ore::assert_contains;
-use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
-use mz_ore::retry::{Retry, RetryResult};
-use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
-use mz_repr::Timestamp;
-use mz_sql::session::user::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, Server, KAFKA_ADDRS};
 

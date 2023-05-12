@@ -14,12 +14,11 @@ use std::ops::Sub;
 
 use ::chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Utc};
 use ::chrono::{Datelike, NaiveDate};
+use mz_ore::cast::CastFrom;
+use mz_proto::{RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use serde::{Serialize, Serializer};
 use thiserror::Error;
-
-use mz_ore::cast::CastFrom;
-use mz_proto::{RustType, TryFromProtoError};
 
 use crate::chrono::ProtoNaiveDateTime;
 use crate::Datum;

@@ -18,6 +18,7 @@ use std::str::FromStr;
 
 use chrono::{FixedOffset, NaiveDate, NaiveTime};
 use chrono_tz::Tz;
+use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -25,8 +26,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
 use crate::chrono::{any_fixed_offset, any_timezone};
-
-use mz_lowertest::MzReflect;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.datetime.rs"));
 
@@ -436,8 +435,10 @@ impl RustType<ProtoTimezone> for Timezone {
 // We need to implement Serialize and Deserialize traits to include Timezone in the UnaryFunc enum.
 // FixedOffset doesn't implement these, even with the "serde" feature enabled.
 mod fixed_offset_serde {
-    use super::*;
     use serde::{de::Error, Deserializer, Serializer};
+
+    use super::*;
+
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<FixedOffset, D::Error> {
@@ -2201,8 +2202,9 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use super::*;
 
     #[test]
     fn iterate_datetimefield() {

@@ -36,10 +36,6 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use serde::{Deserialize, Serialize};
-
-pub use error::PlanError;
-pub use explain::normalize_subqueries;
 use mz_controller::clusters::ClusterId;
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
@@ -51,9 +47,7 @@ use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
 use mz_storage_client::types::sources::{SourceDesc, Timeline};
-pub use optimize::OptimizerConfig;
-pub use query::{QueryContext, QueryLifetime};
-pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
+use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType, Raw,
@@ -61,11 +55,6 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogType, IdReference, RoleAttributes};
 use crate::names::{Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier};
-
-pub use self::expr::{
-    AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
-};
-pub use crate::plan::statement::ddl::PlannedRoleAttributes;
 
 pub(crate) mod error;
 pub(crate) mod explain;
@@ -80,6 +69,14 @@ pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
+
+pub use error::PlanError;
+pub use explain::normalize_subqueries;
+pub use expr::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+pub use optimize::OptimizerConfig;
+pub use query::{QueryContext, QueryLifetime};
+pub use statement::ddl::PlannedRoleAttributes;
+pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]

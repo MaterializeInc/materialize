@@ -19,18 +19,17 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
+use mz_ore::error::ErrorExt;
+#[allow(unused_imports)] // False positive.
+use mz_ore::fmt::FormatBuffer;
 use mz_ore::task::spawn;
+use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
+use mz_persist::retry::Retry;
+use mz_persist_types::{Codec, Codec64, Opaque};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, trace_span, warn, Instrument};
-
-use mz_ore::error::ErrorExt;
-#[allow(unused_imports)] // False positive.
-use mz_ore::fmt::FormatBuffer;
-use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
-use mz_persist::retry::Retry;
-use mz_persist_types::{Codec, Codec64, Opaque};
 
 use crate::cache::StateCache;
 use crate::critical::CriticalReaderId;

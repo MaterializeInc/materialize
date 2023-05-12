@@ -75,13 +75,13 @@
 
 //! Generated protobuf code and companion impls.
 
-use proptest::prelude::Strategy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 use std::{char::CharTryFromError, num::TryFromIntError};
-use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
+use proptest::prelude::Strategy;
+use uuid::Uuid;
 
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_postgres;

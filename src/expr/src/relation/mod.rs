@@ -16,9 +16,6 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use bytesize::ByteSize;
 use itertools::Itertools;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -30,6 +27,8 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
@@ -3157,10 +3156,9 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-
     use mz_proto::protobuf_roundtrip;
     use mz_repr::explain::text::text_string_at;
+    use proptest::prelude::*;
 
     use super::*;
 

@@ -11,7 +11,6 @@ use std::net::Ipv4Addr;
 
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
-
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{

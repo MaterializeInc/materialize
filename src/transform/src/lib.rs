@@ -91,12 +91,13 @@ use std::error::Error;
 use std::fmt;
 use std::iter;
 use std::rc::Rc;
-use tracing::error;
 
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
+use mz_ore::stack::RecursionLimitError;
 use mz_repr::GlobalId;
+use tracing::error;
 
 pub mod attribute;
 pub mod canonicalization;
@@ -104,6 +105,7 @@ pub mod canonicalize_mfp;
 pub mod column_knowledge;
 pub mod compound;
 pub mod cse;
+pub mod dataflow;
 pub mod demand;
 pub mod fold_constants;
 pub mod fusion;
@@ -126,9 +128,7 @@ pub mod threshold_elision;
 pub mod typecheck;
 pub mod union_cancel;
 
-pub mod dataflow;
 pub use dataflow::optimize_dataflow;
-use mz_ore::stack::RecursionLimitError;
 
 #[macro_use]
 extern crate num_derive;

@@ -11,8 +11,6 @@ use std::error::Error;
 use std::fmt;
 use std::mem::size_of;
 
-use once_cell::sync::Lazy;
-
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::adt::numeric::{
@@ -21,6 +19,7 @@ use mz_repr::adt::numeric::{
 use mz_repr::adt::varchar::{InvalidVarCharMaxLengthError, VarCharMaxLength};
 use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::ScalarType;
+use once_cell::sync::Lazy;
 
 use crate::oid;
 

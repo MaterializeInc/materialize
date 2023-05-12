@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use itertools::Itertools;
-
 use mz_rocksdb::RocksDBInstance;
 
 use crate::render::upsert::types::UpsertState;

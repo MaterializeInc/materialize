@@ -12,7 +12,6 @@
 use std::collections::BTreeMap;
 
 use itertools::{zip_eq, Itertools};
-
 use mz_expr::visit::Visit;
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT};

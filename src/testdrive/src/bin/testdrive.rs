@@ -85,6 +85,9 @@ use aws_credential_types::Credentials;
 use aws_types::region::Region;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::path::PathExt;
+use mz_testdrive::Config;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -93,11 +96,6 @@ use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
 use url::Url;
 use walkdir::WalkDir;
-
-use mz_ore::cli::{self, CliConfig};
-use mz_ore::path::PathExt;
-
-use mz_testdrive::Config;
 
 macro_rules! die {
     ($($e:expr),*) => {{

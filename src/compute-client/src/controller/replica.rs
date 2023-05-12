@@ -13,16 +13,15 @@ use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
-use timely::progress::Timestamp;
-use tokio::select;
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_service::client::GenericClient;
+use timely::progress::Timestamp;
+use tokio::select;
+use tokio::sync::mpsc::error::SendError;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::logging::LoggingConfig;
 use crate::metrics::ReplicaMetrics;

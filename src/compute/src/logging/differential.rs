@@ -19,17 +19,16 @@ use differential_dataflow::logging::{
     BatchEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
 use differential_dataflow::operators::arrange::arrangement::Arrange;
-use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Filter, InputCapability};
-
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
+use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::{Filter, InputCapability};
 
 use crate::logging::{DifferentialLog, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};

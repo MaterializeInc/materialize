@@ -17,9 +17,6 @@
 //! This implementation strategy allows us to re-use existing arrangements, and
 //! not create any new stateful operators.
 
-use crate::plan::join::JoinBuildState;
-use crate::plan::join::JoinClosure;
-use crate::plan::AvailableCollections;
 use mz_expr::permutation_for_arrangement;
 use mz_expr::JoinInputMapper;
 use mz_expr::MapFilterProject;
@@ -28,6 +25,10 @@ use mz_expr::{join_permutations, JoinInputCharacteristics};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use crate::plan::join::JoinBuildState;
+use crate::plan::join::JoinClosure;
+use crate::plan::AvailableCollections;
 
 use super::ProtoDeltaJoinPlan;
 use super::ProtoDeltaPathPlan;

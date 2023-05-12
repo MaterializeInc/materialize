@@ -728,13 +728,15 @@ pub trait AvroDecode: Sized {
 
 pub mod public_decoders {
 
-    use super::{AvroDecodable, AvroMapAccess, StatefulAvroDecodable};
+    use std::collections::BTreeMap;
+
     use crate::error::{DecodeError, Error as AvroError};
     use crate::types::{DecimalValue, Scalar, Value};
     use crate::{
         AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, ValueOrReader,
     };
-    use std::collections::BTreeMap;
+
+    use super::{AvroDecodable, AvroMapAccess, StatefulAvroDecodable};
 
     macro_rules! define_simple_decoder {
         ($name:ident, $out:ty, $($scalar_branch:ident);*) => {

@@ -21,12 +21,6 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use proptest_derive::Arbitrary;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
@@ -39,6 +33,11 @@ use mz_sql_parser::ast::{Expr, ObjectType};
 use mz_sql_parser::ast::{QualifiedReplica, UnresolvedItemName};
 use mz_storage_client::types::connections::Connection;
 use mz_storage_client::types::sources::SourceDesc;
+use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{

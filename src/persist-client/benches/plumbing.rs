@@ -17,18 +17,17 @@ use bytes::Bytes;
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use differential_dataflow::trace::Description;
 use futures::stream::{FuturesUnordered, StreamExt};
-use mz_persist_client::internals_bench::trace_push_batch_one_iter;
-use timely::progress::Antichain;
-use tokio::runtime::Runtime;
-use uuid::Uuid;
-
 use mz_ore::task::RuntimeExt;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{
     Atomicity, Blob, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
 use mz_persist::workload::{self, DataGenerator};
+use mz_persist_client::internals_bench::trace_push_batch_one_iter;
 use mz_persist_client::ShardId;
+use timely::progress::Antichain;
+use tokio::runtime::Runtime;
+use uuid::Uuid;
 
 use crate::{bench_all_blob, bench_all_consensus};
 

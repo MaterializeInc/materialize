@@ -81,9 +81,8 @@ use hyper::Server;
 use hyper::StatusCode;
 use hyper::{Body, Response};
 use mz_ccsr::SchemaReference;
-use once_cell::sync::Lazy;
-
 use mz_ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
+use once_cell::sync::Lazy;
 
 pub static SCHEMA_REGISTRY_URL: Lazy<reqwest::Url> =
     Lazy::new(|| match env::var("SCHEMA_REGISTRY_URL") {

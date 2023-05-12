@@ -18,10 +18,6 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::error;
-
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -30,6 +26,9 @@ use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_client::types::sources::Timeline;
+use once_cell::sync::Lazy;
+use timely::progress::Timestamp as TimelyTimestamp;
+use tracing::error;
 
 use crate::catalog::CatalogItem;
 use crate::client::ConnectionId;

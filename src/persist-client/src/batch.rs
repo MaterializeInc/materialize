@@ -21,17 +21,16 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tokio::task::JoinHandle;
-use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
-
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::order::Reverse;
+use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
+use tokio::task::JoinHandle;
+use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;

@@ -9,12 +9,11 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::Oid;
 use mz_repr::{strconv, ColumnType, ScalarType};
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;

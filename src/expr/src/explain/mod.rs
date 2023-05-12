@@ -14,7 +14,6 @@ use std::fmt::Formatter;
 use std::time::Duration;
 
 use itertools::Itertools;
-
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
 use mz_repr::explain::text::DisplayText;

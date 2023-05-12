@@ -73,9 +73,6 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use rand::Rng;
-use tokio_postgres::Config;
-
 use mz_ore::metrics::MetricsRegistry;
 use mz_stash::upgrade::json_to_proto::test_helpers::{
     insert_collections, insert_stash, ArbitraryStash, Collection,
@@ -85,6 +82,8 @@ use mz_stash::upgrade::legacy_types::{
     IdAllocKey, IdAllocValue, MzTimestamp, TimestampKey, TimestampValue,
 };
 use mz_stash::StashFactory;
+use rand::Rng;
+use tokio_postgres::Config;
 
 // Note: This test exists in it's own integration test file because it uses failpoints. Failpoints
 // allow us to inject failures at specific points in our code, but they're set for the entire process

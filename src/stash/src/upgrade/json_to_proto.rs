@@ -15,13 +15,12 @@ use anyhow::Context;
 use bytes::Bytes;
 use fail::fail_point;
 use futures::Future;
+use mz_ore::cast::CastFrom;
 use serde::Deserialize;
 use timely::progress::Antichain;
 use tokio::time::sleep;
 use tokio_postgres::{types::ToSql, Client, Row};
 use tracing::error;
-
-use mz_ore::cast::CastFrom;
 
 use super::legacy_types::{
     AclMode, AlterSourceSinkV1, AuditLogKey, CatalogItemType, ClusterId,
@@ -1422,15 +1421,13 @@ impl From<String> for objects_v15::StringWrapper {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::metrics::MetricsRegistry;
     use proptest::arbitrary::any;
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
     use rand::Rng;
     use tokio_postgres::Config;
 
-    use mz_ore::metrics::MetricsRegistry;
-
-    use super::{migrate_json_to_proto, objects_v15};
     use crate::upgrade::json_to_proto::test_helpers::{
         insert_collections, insert_stash, ArbitraryStash, Collection,
     };
@@ -1439,6 +1436,8 @@ mod tests {
         VersionedStorageUsage,
     };
     use crate::StashFactory;
+
+    use super::{migrate_json_to_proto, objects_v15};
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`

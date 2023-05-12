@@ -23,9 +23,8 @@ use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
-use timely::Data;
-
 use timely::scheduling::ActivateOnDrop;
+use timely::Data;
 
 use super::activator::ActivatorTrait;
 

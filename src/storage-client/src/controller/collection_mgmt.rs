@@ -15,13 +15,12 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_persist_types::Codec64;
+use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use timely::progress::Timestamp;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::debug;
-
-use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 
 use crate::client::TimestamplessUpdate;
 use crate::controller::StorageError;

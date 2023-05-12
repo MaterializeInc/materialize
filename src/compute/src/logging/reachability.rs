@@ -16,17 +16,16 @@ use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::AsCollection;
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Filter;
-
 use mz_compute_client::logging::LoggingConfig;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
+use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::Filter;
 
 use crate::logging::{LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};

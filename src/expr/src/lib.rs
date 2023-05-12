@@ -80,9 +80,8 @@
 use std::collections::BTreeSet;
 use std::ops::Deref;
 
-use serde::{Deserialize, Serialize};
-
 use mz_repr::GlobalId;
+use serde::{Deserialize, Serialize};
 
 mod id;
 mod interpret;
@@ -94,8 +93,6 @@ pub mod explain;
 pub mod virtual_syntax;
 pub mod visit;
 
-pub use relation::canonicalize;
-
 pub use id::{Id, LocalId, PartitionId, SourceInstanceId};
 pub use id::{ProtoId, ProtoLocalId, ProtoPartitionId};
 pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace};
@@ -105,6 +102,7 @@ pub use linear::{
     util::{join_permutations, permutation_for_arrangement},
     MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
 };
+pub use relation::canonicalize;
 pub use relation::func::{AggregateFunc, LagLeadType, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;

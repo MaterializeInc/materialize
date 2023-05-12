@@ -14,21 +14,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use timely::communication::Push;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::Bundle;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Capability, OkErr};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::scheduling::Activator;
-use tracing::error;
-
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::operators::shard_source::shard_source;
-pub use mz_persist_client::operators::shard_source::FlowControl;
 use mz_persist_client::stats::PartStats;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
@@ -40,10 +29,21 @@ use mz_repr::{
     Row, RowArena, ScalarType, Timestamp,
 };
 use mz_timely_util::buffer::ConsolidateBuffer;
+use timely::communication::Push;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::Bundle;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::{Capability, OkErr};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
+use timely::scheduling::Activator;
+use tracing::error;
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
 use crate::types::sources::{RelationDescHack, SourceData};
+
+pub use mz_persist_client::operators::shard_source::FlowControl;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.

@@ -13,7 +13,6 @@ use std::io;
 use bytes::BytesMut;
 use csv::ByteRecord;
 use csv::ReaderBuilder;
-
 use mz_repr::{Datum, RelationType, Row, RowArena};
 
 static END_OF_COPY_MARKER: &[u8] = b"\\.";

@@ -9,13 +9,12 @@
 
 //! AWS configuration for sources and sinks.
 
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use super::StringOrSecret;
 

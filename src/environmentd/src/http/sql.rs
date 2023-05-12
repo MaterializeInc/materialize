@@ -19,11 +19,6 @@ use axum::Json;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
-use serde::{Deserialize, Serialize};
-use tokio::time;
-use tracing::warn;
-use tungstenite::protocol::frame::coding::CloseCode;
-
 use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
 use mz_adapter::{
     AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient,
@@ -36,6 +31,10 @@ use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
+use serde::{Deserialize, Serialize};
+use tokio::time;
+use tracing::warn;
+use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::{AuthedClient, MAX_REQUEST_SIZE};
 

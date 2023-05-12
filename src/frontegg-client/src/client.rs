@@ -21,13 +21,12 @@
 
 use std::time::{Duration, SystemTime};
 
+use mz_frontegg_auth::AppPassword;
 use reqwest::{Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
-
-use mz_frontegg_auth::AppPassword;
 
 use crate::config::{ClientBuilder, ClientConfig};
 use crate::error::{ApiError, Error};

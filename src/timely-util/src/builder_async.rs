@@ -537,13 +537,13 @@ impl<G: Scope> OperatorBuilder<G> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-
     use std::time::Duration;
 
     use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, ToStream};
+
+    use super::*;
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`

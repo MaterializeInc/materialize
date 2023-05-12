@@ -9,9 +9,6 @@
 
 use std::fmt::Debug;
 
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
-
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
 };
@@ -29,6 +26,8 @@ use mz_sql_parser::ast::{
 use mz_stash::StashError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, Response};

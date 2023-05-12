@@ -24,8 +24,12 @@ use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_postgres_util::make_tls;
 use mz_stash::StashFactory;
 use once_cell::sync::Lazy;
 use rand::Rng;
@@ -33,11 +37,6 @@ use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use url::Url;
-
-use mz_ore::error::ErrorExt;
-use mz_ore::retry::Retry;
-use mz_ore::task;
-use mz_postgres_util::make_tls;
 
 use crate::error::PosError;
 use crate::parser::{validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput};

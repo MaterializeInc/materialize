@@ -42,15 +42,14 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use mz_ore::collections::CollectionExt;
-use tracing::warn;
-
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
+use tracing::warn;
 
 use super::is_null;
 

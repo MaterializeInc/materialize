@@ -21,12 +21,13 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
-use crate::types::ScalarKind;
-use crate::{util::TsUnit, ParseSchemaError, SchemaResolutionError};
+use std::fmt;
 
 use chrono::NaiveDateTime;
 use fmt::{Debug, Display};
-use std::fmt;
+
+use crate::types::ScalarKind;
+use crate::{util::TsUnit, ParseSchemaError, SchemaResolutionError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DecodeError {

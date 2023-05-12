@@ -17,10 +17,6 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use rand::Rng;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::sync::OwnedMutexGuard;
-
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_ore::now::EpochMillis;
 use mz_pgrepr::Format;
@@ -32,6 +28,9 @@ use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES, SYS
 use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
+use rand::Rng;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::OwnedMutexGuard;
 
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;

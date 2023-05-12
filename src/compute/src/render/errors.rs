@@ -12,9 +12,8 @@
 use std::hash::Hash;
 
 use differential_dataflow::ExchangeData;
-use timely::container::columnation::Columnation;
-
 use mz_repr::Row;
+use timely::container::columnation::Columnation;
 
 use super::context::ShutdownToken;
 

@@ -25,11 +25,10 @@ use mz_sql::plan::{Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
 use crate::catalog::Catalog;
+use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::rbac;
 use crate::session::Session;
-
-use crate::coord::TargetCluster;
 use crate::{
     catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE},
     AdapterError,

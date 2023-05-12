@@ -25,12 +25,11 @@ use std::fmt;
 
 use bytesize::ByteSize;
 use itertools::Itertools;
-use tracing::warn;
-
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use tracing::warn;
 use IsLateral::*;
 use IsOptional::*;
 

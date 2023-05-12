@@ -21,10 +21,6 @@ use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Operator;
-use timely::dataflow::Scope;
-
 use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
@@ -33,6 +29,9 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{DatumVec, Diff, Row};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Operator;
+use timely::dataflow::Scope;
 
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
@@ -642,10 +641,9 @@ pub mod monoids {
     use std::rc::Rc;
 
     use differential_dataflow::difference::{Multiply, Semigroup};
-    use serde::{Deserialize, Serialize};
-
     use mz_expr::ColumnOrder;
     use mz_repr::{DatumVec, Diff, Row};
+    use serde::{Deserialize, Serialize};
 
     /// A monoid containing a row and an ordering.
     #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]

@@ -96,6 +96,16 @@ use futures::stream::{BoxStream, FuturesUnordered, TryStreamExt};
 use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
+use mz_orchestrator::{
+    NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
+    ServiceProcessMetrics, ServiceStatus,
+};
+use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
+use mz_ore::error::ErrorExt;
+use mz_ore::netio::UnixSocketAddr;
+use mz_ore::result::ResultExt;
+use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
+use mz_pid_file::PidFile;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
@@ -108,17 +118,6 @@ use tokio::select;
 use tokio::sync::broadcast::{self, Sender};
 use tokio::time::{self, Duration};
 use tracing::{debug, error, info, warn};
-
-use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
-    ServiceProcessMetrics, ServiceStatus,
-};
-use mz_ore::cast::{CastFrom, ReinterpretCast, TryCastFrom};
-use mz_ore::error::ErrorExt;
-use mz_ore::netio::UnixSocketAddr;
-use mz_ore::result::ResultExt;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
-use mz_pid_file::PidFile;
 
 pub mod secrets;
 

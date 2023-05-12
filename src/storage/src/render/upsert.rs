@@ -22,6 +22,10 @@ use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_client::types::sources::UpsertEnvelope;
+use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
@@ -29,14 +33,10 @@ use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
-use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
-use mz_storage_client::types::sources::UpsertEnvelope;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
-
-use self::types::{InMemoryHashMap, StatsState, UpsertState};
 use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
+
+use self::types::{InMemoryHashMap, StatsState, UpsertState};
 
 mod rocksdb;
 mod types;

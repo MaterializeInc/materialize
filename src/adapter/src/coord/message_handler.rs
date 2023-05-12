@@ -14,17 +14,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use chrono::DurationRound;
-use mz_persist_client::usage::ShardsUsage;
-use rand::{rngs, Rng, SeedableRng};
-use tracing::{event, warn, Level};
-
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
+use mz_persist_client::usage::ShardsUsage;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
+use rand::{rngs, Rng, SeedableRng};
+use tracing::{event, warn, Level};
 
 use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};

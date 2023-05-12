@@ -15,8 +15,6 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use itertools::{max, Itertools};
-use serde::{Deserialize, Serialize};
-
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::{ClusterId, ReplicaConfig, ReplicaId};
 use mz_ore::cast::CastFrom;
@@ -35,6 +33,7 @@ use mz_sql::names::{
 };
 use mz_stash::{AppendBatch, Id, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
+use serde::{Deserialize, Serialize};
 
 use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,

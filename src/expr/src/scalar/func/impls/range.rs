@@ -9,12 +9,11 @@
 
 use std::fmt;
 
+use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
+use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_lowertest::MzReflect;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 
 use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};

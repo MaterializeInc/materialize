@@ -11,18 +11,20 @@
 //!
 //! Maintenance operations for persist, shared among active handles
 
-use crate::internal::compact::CompactReq;
-use crate::internal::gc::GcReq;
-use crate::{Compactor, GarbageCollector, Machine};
+use std::fmt::Debug;
+use std::mem;
+
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
-use std::fmt::Debug;
-use std::mem;
 use timely::progress::Timestamp;
+
+use crate::internal::compact::CompactReq;
+use crate::internal::gc::GcReq;
+use crate::{Compactor, GarbageCollector, Machine};
 
 /// Every handle to this shard may be occasionally asked to perform
 /// routine maintenance after a successful compare_and_set operation.

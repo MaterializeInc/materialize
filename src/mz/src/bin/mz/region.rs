@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::Result;
-
 use mz::api::{CloudProviderAndRegion, Environment};
 use mz::configuration::ValidProfile;
 

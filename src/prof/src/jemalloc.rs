@@ -16,16 +16,15 @@ use std::os::unix::ffi::OsStrExt;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{ffi::CString, io::BufRead, time::Instant};
-use tokio::sync::Mutex;
 
 use anyhow::bail;
-use once_cell::sync::Lazy;
-use tempfile::NamedTempFile;
-use tikv_jemalloc_ctl::{epoch, raw, stats};
-
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+use once_cell::sync::Lazy;
+use tempfile::NamedTempFile;
+use tikv_jemalloc_ctl::{epoch, raw, stats};
+use tokio::sync::Mutex;
 
 use super::{ProfStartTime, StackProfile, WeightedStack};
 

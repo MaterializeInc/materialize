@@ -84,10 +84,11 @@ use dec::OrderedDecimal;
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, SerializeStruct, Serializer};
 
-use self::vec_stack::VecStack;
 use crate::adt::numeric::Numeric;
 use crate::strconv;
 use crate::{Datum, Row, RowPacker};
+
+use self::vec_stack::VecStack;
 
 /// An owned JSON value backed by a [`Row`].
 ///

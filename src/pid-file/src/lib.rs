@@ -100,7 +100,6 @@
 
 #![warn(missing_docs)]
 
-use libc::FD_CLOEXEC;
 use std::ffi::{CString, NulError};
 use std::fmt;
 use std::fs::{OpenOptions, Permissions};
@@ -111,6 +110,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::ptr;
 
+use libc::FD_CLOEXEC;
 use mz_ore::option::OptionExt;
 
 #[allow(non_camel_case_types)]

@@ -13,10 +13,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
-use timely::dataflow::operators::ToStream;
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
@@ -26,6 +22,9 @@ use mz_storage_client::types::sources::{
     Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
 };
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use timely::dataflow::operators::ToStream;
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};

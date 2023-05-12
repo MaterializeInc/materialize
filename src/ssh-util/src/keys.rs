@@ -222,13 +222,14 @@ impl SshKeyPairSet {
 
 #[cfg(test)]
 mod tests {
-    use super::SshKeyPair;
-    use super::SshKeyPairSet;
     use openssl::pkey::{PKey, Private};
     use serde::{Deserialize, Serialize};
     use ssh_key::private::{Ed25519Keypair, Ed25519PrivateKey, KeypairData};
     use ssh_key::public::Ed25519PublicKey;
     use ssh_key::{LineEnding, PrivateKey};
+
+    use super::SshKeyPair;
+    use super::SshKeyPairSet;
 
     #[test]
     fn test_key_pair_generation() -> anyhow::Result<()> {

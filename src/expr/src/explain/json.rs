@@ -9,9 +9,10 @@
 
 //! `EXPLAIN AS JSON` support for structures defined in this crate.
 
+use mz_repr::explain::json::DisplayJson;
+
 use crate::explain::{ExplainSource, PushdownInfo};
 use crate::interpret::Pushdownable;
-use mz_repr::explain::json::DisplayJson;
 
 use super::{ExplainMultiPlan, ExplainSinglePlan};
 

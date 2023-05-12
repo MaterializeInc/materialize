@@ -87,8 +87,6 @@ use std::{
 
 use anyhow::Context;
 use clap::Parser;
-use once_cell::sync::Lazy;
-
 use mz_adapter::{
     catalog::{
         storage::{self as catalog, BootstrapArgs},
@@ -107,6 +105,7 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::{catalog::EnvironmentId, session::vars::ConnectionCounter};
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller as storage;
+use once_cell::sync::Lazy;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());

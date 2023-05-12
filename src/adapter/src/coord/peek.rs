@@ -17,11 +17,6 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use futures::TryFutureExt;
-use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
-use tokio::sync::oneshot;
-use uuid::Uuid;
-
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_client::types::dataflows::DataflowDescription;
@@ -36,6 +31,10 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
+use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp;
+use tokio::sync::oneshot;
+use uuid::Uuid;
 
 use crate::client::ConnectionId;
 use crate::coord::timestamp_selection::TimestampContext;

@@ -11,6 +11,11 @@
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
+use mz_expr::{
+    explain::ExplainContext,
+    visit::{Visit, Visitor},
+    LocalId, MirRelationExpr,
+};
 use mz_ore::{
     stack::RecursionLimitError,
     str::{bracketed, separated},
@@ -18,12 +23,6 @@ use mz_ore::{
 use mz_repr::explain::{AnnotatedPlan, Attributes, ExplainConfig};
 use num_traits::FromPrimitive;
 use typemap_rev::{TypeMap, TypeMapKey};
-
-use mz_expr::{
-    explain::ExplainContext,
-    visit::{Visit, Visitor},
-    LocalId, MirRelationExpr,
-};
 
 // Attributes should have shortened paths when exported.
 mod arity;

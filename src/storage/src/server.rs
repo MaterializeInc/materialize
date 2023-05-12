@@ -12,14 +12,13 @@
 use std::sync::Arc;
 use std::thread::Thread;
 
-use timely::communication::initialize::WorkerGuards;
-
 use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_storage_client::client::StorageClient;
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::types::connections::ConnectionContext;
+use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::sink::SinkBaseMetrics;

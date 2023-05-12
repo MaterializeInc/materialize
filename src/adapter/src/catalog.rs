@@ -20,13 +20,6 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use tokio::sync::MutexGuard;
-use tracing::{info, trace, warn};
-use uuid::Uuid;
-
 use mz_audit_log::{
     EventDetails, EventType, FullNameV1, IdFullNameV1, ObjectType, VersionedEvent,
     VersionedStorageUsage,
@@ -94,14 +87,17 @@ use mz_storage_client::types::sinks::{
 };
 use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnvelope, Timeline};
 use mz_transform::Optimizer;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use tokio::sync::MutexGuard;
+use tracing::{info, trace, warn};
+use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
-pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
@@ -120,6 +116,10 @@ mod migrate;
 
 pub mod builtin;
 pub mod storage;
+
+pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
+pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 
@@ -7993,10 +7993,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use std::iter;
 
+    use itertools::Itertools;
     use mz_controller::clusters::ClusterId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;

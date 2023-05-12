@@ -9,16 +9,11 @@
 
 //! Structured name types for SQL objects.
 
-use anyhow::anyhow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
-use once_cell::sync::Lazy;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-use uncased::UncasedStr;
-
+use anyhow::anyhow;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::cast::CastFrom;
@@ -27,6 +22,10 @@ use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::MutRecBlock;
 use mz_sql_parser::ast::UnresolvedObjectName;
+use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use uncased::UncasedStr;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};

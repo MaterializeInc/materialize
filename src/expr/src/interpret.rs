@@ -994,10 +994,9 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
 #[cfg(test)]
 mod tests {
+    use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
     use proptest::prelude::*;
     use proptest::sample::{select, Index};
-
-    use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
 
     use crate::func::*;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};

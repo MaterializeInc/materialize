@@ -84,9 +84,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
-use uncased::UncasedStr;
-
 use mz_ore::codegen::CodegenBuf;
+use uncased::UncasedStr;
 
 const AST_DEFS_MOD: &str = "src/ast/defs.rs";
 const KEYWORDS_LIST: &str = "src/keywords.txt";

@@ -21,6 +21,19 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail};
 use differential_dataflow::{AsCollection, Collection};
 use futures::{StreamExt, TryStreamExt};
+use mz_expr::MirScalarExpr;
+use mz_ore::error::ErrorExt;
+use mz_ore::future::TimeoutError;
+use mz_ore::task;
+use mz_postgres_util::desc::PostgresTableDesc;
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::Ident;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::errors::SourceErrorDetails;
+use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
+use mz_timely_util::antichain::AntichainExt;
+use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
@@ -37,24 +50,10 @@ use tokio_postgres::Client;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{info, warn};
 
-use mz_expr::MirScalarExpr;
-use mz_ore::error::ErrorExt;
-use mz_ore::future::TimeoutError;
-use mz_ore::task;
-use mz_postgres_util::desc::PostgresTableDesc;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::Ident;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::SourceErrorDetails;
-use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
-use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
-
-use self::metrics::PgSourceMetrics;
-
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+
+use self::metrics::PgSourceMetrics;
 
 mod metrics;
 

@@ -97,19 +97,6 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use mz_ore::task::RuntimeExt;
-use mz_persist_client::rpc::{
-    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
-};
-use once_cell::sync::Lazy;
-use opentelemetry::trace::TraceContextExt;
-use prometheus::IntGauge;
-use tracing::{error, info, Instrument};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-use url::Url;
-use uuid::Uuid;
-
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
@@ -130,14 +117,25 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::task::RuntimeExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::{
+    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
+};
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use opentelemetry::trace::TraceContextExt;
+use prometheus::IntGauge;
+use tracing::{error, info, Instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+use url::Url;
+use uuid::Uuid;
 
 mod sys;
 

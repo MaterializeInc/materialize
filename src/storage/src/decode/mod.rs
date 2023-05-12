@@ -23,16 +23,10 @@ use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::Hashable;
 use differential_dataflow::{AsCollection, Collection};
-use mz_ore::error::ErrorExt;
-use regex::Regex;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::Scope;
-use timely::scheduling::SyncActivator;
-use tracing::error;
-
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use mz_expr::PartitionId;
 use mz_interchange::avro::ConfluentAvroResolver;
+use mz_ore::error::ErrorExt;
 use mz_repr::{adt::timestamp::CheckedTimestamp, Datum};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_storage_client::types::connections::{ConnectionContext, CsrConnection};
@@ -42,12 +36,18 @@ use mz_storage_client::types::sources::encoding::{
 };
 use mz_storage_client::types::sources::{IncludedColumnSource, MzOffset};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use regex::Regex;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::Scope;
+use timely::scheduling::SyncActivator;
+use tracing::error;
+
+use crate::source::types::{DecodeResult, SourceOutput};
 
 use self::avro::AvroDecoderState;
 use self::csv::CsvDecoderState;
 use self::metrics::DecodeMetrics;
 use self::protobuf::ProtobufDecoderState;
-use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;

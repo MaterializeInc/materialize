@@ -17,12 +17,6 @@ use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
-use tracing::{error, warn};
-
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
@@ -37,6 +31,11 @@ use mz_ore::halt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp;
+use tracing::{error, warn};
 
 use crate::Controller;
 

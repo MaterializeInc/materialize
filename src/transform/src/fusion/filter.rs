@@ -44,9 +44,10 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+
+use crate::TransformArgs;
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]

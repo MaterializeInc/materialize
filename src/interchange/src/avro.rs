@@ -14,13 +14,12 @@ mod encode;
 pub mod envelope_cdc_v2;
 mod schema;
 
-pub use envelope_cdc_v2 as cdc_v2;
-
 pub use self::decode::{Decoder, DiffPair};
 pub use self::encode::{
     encode_datums_as_avro, encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
     AvroEncoder, AvroSchemaGenerator,
 };
+pub use self::envelope_cdc_v2 as cdc_v2;
 pub use self::schema::{parse_schema, schema_to_relationdesc, ConfluentAvroResolver};
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
@@ -30,14 +29,12 @@ fn is_null(schema: &SchemaPieceOrNamed) -> bool {
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-    use mz_repr::adt::date::Date;
-    use mz_repr::adt::timestamp::CheckedTimestamp;
-
-    use ordered_float::OrderedFloat;
-
     use mz_avro::types::{DecimalValue, Value};
+    use mz_repr::adt::date::Date;
     use mz_repr::adt::numeric::{self, NumericMaxScale};
+    use mz_repr::adt::timestamp::CheckedTimestamp;
     use mz_repr::{Datum, RelationDesc, ScalarType};
+    use ordered_float::OrderedFloat;
 
     use super::*;
 

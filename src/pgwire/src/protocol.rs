@@ -19,12 +19,6 @@ use std::sync::Mutex;
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
-use postgres::error::SqlState;
-use tokio::io::{self, AsyncRead, AsyncWrite};
-use tokio::select;
-use tokio::time::{self, Duration, Instant};
-use tracing::{debug, warn, Instrument};
-
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
 };
@@ -41,6 +35,11 @@ use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
 use mz_sql::session::vars::{ConnectionCounter, VarInput};
+use postgres::error::SqlState;
+use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::select;
+use tokio::time::{self, Duration, Instant};
+use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
 use crate::message::{

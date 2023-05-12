@@ -15,17 +15,16 @@ use std::num::NonZeroI64;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
-use thiserror::Error;
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use timely::PartialOrder;
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
+use thiserror::Error;
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::PartialOrder;
+use uuid::Uuid;
 
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;

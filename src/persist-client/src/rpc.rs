@@ -9,9 +9,6 @@
 
 //! gRPC-based implementations of Persist PubSub client and server.
 
-use anyhow::{anyhow, Error};
-use async_trait::async_trait;
-use bytes::Bytes;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::net::SocketAddr;
@@ -21,7 +18,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
+use anyhow::{anyhow, Error};
+use async_trait::async_trait;
+use bytes::Bytes;
 use futures::Stream;
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::{HashMap, HashSet};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::retry::RetryResult;
+use mz_persist::location::VersionedData;
+use mz_proto::{ProtoType, RustType};
 use prost::Message;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Sender;
@@ -33,13 +39,6 @@ use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue, MetadataMap};
 use tonic::transport::Endpoint;
 use tonic::{Extensions, Request, Response, Status, Streaming};
 use tracing::{debug, error, info, info_span, warn, Instrument};
-
-use mz_ore::cast::CastFrom;
-use mz_ore::collections::{HashMap, HashSet};
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::retry::RetryResult;
-use mz_persist::location::VersionedData;
-use mz_proto::{ProtoType, RustType};
 
 use crate::cache::{DynState, StateCache};
 use crate::cfg::PersistConfig;
@@ -1062,12 +1061,11 @@ mod pubsub_state {
 
     use bytes::Bytes;
     use mz_ore::collections::HashSet;
+    use mz_persist::location::{SeqNo, VersionedData};
+    use mz_proto::RustType;
     use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::Receiver;
     use tonic::Status;
-
-    use mz_persist::location::{SeqNo, VersionedData};
-    use mz_proto::RustType;
 
     use crate::internal::service::proto_pub_sub_message::Message;
     use crate::internal::service::ProtoPubSubMessage;
@@ -1271,6 +1269,20 @@ mod pubsub_state {
 
 #[cfg(test)]
 mod grpc {
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use bytes::Bytes;
+    use futures_util::FutureExt;
+    use mz_ore::collections::HashMap;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist::location::{SeqNo, VersionedData};
+    use mz_proto::RustType;
+    use tokio::net::TcpListener;
+    use tokio_stream::wrappers::TcpListenerStream;
+    use tokio_stream::StreamExt;
+
     use crate::cfg::{PersistConfig, PersistParameters};
     use crate::internal::service::proto_pub_sub_message::Message;
     use crate::internal::service::ProtoPubSubMessage;
@@ -1280,18 +1292,6 @@ mod grpc {
         PubSubState,
     };
     use crate::ShardId;
-    use bytes::Bytes;
-    use futures_util::FutureExt;
-    use mz_ore::collections::HashMap;
-    use mz_ore::metrics::MetricsRegistry;
-    use mz_persist::location::{SeqNo, VersionedData};
-    use mz_proto::RustType;
-    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
-    use tokio::net::TcpListener;
-    use tokio_stream::wrappers::TcpListenerStream;
-    use tokio_stream::StreamExt;
 
     const SHARD_ID_0: ShardId = ShardId([0u8; 16]);
     const SHARD_ID_1: ShardId = ShardId([1u8; 16]);
