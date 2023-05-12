@@ -103,7 +103,10 @@ pub enum VarError {
     #[error("{} is not supported", .feature.quoted())]
     RequiresSystemVar { feature: String, gate: String },
     #[error("{} is not supported", .feature)]
-    RequiresFeatureFlag { feature: &'static str },
+    RequiresFeatureFlag {
+        feature: &'static str,
+        name: &'static UncasedStr,
+    },
 }
 
 impl VarError {
@@ -127,6 +130,9 @@ impl VarError {
             } => Some(format!("Available values: {}.", valid_values.join(", "))),
             VarError::RequiresSystemVar { gate, .. } => Some(format!(
                 "contact support to see if the {gate} feature can be enabled"
+            )),
+            VarError::RequiresFeatureFlag { name, .. } => Some(format!(
+                "contact support to see if the {name} flag can be enabled"
             )),
             _ => None,
         }
@@ -2258,6 +2264,7 @@ impl FeatureFlag {
         } else {
             Err(VarError::RequiresFeatureFlag {
                 feature: self.feature_desc,
+                name: &self.flag.name,
             })
         }
     }
