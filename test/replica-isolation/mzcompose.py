@@ -234,6 +234,11 @@ def drop_create_replica(c: Composition) -> None:
 
 
 def create_invalid_replica(c: Composition) -> None:
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
     c.testdrive(
         dedent(
             """
@@ -410,6 +415,12 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
     with c.override(*nodes):
         c.up("materialized", *[n.name for n in nodes])
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
         c.sql(
             """

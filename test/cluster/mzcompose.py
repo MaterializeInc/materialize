@@ -106,7 +106,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         port=6877,
         user="mz_system",
     )
-            
+
     c.sql(
         """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
@@ -123,6 +123,13 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Add a replica to that cluster and verify that tests still pass.
     c.up("clusterd3")
     c.up("clusterd4")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     c.sql(
         """CREATE CLUSTER REPLICA cluster1.replica2
             STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
@@ -153,6 +160,12 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     c.up("clusterd1")
     c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     c.sql(
         """CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
@@ -256,6 +269,12 @@ def workflow_test_github_15531(c: Composition) -> None:
         ), "dataflow count in history not found in clusterd metrics"
 
         return (history_len, dataflow_count)
+    
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
     # Set up a cluster with an indexed table and an unindexed one.
     c.sql(
@@ -340,6 +359,12 @@ def workflow_test_github_15535(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     # Set up a dataflow on clusterd.
     c.sql(
         """
@@ -397,6 +422,12 @@ def workflow_test_github_15799(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
         """
         CREATE CLUSTER cluster1 REPLICAS (
             logging_on (
@@ -443,6 +474,12 @@ def workflow_test_github_15930(c: Composition) -> None:
         c.up("testdrive", persistent=True)
         c.up("materialized")
         c.up("clusterd1")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
         c.sql(
             """
@@ -542,13 +579,16 @@ def workflow_test_github_15496(c: Composition) -> None:
         c.up("materialized")
         c.up("clusterd_nopanic")
 
-        c.testdrive(
-            dedent(
-                """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_repeat_row  = true;
-            """
-            )
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_repeat_row = true;",
+            port=6877,
+            user="mz_system",
         )
 
         # set up a test cluster and run a testdrive regression script
@@ -611,6 +651,12 @@ def workflow_test_github_17177(c: Composition) -> None:
         c.up("testdrive", persistent=True)
         c.up("materialized")
         c.up("clusterd1")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -685,14 +731,18 @@ def workflow_test_github_17510(c: Composition) -> None:
         c.up("materialized")
         c.up("clusterd1")
 
-        c.testdrive(
-            dedent(
-                """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_repeat_row  = true;
-            """
-            )
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
         )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_repeat_row = true;",
+            port=6877,
+            user="mz_system",
+        )
+
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -855,13 +905,16 @@ def workflow_test_github_17509(c: Composition) -> None:
         c.up("materialized")
         c.up("clusterd_nopanic")
 
-        c.testdrive(
-            dedent(
-                """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_repeat_row  = true;
-            """
-            )
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_repeat_row = true;",
+            port=6877,
+            user="mz_system",
         )
 
         # set up a test cluster and run a testdrive regression script
@@ -1116,6 +1169,12 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
         CREATE CLUSTER cluster1 REPLICAS (
@@ -1232,6 +1291,12 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     # Helper function to get reconciliation metrics for clusterd.
     def fetch_reconciliation_metrics() -> Tuple[int, int]:
         metrics = c.exec(
@@ -1315,6 +1380,12 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     c.up("materialized")
     c.up("clusterd1")
 
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
     # Set up a cluster and a number of dataflows that can be reconciled.
     c.sql(
         """
@@ -1392,6 +1463,12 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized", "clusterd1")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
     c.sql(
         """
@@ -1483,6 +1560,12 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
     c.up("clusterd1")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
     # Set up a dataflow on clusterd.
     c.sql(

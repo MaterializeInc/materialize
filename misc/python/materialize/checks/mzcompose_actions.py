@@ -132,7 +132,7 @@ class UseClusterdCompute(MzcomposeAction):
         )
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;",
             port=6877,
             user="mz_system",
         )

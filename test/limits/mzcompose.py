@@ -1444,6 +1444,11 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     )
 
                 c.sql(
+                    "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+                    port=6877,
+                    user="mz_system",
+                )
+                c.sql(
                     f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)
                     + ")"

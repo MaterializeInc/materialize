@@ -9,6 +9,7 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_materialize = true
+ALTER SYSTEM SET enable_index_options = true
 
 # Test consolidation and compaction behavior.
 #
