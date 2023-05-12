@@ -9,7 +9,6 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::cmp::Reverse;
 use std::convert::AsRef;
 use std::hash::{Hash, Hasher};
@@ -165,18 +164,17 @@ impl ValueData {
     fn update_value(&mut self, new_value: Option<UpsertValue>) -> Option<UpsertValue> {
         let new_bytes = &new_value.as_ref().map(Self::calculate_size).unwrap_or(0);
 
+        self.diff_record = match (&self.initial_bytes, &new_value) {
+            (Some(_), None) => -1,
+            (None, Some(_)) => 1,
+            _ => 0,
+        };
+
         let old_value = match new_value {
             Some(new_value) => self.value.replace(new_value),
             None => self.value.take(),
         };
-
-        let diff_bytes = new_bytes - self.initial_bytes.unwrap_or(0);
-        self.diff_bytes = diff_bytes;
-        self.diff_record = match diff_bytes.cmp(&0) {
-            Ordering::Less => -1,
-            Ordering::Equal => 0,
-            Ordering::Greater => 1,
-        };
+        self.diff_bytes = new_bytes - self.initial_bytes.unwrap_or(0);
 
         old_value
     }
