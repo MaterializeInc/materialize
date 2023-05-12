@@ -151,8 +151,16 @@ class QueryExecutionManager:
         self, query_no: int, validation_outcome: ValidationOutcome
     ) -> None:
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
+        success_reason = (
+            f" ({validation_outcome.success_reason})"
+            if validation_outcome.success_reason is not None
+            and validation_outcome.success()
+            else ""
+        )
 
-        print(f"{COMMENT_PREFIX} Test with query #{query_no} {result_desc}.")
+        print(
+            f"{COMMENT_PREFIX} Test with query #{query_no} {result_desc}{success_reason}."
+        )
 
         if validation_outcome.has_errors():
             print(f"Errors:\n{validation_outcome.error_output()}")

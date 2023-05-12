@@ -46,10 +46,10 @@ class ResultComparator:
 
         if queries_succeeded:
             self.validate_outcomes_data(query_execution.outcomes, validation_outcome)
-            validation_outcome.add_remark(ValidationRemark("Result data matches"))
+            validation_outcome.success_reason = "result data matches"
         else:
             # error messages were already validated at metadata validation
-            validation_outcome.add_remark(ValidationRemark("Error message matches"))
+            validation_outcome.success_reason = "error message matches"
 
         return validation_outcome
 
