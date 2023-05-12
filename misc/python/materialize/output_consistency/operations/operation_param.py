@@ -33,4 +33,9 @@ class NumericOperationParam(OperationParam):
         self,
         incompatibilities: Optional[set[ValueCharacteristics]] = None,
     ):
+        if incompatibilities is None:
+            incompatibilities = set()
+
+        incompatibilities.add(ValueCharacteristics.OVERSIZE)
+
         super().__init__(DataTypeCategory.NUMERIC, incompatibilities)
