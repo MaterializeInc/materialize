@@ -38,3 +38,7 @@ merge_pr_target_branch() {
   ci_collapsed_heading "Merge target branch"
   run git merge "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"
 }
+
+get_common_ancestor_commit_of_pr_and_target() {
+  run git merge-base HEAD "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH"
+}

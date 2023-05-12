@@ -32,7 +32,7 @@ if [[ "$BUILDKITE_PULL_REQUEST" != "false" ]]; then
   fetch_pr_target_branch
 
   ci_collapsed_heading "Lint protobuf"
-  COMMON_ANCESTOR="$(run git merge-base HEAD "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH")"
+  COMMON_ANCESTOR="$(get_common_ancestor_commit_of_pr_and_target)"
   ci_try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src"
 fi
 
