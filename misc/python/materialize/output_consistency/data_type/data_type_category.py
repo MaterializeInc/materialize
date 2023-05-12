@@ -6,10 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from enum import Enum
 
 
-class DataTypeGroup(Enum):
+class DataTypeCategory(Enum):
     # only allowed for input parameters
     ANY = (1,)
     # only allowed for expression output, must be resolved from the first arg

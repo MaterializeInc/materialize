@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.data_type.data_type_group import DataTypeGroup
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.data_type.value_characteristics import (
     ValueCharacteristics,
 )
@@ -28,18 +28,18 @@ add_op = OperationWithTwoParams(
     "$ + $",
     NumericOperationParam(),
     NumericOperationParam(),
-    DataTypeGroup.NUMERIC,
+    DataTypeCategory.NUMERIC,
     {ValueGrowsArgsValidator()},
     commutative=True,
 )
 subt_op = OperationWithTwoParams(
-    "$ - $", NumericOperationParam(), NumericOperationParam(), DataTypeGroup.NUMERIC
+    "$ - $", NumericOperationParam(), NumericOperationParam(), DataTypeCategory.NUMERIC
 )
 mult_op = OperationWithTwoParams(
     "$ * $",
     NumericOperationParam(),
     NumericOperationParam(),
-    DataTypeGroup.NUMERIC,
+    DataTypeCategory.NUMERIC,
     {ValueGrowsArgsValidator()},
     commutative=True,
 )
@@ -47,39 +47,39 @@ div_op = OperationWithTwoParams(
     "$ / $",
     NumericOperationParam(),
     NumericOperationParam({ValueCharacteristics.ZERO}),
-    DataTypeGroup.NUMERIC,
+    DataTypeCategory.NUMERIC,
 )
 
-sum_func = UnaryFunction("SUM", NumericOperationParam(), DataTypeGroup.NUMERIC)
-min_func = UnaryFunction("MIN", NumericOperationParam(), DataTypeGroup.NUMERIC)
-max_func = UnaryFunction("MAX", NumericOperationParam(), DataTypeGroup.NUMERIC)
+sum_func = UnaryFunction("SUM", NumericOperationParam(), DataTypeCategory.NUMERIC)
+min_func = UnaryFunction("MIN", NumericOperationParam(), DataTypeCategory.NUMERIC)
+max_func = UnaryFunction("MAX", NumericOperationParam(), DataTypeCategory.NUMERIC)
 
 sqrt_func = UnaryFunction(
     "SQRT",
     NumericOperationParam({ValueCharacteristics.NEGATIVE}),
-    DataTypeGroup.NUMERIC,
+    DataTypeCategory.NUMERIC,
 )
 abs_func = UnaryFunction(
     "ABS",
     NumericOperationParam(),
-    DataTypeGroup.NUMERIC,
+    DataTypeCategory.NUMERIC,
 )
 
 greatest_func = BinaryFunction(
-    "GREATEST", NumericOperationParam(), NumericOperationParam(), DataTypeGroup.DYNAMIC
+    "GREATEST", NumericOperationParam(), NumericOperationParam(), DataTypeCategory.DYNAMIC
 )
 least_func = BinaryFunction(
-    "LEAST", NumericOperationParam(), NumericOperationParam(), DataTypeGroup.DYNAMIC
+    "LEAST", NumericOperationParam(), NumericOperationParam(), DataTypeCategory.DYNAMIC
 )
 greatest3_func = OperationWithNParams(
     "GREATEST($, $, $)",
     [NumericOperationParam(), NumericOperationParam(), NumericOperationParam()],
-    DataTypeGroup.NUMERIC,
+    DataTypeCategory.NUMERIC,
 )
 least3_func = OperationWithNParams(
     "LEAST($, $, $)",
     [NumericOperationParam(), NumericOperationParam(), NumericOperationParam()],
-    DataTypeGroup.NUMERIC,
+    DataTypeCategory.NUMERIC,
 )
 
 

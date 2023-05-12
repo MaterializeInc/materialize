@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from materialize.output_consistency.data_type.data_type_group import DataTypeGroup
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.data_type.value_characteristics import (
     ValueCharacteristics,
 )
@@ -22,5 +22,5 @@ class Expression:
     def to_sql(self) -> str:
         raise RuntimeError("Not implemented")
 
-    def resolve_data_type_group(self) -> DataTypeGroup:
+    def resolve_data_type_category(self) -> DataTypeCategory:
         raise RuntimeError("Not implemented")

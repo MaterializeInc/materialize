@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from materialize.output_consistency.data_type.data_provider import DATA_TYPES
 from materialize.output_consistency.data_type.data_type import RawValue
-from materialize.output_consistency.data_type.data_type_group import DataTypeGroup
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.expressions.expression_with_args import (
     ExpressionWithNArgs,
@@ -100,26 +100,26 @@ class ExpressionGenerator:
             param = operation.params[param_index]
             arg = args[param_index]
 
-            if param.type_group == DataTypeGroup.ANY:
+            if param.type_category == DataTypeCategory.ANY:
                 # param ANY accepts arguments of all types
                 continue
-            if param.type_group == DataTypeGroup.DYNAMIC:
+            if param.type_category == DataTypeCategory.DYNAMIC:
                 raise RuntimeError(
-                    f"Type {DataTypeGroup.DYNAMIC} not allowed for parameters"
+                    f"Type {DataTypeCategory.DYNAMIC} not allowed for parameters"
                 )
 
-            arg_type_group = arg.resolve_data_type_group()
+            arg_type_category = arg.resolve_data_type_category()
 
-            if arg_type_group == DataTypeGroup.ANY:
+            if arg_type_category == DataTypeCategory.ANY:
                 raise RuntimeError(
-                    f"Type {DataTypeGroup.ANY} not allowed for arguments"
+                    f"Type {DataTypeCategory.ANY} not allowed for arguments"
                 )
-            if arg_type_group == DataTypeGroup.DYNAMIC:
+            if arg_type_category == DataTypeCategory.DYNAMIC:
                 raise RuntimeError(
-                    f"Type {DataTypeGroup.DYNAMIC} must be resolved based on the expression"
+                    f"Type {DataTypeCategory.DYNAMIC} must be resolved based on the expression"
                 )
 
-            if param.type_group != arg_type_group:
+            if param.type_category != arg_type_category:
                 # Type mismatch
                 return False
 

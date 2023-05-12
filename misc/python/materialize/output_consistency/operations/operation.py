@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from typing import Optional
 
-from materialize.output_consistency.data_type.data_type_group import DataTypeGroup
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.operations.operation_args_validator import (
     OperationArgsValidator,
 )
@@ -22,7 +22,7 @@ class OperationWithNParams:
         self,
         pattern: str,
         params: list[OperationParam],
-        return_type_group: DataTypeGroup,
+            return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
         commutative: bool = False,
     ):
@@ -32,7 +32,7 @@ class OperationWithNParams:
         self.pattern = pattern
         self.params = params
         self.param_count = len(params)
-        self.return_type_group = return_type_group
+        self.return_type_category = return_type_category
         self.commutative = commutative
         self.args_validators: set[OperationArgsValidator] = args_validators
 
@@ -47,11 +47,11 @@ class OperationWithOneParam(OperationWithNParams):
         self,
         pattern: str,
         param: OperationParam,
-        return_type_group: DataTypeGroup,
+        return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
     ):
         self.pattern = pattern
-        super().__init__(pattern, [param], return_type_group, args_validators, False)
+        super().__init__(pattern, [param], return_type_category, args_validators, False)
 
 
 class OperationWithTwoParams(OperationWithNParams):
@@ -60,13 +60,13 @@ class OperationWithTwoParams(OperationWithNParams):
         pattern: str,
         param1: OperationParam,
         param2: OperationParam,
-        return_type_group: DataTypeGroup,
+            return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
         commutative: bool = False,
     ):
         self.pattern = pattern
         super().__init__(
-            pattern, [param1, param2], return_type_group, args_validators, commutative
+            pattern, [param1, param2], return_type_category, args_validators, commutative
         )
 
 
@@ -75,10 +75,10 @@ class UnaryFunction(OperationWithOneParam):
         self,
         name: str,
         param: OperationParam,
-        return_type_group: DataTypeGroup,
+            return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
     ):
-        super().__init__(f"{name}($)", param, return_type_group, args_validators)
+        super().__init__(f"{name}($)", param, return_type_category, args_validators)
 
 
 class BinaryFunction(OperationWithTwoParams):
@@ -87,7 +87,7 @@ class BinaryFunction(OperationWithTwoParams):
         name: str,
         param1: OperationParam,
         param2: OperationParam,
-        return_type_group: DataTypeGroup,
+            return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
         commutative: bool = False,
     ):
@@ -95,7 +95,7 @@ class BinaryFunction(OperationWithTwoParams):
             f"{name}($, $)",
             param1,
             param2,
-            return_type_group,
+            return_type_category,
             args_validators,
             commutative,
         )

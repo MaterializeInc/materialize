@@ -502,7 +502,7 @@ m2=*</panel_attributes>
       <w>160</w>
       <h>130</h>
     </coordinates>
-    <panel_attributes>DataTypeGroup
+    <panel_attributes>DataTypeCategory
 &lt;&lt;enum&gt;&gt;
 --
 ANY

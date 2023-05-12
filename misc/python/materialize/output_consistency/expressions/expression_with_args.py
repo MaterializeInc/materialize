@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from materialize.output_consistency.data_type.data_type_group import DataTypeGroup
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.operations.operation import (
     EXPRESSION_PLACEHOLDER,
@@ -23,7 +23,7 @@ class ExpressionWithNArgs(Expression):
     ):
         super().__init__(set(), is_expect_error)
         self.pattern = operation.pattern
-        self.return_type_group = operation.return_type_group
+        self.return_type_category = operation.return_type_category
         self.args = args
 
         if len(args) != operation.param_count:
@@ -44,19 +44,19 @@ class ExpressionWithNArgs(Expression):
 
         return sql
 
-    def resolve_data_type_group(self) -> DataTypeGroup:
-        if self.return_type_group == DataTypeGroup.DYNAMIC:
+    def resolve_data_type_category(self) -> DataTypeCategory:
+        if self.return_type_category == DataTypeCategory.DYNAMIC:
             if len(self.args) == 0:
                 raise RuntimeError(
-                    f"Expression {self.pattern} uses {DataTypeGroup.ANY} as return type, which is not allowed"
+                    f"Expression {self.pattern} uses {DataTypeCategory.ANY} as return type, which is not allowed"
                 )
 
-        if self.return_type_group == DataTypeGroup.DYNAMIC:
+        if self.return_type_category == DataTypeCategory.DYNAMIC:
             if len(self.args) == 0:
                 raise RuntimeError(
-                    f"Expression {self.pattern} uses return {DataTypeGroup.DYNAMIC} as return type but has no arguments"
+                    f"Expression {self.pattern} uses return {DataTypeCategory.DYNAMIC} as return type but has no arguments"
                 )
             else:
-                return self.args[0].resolve_data_type_group()
+                return self.args[0].resolve_data_type_category()
 
-        return self.return_type_group
+        return self.return_type_category

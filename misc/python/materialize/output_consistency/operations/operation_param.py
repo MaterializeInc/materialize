@@ -6,9 +6,10 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from typing import Optional
 
-from materialize.output_consistency.data_type.data_type_group import DataTypeGroup
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.data_type.value_characteristics import (
     ValueCharacteristics,
 )
@@ -17,13 +18,13 @@ from materialize.output_consistency.data_type.value_characteristics import (
 class OperationParam:
     def __init__(
         self,
-        type_group: DataTypeGroup,
+            type_category: DataTypeCategory,
         incompatibilities: Optional[set[ValueCharacteristics]] = None,
     ):
         if incompatibilities is None:
             incompatibilities = set()
 
-        self.type_group = type_group
+        self.type_category = type_category
         self.incompatibilities: set[ValueCharacteristics] = incompatibilities
 
 
@@ -32,4 +33,4 @@ class NumericOperationParam(OperationParam):
         self,
         incompatibilities: Optional[set[ValueCharacteristics]] = None,
     ):
-        super().__init__(DataTypeGroup.NUMERIC, incompatibilities)
+        super().__init__(DataTypeCategory.NUMERIC, incompatibilities)
