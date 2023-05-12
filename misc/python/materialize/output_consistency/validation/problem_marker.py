@@ -47,7 +47,7 @@ class ValidationWarning(ValidationProblemMarker):
 
     def __str__(self) -> str:
         warning_desc = f" ({self.description})" if self.description else ""
-        strategy_desc = f" at strategy '{self.strategy}'"
+        strategy_desc = f" with strategy '{self.strategy}'" if self.strategy else ""
         query_desc = f"\n  Query: {self.sql}"
 
         return f"{self.problem_severity}: {self.message}{strategy_desc}{warning_desc}{query_desc}"

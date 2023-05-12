@@ -156,7 +156,7 @@ class ResultComparator:
         if failure.query_column_count > 1:
             validation_outcome.add_warning(
                 "Query error with multiple columns",
-                "Queries expected to return an error should contain only one colum.",
+                "Query expected to return an error should contain only one colum.",
                 sql=failure.sql,
             )
 
@@ -168,7 +168,7 @@ class ResultComparator:
         if result.query_column_count > 1:
             validation_outcome.add_warning(
                 "Query success with single column",
-                "Queries successfully returning a value should be run with other queries.",
+                "Query successfully returning a value should be run with other queries.",
                 sql=result.sql,
             )
 
