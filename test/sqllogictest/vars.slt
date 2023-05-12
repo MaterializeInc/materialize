@@ -303,3 +303,28 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET max_credit_consumption_rate = NaN
 ----
 db error: ERROR: parameter "max_credit_consumption_rate" requires a "numeric" value
+
+statement ok
+SET SCHEMA 'non-resolvable-name'
+
+statement ok
+SET SCHEMA TO 'non-resolvable-name'
+
+statement ok
+SET SCHEMA = 'non-resolvable-name'
+
+query T
+SHOW SCHEMA
+----
+NULL
+
+statement ok
+SET SCHEMA TO 'public'
+
+query T
+SHOW SCHEMA
+----
+public
+
+statement error Expected end of statement, found comma
+SET SCHEMA TO public, private, playground

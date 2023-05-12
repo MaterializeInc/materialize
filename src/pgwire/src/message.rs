@@ -412,6 +412,7 @@ impl ErrorResponse {
             AdapterNotice::ObjectAlreadyExists { .. } => SqlState::DUPLICATE_OBJECT,
             AdapterNotice::DatabaseDoesNotExist { .. } => SqlState::WARNING,
             AdapterNotice::ClusterDoesNotExist { .. } => SqlState::WARNING,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => SqlState::WARNING,
             AdapterNotice::ExistingTransactionInProgress => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
                 SqlState::NO_ACTIVE_SQL_TRANSACTION
@@ -572,6 +573,7 @@ impl Severity {
             AdapterNotice::ObjectAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::DatabaseDoesNotExist { .. } => Severity::Notice,
             AdapterNotice::ClusterDoesNotExist { .. } => Severity::Notice,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => Severity::Notice,
             AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
             AdapterNotice::UserRequested { severity } => match severity {

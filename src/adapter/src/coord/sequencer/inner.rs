@@ -63,11 +63,11 @@ use mz_sql::plan::{
     RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig,
     SubscribeFrom, SubscribePlan, VariableValue, View,
 };
-use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
 };
+use mz_sql::session::vars::{Var, SCHEMA_ALIAS};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -1733,6 +1733,33 @@ impl Coordinator {
         session: &Session,
         plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if &plan.name == SCHEMA_ALIAS {
+            let schemas = self.catalog.resolve_search_path(session);
+            let schema = schemas.first();
+            return match schema {
+                Some((database_spec, schema_spec)) => {
+                    let schema_name = &self
+                        .catalog
+                        .get_schema(database_spec, schema_spec, session.conn_id())
+                        .name()
+                        .schema;
+                    let row = Row::pack_slice(&[Datum::String(schema_name)]);
+                    Ok(send_immediate_rows(vec![row]))
+                }
+                None => {
+                    session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
+                        search_path: session
+                            .vars()
+                            .search_path()
+                            .into_iter()
+                            .map(|schema| schema.to_string())
+                            .collect(),
+                    });
+                    Ok(send_immediate_rows(vec![Row::pack_slice(&[Datum::Null])]))
+                }
+            };
+        }
+
         let variable = session
             .vars()
             .get(&plan.name)
@@ -1740,6 +1767,23 @@ impl Coordinator {
 
         if variable.visible(session.user()) && (variable.safe() || self.catalog().unsafe_mode()) {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
+            if variable.name() == DATABASE_VAR_NAME
+                && matches!(
+                    self.catalog().resolve_database(&variable.value()),
+                    Err(CatalogError::UnknownDatabase(_))
+                )
+            {
+                let name = variable.value();
+                session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
+            } else if variable.name() == CLUSTER_VAR_NAME
+                && matches!(
+                    self.catalog().resolve_cluster(&variable.value()),
+                    Err(CatalogError::UnknownCluster(_))
+                )
+            {
+                let name = variable.value();
+                session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
+            }
             Ok(send_immediate_rows(vec![row]))
         } else {
             Err(AdapterError::VarError(VarError::UnknownParameter(

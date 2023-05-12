@@ -544,3 +544,38 @@ DISCARD BAD
 error: Expected one of ALL or PLANS or SEQUENCES or TEMP or TEMPORARY, found identifier "bad"
 DISCARD BAD
         ^
+
+parse-statement
+SET SCHEMA TO 'public'
+----
+SET search_path = 'public'
+=>
+SetVariable(SetVariableStatement { local: false, variable: Ident("search_path"), to: Values([Literal(String("public"))]) })
+
+parse-statement
+SET schema = 'public'
+----
+SET search_path = 'public'
+=>
+SetVariable(SetVariableStatement { local: false, variable: Ident("search_path"), to: Values([Literal(String("public"))]) })
+
+parse-statement
+SET LOCAL schema = 'public'
+----
+SET LOCAL search_path = 'public'
+=>
+SetVariable(SetVariableStatement { local: true, variable: Ident("search_path"), to: Values([Literal(String("public"))]) })
+
+parse-statement
+SET SESSION schema = 'public'
+----
+SET search_path = 'public'
+=>
+SetVariable(SetVariableStatement { local: false, variable: Ident("search_path"), to: Values([Literal(String("public"))]) })
+
+parse-statement
+SET SESSION schema = public, private
+----
+error: Expected end of statement, found comma
+SET SESSION schema = public, private
+                           ^

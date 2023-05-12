@@ -20,6 +20,10 @@ _variable&lowbar;name_ | The name of the session or system variable to display.
 
 {{% session-variables %}}
 
+## Special Syntax
+
+`SHOW SCHEMA` will show the first resolvable schema on the search path, or `NULL` if no such schema exists.
+
 ## System variables
 
 Materialize reserves system variables for region-wide configuration. Although it's possible to `SHOW` system variables, you must [contact us](https://materialize.com/contact/) to change their value (e.g. increasing the maximum number of AWS PrivateLink connections in your region).
