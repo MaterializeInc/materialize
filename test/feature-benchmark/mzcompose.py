@@ -22,6 +22,7 @@ from scenarios import *  # noqa: F401 F403
 from scenarios import Scenario
 from scenarios_concurrency import *  # noqa: F401 F403
 from scenarios_optbench import *  # noqa: F401 F403
+from scenarios_scale import *  # noqa: F401 F403
 from scenarios_subscribe import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
