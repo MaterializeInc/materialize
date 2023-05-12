@@ -98,14 +98,25 @@ class ResultComparator:
             self.warn_on_success_with_single_column(outcome1, validation_outcome)
 
         if both_failed:
+            failure1 = cast(QueryFailure, outcome1)
             self.validate_error_messages(
-                cast(QueryFailure, outcome1),
+                failure1,
                 cast(QueryFailure, outcome2),
                 validation_outcome,
             )
+            validation_outcome.add_remark(
+                ValidationRemark("DB error", failure1.error_message)
+            )
 
         if not both_successful:
-            any_failure = outcome1 if not outcome1.successful else outcome2
+            any_failure = cast(
+                QueryFailure, outcome1 if not outcome1.successful else outcome2
+            )
+            validation_outcome.add_remark(
+                ValidationRemark(
+                    f"DB error ({any_failure.strategy.name})", any_failure.error_message
+                )
+            )
             self.warn_on_failure_with_multiple_columns(any_failure, validation_outcome)
 
     def validate_row_count(
