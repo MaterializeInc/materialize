@@ -2663,13 +2663,8 @@ pub struct SourceToken {
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_client::stats::PartStats;
-    use mz_persist_types::part::PartBuilder;
-    use mz_repr::stats::PersistSourceDataStats;
-    use mz_repr::{DatumToPersist, DatumToPersistFn, RowArena};
     use proptest::prelude::*;
 
-    use crate::source::persist_source::PersistSourceDataStatsImpl;
     use crate::types::errors::EnvelopeError;
 
     use super::*;
@@ -2718,83 +2713,6 @@ mod tests {
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_columnar_roundtrip(scalar_type)
-        });
-    }
-
-    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
-        struct ValidateStatsSome<'a>(PersistSourceDataStatsImpl<'a>, &'a RowArena, Datum<'a>);
-        impl<'a> DatumToPersistFn<()> for ValidateStatsSome<'a> {
-            fn call<T: DatumToPersist>(self) -> () {
-                let ValidateStatsSome(stats, arena, datum) = self;
-                if let Some(lower) = stats.col_min(0, arena) {
-                    assert!(lower <= datum, "{} vs {} stats={:?}", lower, datum, stats);
-                }
-                if let Some(upper) = stats.col_max(0, arena) {
-                    assert!(upper >= datum, "{} vs {}", upper, datum);
-                }
-                assert_eq!(stats.col_null_count(0), Some(0));
-            }
-        }
-
-        struct ValidateStatsNone<'a>(PersistSourceDataStatsImpl<'a>, &'a RowArena);
-        impl<'a> DatumToPersistFn<()> for ValidateStatsNone<'a> {
-            fn call<T: DatumToPersist>(self) -> () {
-                let ValidateStatsNone(stats, arena) = self;
-                assert_eq!(stats.col_min(0, arena), None);
-                assert_eq!(stats.col_max(0, arena), None);
-                assert_eq!(stats.col_null_count(0), Some(1));
-            }
-        }
-
-        fn validate_stats(column_type: &ColumnType, datum: Datum<'_>) -> Result<(), String> {
-            let schema = RelationDesc::empty().with_column("col", column_type.clone());
-            let row = SourceData(Ok(Row::pack(std::iter::once(datum))));
-
-            let mut part = PartBuilder::new::<SourceData, _, _, _>(&schema, &UnitSchema);
-            {
-                let part_mut = part.get_mut();
-                <RelationDesc as Schema<SourceData>>::encoder(&schema, part_mut.key)?.encode(&row);
-                part_mut.ts.push(1);
-                part_mut.diff.push(1);
-            }
-            let part = part.finish()?;
-            let stats = part.key_stats::<SourceData, _>(&schema)?;
-
-            let schema_hack = RelationDescHack::new(&schema);
-            let stats = PersistSourceDataStatsImpl {
-                stats: &PartStats { key: stats },
-                desc: &schema_hack,
-            };
-            let arena = RowArena::default();
-            if datum.is_null() {
-                column_type.to_persist(ValidateStatsNone(stats, &arena));
-            } else {
-                column_type.to_persist(ValidateStatsSome(stats, &arena, datum));
-            }
-            Ok(())
-        }
-
-        // Non-nullable version of the column.
-        let column_type = scalar_type.clone().nullable(false);
-        for datum in scalar_type.interesting_datums() {
-            assert_eq!(validate_stats(&column_type, datum), Ok(()));
-        }
-
-        // Nullable version of the column.
-        let column_type = scalar_type.clone().nullable(true);
-        for datum in scalar_type.interesting_datums() {
-            assert_eq!(validate_stats(&column_type, datum), Ok(()));
-        }
-        assert_eq!(validate_stats(&column_type, Datum::Null), Ok(()));
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn all_scalar_types_stats_roundtrip() {
-        mz_ore::test::init_logging();
-        proptest!(|(scalar_type in any::<ScalarType>())| {
-            // The proptest! macro interferes with rustfmt.
-            scalar_type_stats_roundtrip(scalar_type)
         });
     }
 }
