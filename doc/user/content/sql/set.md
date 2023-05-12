@@ -27,7 +27,7 @@ _variable&lowbar;value_ | The value to assign to the session variable.
 
 ## Special Syntax
 
-There are a few session variables that act as aliases for other session variables. 
+There are a few session variables that act as aliases for other session variables.
 
 - `SCHEMA`: `SCHEMA` is an alias for `search_path`. Only one schema can be specified using this syntax. The `TO` and `=` syntax are optional.
 - `NAMES`: `NAMES` is an alias for `client_encoding`. The `TO` and `=` syntax must be omitted.
