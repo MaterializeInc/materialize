@@ -15,6 +15,7 @@ from pathlib import Path
 from materialize import ci_util
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
+    Clusterd,
     Kafka,
     Materialized,
     SchemaRegistry,
@@ -26,12 +27,35 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(),
+    Materialized(
+        options=[
+            "--orchestrator-process-scratch-directory=/mzdata/source_data",
+        ],
+        additional_system_parameter_defaults={
+            "upsert_source_disk_default": "true",
+            "enable_unmanaged_cluster_replicas": "true",
+        },
+    ),
     Testdrive(),
+    Clusterd(
+        name="clusterd1",
+        options=[
+            "--scratch-directory=/mzdata/source_data",
+        ],
+    ),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    for name in [
+        "rehydration",
+        "testdrive",
+    ]:
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run testdrive."""
     parser.add_argument(
         "--kafka-default-partitions",
@@ -67,9 +91,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     materialized = Materialized(
         default_size=args.default_size,
         options=[
-            "--orchestrator-process-scratch-directory=/mzdata/source_data"
-            "--system-var-default=upsert_source_disk_default=true"
+            "--orchestrator-process-scratch-directory=/mzdata/source_data",
         ],
+        additional_system_parameter_defaults={"upsert_source_disk_default": "true"},
     )
 
     with c.override(testdrive, materialized):
@@ -102,3 +126,55 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report
             )
+
+
+def workflow_rehydration(c: Composition) -> None:
+    """Test creating sources in a remote clusterd process."""
+
+    c.down(destroy_volumes=True)
+
+    dependencies = [
+        "materialized",
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "clusterd1",
+    ]
+
+    c.up("materialized")
+    c.run("testdrive", "rehydration/01-setup.td")
+
+    for (style, mz) in [
+        (
+            "with DISK",
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/mzdata/source_data",
+                ],
+                additional_system_parameter_defaults={
+                    "upsert_source_disk_default": "true"
+                },
+            ),
+        ),
+        ("without DISK", Materialized()),
+    ]:
+
+        with c.override(
+            mz,
+            Testdrive(no_reset=True, consistent_seed=True),
+        ):
+            print(f"Running rehydration workflow {style}")
+
+            c.up(*dependencies)
+
+            c.run("testdrive", "rehydration/02-source-setup.td")
+
+            c.kill("materialized")
+            c.kill("clusterd1")
+            c.up("materialized")
+            c.up("clusterd1")
+
+            c.run("testdrive", "rehydration/03-after-rehydration.td")
+
+        c.run("testdrive", "rehydration/04-reset.td")
+        c.kill("clusterd1")
