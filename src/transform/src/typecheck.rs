@@ -860,7 +860,7 @@ impl Typecheck {
 
                 tc.typecheck(body, &body_ctx)
             }
-            LetRec { ids, values, body } => {
+            LetRec { ids, values, body, max_iters: _ } => {
                 if ids.len() != values.len() {
                     return Err(TypeError::BadLetRecBindings { source: expr });
                 }
@@ -983,6 +983,7 @@ impl Typecheck {
                     ids: inner_ids,
                     values,
                     body,
+                    max_iters: _,
                 } => {
                     for inner_id in inner_ids {
                         if ids.contains(inner_id) {
