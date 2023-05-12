@@ -30,6 +30,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--dry-run", default=False, type=bool)
     parser.add_argument("--fail-fast", default=False, type=bool)
     parser.add_argument("--execute-setup", default=True, type=bool)
+    parser.add_argument("--verbose", default=False, type=bool)
     args = parser.parse_args()
 
     c.down(destroy_volumes=True)
@@ -44,6 +45,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         args.dry_run,
         args.fail_fast,
         args.execute_setup,
+        args.verbose,
     )
 
     assert test_summary.all_passed(), "At least one test failed"

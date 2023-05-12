@@ -17,6 +17,7 @@ class ConsistencyTestConfiguration:
         dry_run: bool,
         fail_fast: bool,
         execute_setup: bool,
+        verbose_output: bool,
     ):
         self.queries_per_tx = queries_per_tx
         self.max_cols_per_query = max_cols_per_query
@@ -24,6 +25,7 @@ class ConsistencyTestConfiguration:
         self.dry_run = dry_run
         self.fail_fast = fail_fast
         self.execute_setup = execute_setup
+        self.verbose_output = verbose_output
 
 
 DEFAULT_CONFIG = ConsistencyTestConfiguration(
@@ -33,4 +35,5 @@ DEFAULT_CONFIG = ConsistencyTestConfiguration(
     dry_run=False,
     fail_fast=False,
     execute_setup=True,
+    verbose_output=False,
 )

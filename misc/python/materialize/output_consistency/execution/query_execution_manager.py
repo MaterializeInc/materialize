@@ -119,9 +119,6 @@ class QueryExecutionManager:
         query_execution = QueryExecution(query, query_index)
 
         query_no = query_execution.index + 1
-        print(CONTENT_SEPARATOR_1)
-        print(f"{COMMENT_PREFIX} Test query #{query_no}:")
-        print(query_execution.generic_sql)
 
         for strategy in evaluation_strategies:
             sql_query_string = query.to_sql(strategy, QueryOutputFormat.SINGLE_LINE)
@@ -143,13 +140,23 @@ class QueryExecutionManager:
             return True
 
         validation_outcome = self.comparator.compare_results(query_execution)
-        self.print_test_result(query_no, validation_outcome)
+        self.print_test_result(query_no, query_execution, validation_outcome)
 
         return validation_outcome.success()
 
     def print_test_result(
-        self, query_no: int, validation_outcome: ValidationOutcome
+        self,
+        query_no: int,
+        query_execution: QueryExecution,
+        validation_outcome: ValidationOutcome,
     ) -> None:
+        if validation_outcome.success() and not self.config.verbose_output:
+            return
+
+        print(CONTENT_SEPARATOR_1)
+        print(f"{COMMENT_PREFIX} Test query #{query_no}:")
+        print(query_execution.generic_sql)
+
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
         success_reason = (
             f" ({validation_outcome.success_reason})"

@@ -41,12 +41,14 @@ def run_output_consistency_tests(
     dry_run: bool,
     fail_fast: bool,
     execute_setup: bool,
+    verbose_output: bool,
 ) -> ConsistencyTestSummary:
     config: ConsistencyTestConfiguration = DEFAULT_CONFIG
+    config.random_seed = random_seed
     config.dry_run = dry_run
     config.fail_fast = fail_fast
     config.execute_setup = execute_setup
-    config.random_seed = random_seed
+    config.verbose_output = verbose_output
     num_expressions_to_select = 20
 
     evaluation_strategies = [
@@ -77,6 +79,9 @@ def run_output_consistency_tests(
     execution_manager.setup_database_objects(DATA_TYPES, evaluation_strategies)
     test_summary = execution_manager.execute_queries(queries)
 
+    if not config.verbose_output:
+        print("Printing only queries with inconsistencies.")
+
     print(CONTENT_SEPARATOR_1)
     print(f"Test summary: {test_summary}")
 
@@ -104,6 +109,12 @@ def main() -> int:
         type=bool,
         action=argparse.BooleanOptionalAction,
     )
+    parser.add_argument(
+        "--verbose",
+        default=False,
+        type=bool,
+        action=argparse.BooleanOptionalAction,
+    )
     parser.add_argument("--host", default="localhost", type=str)
     parser.add_argument("--port", default=6875, type=int)
     args = parser.parse_args()
@@ -121,6 +132,7 @@ def main() -> int:
         args.dry_run,
         args.fail_fast,
         args.execute_setup,
+        args.verbose,
     )
     return 0 if result.all_passed() else 1
 
