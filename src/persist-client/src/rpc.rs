@@ -32,7 +32,7 @@ use tokio_stream::StreamExt;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue, MetadataMap};
 use tonic::transport::Endpoint;
 use tonic::{Extensions, Request, Response, Status, Streaming};
-use tracing::{debug, error, info, info_span, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{HashMap, HashSet};
@@ -953,12 +953,11 @@ impl PersistGrpcPubSubServer {
 impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServer {
     type PubSubStream = Pin<Box<dyn Stream<Item = Result<ProtoPubSubMessage, Status>> + Send>>;
 
+    #[tracing::instrument(name = "persist::rpc::server", level = "info", skip_all)]
     async fn pub_sub(
         &self,
         request: Request<Streaming<ProtoPubSubMessage>>,
     ) -> Result<Response<Self::PubSubStream>, Status> {
-        let root_span = info_span!("persist::rpc::server");
-        let _guard = root_span.enter();
         let caller_id = request
             .metadata()
             .get(AsciiMetadataKey::from_static(PERSIST_PUBSUB_CALLER_KEY))
@@ -977,12 +976,10 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
         // this spawn here to cleanup after connection error / disconnect, otherwise the stream
         // would not be polled after the connection drops. in our case, we want to clear the
         // connection and its subscriptions from our shared state when it drops.
+        let connection_span = info_span!("connection", caller_id);
         mz_ore::task::spawn(
             || format!("persist_pubsub_connection({})", caller),
             async move {
-                let root_span = info_span!("connection", caller_id);
-                let _guard = root_span.enter();
-
                 let connection = server_state.new_connection(tx);
                 while let Some(result) = in_stream.next().await {
                     let req = match result {
@@ -1019,7 +1016,8 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
                 }
 
                 info!("Persist PubSub connection ended: {:?}", caller_id);
-            },
+            }
+            .instrument(connection_span),
         );
 
         let out_stream: Self::PubSubStream = Box::pin(ReceiverStream::new(rx));

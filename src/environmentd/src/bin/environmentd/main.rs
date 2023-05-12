@@ -104,7 +104,7 @@ use mz_persist_client::rpc::{
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use url::Url;
@@ -765,20 +765,22 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
 
-    let _server = runtime.spawn_named(|| "persist::rpc::server", async move {
-        let span = tracing::info_span!("persist::rpc::server");
-        let _guard = span.enter();
-        info!(
-            "listening for Persist PubSub connections on {}",
-            args.internal_persist_pubsub_listen_addr
-        );
-        // Intentionally do not bubble up errors here, we don't want to take
-        // down environmentd if there are any issues with the pubsub server.
-        let res = persist_pubsub_server
-            .serve(args.internal_persist_pubsub_listen_addr)
-            .await;
-        error!("Persist Pubsub server exited {:?}", res);
-    });
+    let _server = runtime.spawn_named(
+        || "persist::rpc::server",
+        async move {
+            info!(
+                "listening for Persist PubSub connections on {}",
+                args.internal_persist_pubsub_listen_addr
+            );
+            // Intentionally do not bubble up errors here, we don't want to take
+            // down environmentd if there are any issues with the pubsub server.
+            let res = persist_pubsub_server
+                .serve(args.internal_persist_pubsub_listen_addr)
+                .await;
+            error!("Persist Pubsub server exited {:?}", res);
+        }
+        .instrument(tracing::info_span!("persist::rpc::server")),
+    );
 
     let persist_clients = {
         // PersistClientCache may spawn tasks, so run within a tokio runtime context
