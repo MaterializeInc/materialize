@@ -82,7 +82,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_postgres_stash="materialized",
     )
 
-    materialized = Materialized(default_size=args.default_size)
+    materialized = Materialized(
+        default_size=args.default_size,
+        # Used to test some behavior in `system-param-defaults.td`.
+        additional_system_parameter_defaults=[
+            "enable_envelope_upsert_in_subscribe=true",
+        ],
+    )
 
     with c.override(testdrive, materialized):
         c.up(*dependencies)

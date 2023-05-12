@@ -215,7 +215,13 @@ pub(super) struct UpsertMetrics {
     pub(super) multi_get_size: HistogramVec,
     pub(super) multi_put_latency: HistogramVec,
     pub(super) multi_put_size: HistogramVec,
-    // This is a map so that multiple timely workers can interact with the same
+
+    // These are used by `rocksdb`.
+    pub(super) rocksdb_multi_get_latency: HistogramVec,
+    pub(super) rocksdb_multi_get_size: HistogramVec,
+    pub(super) rocksdb_multi_put_latency: HistogramVec,
+    pub(super) rocksdb_multi_put_size: HistogramVec,
+    // These are maps so that multiple timely workers can interact with the same
     // `DeleteOnDropHistogram`, which is only dropped once ALL workers drop it.
     // The map may contain arbitrary, old `Weak`s for deleted sources, which are
     // only cleaned if those sources are recreated.
@@ -223,11 +229,13 @@ pub(super) struct UpsertMetrics {
     // We don't parameterize these by `worker_id` like the `rehydration_*` ones
     // to save on time-series cardinality.
     pub(super) shared: Arc<Mutex<BTreeMap<GlobalId, Weak<UpsertSharedMetrics>>>>,
+    pub(super) rocksdb: Arc<Mutex<BTreeMap<GlobalId, Weak<mz_rocksdb::RocksDBMetrics>>>>,
 }
 
 impl UpsertMetrics {
     fn register_with(registry: &MetricsRegistry) -> Self {
         let shared = Arc::new(Mutex::new(BTreeMap::new()));
+        let rocksdb = Arc::new(Mutex::new(BTreeMap::new()));
         Self {
             rehydration_latency: registry.register(metric!(
                 name: "mz_storage_upsert_state_rehydration_latency",
@@ -244,7 +252,7 @@ impl UpsertMetrics {
             multi_get_latency: registry.register(metric!(
                 name: "mz_storage_upsert_multi_get_latency",
                 help: "The latencies, in fractional seconds, \
-                    of getting values into the upsert state for this source. \
+                    of getting values from the upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
                     metrics about sub-batches.",
                 var_labels: ["source_id"],
@@ -254,7 +262,7 @@ impl UpsertMetrics {
             multi_get_size: registry.register(metric!(
                 name: "mz_storage_upsert_multi_get_size",
                 help: "The batch size, \
-                    of getting values into the upsert state for this source. \
+                    of getting values from the upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
                     metrics about sub-batches.",
                 var_labels: ["source_id"],
@@ -280,6 +288,37 @@ impl UpsertMetrics {
                 buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
             )),
             shared,
+            rocksdb_multi_get_latency: registry.register(metric!(
+                name: "mz_storage_rocksdb_multi_get_latency",
+                help: "The latencies, in fractional seconds, \
+                    of getting batches of values from RocksDB for this source.",
+                var_labels: ["source_id"],
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
+            )),
+            // Choose a relatively low number of representative buckets.
+            rocksdb_multi_get_size: registry.register(metric!(
+                name: "mz_storage_rocksdb_multi_get_size",
+                help: "The batch size, \
+                    of getting batches of values from RocksDB for this source.",
+                var_labels: ["source_id"],
+                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
+            )),
+            rocksdb_multi_put_latency: registry.register(metric!(
+                name: "mz_storage_rocksdb_multi_put_latency",
+                help: "The latencies, in fractional seconds, \
+                    of putting batches of values into RocksDB for this source.",
+                var_labels: ["source_id"],
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
+            )),
+            // Choose a relatively low number of representative buckets.
+            rocksdb_multi_put_size: registry.register(metric!(
+                name: "mz_storage_rocksdb_multi_put_size",
+                help: "The batch size, \
+                    of putting batches of values into RocksDB for this source.",
+                var_labels: ["source_id"],
+                buckets: vec![10.0, 100.0, 1000.0, 10000.0, 100000.0],
+            )),
+            rocksdb,
         }
     }
 
@@ -297,6 +336,41 @@ impl UpsertMetrics {
             .insert(source_id.clone(), Arc::downgrade(&shared_metrics))
             .is_none());
         shared_metrics
+    }
+
+    pub(super) fn rocksdb(&self, source_id: &GlobalId) -> Arc<mz_rocksdb::RocksDBMetrics> {
+        let mut rocksdb = self.rocksdb.lock().expect("mutex poisoned");
+        if let Some(shared_metrics) = rocksdb.get(source_id) {
+            if let Some(shared_metrics) = shared_metrics.upgrade() {
+                return Arc::clone(&shared_metrics);
+            } else {
+                assert!(rocksdb.remove(source_id).is_some());
+            }
+        }
+
+        let rocksdb_metrics = {
+            let source_id = source_id.to_string();
+            mz_rocksdb::RocksDBMetrics {
+                multi_get_latency: self
+                    .rocksdb_multi_get_latency
+                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                multi_get_size: self
+                    .rocksdb_multi_get_size
+                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                multi_put_latency: self
+                    .rocksdb_multi_put_latency
+                    .get_delete_on_drop_histogram(vec![source_id.clone()]),
+                multi_put_size: self
+                    .rocksdb_multi_put_size
+                    .get_delete_on_drop_histogram(vec![source_id]),
+            }
+        };
+
+        let rocksdb_metrics = Arc::new(rocksdb_metrics);
+        assert!(rocksdb
+            .insert(source_id.clone(), Arc::downgrade(&rocksdb_metrics))
+            .is_none());
+        rocksdb_metrics
     }
 }
 

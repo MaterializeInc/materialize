@@ -14,14 +14,14 @@ import argparse
 import os
 import re
 import sys
-from typing import Any, Dict, List
+from typing import Any, List, Optional, Set
 
-import junit_xml
 import requests
 
-from materialize import ROOT, ci_util
+from materialize import ci_util, spawn
 
 CI_RE = re.compile("ci-regexp: (.*)")
+CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 ERROR_RE = re.compile(
     r"""
     ( panicked\ at
@@ -55,8 +55,9 @@ ERROR_RE = re.compile(
 
 
 class KnownIssue:
-    def __init__(self, regex: str, info: Any):
+    def __init__(self, regex: str, apply_to: Optional[str], info: Any):
         self.regex = re.compile(regex)
+        self.apply_to = apply_to
         self.info = info
 
 
@@ -83,24 +84,54 @@ associated open Github issues in Materialize repository.""",
     return 0
 
 
+def annotate_errors(errors: List[str], title: str, style: str) -> None:
+    if not errors:
+        return
+
+    suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
+
+    error_str = "\n".join(f"* {error}" for error in errors)
+
+    if style == "info":
+        markdown = f"""<details><summary>{suite_name}: {title}</summary>
+
+{error_str}
+</details>"""
+    else:
+        markdown = f"""{suite_name}: {title}
+
+{error_str}"""
+
+    spawn.runv(
+        [
+            "buildkite-agent",
+            "annotate",
+            f"--style={style}",
+            f"--context={os.environ['BUILDKITE_JOB_ID']}-{style}",
+        ],
+        stdin=markdown.encode(),
+    )
+
+
 def annotate_logged_errors(log_files: List[str]) -> None:
     error_logs = get_error_logs(log_files)
 
     if not error_logs:
         return
 
-    known_issues = get_known_issues_from_github()
+    step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
+    buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
 
-    step_key = os.getenv("BUILDKITE_STEP_KEY")
-    suite_name = step_key or "Logged Errors"
-    junit_suite = junit_xml.TestSuite(suite_name)
+    known_issues = get_known_issues_from_github()
 
     artifacts = ci_util.get_artifacts()
     job = os.getenv("BUILDKITE_JOB_ID")
 
-    # Keep track of known errors so we log each only once, and attach the
-    # additional occurences to the same junit-xml test case.
-    dict_issue_number_to_test_case_index: Dict[int, int] = {}
+    unknown_errors: List[str] = []
+    known_errors: List[str] = []
+
+    # Keep track of known errors so we log each only once
+    already_reported_issue_numbers: Set[int] = set()
 
     for error in error_logs:
         for artifact in artifacts:
@@ -108,7 +139,7 @@ def annotate_logged_errors(log_files: List[str]) -> None:
                 org = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
                 pipeline = os.environ["BUILDKITE_PIPELINE_SLUG"]
                 build = os.environ["BUILDKITE_BUILD_NUMBER"]
-                linked_file = f'<a href="https://buildkite.com/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{artifact["job_id"]}/artifacts/{artifact["id"]}">{error.file}</a>'
+                linked_file = f'[{error.file}](https://buildkite.com/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{artifact["job_id"]}/artifacts/{artifact["id"]})'
                 break
         else:
             linked_file = error.file
@@ -116,65 +147,45 @@ def annotate_logged_errors(log_files: List[str]) -> None:
         for issue in known_issues:
             match = issue.regex.search(error.line)
             if match and issue.info["state"] == "open":
-                message = f"Known error in logs: <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a><br/>In {linked_file}:{error.line_nr}:"
-                if issue.info["number"] in dict_issue_number_to_test_case_index:
-                    junit_suite.test_cases[
-                        dict_issue_number_to_test_case_index[issue.info["number"]]
-                    ].add_failure_info(message=message, output=error.line)
-                else:
-                    test_case = junit_xml.TestCase(
-                        f"log error {len(junit_suite.test_cases) + 1} (known)",
-                        suite_name,
-                        allow_multiple_subelements=True,
+                if issue.apply_to and issue.apply_to not in (
+                    step_key.lower(),
+                    buildkite_label.lower(),
+                ):
+                    continue
+
+                if issue.info["number"] not in already_reported_issue_numbers:
+                    known_errors.append(
+                        f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}) in {linked_file}:{error.line_nr}:  \n``{error.line}``"
                     )
-                    test_case.add_failure_info(message=message, output=error.line)
-                    dict_issue_number_to_test_case_index[issue.info["number"]] = len(
-                        junit_suite.test_cases
-                    )
-                    junit_suite.test_cases.append(test_case)
+                    already_reported_issue_numbers.add(issue.info["number"])
                 break
         else:
             for issue in known_issues:
                 match = issue.regex.search(error.line)
                 if match and issue.info["state"] == "closed":
-                    message = f"Potential regression in logs: <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']}, closed)</a><br/>In {linked_file}:{error.line_nr}:"
-                    if issue.info["number"] in dict_issue_number_to_test_case_index:
-                        junit_suite.test_cases[
-                            dict_issue_number_to_test_case_index[issue.info["number"]]
-                        ].add_failure_info(message=message, output=error.line)
-                    else:
-                        test_case = junit_xml.TestCase(
-                            f"log error {len(junit_suite.test_cases) + 1} (regression)",
-                            suite_name,
-                            allow_multiple_subelements=True,
+                    if issue.apply_to and issue.apply_to not in (
+                        step_key.lower(),
+                        buildkite_label.lower(),
+                    ):
+                        continue
+
+                    if issue.info["number"] not in already_reported_issue_numbers:
+                        unknown_errors.append(
+                            f"Potential regression [{issue.info['title']} (#{issue.info['number']}, closed)]({issue.info['html_url']}) in {linked_file}:{error.line_nr}:  \n``{error.line}``"
                         )
-                        test_case.add_failure_info(
-                            message=message,
-                            output=error.line,
-                        )
-                        dict_issue_number_to_test_case_index[
-                            issue.info["number"]
-                        ] = len(junit_suite.test_cases)
-                        junit_suite.test_cases.append(test_case)
+                        already_reported_issue_numbers.add(issue.info["number"])
                     break
             else:
-                message = f'Unknown error in logs (<a href="https://github.com/MaterializeInc/materialize/blob/main/doc/developer/ci-regexp.md">ci-regexp guide</a>)<br/>In {linked_file}:{error.line_nr}:'
-                test_case = junit_xml.TestCase(
-                    f"log error {len(junit_suite.test_cases) + 1} (new)",
-                    suite_name,
-                    allow_multiple_subelements=True,
+                unknown_errors.append(
+                    f"Unknown error in {linked_file}:{error.line_nr}:  \n``{error.line}``"
                 )
-                test_case.add_failure_info(message=message, output=error.line)
-                junit_suite.test_cases.append(test_case)
 
-    junit_name = f"{step_key}_logged_errors" if step_key else "logged_errors"
-
-    junit_report = ci_util.junit_report_filename(junit_name)
-    with junit_report.open("w") as f:
-        junit_xml.to_xml_report_file(f, [junit_suite])
-
-    if "BUILDKITE_ANALYTICS_TOKEN_LOGGED_ERRORS" in os.environ:
-        ci_util.upload_junit_report("logged_errors", ROOT / junit_report)
+    annotate_errors(
+        unknown_errors,
+        "Unknown errors and regressions in logs (see [ci-regexp](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/ci-regexp.md))",
+        "error",
+    )
+    annotate_errors(known_errors, "Known errors in logs, ignoring", "info")
 
 
 def get_error_logs(log_files: List[str]) -> List[ErrorLog]:
@@ -212,8 +223,15 @@ def get_known_issues_from_github() -> list[KnownIssue]:
     known_issues = []
     for issue in issues_json["items"]:
         matches = CI_RE.findall(issue["body"])
+        matches_apply_to = CI_APPLY_TO.findall(issue["body"])
         for match in matches:
-            known_issues.append(KnownIssue(match.strip(), issue))
+            if matches_apply_to:
+                for match_apply_to in matches_apply_to:
+                    known_issues.append(
+                        KnownIssue(match.strip(), match_apply_to.strip().lower(), issue)
+                    )
+            else:
+                known_issues.append(KnownIssue(match.strip(), None, issue))
     return known_issues
 
 

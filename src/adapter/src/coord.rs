@@ -86,6 +86,7 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
+use mz_compute_client::controller::ComputeInstanceId;
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
     ClusterConfig, ClusterEvent, ClusterId, CreateReplicaConfig, ReplicaId,
@@ -206,13 +207,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         real_time_recency_ts: Timestamp,
-        replan: TransientPlan,
-    },
-    /// Replans a statement because the transient revision changed while doing off-thread work.
-    Replan {
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
-        replan: TransientPlan,
+        validity: PeekValidity,
     },
 }
 
@@ -292,16 +287,26 @@ pub enum PeekStage {
     Finish(PeekStageFinish),
 }
 
+impl PeekStage {
+    fn validity(&mut self) -> Option<&mut PeekValidity> {
+        match self {
+            PeekStage::Validate(_) => None,
+            PeekStage::Optimize(PeekStageOptimize { validity, .. })
+            | PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
+            | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PeekStageValidate {
     pub plan: mz_sql::plan::PeekPlan,
-    depends_on: Vec<GlobalId>,
     target_cluster: TargetCluster,
 }
 
 #[derive(Debug)]
 pub struct PeekStageOptimize {
-    replan: TransientPlan,
+    validity: PeekValidity,
     source: MirRelationExpr,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -317,7 +322,7 @@ pub struct PeekStageOptimize {
 
 #[derive(Debug)]
 pub struct PeekStageTimestamp {
-    replan: TransientPlan,
+    validity: PeekValidity,
     dataflow: DataflowDescription<OptimizedMirRelationExpr>,
     finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
@@ -335,7 +340,7 @@ pub struct PeekStageTimestamp {
 
 #[derive(Debug)]
 pub struct PeekStageFinish {
-    replan: TransientPlan,
+    validity: PeekValidity,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
     pub dataflow: DataflowDescription<OptimizedMirRelationExpr>,
@@ -346,7 +351,6 @@ pub struct PeekStageFinish {
     pub index_id: GlobalId,
     pub timeline_context: TimelineContext,
     pub source_ids: BTreeSet<GlobalId>,
-    pub in_immediate_multi_stmt_txn: bool,
     pub real_time_recency_ts: Option<mz_repr::Timestamp>,
     pub key: Vec<MirScalarExpr>,
     pub typ: RelationType,
@@ -364,13 +368,46 @@ pub enum TargetCluster {
     Active,
 }
 
-/// A struct to hold information on how to determine if a plan may have changed and how to re-plan
-/// it if so.
+/// A struct to hold information about the validity of peeks and if they should be abandoned after
+/// doing work off of the Coordinator thread.
 #[derive(Debug)]
-pub struct TransientPlan {
+pub struct PeekValidity {
+    /// The most recent revision at which this peek was verified as valid.
     transient_revision: u64,
-    plan: mz_sql::plan::Plan,
-    depends_on: Vec<GlobalId>,
+    /// Objects on which the peek depends.
+    source_ids: BTreeSet<GlobalId>,
+    cluster_id: ComputeInstanceId,
+    replica_id: Option<ReplicaId>,
+}
+
+impl PeekValidity {
+    /// Returns an error if the current catalog no longer has all dependencies.
+    fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
+        if self.transient_revision == catalog.transient_revision() {
+            return Ok(());
+        }
+        // If the transient revision changed, we have to recheck. If successful, bump the revision
+        // so next check uses the above fast path.
+        let Some(cluster) = catalog.try_get_cluster(self.cluster_id) else {
+            return Err(AdapterError::ChangedPlan);
+        };
+        if let Some(replica_id) = self.replica_id {
+            if !cluster.replicas_by_id.contains_key(&replica_id) {
+                return Err(AdapterError::ChangedPlan);
+            }
+        }
+        // It is sufficient to check that all the source_ids still exist because we assume:
+        // - Ids do not mutate.
+        // - Ids are not reused.
+        // - If an id was dropped, this will detect it and error.
+        for id in &self.source_ids {
+            if catalog.try_get_entry(id).is_none() {
+                return Err(AdapterError::ChangedPlan);
+            }
+        }
+        self.transient_revision = catalog.transient_revision();
+        Ok(())
+    }
 }
 
 /// Configures a coordinator.
@@ -387,7 +424,7 @@ pub struct Config {
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     pub default_storage_cluster_size: Option<String>,
-    pub bootstrap_system_parameters: BTreeMap<String, String>,
+    pub system_parameter_defaults: BTreeMap<String, String>,
     pub connection_context: ConnectionContext,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
@@ -1417,7 +1454,7 @@ pub async fn serve(
         cloud_resource_controller,
         cluster_replica_sizes,
         default_storage_cluster_size,
-        bootstrap_system_parameters,
+        system_parameter_defaults,
         mut availability_zones,
         connection_context,
         storage_usage_client,
@@ -1476,7 +1513,7 @@ pub async fn serve(
             metrics_registry: &metrics_registry,
             cluster_replica_sizes,
             default_storage_cluster_size,
-            bootstrap_system_parameters,
+            system_parameter_defaults,
             availability_zones,
             secrets_reader: secrets_controller.reader(),
             egress_ips,

@@ -365,6 +365,13 @@ pub struct Args {
         env = "ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY"
     )]
     orchestrator_process_prometheus_service_discovery_directory: Option<PathBuf>,
+    /// A scratch directory that orchestrated processes can use for ephemeral storage.
+    #[clap(
+        long,
+        env = "ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY",
+        value_name = "PATH"
+    )]
+    orchestrator_process_scratch_directory: Option<PathBuf>,
     /// Whether to use coverage build and collect coverage information. Not to be used for
     /// production, only testing.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_COVERAGE")]
@@ -439,15 +446,15 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_cluster_replica_size: String,
-    /// An list of NAME=VALUE pairs for bootstrapping system parameters that are
-    /// not already modified.
+    /// An list of NAME=VALUE pairs used to override static defaults
+    /// for system parameters.
     #[clap(
         long,
-        env = "BOOTSTRAP_SYSTEM_PARAMETER",
+        env = "SYSTEM_PARAMETER_DEFAULT",
         multiple = true,
         value_delimiter = ';'
     )]
-    bootstrap_system_parameter: Vec<KeyValueArg<String, String>>,
+    system_parameter_default: Vec<KeyValueArg<String, String>>,
     /// Default storage host size
     #[clap(long, env = "DEFAULT_STORAGE_HOST_SIZE")]
     default_storage_host_size: Option<String>,
@@ -654,6 +661,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         Option<Arc<dyn CloudResourceController>>,
     ) = match args.orchestrator {
         OrchestratorKind::Kubernetes => {
+            if args.orchestrator_process_scratch_directory.is_some() {
+                bail!(
+                    "--orchestrator-process-scratch-directory is \
+                      not currently usable with the kubernetes orchestrator"
+                );
+            }
+
             let orchestrator = Arc::new(
                 runtime
                     .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
@@ -710,6 +724,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                                     .orchestrator_process_prometheus_service_discovery_directory,
                             },
                         ),
+                        scratch_directory: args.orchestrator_process_scratch_directory.clone(),
                     }))
                     .context("creating process orchestrator")?,
             );
@@ -725,6 +740,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     );
     let persist_clients = Arc::new(persist_clients);
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
+
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
@@ -739,6 +755,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
+        scratch_directory: args.orchestrator_process_scratch_directory,
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
@@ -779,8 +796,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         default_storage_cluster_size: args.default_storage_host_size,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
-        bootstrap_system_parameters: args
-            .bootstrap_system_parameter
+        system_parameter_defaults: args
+            .system_parameter_default
             .into_iter()
             .map(|kv| (kv.key, kv.value))
             .collect(),

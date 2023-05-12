@@ -23,7 +23,7 @@ We are rolling out access to the new, cloud-native version of Materialize: **hor
 {{< linkbox icon="bulb" title="Key Concepts" >}}
 
 -   [Materialize overview](/overview/what-is-materialize/)
--   [Key Concepts](/overview/key-concepts/)
+-   [Key Concepts](/get-started/key-concepts/)
     {{</ linkbox >}}
     {{< linkbox icon="doc" title="Guides" >}}
 -   [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)

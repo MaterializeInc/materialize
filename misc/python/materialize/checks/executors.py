@@ -13,12 +13,16 @@ from typing import Any, Optional
 
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.mzcompose import Composition
-
-# from materialize.cloudtest import
+from materialize.util import MzVersion, released_materialize_versions
 
 
 class Executor:
-    pass
+    # Store the current Materialize version and keep it up-to-date during
+    # upgrades so that actions can depend not just on the base version, but
+    # also on the current version. This enables testing more interesting
+    # scenarios which are still in development and not available a few versions
+    # back already.
+    current_mz_version: MzVersion
 
     def testdrive(self, input: str) -> Any:
         assert False
@@ -71,6 +75,7 @@ class CloudtestExecutor(Executor):
     def __init__(self, application: MaterializeApplication) -> None:
         self.application = application
         self.seed = random.getrandbits(32)
+        self.current_mz_version = released_materialize_versions()[0]
 
     def cloudtest_application(self) -> MaterializeApplication:
         return self.application

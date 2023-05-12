@@ -76,6 +76,7 @@ message ProtoUpsertEnvelope {
     ProtoUpsertStyle style = 1;
     repeated uint64 key_indices = 2;
     uint64 source_arity = 3;
+    bool disk = 4;
 }
 
 message ProtoUpsertStyle {

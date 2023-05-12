@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import re
+import json
 import time
 from textwrap import dedent
 from threading import Thread
@@ -75,6 +75,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-compute-reconciliation-reuse",
         "test-compute-reconciliation-no-errors",
         "test-mz-subscriptions",
+        "test-mv-source-sink",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -356,25 +357,16 @@ def workflow_test_github_15535(c: Composition) -> None:
     print("Sleeping to wait for frontier updates")
     time.sleep(10)
 
-    def extract_frontiers(output: str) -> Tuple[str, str]:
-        since_re = re.compile("^\s+since:\[(?P<frontier>.*)\]")
-        upper_re = re.compile("^\s+upper:\[(?P<frontier>.*)\]")
-        since = None
-        upper = None
-        for line in output.splitlines():
-            if match := since_re.match(line):
-                since = match.group("frontier").strip()
-            elif match := upper_re.match(line):
-                upper = match.group("frontier").strip()
-
-        assert since is not None, "since not found in EXPLAIN TIMESTAMP output"
-        assert upper is not None, "upper not found in EXPLAIN TIMESTAMP output"
-        return (since, upper)
+    def extract_frontiers(output: str) -> Tuple[int, int]:
+        j = json.loads(output)
+        (upper,) = j["determination"]["upper"]["elements"]
+        (since,) = j["determination"]["since"]["elements"]
+        return (upper, since)
 
     # Verify that there are no empty frontiers.
-    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM mv")
+    output = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mv")
     mv_since, mv_upper = extract_frontiers(output[0][0])
-    output = c.sql_query("EXPLAIN TIMESTAMP FOR SELECT * FROM t")
+    output = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t")
     t_since, t_upper = extract_frontiers(output[0][0])
 
     assert mv_since, "mv has empty since frontier"
@@ -1015,7 +1007,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(
             options=[
-                "--bootstrap-system-parameter=allowed_cluster_replica_sizes='1', '2', 'oops'"
+                "--system-var-default=allowed_cluster_replica_sizes='1', '2', 'oops'"
             ],
         ),
     ):
@@ -1027,7 +1019,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(
             environment_extra=[
-                """ MZ_BOOTSTRAP_SYSTEM_PARAMETER=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
+                """ MZ_SYSTEM_PARAMETER_DEFAULT=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
             ],
         ),
     ):
@@ -1440,3 +1432,46 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
 
     stop_subscribe(subscribe2)
     check_mz_subscriptions(())
+
+
+def workflow_test_mv_source_sink(c: Composition) -> None:
+    """
+    Test that compute materialized view's "since" timestamp is at least as large as source table's "since" timestamp.
+
+    Regression test for https://github.com/MaterializeInc/materialize/issues/19151
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+
+    # Set up a dataflow on clusterd.
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 2
+        ));
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        """
+    )
+
+    def extract_since_ts(output: str) -> int:
+        j = json.loads(output)
+        (since,) = j["determination"]["since"]["elements"]
+        return int(since)
+
+    # Verify that there are no empty frontiers.
+    output = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t")
+    t_since = extract_since_ts(output[0][0])
+    output = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mv")
+    mv_since = extract_since_ts(output[0][0])
+
+    assert (
+        mv_since >= t_since
+    ), f'"since" timestamp of mv ({mv_since}) is less than "since" timestamp of its source table ({t_since})'

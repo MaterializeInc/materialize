@@ -109,6 +109,7 @@ Delimiter
 Desc
 Details
 Discard
+Disk
 Distinct
 Dot
 Double
@@ -181,6 +182,7 @@ Introspection
 Is
 Isnull
 Isolation
+Iteration
 Join
 Json
 Kafka
@@ -262,6 +264,7 @@ Prefix
 Prepare
 Primary
 Privatelink
+Privileges
 Progress
 Protobuf
 Publication

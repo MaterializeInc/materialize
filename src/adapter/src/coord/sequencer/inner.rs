@@ -84,11 +84,13 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
-use crate::coord::timestamp_selection::{TimestampContext, TimestampSource};
+use crate::coord::timestamp_selection::{
+    TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
+};
 use crate::coord::{
     peek, Coordinator, Message, PeekStage, PeekStageFinish, PeekStageOptimize, PeekStageTimestamp,
-    PeekStageValidate, PendingReadTxn, PendingTxn, RealTimeRecencyContext, SinkConnectionReady,
-    TargetCluster, TransientPlan, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    PeekStageValidate, PeekValidity, PendingReadTxn, PendingTxn, RealTimeRecencyContext,
+    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -1835,7 +1837,6 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         plan: PeekPlan,
-        depends_on: Vec<GlobalId>,
         target_cluster: TargetCluster,
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
@@ -1845,7 +1846,6 @@ impl Coordinator {
             session,
             PeekStage::Validate(PeekStageValidate {
                 plan,
-                depends_on,
                 target_cluster,
             }),
         )
@@ -1862,6 +1862,16 @@ impl Coordinator {
         // Process the current stage and allow for processing the next.
         loop {
             event!(Level::TRACE, stage = format!("{:?}", stage));
+
+            // Always verify peek validity. This is cheap, and prevents programming errors
+            // if we move any stages off thread.
+            if let Some(validity) = stage.validity() {
+                if let Err(err) = validity.check(self.catalog()) {
+                    tx.send(Err(err), session);
+                    return;
+                }
+            }
+
             (tx, session, stage) = match stage {
                 PeekStage::Validate(stage) => {
                     let next =
@@ -1880,17 +1890,6 @@ impl Coordinator {
                     }
                 }
                 PeekStage::Finish(stage) => {
-                    // The finish stage doesn't go off-thread, so do a revision check before proceeding.
-                    if self.catalog().transient_revision() != stage.replan.transient_revision {
-                        self.internal_cmd_tx
-                            .send(Message::Replan {
-                                tx,
-                                session,
-                                replan: stage.replan,
-                            })
-                            .expect("coordinator must exist");
-                        return;
-                    }
                     let res = self.peek_stage_finish(&mut session, stage).await;
                     tx.send(res, session);
                     return;
@@ -1905,7 +1904,6 @@ impl Coordinator {
         session: &mut Session,
         PeekStageValidate {
             plan,
-            depends_on,
             target_cluster,
         }: PeekStageValidate,
     ) -> Result<PeekStageOptimize, AdapterError> {
@@ -1914,7 +1912,7 @@ impl Coordinator {
             when,
             finishing,
             copy_to,
-        } = plan.clone();
+        } = plan;
 
         // Two transient allocations. We could reclaim these if we don't use them, potentially.
         // TODO: reclaim transient identifiers in fast path cases.
@@ -1957,14 +1955,15 @@ impl Coordinator {
 
         check_no_invalid_log_reads(catalog, cluster, &source_ids, &mut target_replica)?;
 
-        let replan = TransientPlan {
+        let validity = PeekValidity {
             transient_revision: catalog.transient_revision(),
-            plan: Plan::Peek(plan),
-            depends_on,
+            source_ids: source_ids.clone(),
+            cluster_id: cluster.id(),
+            replica_id: target_replica,
         };
 
         Ok(PeekStageOptimize {
-            replan,
+            validity,
             source,
             finishing,
             copy_to,
@@ -1983,7 +1982,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         PeekStageOptimize {
-            replan,
+            validity,
             source,
             finishing,
             copy_to,
@@ -2038,7 +2037,7 @@ impl Coordinator {
         mz_transform::optimize_dataflow(&mut dataflow, &builder.index_oracle())?;
 
         Ok(PeekStageTimestamp {
-            replan,
+            validity,
             dataflow,
             finishing,
             copy_to,
@@ -2061,7 +2060,7 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         PeekStageTimestamp {
-            replan,
+            validity,
             dataflow,
             finishing,
             copy_to,
@@ -2107,7 +2106,7 @@ impl Coordinator {
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
                         conn_id,
                         real_time_recency_ts,
-                        replan,
+                        validity,
                     });
                     if let Err(e) = result {
                         warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -2119,7 +2118,7 @@ impl Coordinator {
                 tx,
                 session,
                 PeekStageFinish {
-                    replan,
+                    validity,
                     finishing,
                     copy_to,
                     dataflow,
@@ -2130,7 +2129,6 @@ impl Coordinator {
                     index_id,
                     timeline_context,
                     source_ids,
-                    in_immediate_multi_stmt_txn,
                     real_time_recency_ts: None,
                     key,
                     typ,
@@ -2144,7 +2142,7 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         PeekStageFinish {
-            replan: _,
+            validity: _,
             finishing,
             copy_to,
             dataflow,
@@ -2155,7 +2153,6 @@ impl Coordinator {
             index_id,
             timeline_context,
             source_ids,
-            in_immediate_multi_stmt_txn,
             real_time_recency_ts,
             key,
             typ,
@@ -2167,7 +2164,7 @@ impl Coordinator {
             .index_oracle(cluster_id)
             .sufficient_collections(&source_ids);
 
-        let mut peek_plan = self.plan_peek(
+        let peek_plan = self.plan_peek(
             dataflow,
             session,
             &when,
@@ -2177,29 +2174,10 @@ impl Coordinator {
             timeline_context,
             source_ids,
             id_bundle,
-            in_immediate_multi_stmt_txn,
             real_time_recency_ts,
             key,
             typ,
         )?;
-
-        if let Some(id_bundle) = peek_plan.read_holds.take() {
-            if let TimestampContext::TimelineTimestamp(_, timestamp) = peek_plan.timestamp_context {
-                let read_holds = self.acquire_read_holds(timestamp, &id_bundle);
-                self.txn_reads.insert(session.conn_id(), read_holds);
-            }
-        }
-
-        // We only track the peeks in the session if the query doesn't use AS
-        // OF or we're inside an explicit transaction. The latter case is
-        // necessary to support PG's `BEGIN` semantics, whose behavior can
-        // depend on whether or not reads have occurred in the txn.
-        if matches!(session.transaction(), &TransactionStatus::InTransaction(_))
-            || when == QueryWhen::Immediately
-        {
-            session
-                .add_transaction_ops(TransactionOps::Peeks(peek_plan.timestamp_context.clone()))?;
-        }
 
         let timestamp = peek_plan.timestamp_context.timestamp().cloned();
 
@@ -2223,10 +2201,82 @@ impl Coordinator {
         }
     }
 
+    /// Determines the query timestamp and acquires read holds on dependent sources
+    /// if necessary.
+    fn sequence_peek_timestamp(
+        &mut self,
+        session: &mut Session,
+        when: &QueryWhen,
+        cluster_id: ClusterId,
+        timeline_context: TimelineContext,
+        id_bundle: &CollectionIdBundle,
+        source_ids: &BTreeSet<GlobalId>,
+        real_time_recency_ts: Option<Timestamp>,
+    ) -> Result<TimestampDetermination<Timestamp>, AdapterError> {
+        let determination = self.determine_timestamp(
+            session,
+            id_bundle,
+            when,
+            cluster_id,
+            timeline_context.clone(),
+            real_time_recency_ts,
+        )?;
+
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        if when.is_transactional() {
+            session.add_transaction_ops(TransactionOps::Peeks(
+                determination.timestamp_context.clone(),
+            ))?;
+        } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
+            // If the query uses AS OF, then ignore the timestamp.
+            session.add_transaction_ops(TransactionOps::Peeks(TimestampContext::NoTimestamp))?;
+        }
+
+        let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
+            && when == &QueryWhen::Immediately;
+
+        // If we are in a single statement transaction, there is no need to
+        // acquire read holds to prevent compaction as they will be released
+        // immediately following the completion of the transaction.
+        //
+        // If we're in a multi-statement transaction and the query does not use `AS OF`,
+        // acquire read holds on any sources in the current time-domain if they have not
+        // already been acquired. If the query does use `AS OF`, it is not necessary to
+        // acquire read holds.
+        if in_immediate_multi_stmt_txn {
+            self.check_txn_timedomain_conflicts(
+                session,
+                &determination.timestamp_context,
+                id_bundle,
+            )?;
+
+            // If we've already acquired read holds for the txn, we can skip doing so again
+            if !self.txn_reads.contains_key(&session.conn_id()) {
+                if let Some(timestamp) = determination.timestamp_context.timestamp() {
+                    let timedomain_id_bundle = self.timedomain_for(
+                        source_ids,
+                        &timeline_context,
+                        session.conn_id(),
+                        cluster_id,
+                    )?;
+
+                    let read_holds =
+                        self.acquire_read_holds(timestamp.clone(), &timedomain_id_bundle);
+                    self.txn_reads.insert(session.conn_id(), read_holds);
+                }
+            }
+        }
+
+        Ok(determination)
+    }
+
     fn plan_peek(
-        &self,
+        &mut self,
         mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-        session: &Session,
+        session: &mut Session,
         when: &QueryWhen,
         cluster_id: ClusterId,
         view_id: GlobalId,
@@ -2234,103 +2284,22 @@ impl Coordinator {
         timeline_context: TimelineContext,
         source_ids: BTreeSet<GlobalId>,
         id_bundle: CollectionIdBundle,
-        in_immediate_multi_stmt_txn: bool,
         real_time_recency_ts: Option<Timestamp>,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
     ) -> Result<PlannedPeek, AdapterError> {
-        let mut read_holds = None;
         let conn_id = session.conn_id();
-        // For transactions that do not use AS OF, get the timestamp context of the
-        // in-progress transaction or create one. If this is an AS OF query, we
-        // don't care about any possible transaction timestamp context. If this is a
-        // single-statement transaction (TransactionStatus::Started), we don't
-        // need to worry about preventing compaction or choosing a valid
-        // timestamp context for future queries.
-        let timestamp_context = if in_immediate_multi_stmt_txn {
-            match session.get_transaction_timestamp_context() {
-                Some(ts_context @ TimestampContext::TimelineTimestamp(_, _)) => ts_context,
-                _ => {
-                    // Determine a timestamp that will be valid for anything in any schema
-                    // referenced by the first query.
-                    let id_bundle =
-                        self.timedomain_for(&source_ids, &timeline_context, conn_id, cluster_id)?;
-                    // We want to prevent compaction of the indexes consulted by
-                    // determine_timestamp, not the ones listed in the query.
-                    let timestamp = self.determine_timestamp(
-                        session,
-                        &id_bundle,
-                        &QueryWhen::Immediately,
-                        cluster_id,
-                        timeline_context,
-                        real_time_recency_ts,
-                    )?;
-                    // We only need read holds if the read depends on a timestamp.
-                    if timestamp.timestamp_context.contains_timestamp() {
-                        read_holds = Some(id_bundle);
-                    }
-                    timestamp.timestamp_context
-                }
-            }
-        } else {
-            self.determine_timestamp(
+        let timestamp_context = self
+            .sequence_peek_timestamp(
                 session,
-                &id_bundle,
                 when,
                 cluster_id,
                 timeline_context,
+                &id_bundle,
+                &source_ids,
                 real_time_recency_ts,
             )?
-            .timestamp_context
-        };
-
-        if in_immediate_multi_stmt_txn {
-            // If there are no `txn_reads`, then this must be the first query in the transaction
-            // and we can skip timedomain validations.
-            if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
-                // Queries without a timestamp and timeline can belong to any existing timedomain.
-                if let TimestampContext::TimelineTimestamp(_, _) = &timestamp_context {
-                    // Verify that the references and indexes for this query are in the
-                    // current read transaction.
-                    let allowed_id_bundle = txn_reads.id_bundle();
-                    // Find the first reference or index (if any) that is not in the transaction. A
-                    // reference could be caused by a user specifying an object in a different
-                    // schema than the first query. An index could be caused by a CREATE INDEX
-                    // after the transaction started.
-                    let outside = id_bundle.difference(&allowed_id_bundle);
-                    if !outside.is_empty() {
-                        let mut names: Vec<_> = allowed_id_bundle
-                            .iter()
-                            // This could filter out a view that has been replaced in another transaction.
-                            .filter_map(|id| self.catalog().try_get_entry(&id))
-                            .map(|item| item.name())
-                            .map(|name| {
-                                self.catalog()
-                                    .resolve_full_name(name, Some(session.conn_id()))
-                                    .to_string()
-                            })
-                            .collect();
-                        let mut outside: Vec<_> = outside
-                            .iter()
-                            .filter_map(|id| self.catalog().try_get_entry(&id))
-                            .map(|item| item.name())
-                            .map(|name| {
-                                self.catalog()
-                                    .resolve_full_name(name, Some(session.conn_id()))
-                                    .to_string()
-                            })
-                            .collect();
-                        // Sort so error messages are deterministic.
-                        names.sort();
-                        outside.sort();
-                        return Err(AdapterError::RelationOutsideTimeDomain {
-                            relations: outside,
-                            names,
-                        });
-                    }
-                }
-            }
-        }
+            .timestamp_context;
 
         // Now that we have a timestamp, set the as of and resolve calls to mz_now().
         dataflow.set_as_of(timestamp_context.antichain());
@@ -2360,13 +2329,52 @@ impl Coordinator {
 
         Ok(PlannedPeek {
             plan: peek_plan,
-            read_holds,
             timestamp_context,
             conn_id,
             source_arity: typ.arity(),
             id_bundle,
             source_ids,
         })
+    }
+
+    /// Verifies that no timedomain conflicts exist between the transaction's current read
+    /// holds and the specified sets of incoming collections
+    fn check_txn_timedomain_conflicts(
+        &self,
+        session: &Session,
+        timestamp_context: &TimestampContext<Timestamp>,
+        incoming_id_bundle: &CollectionIdBundle,
+    ) -> Result<(), AdapterError> {
+        // If there are no `txn_reads`, then this must be the first query in the transaction
+        // and we can skip timedomain validations.
+        if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
+            // Queries without a timestamp and timeline can belong to any existing timedomain.
+            if let TimestampContext::TimelineTimestamp(_, _) = timestamp_context {
+                // Verify that the references and indexes for this query are in the
+                // current read transaction.
+                let allowed_id_bundle = txn_reads.id_bundle();
+                // Find the first reference or index (if any) that is not in the transaction. A
+                // reference could be caused by a user specifying an object in a different
+                // schema than the first query. An index could be caused by a CREATE INDEX
+                // after the transaction started.
+                let outside = incoming_id_bundle.difference(&allowed_id_bundle);
+                if !outside.is_empty() {
+                    let mut valid_names =
+                        self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
+                    let mut invalid_names =
+                        self.resolve_collection_id_bundle_names(session, &outside);
+                    // Sort so error messages are deterministic.
+                    valid_names.sort();
+                    invalid_names.sort();
+                    return Err(AdapterError::RelationOutsideTimeDomain {
+                        relations: invalid_names,
+                        names: valid_names,
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Checks to see if the session needs a real time recency timestamp and if so returns
@@ -2447,7 +2455,7 @@ impl Coordinator {
 
         let make_sink_desc = |coord: &mut Coordinator, session: &mut Session, from, from_desc| {
             let up_to = up_to
-                .map(|expr| coord.evaluate_when(expr, session))
+                .map(|expr| Coordinator::evaluate_when(coord.catalog().state(), expr, session))
                 .transpose()?;
             if let Some(up_to) = up_to {
                 if as_of == up_to {
@@ -2568,28 +2576,27 @@ impl Coordinator {
     pub(super) fn sequence_explain(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        mut session: Session,
         plan: ExplainPlan,
-        depends_on: Vec<GlobalId>,
+        target_cluster: TargetCluster,
     ) {
         match plan.stage {
-            ExplainStage::Timestamp => {
-                self.sequence_explain_timestamp_begin(tx, session, plan, depends_on)
-            }
-            _ => tx.send(self.sequence_explain_plan(&session, plan), session),
+            ExplainStage::Timestamp => self.sequence_explain_timestamp_begin(tx, session, plan),
+            _ => tx.send(
+                self.sequence_explain_plan(&mut session, plan, target_cluster),
+                session,
+            ),
         }
     }
 
     fn sequence_explain_plan(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: ExplainPlan,
+        target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_compute_client::plan::Plan;
         use mz_repr::explain::trace_plan;
         use ExplainStage::*;
-
-        let cluster = self.catalog().active_cluster(session)?.id;
 
         let ExplainPlan {
             raw_plan,
@@ -2600,6 +2607,15 @@ impl Coordinator {
             no_errors,
             explainee,
         } = plan;
+
+        let cluster_id = {
+            let catalog = self.catalog();
+            let cluster = match explainee {
+                Explainee::Dataflow(_) => catalog.active_cluster(session)?,
+                Explainee::Query => catalog.resolve_target_cluster(target_cluster, session)?,
+            };
+            cluster.id
+        };
 
         /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
         /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
@@ -2650,7 +2666,22 @@ impl Coordinator {
                 raw_plan.optimize_and_lower(&OptimizerConfig {})
             })?;
 
-            self.validate_timeline_context(decorrelated_plan.depends_on())?;
+            let mut timeline_context =
+                self.validate_timeline_context(decorrelated_plan.depends_on())?;
+            if matches!(explainee, Explainee::Query)
+                && matches!(timeline_context, TimelineContext::TimestampIndependent)
+                && decorrelated_plan.contains_temporal()
+            {
+                // If the source IDs are timestamp independent but the query contains temporal functions,
+                // then the timeline context needs to be upgraded to timestamp dependent. This is
+                // required because `source_ids` doesn't contain functions.
+                timeline_context = TimelineContext::TimestampDependent;
+            }
+
+            let source_ids = decorrelated_plan.depends_on();
+            let id_bundle = self
+                .index_oracle(cluster_id)
+                .sufficient_collections(&source_ids);
 
             // Execute the `optimize/local` stage.
             let optimized_plan = catch_unwind(no_errors, "local", || {
@@ -2664,15 +2695,24 @@ impl Coordinator {
             })?;
 
             let mut dataflow = DataflowDesc::new("explanation".to_string());
-            self.dataflow_builder(cluster).import_view_into_dataflow(
-                &explainee_id,
-                &optimized_plan,
-                &mut dataflow,
+            let mut builder = self.dataflow_builder(cluster_id);
+            builder.import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
+
+            // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
+            // timestamp.
+            let style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::Deferred,
+                session,
+            };
+            let state = self.catalog().state();
+            dataflow.visit_children(
+                |r| prep_relation_expr(state, r, style),
+                |s| prep_scalar_expr(state, s, style),
             )?;
 
             // Execute the `optimize/global` stage.
             catch_unwind(no_errors, "global", || {
-                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster))
+                mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle(cluster_id))
             })?;
 
             // Calculate indexes used by the dataflow at this point
@@ -2684,19 +2724,49 @@ impl Coordinator {
 
             // Determine if fast path plan will be used for this explainee
             let fast_path_plan = match explainee {
-                Explainee::Query => peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?,
+                Explainee::Query => {
+                    let timestamp_context = self
+                        .sequence_peek_timestamp(
+                            session,
+                            &QueryWhen::Immediately,
+                            cluster_id,
+                            timeline_context,
+                            &id_bundle,
+                            &source_ids,
+                            None, // no real-time recency
+                        )?
+                        .timestamp_context;
+                    dataflow.set_as_of(timestamp_context.antichain());
+                    let style = ExprPrepStyle::OneShot {
+                        logical_time: EvalTime::Time(timestamp_context.timestamp_or_default()),
+                        session,
+                    };
+                    let state = self.catalog().state();
+                    dataflow.visit_children(
+                        |r| prep_relation_expr(state, r, style),
+                        |s| prep_scalar_expr(state, s, style),
+                    )?;
+                    peek::create_fast_path_plan(&mut dataflow, GlobalId::Explain)?
+                }
                 _ => None,
             };
 
+            if matches!(explainee, Explainee::Query) {
+                // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
+                // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
+                if let Some(as_of) = dataflow.as_of.as_ref() {
+                    if !as_of.is_empty() {
+                        if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1))
+                        {
+                            dataflow.until = timely::progress::Antichain::from_elem(next);
+                        }
+                    }
+                }
+            }
+
             // Execute the `optimize/finalize_dataflow` stage.
             let dataflow_plan = catch_unwind(no_errors, "finalize_dataflow", || {
-                Plan::<mz_repr::Timestamp>::finalize_dataflow(
-                    dataflow,
-                    self.catalog()
-                        .system_config()
-                        .enable_monotonic_oneshot_selects(),
-                )
-                .map_err(AdapterError::Internal)
+                self.finalize_dataflow(dataflow, cluster_id)
             })?;
 
             // Trace the resulting plan for the top-level `optimize` path.
@@ -2774,21 +2844,21 @@ impl Coordinator {
     fn sequence_explain_timestamp_begin(
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        mut session: Session,
         plan: ExplainPlan,
-        depends_on: Vec<GlobalId>,
     ) {
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
-            self.sequence_explain_timestamp_begin_inner(&session, plan.clone()),
+            self.sequence_explain_timestamp_begin_inner(&session, plan),
             tx,
             session
         );
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
-                let replan = TransientPlan {
+                let validity = PeekValidity {
                     transient_revision: self.catalog().transient_revision(),
-                    plan: Plan::Explain(plan),
-                    depends_on,
+                    source_ids,
+                    cluster_id,
+                    replica_id: None,
                 };
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = session.conn_id();
@@ -2809,7 +2879,7 @@ impl Coordinator {
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
                         conn_id,
                         real_time_recency_ts,
-                        replan,
+                        validity,
                     });
                     if let Err(e) = result {
                         warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -2817,8 +2887,8 @@ impl Coordinator {
                 });
             }
             None => tx.send(
-                self.sequence_explain_timestamp_finish(
-                    &session,
+                self.sequence_explain_timestamp_finish_inner(
+                    &mut session,
                     format,
                     cluster_id,
                     optimized_plan,
@@ -2859,11 +2929,11 @@ impl Coordinator {
     }
 
     pub(super) fn sequence_explain_timestamp_finish_inner(
-        &self,
-        session: &Session,
+        &mut self,
+        session: &mut Session,
         format: ExplainFormat,
         cluster_id: ClusterId,
-        optimized_plan: OptimizedMirRelationExpr,
+        source: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -2874,15 +2944,19 @@ impl Coordinator {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
         };
-        let timeline_context = self.validate_timeline_context(optimized_plan.depends_on())?;
-        let determination = self.determine_timestamp(
+        let source_ids = source.depends_on();
+        let timeline_context = self.validate_timeline_context(source_ids.clone())?;
+
+        let determination = self.sequence_peek_timestamp(
             session,
-            &id_bundle,
             &QueryWhen::Immediately,
             cluster_id,
             timeline_context,
+            &id_bundle,
+            &source_ids,
             real_time_recency_ts,
         )?;
+
         let mut sources = Vec::new();
         {
             for id in id_bundle.storage_ids.iter() {
@@ -3021,7 +3095,6 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: InsertPlan,
-        depends_on: Vec<GlobalId>,
     ) {
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
@@ -3089,7 +3162,7 @@ impl Coordinator {
                     returning: plan.returning,
                 };
 
-                self.sequence_read_then_write(tx, session, read_then_write_plan, depends_on)
+                self.sequence_read_then_write(tx, session, read_then_write_plan)
                     .await;
             }
         }
@@ -3175,7 +3248,6 @@ impl Coordinator {
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: ReadThenWritePlan,
-        depends_on: Vec<GlobalId>,
     ) {
         guard_write_critical_section!(self, tx, session, Plan::ReadThenWrite(plan));
 
@@ -3262,7 +3334,6 @@ impl Coordinator {
                 finishing,
                 copy_to: None,
             },
-            depends_on,
             TargetCluster::Active,
         )
         .await;
@@ -3779,7 +3850,7 @@ impl Coordinator {
         GrantPrivilegePlan {
             acl_mode,
             object_id,
-            grantee,
+            grantees,
             grantor,
         }: GrantPrivilegePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -3787,7 +3858,7 @@ impl Coordinator {
             session,
             acl_mode,
             object_id,
-            grantee,
+            grantees,
             grantor,
             UpdatePrivilegeVariant::Grant,
         )
@@ -3800,7 +3871,7 @@ impl Coordinator {
         RevokePrivilegePlan {
             acl_mode,
             object_id,
-            revokee,
+            revokees,
             grantor,
         }: RevokePrivilegePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -3808,7 +3879,7 @@ impl Coordinator {
             session,
             acl_mode,
             object_id,
-            revokee,
+            revokees,
             grantor,
             UpdatePrivilegeVariant::Revoke,
         )
@@ -3820,7 +3891,7 @@ impl Coordinator {
         session: &mut Session,
         acl_mode: AclMode,
         object_id: ObjectId,
-        grantee: RoleId,
+        grantees: Vec<RoleId>,
         grantor: RoleId,
         variant: UpdatePrivilegeVariant,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -3831,45 +3902,59 @@ impl Coordinator {
             .catalog()
             .get_privileges(&object_id, session.conn_id())
             .expect("cannot grant privileges on objects without privileges");
-        let existing_privilege = privileges
-            .get(&grantee)
-            .and_then(|privileges| {
-                privileges
-                    .into_iter()
-                    .find(|mz_acl_item| mz_acl_item.grantor == grantor)
-            })
-            .map(Cow::Borrowed)
-            .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
 
-        match variant {
-            UpdatePrivilegeVariant::Grant => {
-                if existing_privilege.acl_mode.contains(acl_mode) {
-                    // The granted privileges already exists so we can return early.
-                    return Ok(ExecuteResponse::GrantedPrivilege);
-                }
-            }
-            UpdatePrivilegeVariant::Revoke => {
-                if existing_privilege
-                    .acl_mode
-                    .intersection(acl_mode)
-                    .is_empty()
+        let mut ops = Vec::with_capacity(grantees.len());
+        for grantee in grantees {
+            let existing_privilege = privileges
+                .get(&grantee)
+                .and_then(|privileges| {
+                    privileges
+                        .into_iter()
+                        .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+                })
+                .map(Cow::Borrowed)
+                .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
+
+            match variant {
+                UpdatePrivilegeVariant::Grant
+                    if !existing_privilege.acl_mode.contains(acl_mode) =>
                 {
-                    // The revoked privileges don't exist so we can return early.
-                    return Ok(ExecuteResponse::RevokedPrivilege);
+                    ops.push(catalog::Op::UpdatePrivilege {
+                        object_id: object_id.clone(),
+                        privilege: MzAclItem {
+                            grantee,
+                            grantor,
+                            acl_mode,
+                        },
+                        variant,
+                    });
                 }
+                UpdatePrivilegeVariant::Revoke
+                    if !existing_privilege
+                        .acl_mode
+                        .intersection(acl_mode)
+                        .is_empty() =>
+                {
+                    ops.push(catalog::Op::UpdatePrivilege {
+                        object_id: object_id.clone(),
+                        privilege: MzAclItem {
+                            grantee,
+                            grantor,
+                            acl_mode,
+                        },
+                        variant,
+                    });
+                }
+                // no-op
+                _ => {}
             }
         }
 
-        let op = catalog::Op::UpdatePrivilege {
-            object_id,
-            privilege: MzAclItem {
-                grantee,
-                grantor,
-                acl_mode,
-            },
-            variant,
-        };
-        self.catalog_transact(Some(session), vec![op])
+        if ops.is_empty() {
+            return Ok(variant.into());
+        }
+
+        self.catalog_transact(Some(session), ops)
             .await
             .map(|_| match variant {
                 UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,

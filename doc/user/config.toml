@@ -9,36 +9,131 @@ repo = "//github.com/MaterializeInc/materialize"
 [frontmatter]
 publishDate = ["publishDate"]
 
+#
+# Get started
+#
+
 [[menu.main]]
-identifier = "overview"
-name = "Overview"
+identifier = "get-started"
+name = "Get started"
+weight= 5
+
+#
+# Connect sources
+#
+
+[[menu.main]]
+identifier = "connect-sources"
+name = "Connect sources"
+weight= 11
+
+[[menu.main]]
+name = "PostgreSQL"
+parent = 'connect-sources'
+identifier = 'postgresql'
+weight = 5
+
+[[menu.main]]
+name = "MySQL"
+parent = 'connect-sources'
+identifier = 'mysql'
+weight = 10
+
+[[menu.main]]
+name = "Kafka"
+parent = 'connect-sources'
+identifier = 'kafka'
+weight = 15
+
+[[menu.main]]
+name = "Redpanda"
+parent = 'connect-sources'
+identifier = 'redpanda'
+weight = 20
+
+[[menu.main]]
+identifier = "network-security"
+name = "Network security"
+parent = 'connect-sources'
+weight= 30
+
+#
+# Transform data
+#
+
+[[menu.main]]
+identifier = "transform"
+name = "Transform data"
+weight= 12
+
+[[menu.main]]
+name = "Views"
+parent = "transform"
+url = "/sql/create-view/"
 weight= 5
 
 [[menu.main]]
-identifier = "quickstarts"
-name = "Quickstarts"
+name = "Indexes"
+parent = "transform"
+url = "/sql/create-index"
 weight= 10
+
+[[menu.main]]
+name = "Materialized views"
+parent = "transform"
+url = "/sql/create-materialized-view/"
+weight= 15
+
+[[menu.main]]
+name = "Common patterns"
+parent = 'transform'
+identifier = 'sql-patterns'
+weight = 30
+
+#
+# Serve results
+#
+
+[[menu.main]]
+identifier = "serve"
+name = "Serve results"
+weight= 13
+
+[[menu.main]]
+name = "Query for results (`SELECT`)"
+parent = "serve"
+url = "/sql/select/"
+weight= 5
+
+[[menu.main]]
+name = "Subscribe to results (`SUBSCRIBE`)"
+parent = "serve"
+url = "/sql/subscribe/"
+weight= 10
+
+[[menu.main]]
+name = "Sink results to Kafka"
+parent = "serve"
+url = "/sql/create-sink"
+weight= 15
+
+#
+# Manage Materialize
+#
+
+[[menu.main]]
+identifier = "manage"
+name = "Manage Materialize"
+weight= 14
+
+#
+# Reference
+#
 
 [[menu.main]]
 identifier = "reference"
 name = "Reference"
 weight= 15
-
-[[menu.main]]
-identifier = "integrations"
-name = "Tools and integrations"
-weight= 25
-
-[[menu.main]]
-identifier = "ops"
-name = "Operating Materialize"
-weight= 25
-
-[[menu.main]]
-identifier = "network-security"
-name = "Network security"
-parent = 'ops'
-weight= 10
 
 [[menu.main]]
 identifier = "cs_kafka"
@@ -55,24 +150,6 @@ url = "/sql/create-source/kafka"
 weight= 10
 
 [[menu.main]]
-name = "Views"
-parent = "reference"
-url = "/sql/create-view/"
-weight= 30
-
-[[menu.main]]
-name = "Materialized views"
-parent = "reference"
-url = "/sql/create-materialized-view/"
-weight= 35
-
-[[menu.main]]
-name = "Clusters"
-parent = "reference"
-url = "/sql/create-cluster/"
-weight= 1
-
-[[menu.main]]
 identifier = "csink_kafka"
 name = "Kafka"
 parent = "create-sink"
@@ -87,46 +164,29 @@ url = "/sql/create-sink/kafka"
 weight= 10
 
 [[menu.main]]
-name = "Queries (`SELECT`)"
-parent = "reference"
-url = "/sql/select/"
-weight= 70
-
-[[menu.main]]
-name = "Subscriptions (`SUBSCRIBE`)"
-parent = "reference"
-url = "/sql/subscribe/"
-weight= 80
-
-[[menu.main]]
-name = "Indexes"
-parent = "reference"
-url = "/sql/create-index"
-weight= 40
-
-[[menu.main]]
 name = "SQL commands"
 identifier = "commands"
 parent = "reference"
 weight = 100
 
 [[menu.main]]
-identifier = "cs_connections"
-name = "Connections"
-parent = "reference"
-url = "/sql/create-connection/"
-weight= 5
-
-[[menu.main]]
-name = "SQL patterns"
-parent = 'reference'
-identifier = 'sql-patterns'
-weight = 85
-
-[[menu.main]]
 name = "CREATE SOURCE"
 parent = 'commands'
 url = '/sql/create-source'
+
+[[menu.main]]
+name = "CREATE SINK"
+parent = 'commands'
+url = '/sql/create-sink'
+
+#
+# Tools and integrations
+#
+
+[[menu.main]]
+identifier = "integrations"
+name = "Tools and integrations"
+weight= 25
 
 [[menu.main]]
 identifier = "tools-and-integrations"
@@ -136,22 +196,14 @@ url = "/integrations"
 weight = 5
 
 [[menu.main]]
-identifier = "integration-guides"
-name = "Integration guides"
-parent = "integrations"
-weight = 40
-
-[[menu.main]]
 identifier = "client-libraries"
-name = "Client libraries"
+name = "SQL drivers"
 parent = "integrations"
-weight = 30
+weight = 15
 
-[[menu.main]]
-identifier = "advanced"
-name = "Advanced concepts"
-parent = "overview"
-weight = 80
+#
+# About
+#
 
 [[menu.main]]
 identifier = "about"
@@ -162,13 +214,13 @@ weight = 70
 name = "Security overview"
 parent = "about"
 url = "https://materialize.com/security-overview"
-weight= 40
+weight= 25
 
 [[menu.main]]
 name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
-weight= 2000
+weight= 30
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works

@@ -1930,7 +1930,9 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("messages_received", ScalarType::UInt64.nullable(false))
         .with_column("updates_staged", ScalarType::UInt64.nullable(false))
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false)),
+        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
+        .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
+        .with_column("envelope_state_count", ScalarType::UInt64.nullable(false)),
     is_retained_metrics_object: true,
 });
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -3228,6 +3230,50 @@ FROM
 ORDER BY 1, 2"#,
 };
 
+pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
+    name: "mz_cluster_replica_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: r#"CREATE VIEW
+    mz_internal.mz_cluster_replica_history
+    AS
+        WITH
+            creates AS
+            (
+                SELECT
+                    details ->> 'logical_size' AS size,
+                    details ->> 'replica_id' AS replica_id,
+                    occurred_at
+                FROM mz_catalog.mz_audit_events
+                WHERE
+                    object_type = 'cluster-replica' AND event_type = 'create'
+                        AND
+                    details ->> 'replica_id' IS NOT NULL
+                        AND
+                    details ->> 'cluster_id' !~~ 's%'
+            ),
+            drops AS
+            (
+                SELECT details ->> 'replica_id' AS replica_id, occurred_at
+                FROM mz_catalog.mz_audit_events
+                WHERE object_type = 'cluster-replica' AND event_type = 'drop'
+            )
+        SELECT
+            creates.replica_id,
+            creates.size,
+            creates.occurred_at AS created_at,
+            drops.occurred_at AS dropped_at,
+            mz_internal.mz_error_if_null(
+                    mz_cluster_replica_sizes.credits_per_hour, 'Replica of unknown size'
+                )
+                AS credits_per_hour
+        FROM
+            creates
+                LEFT JOIN drops ON creates.replica_id = drops.replica_id
+                LEFT JOIN
+                    mz_internal.mz_cluster_replica_sizes
+                    ON mz_cluster_replica_sizes.size = creates.size"#,
+};
+
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3687,6 +3733,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
+        Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&PG_NAMESPACE),
         Builtin::View(&PG_CLASS),
         Builtin::View(&PG_DATABASE),

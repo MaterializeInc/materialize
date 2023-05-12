@@ -40,7 +40,7 @@ class Benchmark:
     def run(self) -> Tuple[float, int]:
         scale = self._scenario.SCALE
 
-        if self._scale:
+        if self._scale and not self._scenario.FIXED_SCALE:
             if self._scale.startswith("+"):
                 scale = scale + float(self._scale.lstrip("+"))
             elif self._scale.startswith("-"):

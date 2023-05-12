@@ -248,8 +248,7 @@ impl Coordinator {
                 self.sequence_end_transaction(tx, session, action);
             }
             Plan::Peek(plan) => {
-                self.sequence_peek(tx, session, plan, depends_on, target_cluster)
-                    .await;
+                self.sequence_peek(tx, session, plan, target_cluster).await;
             }
             Plan::Subscribe(plan) => {
                 tx.send(
@@ -275,14 +274,13 @@ impl Coordinator {
                 self.sequence_copy_rows(tx, session, id, columns, rows);
             }
             Plan::Explain(plan) => {
-                self.sequence_explain(tx, session, plan, depends_on);
+                self.sequence_explain(tx, session, plan, target_cluster);
             }
             Plan::Insert(plan) => {
-                self.sequence_insert(tx, session, plan, depends_on).await;
+                self.sequence_insert(tx, session, plan).await;
             }
             Plan::ReadThenWrite(plan) => {
-                self.sequence_read_then_write(tx, session, plan, depends_on)
-                    .await;
+                self.sequence_read_then_write(tx, session, plan).await;
             }
             Plan::AlterNoop(plan) => {
                 tx.send(
@@ -476,8 +474,8 @@ impl Coordinator {
     }
 
     pub(crate) fn sequence_explain_timestamp_finish(
-        &self,
-        session: &Session,
+        &mut self,
+        session: &mut Session,
         format: ExplainFormat,
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,

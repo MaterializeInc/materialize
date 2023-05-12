@@ -11,7 +11,7 @@ menu:
     weight: 20
 ---
 
-A [source](../../overview/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
+A [source](../../get-started/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
 Like other relations, sources are [namespaced](../namespaces/) by a database and schema.
 
 [//]: # "TODO(morsapaes) Add short description about what the command gets going in the background."
@@ -89,7 +89,7 @@ CREATE VIEW my_jsonb_source AS
 Raw byte-formatted sources have one column, by default named `data`. For more details on handling JSON-encoded messages, check the [`jsonb` type](/sql/types/jsonb) documentation.
 {{</ note >}}
 
-To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/overview/key-concepts/#materialized-views).
+To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/get-started/key-concepts/#materialized-views).
 
 ```sql
 -- parse jsonb into typed columns
@@ -252,7 +252,7 @@ Sources that specify the `SIZE` option are linked to a single-purpose cluster
 dedicated to maintaining that source.
 
 You can also choose to place a source in an existing
-[cluster](/overview/key-concepts/#clusters) by using the `IN CLUSTER` option.
+[cluster](/get-started/key-concepts/#clusters) by using the `IN CLUSTER` option.
 Sources in a cluster share the resource allocation of the cluster with all other
 objects in the cluster.
 
@@ -262,7 +262,7 @@ capacity.
 
 ## Related pages
 
-- [Key Concepts](../../overview/key-concepts/)
+- [Key Concepts](../../get-started/key-concepts/)
 - [`SHOW SOURCES`](/sql/show-sources/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SOURCE`](/sql/show-create-source/)

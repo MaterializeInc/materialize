@@ -83,6 +83,7 @@
 #![warn(missing_docs)]
 
 use std::convert::AsRef;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -94,6 +95,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropHistogram;
 
 /// An error using this RocksDB wrapper.
@@ -123,6 +125,10 @@ pub struct Options {
     /// path before starting.
     pub cleanup_on_new: bool,
 
+    /// Whether or not to clear state at the instance
+    /// after the client is dropped.
+    pub cleanup_on_drop: bool,
+
     /// Whether or not to write writes
     /// to the wal.
     pub use_wal: bool,
@@ -140,11 +146,11 @@ pub struct RocksDBMetrics {
     /// Latency of multi_gets, in fractional seconds.
     pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Size of multi_get batches.
-    pub multi_get_batch_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Latency of write batch writes, in fractional seconds.
-    pub write_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
     /// Size of write batches.
-    pub write_batch_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_put_size: DeleteOnDropHistogram<'static, Vec<String>>,
 }
 
 impl Options {
@@ -152,6 +158,7 @@ impl Options {
     pub fn new_with_defaults() -> Result<Self, RocksDBError> {
         Ok(Options {
             cleanup_on_new: true,
+            cleanup_on_drop: true,
             use_wal: false,
             compression_type: DBCompressionType::Snappy,
             env: rocksdb::Env::new()?,
@@ -233,15 +240,20 @@ where
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
     /// Start a new RocksDB instance at the path.
-    pub async fn new(
+    pub async fn new<M: Deref<Target = RocksDBMetrics> + Send + 'static>(
         instance_path: &Path,
         options: Options,
-        metrics: RocksDBMetrics,
+        metrics: M,
     ) -> Result<Self, Error> {
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
             mz_ore::task::spawn_blocking(
-                || format!("RocksDB instance at {}: cleanup", instance_path.display()),
+                || {
+                    format!(
+                        "RocksDB instance at {}: cleanup on creation",
+                        instance_path.display()
+                    )
+                },
                 move || {
                     DB::destroy(&RocksDBOptions::default(), instance_path_owned).unwrap();
                 },
@@ -254,7 +266,14 @@ where
 
         let instance_path = instance_path.to_owned();
 
-        std::thread::spawn(move || rocksdb_core_loop(options, instance_path, rx, metrics));
+        let (creation_error_tx, creation_error_rx) = oneshot::channel();
+        std::thread::spawn(move || {
+            rocksdb_core_loop(options, instance_path, rx, metrics, creation_error_tx)
+        });
+
+        if let Ok(creation_error) = creation_error_rx.await {
+            return Err(creation_error);
+        }
 
         Ok(Self {
             tx,
@@ -369,16 +388,28 @@ where
 }
 
 // TODO(guswynn): retry retryable rocksdb errors.
-fn rocksdb_core_loop<K, V>(
+fn rocksdb_core_loop<K, V, M>(
     options: Options,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
-    metrics: RocksDBMetrics,
+    metrics: M,
+    creation_error_tx: oneshot::Sender<Error>,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
+    M: Deref<Target = RocksDBMetrics> + Send + 'static,
 {
-    let db: DB = DB::open(&options.as_rocksdb_options(), &instance_path).unwrap();
+    let db: DB = match DB::open(&options.as_rocksdb_options(), &instance_path) {
+        Ok(db) => {
+            drop(creation_error_tx);
+            db
+        }
+        Err(e) => {
+            // Communicate the error back to `new`.
+            let _ = creation_error_tx.send(Error::RocksDB(e));
+            return;
+        }
+    };
     let wo = options.as_rocksdb_write_options();
 
     while let Some(cmd) = cmd_rx.blocking_recv() {
@@ -405,9 +436,7 @@ fn rocksdb_core_loop<K, V>(
                 match gets {
                     Ok(gets) => {
                         metrics.multi_get_latency.observe(latency.as_secs_f64());
-                        metrics
-                            .multi_get_batch_size
-                            .observe(f64::cast_lossy(batch_size));
+                        metrics.multi_get_size.observe(f64::cast_lossy(batch_size));
                         for previous_value in gets {
                             let previous_value = match previous_value
                                 .map(|v| bincode::deserialize(&v))
@@ -463,10 +492,8 @@ fn rocksdb_core_loop<K, V>(
                 match db.write_opt(writes, &wo) {
                     Ok(()) => {
                         let latency = now.elapsed();
-                        metrics.write_latency.observe(latency.as_secs_f64());
-                        metrics
-                            .write_batch_size
-                            .observe(f64::cast_lossy(batch_size));
+                        metrics.multi_put_latency.observe(latency.as_secs_f64());
+                        metrics.multi_put_size.observe(f64::cast_lossy(batch_size));
                         let _ = response_sender.send(Ok(batch));
                     }
                     Err(e) => {
@@ -477,8 +504,16 @@ fn rocksdb_core_loop<K, V>(
             }
         }
     }
-
     // Gracefully cleanup if the `RocksDBInstance` has gone away.
     db.cancel_all_background_work(true);
     drop(db);
+
+    // Note that we don't retry, as we already may race here with a source being restarted.
+    if let Err(e) = DB::destroy(&RocksDBOptions::default(), &*instance_path) {
+        tracing::warn!(
+            "failed to cleanup rocksdb dir at {}: {}",
+            instance_path.display(),
+            e.display_with_causes(),
+        );
+    }
 }

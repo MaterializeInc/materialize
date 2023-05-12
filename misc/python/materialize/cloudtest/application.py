@@ -73,8 +73,8 @@ class Application:
     def kubectl(self, *args: str) -> str:
         try:
             return subprocess.check_output(
-                ["kubectl", "--context", self.context(), *args]
-            ).decode("ascii")
+                ["kubectl", "--context", self.context(), *args], text=True
+            )
         except subprocess.CalledProcessError as e:
             print(
                 dedent(

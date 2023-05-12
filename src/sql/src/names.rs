@@ -15,6 +15,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
@@ -24,6 +25,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::MutRecBlock;
 use mz_sql_parser::ast::UnresolvedObjectName;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
@@ -677,7 +679,9 @@ impl AstInfo for Aug {
 }
 
 /// The identifier for a schema.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum SchemaId {
     User(u64),
     System(u64),
@@ -725,7 +729,9 @@ impl FromStr for SchemaId {
 }
 
 /// The identifier for a database.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum DatabaseId {
     User(u64),
     System(u64),
@@ -1065,7 +1071,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 CteBlock::Simple(result_ctes)
             }
-            CteBlock::MutuallyRecursive(ctes) => {
+            CteBlock::MutuallyRecursive(MutRecBlock { options, ctes }) => {
                 let mut result_ctes = Vec::<CteMutRec<Aug>>::new();
 
                 let initial_id = self.ctes.len();
@@ -1094,7 +1100,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         query,
                     });
                 }
-                CteBlock::MutuallyRecursive(result_ctes)
+                CteBlock::MutuallyRecursive(MutRecBlock {
+                    options: options
+                        .into_iter()
+                        .map(|option| self.fold_mut_rec_block_option(option))
+                        .collect(),
+                    ctes: result_ctes,
+                })
             }
         };
 

@@ -141,7 +141,6 @@ where
 #[derive(Debug)]
 pub struct PlannedPeek {
     pub plan: PeekPlan,
-    pub read_holds: Option<CollectionIdBundle>,
     pub timestamp_context: TimestampContext<mz_repr::Timestamp>,
     pub conn_id: ConnectionId,
     pub source_arity: usize,
@@ -307,7 +306,6 @@ impl crate::coord::Coordinator {
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,
-            read_holds: _,
             timestamp_context,
             conn_id,
             source_arity,

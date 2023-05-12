@@ -1349,3 +1349,17 @@ WITH MUTUALLY RECURSIVE foo (a, b) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar), 
 error: Expected a data type name, found comma
 WITH MUTUALLY RECURSIVE foo (a, b) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar), bar (a int) as (SELECT a FROM foo) SELECT * FROM bar
                               ^
+
+# WITH MUTUALLY RECURSIVE -- ITERATION LIMIT
+parse-statement roundtrip
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT 17)
+    foo (a int8) AS (
+        WITH MUTUALLY RECURSIVE (ITERATION LIMIT 11)
+            bar (b int8) AS (
+                SELECT * FROM foo
+            )
+        SELECT * FROM (SELECT * FROM bar)
+    )
+SELECT * FROM foo
+----
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT = 17) foo (a int8) AS (WITH MUTUALLY RECURSIVE (ITERATION LIMIT = 11) bar (b int8) AS (SELECT * FROM foo) SELECT * FROM (SELECT * FROM bar)) SELECT * FROM foo

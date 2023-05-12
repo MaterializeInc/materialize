@@ -44,7 +44,7 @@ use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::soft_assert;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
@@ -55,10 +55,11 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
-    NameReference, PrivilegeMap, RoleAttributes, SessionCatalog, TypeReference,
+    CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
+    CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference, PrivilegeMap,
+    RoleAttributes, SessionCatalog, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -104,7 +105,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
-use crate::{rbac, AdapterError, DUMMY_AVAILABILITY_ZONE};
+use crate::{rbac, AdapterError, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
 
 use self::builtin::{BuiltinCluster, BuiltinSource};
 
@@ -189,6 +190,41 @@ pub struct CatalogState {
 }
 
 impl CatalogState {
+    pub fn empty() -> Self {
+        CatalogState {
+            database_by_name: Default::default(),
+            database_by_id: Default::default(),
+            entry_by_id: Default::default(),
+            ambient_schemas_by_name: Default::default(),
+            ambient_schemas_by_id: Default::default(),
+            temporary_schemas: Default::default(),
+            clusters_by_id: Default::default(),
+            clusters_by_name: Default::default(),
+            clusters_by_linked_object_id: Default::default(),
+            roles_by_name: Default::default(),
+            roles_by_id: Default::default(),
+            config: CatalogConfig {
+                start_time: Default::default(),
+                start_instant: Instant::now(),
+                nonce: Default::default(),
+                environment_id: EnvironmentId::for_tests(),
+                session_id: Default::default(),
+                unsafe_mode: Default::default(),
+                build_info: &DUMMY_BUILD_INFO,
+                timestamp_interval: Default::default(),
+                now: NOW_ZERO.clone(),
+            },
+            oid_counter: Default::default(),
+            cluster_replica_sizes: Default::default(),
+            default_storage_cluster_size: Default::default(),
+            availability_zones: Default::default(),
+            system_configuration: Default::default(),
+            egress_ips: Default::default(),
+            aws_principal_context: Default::default(),
+            aws_privatelink_availability_zones: Default::default(),
+        }
+    }
+
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         let oid = self.oid_counter;
         if oid == u32::max_value() {
@@ -1020,6 +1056,15 @@ impl CatalogState {
         Ok(self.system_configuration.get(name)?)
     }
 
+    /// Set the default value for `name`, which is the value it will be reset to.
+    fn set_system_configuration_default(
+        &mut self,
+        name: &str,
+        value: VarInput,
+    ) -> Result<(), AdapterError> {
+        Ok(self.system_configuration.set_default(name, value)?)
+    }
+
     /// Insert system configuration `name` with `value`.
     ///
     /// Return a `bool` value indicating whether the configuration was modified
@@ -1042,7 +1087,7 @@ impl CatalogState {
 
     /// Remove all system configurations.
     fn clear_system_configuration(&mut self) {
-        self.system_configuration = SystemVars::default();
+        self.system_configuration.reset_all();
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -2570,7 +2615,9 @@ impl CatalogItemRebuilder {
         id: GlobalId,
         ancestor_ids: &BTreeMap<GlobalId, GlobalId>,
     ) -> Self {
-        if id.is_system() && (entry.is_table() || entry.is_introspection_source()) {
+        if id.is_system()
+            && (entry.is_table() || entry.is_introspection_source() || entry.is_source())
+        {
             Self::SystemSource(entry.item().clone())
         } else {
             let create_sql = entry.create_sql().to_string();
@@ -2805,7 +2852,7 @@ impl Catalog {
 
         catalog
             .load_system_configuration(
-                config.bootstrap_system_parameters,
+                config.system_parameter_defaults,
                 config.system_parameter_frontend,
             )
             .await?;
@@ -3335,9 +3382,8 @@ impl Catalog {
     ///
     /// 1. Load parameters from the configuration persisted in the catalog
     ///    storage backend.
-    /// 2. Overwrite without persisting selected parameter values from the
-    ///    configuration passed in the provided `bootstrap_system_parameters`
-    ///    map.
+    /// 2. Set defaults from configuration passed in the provided
+    ///    `system_parameter_defaults` map.
     /// 3. Overwrite and persist selected parameter values from the
     ///    configuration that can be pulled from the provided
     ///    `system_parameter_frontend` (if present).
@@ -3346,7 +3392,7 @@ impl Catalog {
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_system_configuration(
         &mut self,
-        bootstrap_system_parameters: BTreeMap<String, String>,
+        system_parameter_defaults: BTreeMap<String, String>,
         system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     ) -> Result<(), AdapterError> {
         let (system_config, boot_ts) = {
@@ -3355,10 +3401,10 @@ impl Catalog {
             let boot_ts = storage.boot_ts();
             (system_config, boot_ts)
         };
-        for (name, value) in &bootstrap_system_parameters {
+        for (name, value) in &system_parameter_defaults {
             match self
                 .state
-                .insert_system_configuration(name, VarInput::Flat(value))
+                .set_system_configuration_default(name, VarInput::Flat(value))
             {
                 Ok(_) => (),
                 Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
@@ -4083,7 +4129,7 @@ impl Catalog {
             metrics_registry,
             cluster_replica_sizes: Default::default(),
             default_storage_cluster_size: None,
-            bootstrap_system_parameters: Default::default(),
+            system_parameter_defaults: Default::default(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
@@ -6744,6 +6790,9 @@ impl Catalog {
                 ),
                 tcp_user_timeout: Some(self.system_config().pg_replication_tcp_user_timeout()),
             },
+            keep_n_source_status_history_entries: self
+                .system_config()
+                .keep_n_source_status_history_entries(),
         }
     }
 
@@ -6860,6 +6909,15 @@ fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) 
 pub enum UpdatePrivilegeVariant {
     Grant,
     Revoke,
+}
+
+impl From<UpdatePrivilegeVariant> for ExecuteResponse {
+    fn from(variant: UpdatePrivilegeVariant) -> Self {
+        match variant {
+            UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
+            UpdatePrivilegeVariant::Revoke => ExecuteResponse::RevokedPrivilege,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

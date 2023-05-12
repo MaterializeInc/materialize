@@ -9,6 +9,7 @@ members = [
     "src/build-id",
     "src/build-info",
     "src/ccsr",
+    "src/cloud-api",
     "src/cluster",
     "src/clusterd",
     "src/cluster-client",

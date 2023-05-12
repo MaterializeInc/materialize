@@ -871,6 +871,7 @@ impl RunnerInner {
                 command_wrapper: vec![],
                 propagate_crashes: true,
                 tcp_proxy: None,
+                scratch_directory: None,
             })
             .await?,
         );
@@ -900,6 +901,7 @@ impl RunnerInner {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
+                scratch_directory: None,
             },
             secrets_controller,
             cloud_resource_controller: None,
@@ -919,7 +921,7 @@ impl RunnerInner {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            bootstrap_system_parameters: Default::default(),
+            system_parameter_defaults: Default::default(),
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,

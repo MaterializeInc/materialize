@@ -3,15 +3,15 @@ title: "Free trial FAQs"
 description: "Answers to frequently asked questions about Materialize free trials"
 menu:
   main:
-    parent: "quickstarts"
-    weight: 15
+    parent: "about"
+    weight: 20
 ---
 
 When you [sign up for Materialize](https://materialize.com/register/), you get a free trial account so you can explore the product and start building! This page answers some frequently asked questions about free trials.
 
 ## What are the limits of a free trial?
 
-In Materialize, [cluster replicas](/overview/key-concepts/#cluster-replicas) are the physical resources for doing computational work. Cluster replicas come in various sizes, and each size has a [credit consumption rate](https://materialize.com/pricing/).
+In Materialize, [cluster replicas](/get-started/key-concepts/#cluster-replicas) are the physical resources for doing computational work. Cluster replicas come in various sizes, and each size has a [credit consumption rate](https://materialize.com/pricing/).
 
 During your free trial, your credit consumption rate across all replicas in a region cannot exceed 4 credits per hour at any point in time. This limit should accommodate most trial scenarios.
 

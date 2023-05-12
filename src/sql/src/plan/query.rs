@@ -38,6 +38,7 @@ use std::convert::{TryFrom, TryInto};
 
 use std::iter;
 use std::mem;
+use std::num::NonZeroU64;
 
 use itertools::Itertools;
 use uuid::Uuid;
@@ -45,6 +46,7 @@ use uuid::Uuid;
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
+use mz_ore::option::FallibleMapExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
 use mz_repr::adt::char::CharLength;
@@ -59,10 +61,10 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AsOf, Assignment, AstInfo, CteBlock, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
-    Limit, OrderByExpr, Query, Select, SelectItem, SelectOption, SelectOptionName, SetExpr,
-    SetOperator, ShowStatement, SubscriptPosition, TableAlias, TableFactor, TableFunction,
-    TableWithJoins, UnresolvedItemName, UpdateStatement, Value, Values, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowSpec,
+    Limit, MutRecBlock, MutRecBlockOption, MutRecBlockOptionName, OrderByExpr, Query, Select,
+    SelectItem, SelectOption, SelectOptionName, SetExpr, SetOperator, ShowStatement,
+    SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedItemName,
+    UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
@@ -81,6 +83,7 @@ use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
+use crate::plan::PlanError::InvalidIterationLimit;
 use crate::plan::{transform_ast, PlanContext, ShowCreatePlan};
 use crate::plan::{Params, QueryWhen};
 
@@ -1116,7 +1119,11 @@ fn plan_query_inner(
                 }
             }
         }
-        CteBlock::MutuallyRecursive(_) => {
+        CteBlock::MutuallyRecursive(MutRecBlock { options, ctes: _ }) => {
+            let MutRecBlockOptionExtracted {
+                iter_limit,
+                seen: _,
+            } = MutRecBlockOptionExtracted::try_from(options.clone())?;
             let mut bindings = Vec::new();
             for (id, value, shadowed_val) in cte_bindings.into_iter() {
                 if let Some(cte) = qcx.ctes.remove(&id) {
@@ -1128,6 +1135,9 @@ fn plan_query_inner(
             }
             if !bindings.is_empty() {
                 result = HirRelationExpr::LetRec {
+                    max_iter: iter_limit.try_map(|iter_limit| {
+                        NonZeroU64::new(*iter_limit).ok_or(InvalidIterationLimit)
+                    })?,
                     bindings,
                     body: Box::new(result),
                 }
@@ -1137,6 +1147,8 @@ fn plan_query_inner(
 
     Ok((result, scope, finishing, expected_group_size))
 }
+
+generate_extracted_config!(MutRecBlockOption, (IterLimit, u64));
 
 /// Creates plans for CTEs and introduces them to `qcx.ctes`.
 ///
@@ -1185,7 +1197,7 @@ pub fn plan_ctes(
                 result.push((cte.id, val, shadowed));
             }
         }
-        CteBlock::MutuallyRecursive(ctes) => {
+        CteBlock::MutuallyRecursive(MutRecBlock { options: _, ctes }) => {
             qcx.scx.require_with_mutually_recursive()?;
 
             // Insert column types into `qcx.ctes` first for recursive bindings.

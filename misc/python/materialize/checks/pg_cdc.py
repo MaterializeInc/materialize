@@ -140,6 +140,11 @@ class PgCdc(Check):
         return Testdrive(
             dedent(
                 """
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT SELECT ON postgres_source_tableA TO materialize
+                GRANT SELECT ON postgres_source_tableB TO materialize
+                GRANT SELECT ON postgres_source_tableC TO materialize
+
                 > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA GROUP BY f1;
                 A 800 97350
                 B 800 97350

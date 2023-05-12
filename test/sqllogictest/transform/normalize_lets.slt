@@ -264,3 +264,216 @@ Explained Query:
                   Get l0
 
 EOF
+
+#### Tests for ITERATION LIMIT
+
+## ITERATION LIMIT -- Simple test
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE (ITERATION LIMIT 10)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive [iteration_limit=10]
+    cte l0 =
+      Distinct group_by=[#0]
+        Union
+          Project (#1)
+            Map ((#0 + 1))
+              Get l0
+          Constant
+            - (1)
+
+EOF
+
+## ITERATION LIMIT -- consolidation of independent recursive query blocks with different ITERATION LIMIT
+
+query T multiline
+EXPLAIN SELECT * FROM (
+    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 5)
+        foo (a int8) AS (SELECT DISTINCT a FROM foo)
+    SELECT * FROM foo
+)
+UNION ALL
+SELECT * FROM (
+    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 7)
+        bar (a int8) AS (SELECT DISTINCT a - 2 FROM bar)
+    SELECT * FROM bar
+);
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Get l1
+  With Mutually Recursive
+    cte [iteration_limit=7] l1 =
+      Distinct group_by=[(#0 - 2)]
+        Get l1
+    cte [iteration_limit=5] l0 =
+      Distinct group_by=[#0]
+        Get l0
+
+EOF
+
+## ITERATION LIMIT -- consolidation of independent recursive query blocks with equal ITERATION LIMIT.
+## We want to see ITERATION LIMIT printed at the block level rather than on each cte.
+
+query T multiline
+EXPLAIN SELECT * FROM (
+    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 27)
+        foo (a int8) AS (SELECT DISTINCT a FROM foo)
+    SELECT * FROM foo
+)
+UNION ALL
+SELECT * FROM (
+    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 27)
+        bar (a int8) AS (SELECT DISTINCT a - 2 FROM bar)
+    SELECT * FROM bar
+);
+----
+Explained Query:
+  Return
+    Union
+      Get l0
+      Get l1
+  With Mutually Recursive [iteration_limit=27]
+    cte l1 =
+      Distinct group_by=[(#0 - 2)]
+        Get l1
+    cte l0 =
+      Distinct group_by=[#0]
+        Get l0
+
+EOF
+
+## ITERATION LIMIT -- consolidation of not-really nested recursive query.
+## Here, the ITERATION LIMIT of the inner WMR is irrelevant, because it's not recursive.
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE (ITERATION LIMIT 9)
+    foo (a int8) AS (
+        WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3)
+            bar (b int8) AS (
+                SELECT * FROM foo
+            )
+        SELECT * FROM (SELECT * FROM foo UNION ALL SELECT * FROM bar)
+    )
+SELECT * FROM foo;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive [iteration_limit=9]
+    cte l0 =
+      Union
+        Get l0
+        Get l0
+
+EOF
+
+# ITERATION LIMIT -- a nested recursive query.
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE (ITERATION LIMIT 17)
+    foo (a int8) AS (
+        WITH MUTUALLY RECURSIVE (ITERATION LIMIT 11)
+            bar (b int8) AS (
+                SELECT * FROM (SELECT * FROM foo UNION ALL SELECT * FROM bar)
+            )
+        SELECT * FROM (SELECT * FROM foo EXCEPT ALL SELECT * FROM bar)
+    )
+SELECT * FROM foo;
+----
+Explained Query:
+  Return
+    Get l1
+  With Mutually Recursive [iteration_limit=17]
+    cte l1 =
+      Return
+        Threshold
+          Union
+            Get l1
+            Negate
+              Get l0
+      With Mutually Recursive [iteration_limit=11]
+        cte l0 =
+          Union
+            Get l1
+            Get l0
+
+EOF
+
+## ITERATION LIMIT -- Complex inlining and other things.
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE (ITERATION LIMIT 21)
+    label (node int, comp int) AS (
+        SELECT dst, MIN(comp)
+        FROM (
+            SELECT dst, dst AS comp FROM edges
+            UNION ALL
+            SELECT edges.dst, label.comp
+            FROM edges, label
+            WHERE edges.src = label.node
+        )
+        GROUP BY dst
+    )
+SELECT round, COUNT(*) FROM (
+    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 23)
+        relabel (node int, comp int, round int) AS (
+            SELECT DISTINCT ON(node) node, comp, round
+            FROM (
+                SELECT node, comp, 0 as round FROM label
+                UNION ALL
+                SELECT edges.dst, relabel.comp, relabel.round + 1
+                FROM edges, relabel
+                WHERE edges.src = relabel.node
+            )
+            ORDER BY node, comp
+        )
+    SELECT round FROM relabel
+)
+GROUP BY round;
+----
+Explained Query:
+  Return
+    Return
+      Reduce group_by=[#0] aggregates=[count(*)]
+        Project (#2)
+          Get l1
+    With Mutually Recursive [iteration_limit=23]
+      cte l1 =
+        TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1 monotonic=false
+          Union
+            Map (0)
+              Get l0
+            Project (#1, #3, #5)
+              Map ((#4 + 1))
+                Join on=(#0 = #2) type=differential
+                  ArrangeBy keys=[[#0]]
+                    Filter (#0) IS NOT NULL
+                      Get materialize.public.edges
+                  ArrangeBy keys=[[#0]]
+                    Filter (#0) IS NOT NULL
+                      Get l1
+  With Mutually Recursive [iteration_limit=21]
+    cte l0 =
+      Reduce group_by=[#0] aggregates=[min(#1)]
+        Union
+          Project (#1, #1)
+            Get materialize.public.edges
+          Project (#1, #3)
+            Join on=(#0 = #2) type=differential
+              ArrangeBy keys=[[#0]]
+                Filter (#0) IS NOT NULL
+                  Get materialize.public.edges
+              ArrangeBy keys=[[#0]]
+                Filter (#0) IS NOT NULL
+                  Get l0
+
+EOF

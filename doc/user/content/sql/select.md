@@ -67,7 +67,7 @@ and re-order results.
 ### Ad hoc queries
 
 Queries over non-materialized views will create an ephemeral dataflow to compute
-the results. These dataflows are bound to the active [cluster](/overview/key-concepts#clusters),
+the results. These dataflows are bound to the active [cluster](/get-started/key-concepts#clusters),
  which you can change using:
 
 ```sql

@@ -18,6 +18,7 @@ use itertools::Itertools;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
 use mz_repr::explain::text::DisplayText;
+use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
 use mz_repr::explain::{
     AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
     UnsupportedFormat, UsedIndexes,
@@ -171,8 +172,14 @@ impl<'a> MirRelationExpr {
 ///
 /// If these blocks are subsequently pulled up by `NormalizeLets`,
 /// the rendered version of the resulting tree will only have linear chains.
-pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), RecursionLimitError> {
+pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainError> {
     use MirRelationExpr::{Constant, Get, Join, Union};
+
+    if expr.is_recursive() {
+        // `linear_chains` is not implemented for WMR, see
+        // https://github.com/MaterializeInc/materialize/issues/19012
+        return Err(LinearChainsPlusRecursive);
+    }
 
     // helper struct: a generator of fresh local ids
     let mut id_gen = id_gen(expr)?.peekable();

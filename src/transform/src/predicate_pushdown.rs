@@ -489,7 +489,12 @@ impl PredicatePushdown {
                     // Continue recursively on the value.
                     self.action(value, get_predicates)
                 }
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    max_iters: _,
+                    body,
+                } => {
                     // Note: This could be extended to be able to do a little more pushdowns, see
                     // https://github.com/MaterializeInc/materialize/issues/18167#issuecomment-1477588262
 

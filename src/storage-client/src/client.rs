@@ -315,6 +315,8 @@ pub struct SourceStatisticsUpdate {
     pub updates_staged: u64,
     pub updates_committed: u64,
     pub bytes_received: u64,
+    pub envelope_state_bytes: u64,
+    pub envelope_state_count: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -343,6 +345,8 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.updates_staged));
         packer.push(Datum::from(self.updates_committed));
         packer.push(Datum::from(self.bytes_received));
+        packer.push(Datum::from(self.envelope_state_bytes));
+        packer.push(Datum::from(self.envelope_state_count));
     }
 }
 impl PackableStats for SinkStatisticsUpdate {
@@ -396,6 +400,8 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                                 updates_staged: update.updates_staged,
                                 updates_committed: update.updates_committed,
                                 bytes_received: update.bytes_received,
+                                envelope_state_bytes: update.envelope_state_bytes,
+                                envelope_state_count: update.envelope_state_count,
                             })
                             .collect(),
                         sink_updates: sink_stats
@@ -439,6 +445,8 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             updates_staged: update.updates_staged,
                             updates_committed: update.updates_committed,
                             bytes_received: update.bytes_received,
+                            envelope_state_bytes: update.envelope_state_bytes,
+                            envelope_state_count: update.envelope_state_count,
                         })
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
