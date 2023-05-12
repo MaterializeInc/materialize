@@ -11,11 +11,11 @@ import argparse
 import pg8000
 from pg8000 import Cursor
 
-from materialize.output_consistency.common.format_constants import CONTENT_SEPARATOR_1
-from materialize.output_consistency.configuration.configuration import (
+from materialize.output_consistency.common.configuration import (
     DEFAULT_CONFIG,
     ConsistencyTestConfiguration,
 )
+from materialize.output_consistency.common.format_constants import CONTENT_SEPARATOR_1
 from materialize.output_consistency.data_type.data_provider import DATA_TYPES
 from materialize.output_consistency.execution.evaluation_strategy import (
     ConstantFoldingEvaluation,

@@ -12,7 +12,7 @@ from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError
 
-from materialize.output_consistency.configuration.configuration import (
+from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
 

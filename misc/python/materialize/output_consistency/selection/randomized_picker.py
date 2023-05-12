@@ -9,7 +9,7 @@
 
 import random
 
-from materialize.output_consistency.configuration.configuration import (
+from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.expressions.expression import Expression

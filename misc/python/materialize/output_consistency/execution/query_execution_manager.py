@@ -6,12 +6,12 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from materialize.output_consistency.common.configuration import (
+    ConsistencyTestConfiguration,
+)
 from materialize.output_consistency.common.format_constants import (
     COMMENT_PREFIX,
     CONTENT_SEPARATOR_1,
-)
-from materialize.output_consistency.configuration.configuration import (
-    ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.execution.evaluation_strategy import (
