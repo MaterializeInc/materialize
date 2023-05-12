@@ -507,6 +507,8 @@ fn test_subscribe_basic() {
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
+    server.enable_feature_flags(&["enable_index_options", "enable_logical_compaction_window"]);
+
     client_writes
         .batch_execute("CREATE TABLE t (data text)")
         .unwrap();
@@ -2693,6 +2695,8 @@ fn test_dont_drop_sinks_twice() {
 fn test_timelines_persist_after_failed_transaction() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
+
+    server.enable_feature_flags(&["enable_create_source_denylist_with_options"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 

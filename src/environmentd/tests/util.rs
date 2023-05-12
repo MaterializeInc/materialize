@@ -443,7 +443,7 @@ impl Server {
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
-            .user("materialize");
+            .user("mz_system");
         config
     }
 
@@ -457,6 +457,16 @@ impl Server {
         config
     }
 
+    pub fn enable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .unwrap();
+        }
+    }
+
     pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
@@ -465,6 +475,16 @@ impl Server {
         <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
     {
         Ok(self.pg_config().connect(tls)?)
+    }
+
+    pub fn connect_internal<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        Ok(self.pg_config_internal().connect(tls)?)
     }
 
     pub async fn connect_async<T>(
