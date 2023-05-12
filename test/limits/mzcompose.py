@@ -76,8 +76,9 @@ class Connections(Generator):
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
-        # two extra connections for mz_system and the default connection
-        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+2};")
+        # three extra connections for mz_system, default connection, and one
+        # since sqlparse 0.4.4
+        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+3};")
 
         for i in cls.all():
             print(
