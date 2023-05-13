@@ -13,7 +13,7 @@ $ set-regex match="<VARIES>|<VARIES>|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{9}\)
 application_name                    ""                      "Sets the application name to be reported in statistics and logs (PostgreSQL)."
 client_encoding                     UTF8                    "Sets the client's character set encoding (PostgreSQL)."
 client_min_messages                 notice                  "Sets the message levels that are sent to the client (PostgreSQL)."
-cluster                             <VARIES>                 "Sets the current cluster (Materialize)."
+cluster                             default                 "Sets the current cluster (Materialize)."
 cluster_replica                     ""                      "Sets a target cluster replica for SELECT queries (Materialize)."
 database                            materialize             "Sets the current database (CockroachDB)."
 DateStyle                           "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
