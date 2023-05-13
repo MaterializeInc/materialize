@@ -27,6 +27,11 @@ ALTER SYSTEM SET enable_index_options = true
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_logical_compaction_window = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
 ALTER ROLE materialize CREATEDB CREATECLUSTER CREATEROLE;
 ----
 COMPLETE 0

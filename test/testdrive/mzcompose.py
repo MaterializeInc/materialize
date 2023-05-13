@@ -28,7 +28,7 @@ SERVICES = [
     Redpanda(),
     Localstack(),
     Materialized(),
-    Testdrive(),
+    Testdrive(default_timeout='10s'),
 ]
 
 
@@ -80,6 +80,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
         validate_postgres_stash="materialized",
+        default_timeout='10s'
     )
 
     materialized = Materialized(

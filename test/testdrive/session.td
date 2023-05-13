@@ -7,13 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match="cluster1|default|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{9}\)" replacement=<VARIES>
+$ set-regex match="<VARIES>|<VARIES>|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{9}\)" replacement=<VARIES>
 
 > SHOW ALL
-application_name                    psql                    "Sets the application name to be reported in statistics and logs (PostgreSQL)."
+application_name                    ""                      "Sets the application name to be reported in statistics and logs (PostgreSQL)."
 client_encoding                     UTF8                    "Sets the client's character set encoding (PostgreSQL)."
 client_min_messages                 notice                  "Sets the message levels that are sent to the client (PostgreSQL)."
-cluster                             default                 "Sets the current cluster (Materialize)."
+cluster                             <VARIES>                 "Sets the current cluster (Materialize)."
 cluster_replica                     ""                      "Sets a target cluster replica for SELECT queries (Materialize)."
 database                            materialize             "Sets the current database (CockroachDB)."
 DateStyle                           "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
@@ -26,15 +26,15 @@ server_version                      9.5.0                   "Shows the PostgreSQ
 server_version_num                  90500                   "Shows the PostgreSQL compatible server version as an integer (PostgreSQL)."
 sql_safe_updates                    off                     "Prohibits SQL statements that may be overly destructive (CockroachDB)."
 standard_conforming_strings         on                      "Causes '...' strings to treat backslashes literally (PostgreSQL)."
-statement_timeout                   "10 s"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds"
-idle_in_transaction_session_timeout "2 min"                 "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it istaken as milliseconds. A value of zero disables the timeout (PostgreSQL)."
+statement_timeout                   "10 s"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
+idle_in_transaction_session_timeout "2 min"                 "Sets the maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (PostgreSQL)."
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
 emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize)."
 emit_trace_id_notice                off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
 auto_route_introspection_queries    on                      "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize)."
 enable_session_rbac_checks          off                     "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
-mz_version                          "v0.54.0-dev (1f684b8e4)" "Shows the Materialize server version (Materialize)."
+mz_version                          <VARIES>                "Shows the Materialize server version (Materialize)."
 is_superuser                        off                     "Reports whether the current session is a superuser (PostgreSQL)."
 allowed_cluster_replica_sizes       ""                      "The allowed sizes when creating a new cluster replica (Materialize)."
 enable_rbac_checks                  off                     "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
@@ -52,7 +52,7 @@ max_schemas_per_database            1000                    "The maximum number 
 max_secrets                         100                     "The maximum number of secrets in the region, across all schemas (Materialize)."
 max_sinks                           25                      "The maximum number of sinks in the region, across all schemas (Materialize)."
 max_sources                         25                      "The maximum number of sources in the region, across all schemas (Materialize)."
-max_tables                          25                      The maximum number of tables in the region, across all schemas (Materialize).
+max_tables                          25                      "The maximum number of tables in the region, across all schemas (Materialize)."
 
 > SET application_name = 'foo'
 
