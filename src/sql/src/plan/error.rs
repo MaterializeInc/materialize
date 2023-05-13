@@ -37,6 +37,7 @@ use crate::names::PartialItemName;
 use crate::names::ResolvedItemName;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
+use crate::session::vars::VarError;
 
 #[derive(Clone, Debug)]
 pub enum PlanError {
@@ -182,6 +183,7 @@ pub enum PlanError {
     InvalidKeysInSubscribeEnvelopeUpsert,
     InvalidKeysInSubscribeEnvelopeDebezium,
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
+    VarError(VarError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -206,6 +208,7 @@ impl PlanError {
             Self::RequiresVarOrUnsafe { .. } => {
                 Some("The requested feature is not currently enabled on this account.".into())
             }
+            Self::VarError(e) => e.detail(),
             _ => None,
         }
     }
@@ -283,6 +286,7 @@ impl PlanError {
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 Some("All order bys must be output columns.".into())
             }
+            Self::VarError(e) => e.hint(),
             _ => None,
         }
     }
@@ -474,6 +478,7 @@ impl fmt::Display for PlanError {
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 write!(f, "invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY")
             }
+            Self::VarError(e) => e.fmt(f),
         }
     }
 }
@@ -550,6 +555,12 @@ impl From<ParserError> for PlanError {
 impl From<PostgresError> for PlanError {
     fn from(e: PostgresError) -> PlanError {
         PlanError::PostgresConnectionErr { cause: Arc::new(e) }
+    }
+}
+
+impl From<VarError> for PlanError {
+    fn from(e: VarError) -> Self {
+        PlanError::VarError(e)
     }
 }
 

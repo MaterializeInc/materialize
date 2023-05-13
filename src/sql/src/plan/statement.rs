@@ -34,7 +34,7 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::{query, with_options};
 use crate::plan::{Params, Plan, PlanContext, PlanKind};
-use crate::session::vars::SystemVars;
+use crate::session::vars::{FeatureFlag, SystemVars};
 
 pub(crate) mod ddl;
 mod dml;
@@ -707,6 +707,24 @@ impl<'a> StatementContext<'a> {
             ObjectId::Role(_) => ObjectType::Role,
             ObjectId::Item(item_id) => self.get_item(item_id).item_type().into(),
         }
+    }
+
+    /// Returns an error if the named `FeatureFlag` is not set to `on`.
+    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
+        flag.enabled(Some(self.catalog.system_vars()), None, None)?;
+        Ok(())
+    }
+
+    /// Equivalent to [`Self::require_feature_flag`] but with the ability for the caller to control
+    /// the error message.
+    pub fn require_feature_flag_w_dynamic_desc(
+        &self,
+        flag: &FeatureFlag,
+        desc: String,
+        detail: String,
+    ) -> Result<(), PlanError> {
+        flag.enabled(Some(self.catalog.system_vars()), Some(desc), Some(detail))?;
+        Ok(())
     }
 
     pub fn unsafe_mode(&self) -> bool {

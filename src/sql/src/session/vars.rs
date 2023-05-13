@@ -44,7 +44,7 @@ pub enum EndTransactionAction {
 }
 
 /// Errors that can occur when working with [`Var`]s
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum VarError {
     /// The specified session parameter is constrained to a finite set of
     /// values.
@@ -102,7 +102,8 @@ pub enum VarError {
     RequiresUnsafeMode(&'static str),
     #[error("{} is not supported", .feature)]
     RequiresFeatureFlag {
-        feature: &'static str,
+        feature: String,
+        detail: Option<String>,
         name_hint: Option<&'static UncasedStr>,
     },
 }
@@ -110,8 +111,11 @@ pub enum VarError {
 impl VarError {
     pub fn detail(&self) -> Option<String> {
         match self {
-            Self::RequiresFeatureFlag { .. } => {
-                Some("The requested feature is typically meant only for internal development and testing of Materialize.".into())
+            Self::RequiresFeatureFlag { detail, .. } => {
+                match detail {
+                    None => Some("The requested feature is typically meant only for internal development and testing of Materialize.".into()),
+                    o => o.clone()
+                }
             }
             _ => None,
         }
@@ -857,10 +861,6 @@ feature_flags!(
     ),
     (enable_date_bin_hopping, "the date_bin_hopping function"),
     (
-        enable_denylist_kafka_options,
-        "Kafka sources with non-allowlisted options"
-    ),
-    (
         enable_envelope_debezium_in_subscribe,
         "`ENVELOPE DEBEZIUM (KEY (..))`"
     ),
@@ -872,8 +872,8 @@ feature_flags!(
     (enable_format_json, "FORMAT JSON"),
     (enable_index_options, "INDEX OPTIONS"),
     (
-        enable_kafka_config_denylist_with_options,
-        "KAFKA config using denylist options"
+        enable_kafka_config_denylist_options,
+        "Kafka sources with non-allowlisted options"
     ),
     (enable_list_length_max, "the list_length_max function"),
     (enable_list_n_layers, "the list_n_layers function"),
@@ -2333,12 +2333,18 @@ impl Var for FeatureFlag {
 }
 
 impl FeatureFlag {
-    pub fn enabled(&self, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+    pub fn enabled(
+        &self,
+        system_vars: Option<&SystemVars>,
+        feature: Option<String>,
+        detail: Option<String>,
+    ) -> Result<(), VarError> {
         match system_vars {
             Some(system_vars) if *system_vars.expect_value(self.flag) => Ok(()),
             _ => Err(VarError::RequiresFeatureFlag {
-                feature: self.feature_desc,
+                feature: feature.unwrap_or(self.feature_desc.to_string()),
                 name_hint: system_vars.map(|_| self.flag.name),
+                detail,
             }),
         }
     }

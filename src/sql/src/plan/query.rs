@@ -86,6 +86,7 @@ use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidIterationLimit;
 use crate::plan::{transform_ast, PlanContext, ShowCreatePlan};
 use crate::plan::{Params, QueryWhen};
+use crate::session::vars::FeatureFlag;
 
 use super::statement::show;
 
@@ -5407,6 +5408,10 @@ impl<'a> ExprContext<'a> {
 
     pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
         self.qcx.scx.require_unsafe_mode(feature_name)
+    }
+
+    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
+        self.qcx.scx.require_feature_flag(flag)
     }
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {
