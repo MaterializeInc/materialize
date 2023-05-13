@@ -7,17 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
-----
-COMPLETE 0
-
 # Basic tests of the `CREATE CLUSTER` and `DROP CLUSTER` DDL statements.
 
 mode cockroach
 
 # Start from a pristine state
 reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;
+----
+COMPLETE 0
 
 statement error Expected REPLICAS, found EOF
 CREATE CLUSTER foo
