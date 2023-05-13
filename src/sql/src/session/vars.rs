@@ -980,6 +980,53 @@ pub const ALLOW_UNSTABLE_DEPENDENCIES: ServerVar<bool> = ServerVar {
     safe: false,
 };
 
+// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
+// availability of features.
+//
+// Note that not all ServerVar<bool> are feature flags. Feature flags are for variables that:
+// - Belong to `SystemVars`, _not_ `SessionVars`
+// - Default to false and must be explicitly enabled
+macro_rules! feature_flags {
+    ($(($name:expr, $feature_desc:literal)),+) => {
+        paste::paste!{
+            $(
+                // Note that the ServerVar is not directly exported; we expect these to be
+                // accessible through their FeatureFlag variant.
+                static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
+                    name: UncasedStr::new(stringify!($name)),
+                    value: &false,
+                    description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
+                    internal: true,
+                    safe: false,
+                };
+
+                pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
+                    flag: &[<$name:upper _VAR>],
+                    feature_desc: $feature_desc,
+                };
+            )+
+
+            impl SystemVars {
+                fn with_feature_flags(self) -> Self
+                {
+                    self
+                    $(
+                        .with_var(&[<$name:upper _VAR>])
+                    )+
+                }
+
+                $(
+                    pub fn [<$name:lower>](&self) -> bool {
+                        *self.expect_value(&[<$name:upper _VAR>])
+                    }
+                )+
+            }
+        }
+    }
+}
+
+feature_flags!((dummy, "dummy desc"));
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -1745,6 +1792,7 @@ impl SystemVars {
             active_connection_count,
         };
         let mut vars = vars
+            .with_feature_flags()
             .with_var(&CONFIG_HAS_SYNCED_ONCE)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
@@ -2531,6 +2579,52 @@ where
                 Ok(())
             }
             Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+        }
+    }
+}
+
+// Provides a wrapper to express that a particular `ServerVar` is meant to be used as a feature
+/// flag.
+#[derive(Debug)]
+pub struct FeatureFlag {
+    flag: &'static ServerVar<bool>,
+    feature_desc: &'static str,
+}
+
+impl Var for FeatureFlag {
+    fn name(&self) -> &'static str {
+        self.flag.name()
+    }
+
+    fn value(&self) -> String {
+        self.flag.value()
+    }
+
+    fn description(&self) -> &'static str {
+        self.flag.description()
+    }
+
+    fn type_name(&self) -> String {
+        self.flag.type_name()
+    }
+
+    fn visible(&self, user: &User) -> bool {
+        self.flag.visible(user)
+    }
+
+    fn safe(&self) -> bool {
+        self.flag.safe()
+    }
+}
+
+impl FeatureFlag {
+    pub fn enabled(&self, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+        match system_vars {
+            Some(system_vars) if *system_vars.expect_value(self.flag) => Ok(()),
+            _ => Err(VarError::RequiresFeatureFlag {
+                feature: self.feature_desc,
+                name_hint: system_vars.map(|_| self.flag.name),
+            }),
         }
     }
 }
