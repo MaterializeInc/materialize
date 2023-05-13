@@ -731,15 +731,6 @@ impl<'a> StatementContext<'a> {
         self.catalog.config().unsafe_mode
     }
 
-    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
-        if !self.unsafe_mode() {
-            return Err(PlanError::RequiresUnsafe {
-                feature: feature_name.to_string(),
-            });
-        }
-        Ok(())
-    }
-
     fn require_var_or_unsafe_mode<F>(
         &self,
         feature_flag: F,
