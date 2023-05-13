@@ -785,7 +785,7 @@ impl<'a> StatementContext<'a> {
             && !self
                 .catalog
                 .system_vars()
-                .enable_within_timestamp_order_by()
+                .enable_within_timestamp_order_by_in_subscribe()
         {
             sql_bail!("`WITHIN TIMESTAMP ORDER BY ..` is not enabled")
         }
