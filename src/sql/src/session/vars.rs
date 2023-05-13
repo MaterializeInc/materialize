@@ -98,11 +98,24 @@ pub enum VarError {
     /// The named parameter is unknown to the system.
     #[error("unrecognized configuration parameter {}", .0.quoted())]
     UnknownParameter(String),
+    /// The specified session parameter is read only unless in unsafe mode.
+    #[error("parameter {} can only be set in unsafe mode", .0.quoted())]
+    RequiresUnsafeMode(&'static str),
+    #[error("{} is not supported", .feature)]
+    RequiresFeatureFlag {
+        feature: &'static str,
+        name_hint: Option<&'static UncasedStr>,
+    },
 }
 
 impl VarError {
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            Self::RequiresFeatureFlag { .. } => {
+                Some("The requested feature is typically meant only for internal development and testing of Materialize.".into())
+            }
+            _ => None,
+        }
     }
 
     pub fn hint(&self) -> Option<String> {
@@ -111,6 +124,9 @@ impl VarError {
                 valid_values: Some(valid_values),
                 ..
             } => Some(format!("Available values: {}.", valid_values.join(", "))),
+            VarError::RequiresFeatureFlag { name_hint, .. } => {
+                name_hint.map(|name| format!("Enable with {name} flag"))
+            }
             _ => None,
         }
     }

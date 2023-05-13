@@ -392,6 +392,8 @@ impl ErrorResponse {
                 VarError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
                 VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
                 VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
+                VarError::RequiresUnsafeMode(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                VarError::RequiresFeatureFlag { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             },
         };
         ErrorResponse {
