@@ -536,16 +536,6 @@ const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-/// Whether or not the `DISK` option in available `UPSERT` sources.
-const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_upsert_source_disk"),
-    value: &false,
-    description: "Feature flag indicating availability of the `DISK` \
-                  option in `UPSERT/DEBEZIUM` sources (Materialize).",
-    internal: true,
-    safe: true,
-};
-
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
 mod upsert_rocksdb {
     use std::str::FromStr;
@@ -828,34 +818,6 @@ pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-/// Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled.
-static ENABLE_WITH_MUTUALLY_RECURSIVE: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_with_mutually_recursive"),
-    value: &false,
-    description: "Feature flag indicating whether `WITH MUTUALLY RECURSIVE` queries are enabled (Materialize).",
-    internal: true,
-    safe: true,
-};
-
-/// Feature flag indicating whether monotonic evaluation of one-shot SELECT queries is enabled.
-static ENABLE_MONOTONIC_ONESHOT_SELECTS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_monotonic_oneshot_selects"),
-    value: &false,
-    description: "Feature flag indicating whether monotonic evaluation of one-shot SELECT queries \
-                  is enabled (Materialize).",
-    internal: true,
-    safe: true,
-};
-
-/// Feature flag indicating whether `FORMAT JSON` sources are enabled.
-static ENABLE_FORMAT_JSON: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_format_json"),
-    value: &false,
-    description: "Feature flag indicating whether `FORMAT JSON` sources are enabled (Materialize).",
-    internal: true,
-    safe: true,
-};
-
 /// Feature flag indicating whether real time recency is enabled.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
@@ -930,30 +892,6 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_envelope_upsert_in_subscribe"),
-    value: &false,
-    description: "Feature flag indicating whether `ENVELOPE UPSERT` can be used in `SUBSCRIBE` queries (Materialize).",
-    internal: false,
-    safe: true,
-};
-
-pub const ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_envelope_debezium_in_subscribe"),
-    value: &false,
-    description: "Feature flag indicating whether `ENVELOPE DEBEZIUM` can be used in `SUBSCRIBE` queries (Materialize).",
-    internal: false,
-    safe: true,
-};
-
-pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_within_timestamp_order_by_in_subscribe"),
-    value: &false,
-    description: "Feature flag indicating whether `WITHIN TIMESTAMP ORDER BY` can be used in `SUBSCRIBE` queries (Materialize).",
-    internal: false,
-    safe: true,
-};
-
 pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_connections"),
     value: &1000,
@@ -969,15 +907,6 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
     internal: true,
     safe: true,
-};
-
-pub const ALLOW_UNSTABLE_DEPENDENCIES: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("allow_unstable_dependencies"),
-    value: &false,
-    description:
-        "Whether to allow catalog objects to depend on unstable items, e.g. those in the `mz_internal` schema (Materialize).",
-    internal: true,
-    safe: false,
 };
 
 // Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
@@ -1025,7 +954,92 @@ macro_rules! feature_flags {
     }
 }
 
-feature_flags!((dummy, "dummy desc"));
+feature_flags!(
+    // Gates for other feature flags
+    (allow_real_time_recency, "real time recency"),
+    // Actual feature flags
+    (
+        enable_binary_date_bin,
+        "the binary version of date_bin function"
+    ),
+    (
+        enable_create_sink_denylist_with_options,
+        "CREATE SINK with unsafe options"
+    ),
+    (
+        enable_create_source_denylist_with_options,
+        "CREATE SOURCE with unsafe options"
+    ),
+    (
+        enable_create_source_from_testscript,
+        "CREATE SOURCE ... FROM TEST SCRIPT"
+    ),
+    (enable_date_bin_hopping, "the date_bin_hopping function"),
+    (
+        enable_denylist_kafka_options,
+        "Kafka sources with non-allowlisted options"
+    ),
+    (
+        enable_envelope_debezium_in_subscribe,
+        "`ENVELOPE DEBEZIUM (KEY (..))`"
+    ),
+    (enable_envelope_materialize, "ENVELOPE MATERIALIZE"),
+    (
+        enable_envelope_upsert_in_subscribe,
+        "`ENVELOPE UPSERT` can be used in `SUBSCRIBE`"
+    ),
+    (enable_format_json, "FORMAT JSON"),
+    (enable_index_options, "INDEX OPTIONS"),
+    (
+        enable_kafka_config_denylist_with_options,
+        "KAFKA config using denylist options"
+    ),
+    (enable_list_length_max, "the list_length_max function"),
+    (enable_list_n_layers, "the list_n_layers function"),
+    (enable_list_remove, "the list_remove function"),
+    (
+        enable_logical_compaction_window,
+        "LOGICAL COMPACTION WINDOW"
+    ),
+    (
+        enable_monotonic_oneshot_selects,
+        "monotonic evaluation of one-shot SELECT queries"
+    ),
+    (enable_primary_key_not_enforced, "PRIMARY KEY NOT ENFORCED"),
+    (enable_mfp_pushdown_explain, "`mfp_pushdown` explain"),
+    (
+        enable_multi_worker_storage_persist_sink,
+        "multi-worker storage persist sink"
+    ),
+    (enable_raise_statement, "RAISE statement"),
+    (enable_repeat_row, "the repeat_row function"),
+    (
+        enable_table_check_constraint,
+        "CREATE TABLE with a check constraint"
+    ),
+    (enable_table_foreign_key, "CREATE TABLE with a foreign key"),
+    (
+        enable_table_keys,
+        "CREATE TABLE with a primary key or unique constraint"
+    ),
+    (
+        enable_unmanaged_cluster_replicas,
+        "unmanaged cluster replicas"
+    ),
+    (
+        enable_unstable_dependencies,
+        "depending on unstable objects"
+    ),
+    (
+        enable_upsert_source_disk,
+        "`WITH (DISK)` for `UPSERT/DEBEZIUM` sources"
+    ),
+    (enable_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
+    (
+        enable_within_timestamp_order_by_in_subscribe,
+        "`WITHIN TIMESTAMP ORDER BY ..`"
+    )
+);
 
 /// Represents the input to a variable.
 ///
@@ -1810,7 +1824,6 @@ impl SystemVars {
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
-            .with_var(&ENABLE_UPSERT_SOURCE_DISK)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
@@ -1835,9 +1848,6 @@ impl SystemVars {
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&METRICS_RETENTION)
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
-            .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
-            .with_var(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
-            .with_var(&ENABLE_FORMAT_JSON)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
@@ -1846,12 +1856,8 @@ impl SystemVars {
             .with_var(&PG_REPLICATION_KEEPALIVES_RETRIES)
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
-            .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
-            .with_var(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
-            .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
-            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
-            .with_var(&ALLOW_UNSTABLE_DEPENDENCIES);
+            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES);
         vars.refresh_internal_state();
         vars
     }
@@ -2110,11 +2116,6 @@ impl SystemVars {
         *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
     }
 
-    /// Returns the `enable_upsert_source_disk` configuration parameter.
-    pub fn enable_upsert_source_disk(&self) -> bool {
-        *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
-    }
-
     pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb::tuning::CompactionStyle {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
     }
@@ -2255,34 +2256,19 @@ impl SystemVars {
         *self.expect_value(&MOCK_AUDIT_EVENT_TIMESTAMP)
     }
 
-    /// Returns the `enable_with_mutually_recursive` configuration parameter.
-    pub fn enable_with_mutually_recursive(&self) -> bool {
-        *self.expect_value(&ENABLE_WITH_MUTUALLY_RECURSIVE)
-    }
-
     /// Sets the `enable_with_mutually_recursive` configuration parameter.
     pub fn set_enable_with_mutually_recursive(&mut self, value: bool) -> bool {
         self.vars
-            .get_mut(ENABLE_WITH_MUTUALLY_RECURSIVE.name)
+            .get_mut(ENABLE_WITH_MUTUALLY_RECURSIVE_VAR.name)
             .expect("var known to exist")
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
     }
 
-    /// Returns the `enable_monotonic_oneshot_selects` configuration parameter.
-    pub fn enable_monotonic_oneshot_selects(&self) -> bool {
-        *self.expect_value(&ENABLE_MONOTONIC_ONESHOT_SELECTS)
-    }
-
-    /// Returns the `enable_format_json` configuration parameter.
-    pub fn enable_format_json(&self) -> bool {
-        *self.expect_value(&ENABLE_FORMAT_JSON)
-    }
-
     /// Sets the `enable_format_json` configuration parameter.
     pub fn set_enable_format_json(&mut self, value: bool) -> bool {
         self.vars
-            .get_mut(ENABLE_FORMAT_JSON.name)
+            .get_mut(ENABLE_FORMAT_JSON_VAR.name)
             .expect("var known to exist")
             .set(VarInput::Flat(value.format().as_str()))
             .expect("valid parameter value")
@@ -2298,21 +2284,6 @@ impl SystemVars {
         *self.expect_value(&ENABLE_RBAC_CHECKS)
     }
 
-    /// Returns the `enable_envelope_upsert_in_subscribe` configuration parameter.
-    pub fn enable_envelope_upsert_in_subscribe(&self) -> bool {
-        *self.expect_value(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
-    }
-
-    /// Returns the `enable_envelope_debezium_in_subscribe` configuration parameter.
-    pub fn enable_envelope_debezium_in_subscribe(&self) -> bool {
-        *self.expect_value(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
-    }
-
-    /// Returns the `enable_within_timestamp_order_by` configuration parameter.
-    pub fn enable_within_timestamp_order_by(&self) -> bool {
-        *self.expect_value(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
-    }
-
     /// Returns the `max_connections` configuration parameter.
     pub fn max_connections(&self) -> u32 {
         *self.expect_value(&MAX_CONNECTIONS)
@@ -2320,11 +2291,6 @@ impl SystemVars {
 
     pub fn keep_n_source_status_history_entries(&self) -> usize {
         *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
-    }
-
-    /// Returns the `enable_rbac_checks` configuration parameter.
-    pub fn allow_unstable_dependencies(&self) -> bool {
-        *self.expect_value(&ALLOW_UNSTABLE_DEPENDENCIES)
     }
 }
 
