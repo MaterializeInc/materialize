@@ -32,6 +32,7 @@ use crate::catalog::{CatalogError, CatalogItemType};
 use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
+use crate::session::vars::VarError;
 
 #[derive(Clone, Debug)]
 pub enum PlanError {
@@ -177,6 +178,7 @@ pub enum PlanError {
     InvalidKeysInSubscribeEnvelopeDebezium,
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
     FromValueRequiresParen,
+    VarError(VarError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -201,6 +203,7 @@ impl PlanError {
             Self::RequiresVarOrUnsafe { .. } => {
                 Some("The requested feature is not currently enabled on this account.".into())
             }
+            Self::VarError(e) => e.detail(),
             _ => None,
         }
     }
@@ -274,6 +277,7 @@ impl PlanError {
                 Some("All order bys must be output columns.".into())
             }
             Self::Catalog(e) => e.hint(),
+            Self::VarError(e) => e.hint(),
             _ => None,
         }
     }
@@ -468,6 +472,7 @@ impl fmt::Display for PlanError {
             Self::FromValueRequiresParen => f.write_str(
                 "VALUES expression in FROM clause must be surrounded by parentheses"
             ),
+            Self::VarError(e) => e.fmt(f),
         }
     }
 }
@@ -544,6 +549,12 @@ impl From<ParserError> for PlanError {
 impl From<PostgresError> for PlanError {
     fn from(e: PostgresError) -> PlanError {
         PlanError::PostgresConnectionErr { cause: Arc::new(e) }
+    }
+}
+
+impl From<VarError> for PlanError {
+    fn from(e: VarError) -> Self {
+        PlanError::VarError(e)
     }
 }
 
