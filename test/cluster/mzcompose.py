@@ -269,7 +269,7 @@ def workflow_test_github_15531(c: Composition) -> None:
         ), "dataflow count in history not found in clusterd metrics"
 
         return (history_len, dataflow_count)
-    
+
     c.sql(
         "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
         port=6877,
@@ -742,7 +742,6 @@ def workflow_test_github_17510(c: Composition) -> None:
             port=6877,
             user="mz_system",
         )
-
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
