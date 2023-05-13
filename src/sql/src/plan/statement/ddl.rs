@@ -116,6 +116,7 @@ use crate::plan::{
     SourceSinkClusterConfig, Table, Type, View,
 };
 use crate::session::user::SYSTEM_USER;
+use crate::session::vars;
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -293,12 +294,12 @@ pub fn plan_create_table(
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
                 // them in unsafe mode for sqllogictest's sake.
-                scx.require_unsafe_mode("CREATE TABLE with a foreign key")?
+                scx.require_feature_flag(&vars::ENABLE_TABLE_FOREIGN_KEY)?
             }
             TableConstraint::Check { .. } => {
                 // Check constraints are not presently enforced. We allow them
                 // in unsafe mode for sqllogictest's sake.
-                scx.require_unsafe_mode("CREATE TABLE with a check constraint")?
+                scx.require_feature_flag(&vars::ENABLE_TABLE_CHECK_CONSTRAINT)?
             }
         }
     }
@@ -306,7 +307,7 @@ pub fn plan_create_table(
     if !keys.is_empty() {
         // Unique constraints are not presently enforced. We allow them in
         // unsafe mode for sqllogictest's sake.
-        scx.require_unsafe_mode("CREATE TABLE with a primary key or unique constraint")?;
+        scx.require_feature_flag(&vars::ENABLE_TABLE_KEYS)?
     }
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -395,16 +396,20 @@ pub fn plan_create_source(
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
-    const SAFE_WITH_OPTIONS: &[CreateSourceOptionName] = &[CreateSourceOptionName::Size];
+    const ALLOWED_WITH_OPTIONS: &[CreateSourceOptionName] = &[CreateSourceOptionName::Size];
 
-    if with_options
+    if let Some(op) = with_options
         .iter()
-        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+        .find(|op| !ALLOWED_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_unsafe_mode(&format!(
-            "creating sources with WITH options other than {}",
-            comma_separated(SAFE_WITH_OPTIONS)
-        ))?;
+        scx.require_feature_flag_w_dynamic_desc(
+            &vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS,
+            format!("CREATE SOURCE...WITH ({}..)", op.name.to_ast_string()),
+            format!(
+                "permitted options are {}",
+                comma_separated(ALLOWED_WITH_OPTIONS)
+            ),
+        )?;
     }
 
     if !matches!(connection, CreateSourceConnection::Kafka { .. })
@@ -436,12 +441,21 @@ pub fn plan_create_source(
 
             // Starting offsets are allowed out unsafe mode, as they are a simple,
             // useful way to specify where to start reading a topic.
-            if let Some(opt) = options.iter().find(|opt| {
-                opt.name != KafkaConfigOptionName::StartOffset
-                    && opt.name != KafkaConfigOptionName::StartTimestamp
-                    && opt.name != KafkaConfigOptionName::Topic
-            }) {
-                scx.require_unsafe_mode(&format!("KAFKA CONNECTION option {}", opt.name))?;
+            const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[
+                KafkaConfigOptionName::StartOffset,
+                KafkaConfigOptionName::StartTimestamp,
+                KafkaConfigOptionName::Topic,
+            ];
+
+            if let Some(op) = options
+                .iter()
+                .find(|op| !ALLOWED_OPTIONS.contains(&op.name))
+            {
+                scx.require_feature_flag_w_dynamic_desc(
+                    &vars::ENABLE_KAFKA_CONFIG_DENYLIST_OPTIONS,
+                    format!("FROM KAFKA CONNECTION ({}...)", op.name.to_ast_string()),
+                    format!("permitted options are {}", comma_separated(ALLOWED_OPTIONS)),
+                )?;
             }
 
             kafka_util::validate_options_for_context(
@@ -799,7 +813,7 @@ pub fn plan_create_source(
             (connection, encoding, available_subsources)
         }
         CreateSourceConnection::TestScript { desc_json } => {
-            scx.require_unsafe_mode("CREATE SOURCE ... FROM TEST SCRIPT")?;
+            scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE_FROM_TESTSCRIPT)?;
             let connection = GenericSourceConnection::from(TestScriptSourceConnection {
                 desc_json: desc_json.clone(),
             });
@@ -929,7 +943,7 @@ pub fn plan_create_source(
             }
         }
         mz_sql_parser::ast::Envelope::CdcV2 => {
-            scx.require_unsafe_mode("ENVELOPE MATERIALIZE")?;
+            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
             match format {
                 CreateSourceFormat::Bare(Format::Avro(_)) => {}
@@ -940,9 +954,10 @@ pub fn plan_create_source(
     };
 
     if disk.is_some() {
-        scx.require_upsert_source_disk_available()?;
         match &envelope {
-            UnplannedSourceEnvelope::Upsert { .. } => {}
+            UnplannedSourceEnvelope::Upsert { .. } => {
+                scx.require_feature_flag(&vars::ENABLE_UPSERT_SOURCE_DISK)?
+            }
             _ => {
                 bail_unsupported!("ON DISK used with non-UPSERT/DEBEZIUM ENVELOPE");
             }
@@ -969,7 +984,7 @@ pub fn plan_create_source(
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
         // Don't remove this without addressing
         // https://github.com/MaterializeInc/materialize/issues/15272.
-        scx.require_unsafe_mode("PRIMARY KEY NOT ENFORCED")?;
+        scx.require_feature_flag(&vars::ENABLE_PRIMARY_KEY_NOT_ENFORCED)?;
 
         let key_columns = columns
             .into_iter()
@@ -1610,7 +1625,7 @@ fn get_encoding_inner(
             })
         }
         Format::Json => {
-            scx.require_format_json()?;
+            scx.require_feature_flag(&crate::session::vars::ENABLE_FORMAT_JSON)?;
             DataEncodingInner::Json
         }
         Format::Text => DataEncodingInner::Text,
@@ -1952,17 +1967,21 @@ pub fn plan_create_sink(
         with_options,
     } = stmt;
 
-    const SAFE_WITH_OPTIONS: &[CreateSinkOptionName] =
+    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] =
         &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
 
-    if with_options
+    if let Some(op) = with_options
         .iter()
-        .any(|op| !SAFE_WITH_OPTIONS.contains(&op.name))
+        .find(|op| !ALLOWED_WITH_OPTIONS.contains(&op.name))
     {
-        scx.require_unsafe_mode(&format!(
-            "creating sinks with WITH options other than {}",
-            comma_separated(SAFE_WITH_OPTIONS)
-        ))?;
+        scx.require_feature_flag_w_dynamic_desc(
+            &vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS,
+            format!("CREATE SINK...WITH ({}..)", op.name.to_ast_string()),
+            format!(
+                "permitted options are {}",
+                comma_separated(ALLOWED_WITH_OPTIONS)
+            ),
+        )?;
     }
 
     let envelope = match envelope {
@@ -2148,7 +2167,7 @@ fn kafka_sink_builder(
     scx: &StatementContext,
     mz_sql_parser::ast::KafkaConnection {
         connection,
-        options: with_options,
+        options,
     }: mz_sql_parser::ast::KafkaConnection<Aug>,
     format: Option<Format<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
@@ -2163,21 +2182,24 @@ fn kafka_sink_builder(
         _ => sql_bail!("{} is not a kafka connection", item.name()),
     };
 
-    if with_options
+    // Starting offsets are allowed out unsafe mode, as they are a simple,
+    // useful way to specify where to start reading a topic.
+    const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[KafkaConfigOptionName::Topic];
+
+    if let Some(op) = options
         .iter()
-        .any(|mz_sql_parser::ast::KafkaConfigOption { name, .. }| {
-            !matches!(name, KafkaConfigOptionName::Topic)
-        })
+        .find(|op| !ALLOWED_OPTIONS.contains(&op.name))
     {
-        scx.require_unsafe_mode("KAFKA CONNECTION options besides TOPIC")?;
+        scx.require_feature_flag_w_dynamic_desc(
+            &vars::ENABLE_KAFKA_CONFIG_DENYLIST_OPTIONS,
+            format!("FROM KAFKA CONNECTION ({}...)", op.name.to_ast_string()),
+            format!("permitted options are {}", comma_separated(ALLOWED_OPTIONS)),
+        )?;
     }
 
-    kafka_util::validate_options_for_context(
-        &with_options,
-        kafka_util::KafkaOptionCheckContext::Sink,
-    )?;
+    kafka_util::validate_options_for_context(&options, kafka_util::KafkaOptionCheckContext::Sink)?;
 
-    let extracted_options: KafkaConfigOptionExtracted = with_options.try_into()?;
+    let extracted_options: KafkaConfigOptionExtracted = options.try_into()?;
 
     for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
         connection.options.insert(k, v);
@@ -2788,7 +2810,7 @@ fn plan_replica_config(
             compute_addresses,
             workers,
         ) => {
-            scx.require_unsafe_mode("unmanaged cluster replicas")?;
+            scx.require_feature_flag(&vars::ENABLE_UNMANAGED_CLUSTER_REPLICAS)?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
             // accidentally omit one of these options, so we try to produce
@@ -3873,7 +3895,7 @@ fn plan_index_options(
 ) -> Result<Vec<crate::plan::IndexOption>, PlanError> {
     if !with_opts.is_empty() {
         // Index options are not durable.
-        scx.require_unsafe_mode("INDEX OPTIONS")?;
+        scx.require_feature_flag(&vars::ENABLE_INDEX_OPTIONS)?;
     }
 
     let IndexOptionExtracted {
@@ -3884,7 +3906,7 @@ fn plan_index_options(
     let mut out = Vec::with_capacity(1);
 
     if let Some(OptionalInterval(lcw)) = logical_compaction_window {
-        scx.require_unsafe_mode("LOGICAL COMPACTION WINDOW")?;
+        scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
         out.push(crate::plan::IndexOption::LogicalCompactionWindow(
             lcw.map(|interval| interval.duration()).transpose()?,
         ))
