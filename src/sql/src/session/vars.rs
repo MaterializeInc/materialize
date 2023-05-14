@@ -734,8 +734,8 @@ static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-static MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
-    name: UncasedStr::new("mock_audit_event_timestamp"),
+static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
+    name: UncasedStr::new("unsafe_mock_audit_event_timestamp"),
     value: &None,
     description: "Mocked timestamp to use for audit events for testing purposes",
     internal: true,
@@ -1700,7 +1700,7 @@ impl Default for SystemVars {
             .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&METRICS_RETENTION)
-            .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
+            .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&PG_REPLICATION_CONNECT_TIMEOUT)
@@ -2079,9 +2079,9 @@ impl SystemVars {
         *self.expect_value(&METRICS_RETENTION)
     }
 
-    /// Returns the `mock_audit_event_timestamp` configuration parameter.
-    pub fn mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
-        *self.expect_value(&MOCK_AUDIT_EVENT_TIMESTAMP)
+    /// Returns the `unsafe_mock_audit_event_timestamp` configuration parameter.
+    pub fn unsafe_mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
+        *self.expect_value(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
     }
 
     /// Sets the `enable_with_mutually_recursive` configuration parameter.

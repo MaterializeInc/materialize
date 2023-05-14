@@ -134,7 +134,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 49  drop  cluster  {"id":"u2","name":"foo"}  materialize
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET mock_audit_event_timestamp = 666
+ALTER SYSTEM SET unsafe_mock_audit_event_timestamp = 666
 ----
 COMPLETE 0
 
@@ -147,7 +147,7 @@ SELECT id, event_type, object_type, details, user, occurred_at FROM mz_audit_eve
 50  create  table  {"database":"materialize","id":"u16","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM RESET mock_audit_event_timestamp
+ALTER SYSTEM RESET unsafe_mock_audit_event_timestamp
 ----
 COMPLETE 0
 
