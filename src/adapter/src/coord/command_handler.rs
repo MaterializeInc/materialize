@@ -137,7 +137,12 @@ impl Coordinator {
             Command::GetSystemVars { session, tx } => {
                 let mut vars = BTreeMap::new();
                 for var in self.catalog().system_config().iter() {
-                    vars.insert(var.name().to_string(), var.value());
+                    if var
+                        .visible(session.user(), Some(self.catalog.system_config()))
+                        .is_ok()
+                    {
+                        vars.insert(var.name().to_string(), var.value());
+                    }
                 }
                 let _ = tx.send(Response {
                     result: Ok(vars),
@@ -146,13 +151,25 @@ impl Coordinator {
             }
 
             Command::SetSystemVars { vars, session, tx } => {
-                let ops = vars
-                    .into_iter()
-                    .map(|(name, value)| catalog::Op::UpdateSystemConfiguration {
+                let mut ops = Vec::with_capacity(vars.len());
+
+                for (name, value) in vars {
+                    if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
+                        var.visible(session.user(), Some(self.catalog.system_config()))
+                    }) {
+                        let _ = tx.send(Response {
+                            result: Err(e.into()),
+                            session,
+                        });
+                        return;
+                    }
+
+                    ops.push(catalog::Op::UpdateSystemConfiguration {
                         name,
                         value: OwnedVarInput::Flat(value),
-                    })
-                    .collect();
+                    });
+                }
+
                 let result = self.catalog_transact(Some(&session), ops).await;
                 let _ = tx.send(Response { result, session });
             }

@@ -1783,10 +1783,15 @@ impl SystemVars {
     /// Configuration parameters are matched case insensitively. If no such
     /// configuration parameter exists, `get` returns an error.
     ///
-    /// Note that if `name` is known at compile time, you should instead use the
-    /// named accessor to access the variable with its true Rust type. For
-    /// example, `self.get("max_tables").value()` returns the string
-    /// `"25"` or the current value, while `self.max_tables()` returns an i32.
+    /// Note that:
+    /// - If `name` is known at compile time, you should instead use the named
+    /// accessor to access the variable with its true Rust type. For example,
+    /// `self.get("max_tables").value()` returns the string `"25"` or the
+    /// current value, while `self.max_tables()` returns an i32.
+    ///
+    /// - This function does not check that the access variable should be
+    /// visible because of other settings or users. Before or after accessing
+    /// this method, you should call `Var::visible`.
     ///
     /// # Errors
     ///
@@ -1801,6 +1806,10 @@ impl SystemVars {
 
     /// Check if the given `values` is the default value for the [`Var`]
     /// identified by `name`.
+    ///
+    /// Note that this function does not check that the access variable should
+    /// be visible because of other settings or users. Before or after accessing
+    /// this method, you should call `Var::visible`.
     ///
     /// # Errors
     ///
@@ -1827,6 +1836,10 @@ impl SystemVars {
     /// `name` was modified by this call (it won't be if it already had the
     /// given `value`).
     ///
+    /// Note that this function does not check that the access variable should
+    /// be visible because of other settings or users. Before or after accessing
+    /// this method, you should call `Var::visible`.
+    ///
     /// # Errors
     ///
     /// The call will return an error:
@@ -1843,6 +1856,10 @@ impl SystemVars {
     /// Set the default for this variable. This is the value this
     /// variable will be be `reset` to. If no default is set, the static default in the
     /// variable definition is used instead.
+    ///
+    /// Note that this function does not check that the access variable should
+    /// be visible because of other settings or users. Before or after accessing
+    /// this method, you should call `Var::visible`.
     pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
         self.vars
             .get_mut(UncasedStr::new(name))
@@ -1858,6 +1875,10 @@ impl SystemVars {
     ///
     /// Return a `bool` value indicating whether the [`Var`] identified by
     /// `name` was modified by this call (it won't be if was already reset).
+    ///
+    /// Note that this function does not check that the access variable should
+    /// be visible because of other settings or users. Before or after accessing
+    /// this method, you should call `Var::visible`.
     ///
     /// # Errors
     ///
@@ -2120,8 +2141,8 @@ pub trait Var: fmt::Debug {
     /// Returns the name of the type of this variable.
     fn type_name(&self) -> &'static str;
 
-    /// Indicates wither the [`Var`] is visible as a function of the `user` and
-    /// `system_vars`.
+    /// Indicates wither the [`Var`] is visible as a function of the `user` and `system_vars`.
+    /// "Invisible" parameters return `VarErrors`.
     ///
     /// Variables marked as `internal` are only visible for the system user.
     fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError>;
