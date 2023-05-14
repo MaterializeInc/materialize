@@ -708,7 +708,12 @@ impl CatalogState {
             role_id: MZ_SYSTEM_ROLE_ID,
             prepared_statements: None,
         };
-        enable_features_required_for_catalog_open(&mut session_catalog);
+
+        // Enable catalog features that might be required during planning in
+        // [Catalog::open]. Existing catalog items might have been created while a
+        // specific feature flag turned on, so we need to ensure that this is also the
+        // case during catalog rehydration in order to avoid panics.
+        session_catalog.system_vars_mut().enable_all_feature_flags();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -6562,7 +6567,11 @@ impl Catalog {
         custom_logical_compaction_window: Option<Duration>,
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
-        enable_features_required_for_catalog_open(&mut session_catalog);
+        // Enable catalog features that might be required during planning in
+        // [Catalog::open]. Existing catalog items might have been created while a
+        // specific feature flag turned on, so we need to ensure that this is also the
+        // case during catalog rehydration in order to avoid panics.
+        session_catalog.system_vars_mut().enable_all_feature_flags();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -6960,26 +6969,6 @@ pub fn is_reserved_role_name(name: &str) -> bool {
 
 pub fn is_public_role(name: &str) -> bool {
     name == &*PUBLIC_ROLE_NAME
-}
-
-/// Enable catalog features that might be required during planning in
-/// [Catalog::open]. Existing catalog items might have been created while a
-/// specific feature flag turned on, so we need to ensure that this is also the
-/// case during catalog rehydration in order to avoid panics.
-fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) {
-    if !session_catalog
-        .system_vars()
-        .enable_with_mutually_recursive()
-    {
-        session_catalog
-            .system_vars_mut()
-            .set_enable_with_mutually_recursive(true);
-    }
-    if !session_catalog.system_vars().enable_format_json() {
-        session_catalog
-            .system_vars_mut()
-            .set_enable_format_json(true);
-    }
 }
 
 #[derive(Debug, Copy, Clone)]

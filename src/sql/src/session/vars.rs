@@ -881,6 +881,13 @@ macro_rules! feature_flags {
                     )+
                 }
 
+                pub fn enable_all_feature_flags(&mut self) {
+                    $(
+                        self.set(stringify!($name), VarInput::Flat("on"))
+                            .expect("setting default value must work");
+                    )+
+                }
+
                 $(
                     pub fn [<$name:lower>](&self) -> bool {
                         *self.expect_value(&[<$name:upper _VAR>])
@@ -2264,24 +2271,6 @@ impl SystemVars {
     /// Returns the `unsafe_mock_audit_event_timestamp` configuration parameter.
     pub fn unsafe_mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
         *self.expect_value(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
-    }
-
-    /// Sets the `enable_with_mutually_recursive` configuration parameter.
-    pub fn set_enable_with_mutually_recursive(&mut self, value: bool) -> bool {
-        self.vars
-            .get_mut(ENABLE_WITH_MUTUALLY_RECURSIVE_VAR.name)
-            .expect("var known to exist")
-            .set(VarInput::Flat(value.format().as_str()))
-            .expect("valid parameter value")
-    }
-
-    /// Sets the `enable_format_json` configuration parameter.
-    pub fn set_enable_format_json(&mut self, value: bool) -> bool {
-        self.vars
-            .get_mut(ENABLE_FORMAT_JSON_VAR.name)
-            .expect("var known to exist")
-            .set(VarInput::Flat(value.format().as_str()))
-            .expect("valid parameter value")
     }
 
     /// Returns the `enable_ld_rbac_checks` configuration parameter.
