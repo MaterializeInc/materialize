@@ -11,6 +11,11 @@
 # This file contains tests for the TopK elision transform
 # and interaction of transforms with the TopK operator.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE test1(a int, b int, c int, d int)
 

@@ -14,6 +14,11 @@ mode cockroach
 # Start from a pristine state
 reset-server
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;
+----
+COMPLETE 0
+
 statement error Expected REPLICAS, found EOF
 CREATE CLUSTER foo
 
