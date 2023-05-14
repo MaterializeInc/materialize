@@ -70,8 +70,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, PlanError, SourceSinkClusterConfig as PlanStorageClusterConfig,
-    StatementDesc,
+    Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -208,7 +207,6 @@ impl CatalogState {
                 start_instant: Instant::now(),
                 nonce: Default::default(),
                 environment_id: EnvironmentId::for_tests(),
-                unsafe_mode: Default::default(),
                 session_id: Default::default(),
                 build_info: &DUMMY_BUILD_INFO,
                 timestamp_interval: Default::default(),
@@ -1441,16 +1439,6 @@ impl CatalogState {
     /// Return current system configuration.
     pub fn system_config(&self) -> &SystemVars {
         &self.system_configuration
-    }
-
-    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        if !self.config.unsafe_mode {
-            Err(AdapterError::PlanError(PlanError::RequiresUnsafe {
-                feature: feature_name.to_string(),
-            }))
-        } else {
-            Ok(())
-        }
     }
 
     /// Serializes the catalog's in-memory state.
@@ -2768,7 +2756,6 @@ impl Catalog {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
                     nonce: rand::random(),
-                    unsafe_mode: config.unsafe_mode,
                     environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -6251,17 +6238,10 @@ impl Catalog {
                 Op::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, value.borrow())?;
                     let var = state.get_system_configuration(&name)?;
-                    if !var.safe() {
-                        state.require_unsafe_mode(var.name())?;
-                    }
                     tx.upsert_system_config(&name, var.value())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
-                    let var = state.get_system_configuration(&name)?;
-                    if !var.safe() {
-                        state.require_unsafe_mode(var.name())?;
-                    }
                     tx.remove_system_config(&name);
                 }
                 Op::ResetAllSystemConfiguration => {
@@ -6810,14 +6790,6 @@ impl Catalog {
 
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
-    }
-
-    pub fn unsafe_mode(&self) -> bool {
-        self.config().unsafe_mode
-    }
-
-    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        self.state.require_unsafe_mode(feature_name)
     }
 
     /// Return the current compute configuration, derived from the system configuration.
