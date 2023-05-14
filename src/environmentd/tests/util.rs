@@ -384,6 +384,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         tls: config.tls,
         frontegg: config.frontegg,
         unsafe_mode: config.unsafe_mode,
+        all_features: false,
         metrics_registry: metrics_registry.clone(),
         now: config.now,
         environment_id,

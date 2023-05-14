@@ -161,6 +161,11 @@ pub struct Args {
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
 
+    /// Enables all feature flags, meant only as a tool for local development;
+    /// this should never be enabled in CI.
+    #[clap(long, env = "ALL_FEATURES")]
+    all_features: bool,
+
     // === Connection options. ===
     /// The address on which to listen for untrusted SQL connections.
     ///
@@ -838,6 +843,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         secrets_controller,
         cloud_resource_controller,
         unsafe_mode: args.unsafe_mode,
+        all_features: args.all_features,
         metrics_registry,
         now,
         environment_id: args.environment_id,

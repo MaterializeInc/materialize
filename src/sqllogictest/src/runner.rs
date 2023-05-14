@@ -910,6 +910,7 @@ impl RunnerInner {
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
+            all_features: false,
             metrics_registry,
             now,
             environment_id,
