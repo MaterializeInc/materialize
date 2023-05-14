@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
+
 ## Test a plausibly correct recursive query.
 query T multiline
 EXPLAIN WITH MUTUALLY RECURSIVE

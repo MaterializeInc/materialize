@@ -17,6 +17,22 @@ mode cockroach
 # queries with LISTs. As a workaround until LIST is reflected in pg_type,
 # we just convert everything to `text`.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_list_n_layers = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_list_length_max = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_list_remove = true
+----
+COMPLETE 0
+
+
 query T
 SELECT (LIST[1,2,3])::text
 ----

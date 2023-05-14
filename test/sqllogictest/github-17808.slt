@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
+
 # Regression test for issues corrected by https://github.com/MaterializeInc/materialize/issues/17808.
 
 # The following query should not frustrate the system, although it did prior to

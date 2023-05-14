@@ -366,6 +366,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up("redpanda", "materialized", "postgres", "clusterd")
 
         c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
             """
             CREATE CLUSTER clusterd REPLICAS (r1 (
                 STORAGECTL ADDRESSES ['clusterd:2100'],

@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+
 > DROP CLUSTER IF EXISTS cluster1 CASCADE;
 
 > CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE '3xsmall'), replica2 (SIZE '3xsmall'));
