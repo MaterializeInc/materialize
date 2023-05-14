@@ -824,12 +824,14 @@ pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
-/// Feature flag indicating whether real time recency is enabled.
+/// Feature flag indicating whether real time recency is enabled. Not that
+/// unlike other feature flags, this is made available at the session level, so
+/// is additionally gated by a feature flag.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
     value: &false,
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
-    internal: true,
+    internal: false,
     safe: false,
 };
 
@@ -1173,7 +1175,8 @@ impl SessionVars {
             ),
             timezone: SessionVar::new(&TIMEZONE),
             transaction_isolation: SessionVar::new(&TRANSACTION_ISOLATION),
-            real_time_recency: SessionVar::new(&REAL_TIME_RECENCY),
+            real_time_recency: SessionVar::new(&REAL_TIME_RECENCY)
+                .add_feature_flag(&ALLOW_REAL_TIME_RECENCY),
             emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
             emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
             auto_route_introspection_queries: SessionVar::new(&AUTO_ROUTE_INTROSPECTION_QUERIES),
@@ -1185,6 +1188,10 @@ impl SessionVars {
 
     /// Returns an iterator over the configuration parameters and their current
     /// values for this session.
+    ///
+    /// Note that this function does not check that the access variable should
+    /// be visible because of other settings or users. Before or after accessing
+    /// this method, you should call `Var::visible`.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
         // `as` is ok to use to cast to a trait object.
         #[allow(clippy::as_conversions)]
@@ -1254,64 +1261,71 @@ impl SessionVars {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
-    pub fn get(&self, name: &str) -> Result<&dyn Var, VarError> {
-        if name == APPLICATION_NAME.name {
-            Ok(&self.application_name)
+    ///
+    /// If the variable does not exist or the user does not have the visibility requires, this
+    /// function returns an error.
+    pub fn get(&self, system_vars: Option<&SystemVars>, name: &str) -> Result<&dyn Var, VarError> {
+        let var: &dyn Var = if name == APPLICATION_NAME.name {
+            &self.application_name
         } else if name == CLIENT_ENCODING.name {
-            Ok(&self.client_encoding)
+            &self.client_encoding
         } else if name == CLIENT_MIN_MESSAGES.name {
-            Ok(&self.client_min_messages)
+            &self.client_min_messages
         } else if name == CLUSTER.name {
-            Ok(&self.cluster)
+            &self.cluster
         } else if name == CLUSTER_REPLICA.name {
-            Ok(&self.cluster_replica)
+            &self.cluster_replica
         } else if name == DATABASE.name {
-            Ok(&self.database)
+            &self.database
         } else if name == DATE_STYLE.name {
-            Ok(self.date_style)
+            self.date_style
         } else if name == EXTRA_FLOAT_DIGITS.name {
-            Ok(&self.extra_float_digits)
+            &self.extra_float_digits
         } else if name == FAILPOINTS.name {
-            Ok(&self.failpoints)
+            &self.failpoints
         } else if name == INTEGER_DATETIMES.name {
-            Ok(&self.integer_datetimes)
+            &self.integer_datetimes
         } else if name == INTERVAL_STYLE.name {
-            Ok(&self.interval_style)
+            &self.interval_style
         } else if name == MZ_VERSION_NAME {
-            Ok(self.build_info)
+            self.build_info
         } else if name == SEARCH_PATH.name {
-            Ok(&self.search_path)
+            &self.search_path
         } else if name == SERVER_VERSION.name {
-            Ok(&self.server_version)
+            &self.server_version
         } else if name == SERVER_VERSION_NUM.name {
-            Ok(&self.server_version_num)
+            &self.server_version_num
         } else if name == SQL_SAFE_UPDATES.name {
-            Ok(&self.sql_safe_updates)
+            &self.sql_safe_updates
         } else if name == STANDARD_CONFORMING_STRINGS.name {
-            Ok(&self.standard_conforming_strings)
+            &self.standard_conforming_strings
         } else if name == STATEMENT_TIMEOUT.name {
-            Ok(&self.statement_timeout)
+            &self.statement_timeout
         } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
-            Ok(&self.idle_in_transaction_session_timeout)
+            &self.idle_in_transaction_session_timeout
         } else if name == TIMEZONE.name {
-            Ok(&self.timezone)
+            &self.timezone
         } else if name == TRANSACTION_ISOLATION.name {
-            Ok(&self.transaction_isolation)
+            &self.transaction_isolation
         } else if name == REAL_TIME_RECENCY.name {
-            Ok(&self.real_time_recency)
+            &self.real_time_recency
         } else if name == EMIT_TIMESTAMP_NOTICE.name {
-            Ok(&self.emit_timestamp_notice)
+            &self.emit_timestamp_notice
         } else if name == EMIT_TRACE_ID_NOTICE.name {
-            Ok(&self.emit_trace_id_notice)
+            &self.emit_trace_id_notice
         } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
-            Ok(&self.auto_route_introspection_queries)
+            &self.auto_route_introspection_queries
         } else if name == IS_SUPERUSER_NAME {
-            Ok(&self.user)
+            &self.user
         } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
-            Ok(&self.enable_session_rbac_checks)
+            &self.enable_session_rbac_checks
         } else {
-            Err(VarError::UnknownParameter(name.into()))
-        }
+            return Err(VarError::UnknownParameter(name.into()));
+        };
+
+        var.visible(&self.user, system_vars)?;
+
+        Ok(var)
     }
 
     /// Sets the configuration parameter named `name` to the value represented
@@ -1326,7 +1340,18 @@ impl SessionVars {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    pub fn set(&mut self, name: &str, input: VarInput, local: bool) -> Result<(), VarError> {
+    ///
+    /// If the variable does not exist or the user does not have the visibility requires, this
+    /// function returns an error.
+    pub fn set(
+        &mut self,
+        system_vars: Option<&SystemVars>,
+        name: &str,
+        input: VarInput,
+        local: bool,
+    ) -> Result<(), VarError> {
+        self.get(system_vars, name)?;
+
         if name == APPLICATION_NAME.name {
             self.application_name.set(input, local)
         } else if name == CLIENT_ENCODING.name {
@@ -1450,6 +1475,11 @@ impl SessionVars {
         } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
             self.enable_session_rbac_checks.set(input, local)
         } else {
+            mz_ore::soft_assert!(
+                false,
+                "SessionVars get/set states have diverged; get has {name}, but set does not",
+            );
+
             Err(VarError::UnknownParameter(name.into()))
         }
     }
@@ -1457,14 +1487,24 @@ impl SessionVars {
     /// Sets the configuration parameter named `name` to its default value.
     ///
     /// The new value may be either committed or rolled back by the next call to
-    /// [`SessionVars::end_transaction`]. If `local` is true, the new value is always
-    /// discarded by the next call to [`SessionVars::end_transaction`], even if the
-    /// transaction is marked to commit.
+    /// [`SessionVars::end_transaction`]. If `local` is true, the new value is
+    /// always discarded by the next call to [`SessionVars::end_transaction`],
+    /// even if the transaction is marked to commit.
     ///
-    /// Like with [`SessionVars::get`], configuration parameters are matched case
-    /// insensitively. If the named configuration parameter does not exist, an
-    /// error is returned.
-    pub fn reset(&mut self, name: &str, local: bool) -> Result<(), VarError> {
+    /// Like with [`SessionVars::get`], configuration parameters are matched
+    /// case insensitively. If the named configuration parameter does not exist,
+    /// an error is returned.
+    ///
+    /// If the variable does not exist or the user does not have the visibility
+    /// requires, this function returns an error.
+    pub fn reset(
+        &mut self,
+        system_vars: Option<&SystemVars>,
+        name: &str,
+        local: bool,
+    ) -> Result<(), VarError> {
+        self.get(system_vars, name)?;
+
         if name == APPLICATION_NAME.name {
             self.application_name.reset(local);
         } else if name == CLIENT_MIN_MESSAGES.name {
@@ -1511,6 +1551,11 @@ impl SessionVars {
         {
             // fixed value
         } else {
+            mz_ore::soft_assert!(
+                false,
+                "SessionVars get/reset states have diverged; get has {name}, but set does not",
+            );
+
             return Err(VarError::UnknownParameter(name.into()));
         }
         Ok(())
@@ -2328,11 +2373,11 @@ pub trait Var: fmt::Debug {
     /// Returns the name of the type of this variable.
     fn type_name(&self) -> String;
 
-    /// Indicates wither the [`Var`] is visible for the given [`User`].
+    /// Indicates wither the [`Var`] is visible as a function of the `user` and
+    /// `system_vars`.
     ///
-    /// Variables marked as `internal` are only visible for the
-    /// system user.
-    fn visible(&self, user: &User) -> bool;
+    /// Variables marked as `internal` are only visible for the system user.
+    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError>;
 
     /// Indicates wither the [`Var`] is only visible in unsafe mode.
     ///
@@ -2408,8 +2453,19 @@ where
         V::type_name()
     }
 
-    fn visible(&self, user: &User) -> bool {
-        !self.internal || user == &*SYSTEM_USER
+    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+        if self.internal && user != &*SYSTEM_USER {
+            Err(VarError::UnknownParameter(self.name().to_string()))
+        } else if self.name().starts_with("unsafe")
+            && match system_vars {
+                None => true,
+                Some(system_vars) => !system_vars.allow_unsafe,
+            }
+        {
+            Err(VarError::RequiresUnsafeMode(self.name()))
+        } else {
+            Ok(())
+        }
     }
 
     fn safe(&self) -> bool {
@@ -2496,8 +2552,8 @@ where
         V::type_name()
     }
 
-    fn visible(&self, user: &User) -> bool {
-        self.parent.visible(user)
+    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+        self.parent.visible(user, system_vars)
     }
 
     fn safe(&self) -> bool {
@@ -2589,8 +2645,8 @@ impl Var for FeatureFlag {
         self.flag.type_name()
     }
 
-    fn visible(&self, user: &User) -> bool {
-        self.flag.visible(user)
+    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+        self.flag.visible(user, system_vars)
     }
 
     fn safe(&self) -> bool {
@@ -2636,6 +2692,7 @@ where
     staged_value: Option<V::Owned>,
     session_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
+    feature_flag: Option<&'static FeatureFlag>,
 }
 
 impl<V> SessionVar<V>
@@ -2649,7 +2706,13 @@ where
             staged_value: None,
             session_value: None,
             parent,
+            feature_flag: None,
         }
+    }
+
+    fn add_feature_flag(mut self, flag: &'static FeatureFlag) -> Self {
+        self.feature_flag = Some(flag);
+        self
     }
 
     fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
@@ -2718,8 +2781,12 @@ where
         V::type_name()
     }
 
-    fn visible(&self, user: &User) -> bool {
-        self.parent.visible(user)
+    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
+        if let Some(flag) = self.feature_flag {
+            flag.enabled(system_vars, None, None)?;
+        }
+
+        self.parent.visible(user, system_vars)
     }
 
     fn safe(&self) -> bool {
@@ -2744,8 +2811,8 @@ impl Var for BuildInfo {
         str::type_name()
     }
 
-    fn visible(&self, _: &User) -> bool {
-        true
+    fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
+        Ok(())
     }
 
     fn safe(&self) -> bool {
@@ -2770,8 +2837,8 @@ impl Var for User {
         bool::type_name()
     }
 
-    fn visible(&self, _: &User) -> bool {
-        true
+    fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
+        Ok(())
     }
 
     fn safe(&self) -> bool {

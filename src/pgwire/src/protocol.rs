@@ -231,7 +231,10 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+            if let Err(err) = session
+                .vars_mut()
+                .set(None, &key, VarInput::Flat(&val), LOCAL)
+            {
                 session.add_notice(AdapterNotice::BadStartupSetting {
                     name: key,
                     reason: err.to_string(),

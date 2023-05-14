@@ -358,7 +358,10 @@ where
         if let Ok(options) = maybe_options {
             for (key, val) in options {
                 const LOCAL: bool = false;
-                if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+                if let Err(err) = session
+                    .vars_mut()
+                    .set(None, &key, VarInput::Flat(&val), LOCAL)
+                {
                     session.add_notice(AdapterNotice::BadStartupSetting {
                         name: key.to_string(),
                         reason: err.to_string(),
@@ -521,7 +524,10 @@ async fn init_ws(
     let session = client.client.session();
     for (key, val) in options {
         const LOCAL: bool = false;
-        if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+        if let Err(err) = session
+            .vars_mut()
+            .set(None, &key, VarInput::Flat(&val), LOCAL)
+        {
             session.add_notice(AdapterNotice::BadStartupSetting {
                 name: key,
                 reason: err.to_string(),
