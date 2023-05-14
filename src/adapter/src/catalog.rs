@@ -68,8 +68,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, PlanError, SourceSinkClusterConfig as PlanStorageClusterConfig,
-    StatementDesc,
+    Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -1454,16 +1453,6 @@ impl CatalogState {
     /// Return current system configuration.
     pub fn system_config(&self) -> &SystemVars {
         &self.system_configuration
-    }
-
-    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        if !self.config.unsafe_mode {
-            Err(AdapterError::PlanError(PlanError::RequiresUnsafe {
-                feature: feature_name.to_string(),
-            }))
-        } else {
-            Ok(())
-        }
     }
 
     /// Serializes the catalog's in-memory state.
@@ -6267,17 +6256,10 @@ impl Catalog {
                 Op::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, value.borrow())?;
                     let var = state.get_system_configuration(&name)?;
-                    if !var.safe() {
-                        state.require_unsafe_mode(var.name())?;
-                    }
                     tx.upsert_system_config(&name, var.value())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
-                    let var = state.get_system_configuration(&name)?;
-                    if !var.safe() {
-                        state.require_unsafe_mode(var.name())?;
-                    }
                     tx.remove_system_config(&name);
                 }
                 Op::ResetAllSystemConfiguration => {
@@ -6830,10 +6812,6 @@ impl Catalog {
 
     pub fn unsafe_mode(&self) -> bool {
         self.config().unsafe_mode
-    }
-
-    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        self.state.require_unsafe_mode(feature_name)
     }
 
     /// Return the current compute configuration, derived from the system configuration.
