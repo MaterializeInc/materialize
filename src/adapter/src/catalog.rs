@@ -2780,7 +2780,7 @@ impl Catalog {
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 default_storage_cluster_size: config.default_storage_cluster_size,
                 availability_zones: config.availability_zones,
-                system_configuration: SystemVars::default(),
+                system_configuration: SystemVars::default().set_unsafe(config.unsafe_mode),
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,

@@ -104,6 +104,8 @@ pub enum VarError {
     RequiresFeatureFlag {
         feature: String,
         detail: Option<String>,
+        /// If we're running in unsafe mode and hit this error, we should surface the flag name that
+        /// needs to be set to make the feature work.
         name_hint: Option<&'static UncasedStr>,
     },
 }
@@ -1605,12 +1607,14 @@ impl SessionVars {
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {
+    allow_unsafe: bool,
     vars: BTreeMap<&'static UncasedStr, Box<dyn VarMut>>,
 }
 
 impl Clone for SystemVars {
     fn clone(&self) -> Self {
         SystemVars {
+            allow_unsafe: self.allow_unsafe,
             vars: self.vars.iter().map(|(k, v)| (*k, v.clone_var())).collect(),
         }
     }
@@ -1669,6 +1673,7 @@ impl Default for SystemVars {
 impl SystemVars {
     fn empty() -> Self {
         SystemVars {
+            allow_unsafe: false,
             vars: Default::default(),
         }
     }
@@ -1680,6 +1685,15 @@ impl SystemVars {
     {
         self.vars.insert(var.name, Box::new(SystemVar::new(var)));
         self
+    }
+
+    pub fn set_unsafe(mut self, allow_unsafe: bool) -> Self {
+        self.allow_unsafe = allow_unsafe;
+        self
+    }
+
+    pub fn allow_unsafe(&self) -> bool {
+        self.allow_unsafe
     }
 
     fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
@@ -2343,8 +2357,16 @@ impl FeatureFlag {
             Some(system_vars) if *system_vars.expect_value(self.flag) => Ok(()),
             _ => Err(VarError::RequiresFeatureFlag {
                 feature: feature.unwrap_or(self.feature_desc.to_string()),
-                name_hint: system_vars.map(|_| self.flag.name),
                 detail,
+                name_hint: system_vars
+                    .map(|s| {
+                        if s.allow_unsafe {
+                            Some(self.flag.name)
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten(),
             }),
         }
     }
