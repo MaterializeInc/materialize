@@ -2277,14 +2277,6 @@ pub trait Var: fmt::Debug {
     ///
     /// Variables marked as `internal` are only visible for the system user.
     fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError>;
-
-    /// Indicates wither the [`Var`] is experimental.
-    ///
-    /// The default implementation determines this from the [`Var`] name, as
-    /// experimental variable names should always end with "_experimental".
-    fn experimental(&self) -> bool {
-        self.name().ends_with("_experimental")
-    }
 }
 
 /// A `Var` with additional methods for mutating the value, as well as
