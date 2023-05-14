@@ -7,6 +7,62 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Run-time configuration parameters
+//!
+//! ## Overview
+//! Materialize roughly follows the PostgreSQL configuration model, which works
+//! as follows. There is a global set of named configuration parameters, like
+//! `DateStyle` and `client_encoding`. These parameters can be set in several
+//! places: in an on-disk configuration file (in Postgres, named
+//! postgresql.conf), in command line arguments when the server is started, or
+//! at runtime via the `ALTER SYSTEM` or `SET` statements. Parameters that are
+//! set in a session take precedence over database defaults, which in turn take
+//! precedence over command line arguments, which in turn take precedence over
+//! settings in the on-disk configuration. Note that changing the value of
+//! parameters obeys transaction semantics: if a transaction fails to commit,
+//! any parameters that were changed in that transaction (i.e., via `SET`) will
+//! be rolled back to their previous value.
+//!
+//! The Materialize configuration hierarchy at the moment is much simpler.
+//! Global defaults are hardcoded into the binary, and a select few parameters
+//! can be overridden per session. A select few parameters can be overridden on
+//! disk.
+//!
+//! The set of variables that can be overridden per session and the set of
+//! variables that can be overridden on disk are currently disjoint. The
+//! infrastructure has been designed with an eye towards merging these two sets
+//! and supporting additional layers to the hierarchy, however, should the need
+//! arise.
+//!
+//! The configuration parameters that exist are driven by compatibility with
+//! PostgreSQL drivers that expect them, not because they are particularly
+//! important.
+//!
+//! ## Structure
+//! Thw most meaningful exports from this module are:
+//!
+//! - [`SessionVars`] represent per-session parameters, which each user can
+//!   access independently of one another, and are accessed via `SET`.
+//!
+//!   The fields of [`SessionVars`] are either;
+//!     - `SessionVar`, which is preferable and simply requires full support of
+//!       the `SessionVar` impl for its embedded value type.
+//!     - [`ServerVar`] for types that do not currently support everything
+//!       required by `SessionVar`, e.g. they are fixed-value parameters.
+//!
+//!   In the fullness of time, all fields in [`SessionVars`] should be
+//!   `SessionVar`.
+//!
+//! - [`SystemVars`] represent system-wide configuration settings and are
+//!   accessed via `ALTER SYSTEM SET`.
+//!
+//!   All elements of [`SystemVars`] are `SystemVar`.
+//!
+//! Some [`ServerVar`] are also marked as a [`FeatureFlag`]; this is just a
+//! wrapper to make working with a set of [`ServerVar`] easier, primarily from
+//! within SQL planning, where we might want to check if a feature is enabled
+//! before planning it.
+
 use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
@@ -1026,32 +1082,8 @@ impl OwnedVarInput {
 
 /// Session variables.
 ///
-/// Materialize roughly follows the PostgreSQL configuration model, which works
-/// as follows. There is a global set of named configuration parameters, like
-/// `DateStyle` and `client_encoding`. These parameters can be set in several
-/// places: in an on-disk configuration file (in Postgres, named
-/// postgresql.conf), in command line arguments when the server is started, or
-/// at runtime via the `ALTER SYSTEM` or `SET` statements. Parameters that are
-/// set in a session take precedence over database defaults, which in turn take
-/// precedence over command line arguments, which in turn take precedence over
-/// settings in the on-disk configuration. Note that changing the value of
-/// parameters obeys transaction semantics: if a transaction fails to commit,
-/// any parameters that were changed in that transaction (i.e., via `SET`)
-/// will be rolled back to their previous value.
-///
-/// The Materialize configuration hierarchy at the moment is much simpler.
-/// Global defaults are hardcoded into the binary, and a select few parameters
-/// can be overridden per session. A select few parameters can be overridden on
-/// disk.
-///
-/// The set of variables that can be overridden per session and the set of
-/// variables that can be overridden on disk are currently disjoint. The
-/// infrastructure has been designed with an eye towards merging these two sets
-/// and supporting additional layers to the hierarchy, however, should the need arise.
-///
-/// The configuration parameters that exist are driven by compatibility with
-/// PostgreSQL drivers that expect them, not because they are particularly
-/// important.
+/// See the `mz_sql::session` module documentation for more details on the
+/// Materialize configuration model.
 #[derive(Debug)]
 pub struct SessionVars {
     // Normal variables.
@@ -1716,9 +1748,11 @@ impl ConnectionCounter {
 
 /// On disk variables.
 ///
-/// See [`SessionVars`] for more details on the Materialize configuration model.
+/// See the `mz_sql::session` module documentation for more details on the
+/// Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {
+    /// Allows "unsafe" parameters to be set.
     allow_unsafe: bool,
     vars: BTreeMap<&'static UncasedStr, Box<dyn VarMut>>,
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
