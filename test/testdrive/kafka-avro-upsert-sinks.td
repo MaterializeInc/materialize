@@ -9,6 +9,9 @@
 
 # Test Avro UPSERT sinks.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_materialize = true
+
 
 
 # sinking directly from an UPSERT source with multi-part key
