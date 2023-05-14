@@ -316,8 +316,6 @@ pub struct CatalogConfig {
     pub environment_id: EnvironmentId,
     /// A transient UUID associated with this process.
     pub session_id: Uuid,
-    /// Whether the server is running in unsafe mode.
-    pub unsafe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// Default timestamp interval.

@@ -210,7 +210,6 @@ impl CatalogState {
                 start_instant: Instant::now(),
                 nonce: Default::default(),
                 environment_id: EnvironmentId::for_tests(),
-                unsafe_mode: Default::default(),
                 session_id: Default::default(),
                 build_info: &DUMMY_BUILD_INFO,
                 timestamp_interval: Default::default(),
@@ -2770,7 +2769,6 @@ impl Catalog {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
                     nonce: rand::random(),
-                    unsafe_mode: config.unsafe_mode,
                     environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -6808,10 +6806,6 @@ impl Catalog {
 
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
-    }
-
-    pub fn unsafe_mode(&self) -> bool {
-        self.config().unsafe_mode
     }
 
     /// Return the current compute configuration, derived from the system configuration.
