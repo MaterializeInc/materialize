@@ -211,8 +211,8 @@ impl CatalogState {
                 start_instant: Instant::now(),
                 nonce: Default::default(),
                 environment_id: EnvironmentId::for_tests(),
-                session_id: Default::default(),
                 unsafe_mode: Default::default(),
+                session_id: Default::default(),
                 build_info: &DUMMY_BUILD_INFO,
                 timestamp_interval: Default::default(),
                 now: NOW_ZERO.clone(),
@@ -1259,10 +1259,6 @@ impl CatalogState {
         &self.config
     }
 
-    pub fn unsafe_mode(&self) -> bool {
-        self.config.unsafe_mode
-    }
-
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
         match self.database_by_name.get(database_name) {
             Some(id) => Ok(&self.database_by_id[id]),
@@ -1535,10 +1531,10 @@ impl CatalogState {
     ) -> Result<(), Error> {
         let user = session.map(|session| session.user().name.to_string());
         let occurred_at = match (
-            self.unsafe_mode(),
+            false,
             self.system_configuration.mock_audit_event_timestamp(),
         ) {
-            (true, Some(ts)) => ts.into(),
+            (true, Some(ts)) => todo!("make unsafe"),
             _ => oracle_write_ts.into(),
         };
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
