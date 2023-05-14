@@ -2779,8 +2779,14 @@ impl Catalog {
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 default_storage_cluster_size: config.default_storage_cluster_size,
                 availability_zones: config.availability_zones,
-                system_configuration: SystemVars::new(config.active_connection_count)
-                    .set_unsafe(config.unsafe_mode),
+                system_configuration: {
+                    let mut s = SystemVars::new(config.active_connection_count)
+                        .set_unsafe(config.unsafe_mode);
+                    if config.all_features {
+                        s.enable_all_feature_flags_by_default();
+                    }
+                    s
+                },
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
@@ -4160,6 +4166,7 @@ impl Catalog {
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
+            all_features: false,
             build_info: &DUMMY_BUILD_INFO,
             environment_id: EnvironmentId::for_tests(),
             now,

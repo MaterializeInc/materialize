@@ -35,6 +35,8 @@ pub struct Config<'a> {
     pub storage: storage::Connection,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
+    /// Whether the build is a local dev build.
+    pub all_features: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// A persistent ID associated with the environment.

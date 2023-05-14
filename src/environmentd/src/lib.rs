@@ -126,8 +126,12 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 #[derive(Debug, Clone)]
 pub struct Config {
     // === Special modes. ===
-    /// Whether to permit usage of unsafe features.
+    /// Whether to permit usage of unsafe features. This is never meant to run
+    /// in production.
     pub unsafe_mode: bool,
+    /// Whether the environmentd is running on a local dev machine. This is
+    /// never meant to run in production or CI.
+    pub all_features: bool,
 
     // === Connection options. ===
     /// The IP address and port to listen for pgwire connections on.
@@ -372,6 +376,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         dataflow_client: controller,
         storage: adapter_storage,
         unsafe_mode: config.unsafe_mode,
+        all_features: config.all_features,
         build_info: &BUILD_INFO,
         environment_id: config.environment_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
