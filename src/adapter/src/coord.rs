@@ -415,6 +415,7 @@ pub struct Config {
     pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection,
     pub unsafe_mode: bool,
+    pub local_dev: bool,
     pub build_info: &'static BuildInfo,
     pub environment_id: EnvironmentId,
     pub metrics_registry: MetricsRegistry,
@@ -1446,6 +1447,7 @@ pub async fn serve(
         dataflow_client,
         storage,
         unsafe_mode,
+        local_dev,
         build_info,
         environment_id,
         metrics_registry,
@@ -1506,6 +1508,7 @@ pub async fn serve(
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
+            local_dev,
             build_info,
             environment_id,
             now: now.clone(),

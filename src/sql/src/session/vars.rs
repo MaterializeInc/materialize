@@ -762,6 +762,13 @@ macro_rules! feature_flags {
                     )+
                 }
 
+                pub fn enable_all_feature_flags_by_default(&mut self) {
+                    $(
+                        self.set_default(stringify!($name), VarInput::Flat("on"))
+                            .expect("setting default value must work");
+                    )+
+                }
+
                 $(
                     pub fn [<$name:lower>](&self) -> bool {
                         *self.expect_value(&[<$name:upper _VAR>])

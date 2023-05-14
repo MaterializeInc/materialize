@@ -168,6 +168,11 @@ pub struct Args {
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
 
+    /// Enables features appropriate only for local development, such as
+    /// enabling all optional features.
+    #[clap(long, env = "LOCAL_DEV")]
+    local_dev: bool,
+
     // === Connection options. ===
     /// The address on which to listen for untrusted SQL connections.
     ///
@@ -845,6 +850,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         secrets_controller,
         cloud_resource_controller,
         unsafe_mode: args.unsafe_mode,
+        local_dev: args.local_dev,
         metrics_registry,
         now,
         environment_id: args.environment_id,
