@@ -64,7 +64,7 @@ use mz_sql::plan::{
     SubscribeFrom, SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    IsolationLevel, OwnedVarInput, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
     ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_sql::session::vars::{Var, SCHEMA_ALIAS};
@@ -1762,34 +1762,30 @@ impl Coordinator {
 
         let variable = session
             .vars()
-            .get(&plan.name)
+            .get(Some(self.catalog().system_config()), &plan.name)
             .or_else(|_| self.catalog().system_config().get(&plan.name))?;
 
-        if variable.visible(session.user()) && (variable.safe() || self.catalog().unsafe_mode()) {
-            let row = Row::pack_slice(&[Datum::String(&variable.value())]);
-            if variable.name() == DATABASE_VAR_NAME
-                && matches!(
-                    self.catalog().resolve_database(&variable.value()),
-                    Err(CatalogError::UnknownDatabase(_))
-                )
-            {
-                let name = variable.value();
-                session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
-            } else if variable.name() == CLUSTER_VAR_NAME
-                && matches!(
-                    self.catalog().resolve_cluster(&variable.value()),
-                    Err(CatalogError::UnknownCluster(_))
-                )
-            {
-                let name = variable.value();
-                session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
-            }
-            Ok(send_immediate_rows(vec![row]))
-        } else {
-            Err(AdapterError::VarError(VarError::UnknownParameter(
-                plan.name,
-            )))
+        variable.visible(session.user(), Some(self.catalog().system_config()))?;
+
+        let row = Row::pack_slice(&[Datum::String(&variable.value())]);
+        if variable.name() == DATABASE_VAR_NAME
+            && matches!(
+                self.catalog().resolve_database(&variable.value()),
+                Err(CatalogError::UnknownDatabase(_))
+            )
+        {
+            let name = variable.value();
+            session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
+        } else if variable.name() == CLUSTER_VAR_NAME
+            && matches!(
+                self.catalog().resolve_cluster(&variable.value()),
+                Err(CatalogError::UnknownCluster(_))
+            )
+        {
+            let name = variable.value();
+            session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
         }
+        Ok(send_immediate_rows(vec![row]))
     }
 
     pub(super) fn sequence_set_variable(
@@ -1804,14 +1800,14 @@ impl Coordinator {
             VariableValue::Values(values) => Some(values),
         };
 
-        let var = vars.get(&name)?;
-        if !var.safe() {
-            self.catalog().require_unsafe_mode(var.name())?;
-        }
-
         match values {
             Some(values) => {
-                vars.set(&name, VarInput::SqlSet(&values), local)?;
+                vars.set(
+                    Some(self.catalog().system_config()),
+                    &name,
+                    VarInput::SqlSet(&values),
+                    local,
+                )?;
 
                 // Database or cluster value does not correspond to a catalog item.
                 if name.as_str() == DATABASE_VAR_NAME
@@ -1842,7 +1838,7 @@ impl Coordinator {
                     }
                 }
             }
-            None => vars.reset(&name, local)?,
+            None => vars.reset(Some(self.catalog().system_config()), &name, local)?,
         }
 
         Ok(ExecuteResponse::SetVariable { name, reset: false })
@@ -1853,13 +1849,10 @@ impl Coordinator {
         session: &mut Session,
         plan: ResetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let vars = session.vars_mut();
         let name = plan.name;
-        let var = vars.get(&name)?;
-        if !var.safe() {
-            self.catalog().require_unsafe_mode(var.name())?;
-        }
-        session.vars_mut().reset(&name, false)?;
+        session
+            .vars_mut()
+            .reset(Some(self.catalog().system_config()), &name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
     }
 
