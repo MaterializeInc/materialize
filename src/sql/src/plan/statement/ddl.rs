@@ -293,20 +293,20 @@ pub fn plan_create_table(
             }
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
-                // them in unsafe mode for sqllogictest's sake.
+                // them with feature flags for sqllogictest's sake.
                 scx.require_feature_flag(&vars::ENABLE_TABLE_FOREIGN_KEY)?
             }
             TableConstraint::Check { .. } => {
                 // Check constraints are not presently enforced. We allow them
-                // in unsafe mode for sqllogictest's sake.
+                // with feature flags for sqllogictest's sake.
                 scx.require_feature_flag(&vars::ENABLE_TABLE_CHECK_CONSTRAINT)?
             }
         }
     }
 
     if !keys.is_empty() {
-        // Unique constraints are not presently enforced. We allow them in
-        // unsafe mode for sqllogictest's sake.
+        // Unique constraints are not presently enforced. We allow them with feature flags for
+        // sqllogictest's sake.
         scx.require_feature_flag(&vars::ENABLE_TABLE_KEYS)?
     }
 
@@ -439,7 +439,7 @@ pub fn plan_create_source(
                 _ => sql_bail!("{} is not a kafka connection", connection_item.name()),
             };
 
-            // Starting offsets are allowed out unsafe mode, as they are a simple,
+            // Starting offsets are allowed out with feature flags mode, as they are a simple,
             // useful way to specify where to start reading a topic.
             const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[
                 KafkaConfigOptionName::StartOffset,
@@ -2187,7 +2187,7 @@ fn kafka_sink_builder(
         _ => sql_bail!("{} is not a kafka connection", item.name()),
     };
 
-    // Starting offsets are allowed out unsafe mode, as they are a simple,
+    // Starting offsets are allowed with feature flags mode, as they are a simple,
     // useful way to specify where to start reading a topic.
     const ALLOWED_OPTIONS: &[KafkaConfigOptionName] = &[KafkaConfigOptionName::Topic];
 
@@ -3314,10 +3314,10 @@ impl TryFrom<AwsConnectionOptionExtracted> for AwsConfig {
                 session_token: options.token,
             },
             endpoint: match options.endpoint {
-                // TODO(benesch): this should not treat an empty endpoint as
-                // equivalent to a `NULL` endpoint, but making that change now
-                // would break testdrive. AWS connections are all behind unsafe
-                // mode right now, so no particular urgency to correct this.
+                // TODO(benesch): this should not treat an empty endpoint as equivalent to a `NULL`
+                // endpoint, but making that change now would break testdrive. AWS connections are
+                // all behind feature flags mode right now, so no particular urgency to correct
+                // this.
                 Some(endpoint) if !endpoint.is_empty() => Some(endpoint),
                 _ => None,
             },

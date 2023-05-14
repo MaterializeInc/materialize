@@ -160,7 +160,6 @@ const APPLICATION_NAME: ServerVar<str> = ServerVar {
     value: "",
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 const CLIENT_ENCODING: ServerVar<str> = ServerVar {
@@ -168,7 +167,6 @@ const CLIENT_ENCODING: ServerVar<str> = ServerVar {
     value: "UTF8",
     description: "Sets the client's character set encoding (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
@@ -176,7 +174,6 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     value: &ClientSeverity::Notice,
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 
@@ -185,7 +182,6 @@ const CLUSTER: ServerVar<str> = ServerVar {
     value: "default",
     description: "Sets the current cluster (Materialize).",
     internal: false,
-    safe: true,
 };
 
 const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
@@ -193,7 +189,6 @@ const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
     value: &None,
     description: "Sets a target cluster replica for SELECT queries (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const DATABASE_VAR_NAME: &UncasedStr = UncasedStr::new("database");
@@ -203,7 +198,6 @@ const DATABASE: ServerVar<str> = ServerVar {
     value: DEFAULT_DATABASE_NAME,
     description: "Sets the current database (CockroachDB).",
     internal: false,
-    safe: true,
 };
 
 static DEFAULT_DATE_STYLE: Lazy<Vec<String>> = Lazy::new(|| vec!["ISO".into(), "MDY".into()]);
@@ -213,7 +207,6 @@ static DATE_STYLE: Lazy<ServerVar<Vec<String>>> = Lazy::new(|| ServerVar {
     value: &*DEFAULT_DATE_STYLE,
     description: "Sets the display format for date and time values (PostgreSQL).",
     internal: false,
-    safe: true,
 });
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
@@ -221,7 +214,6 @@ const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     value: &3,
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 const FAILPOINTS: ServerVar<str> = ServerVar {
@@ -229,7 +221,6 @@ const FAILPOINTS: ServerVar<str> = ServerVar {
     value: "",
     description: "Allows failpoints to be dynamically activated.",
     internal: false,
-    safe: true,
 };
 
 const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
@@ -237,7 +228,6 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     value: &true,
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 const INTERVAL_STYLE: ServerVar<str> = ServerVar {
@@ -246,7 +236,6 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
     value: "postgres",
     description: "Sets the display format for interval values (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
@@ -261,7 +250,6 @@ static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
     internal: false,
-    safe: true,
 });
 
 const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
@@ -271,7 +259,6 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
         "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
         If this value is specified without units, it is taken as milliseconds.",
     internal: false,
-    safe: true,
 };
 
 const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
@@ -282,7 +269,6 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
          being terminated. If this value is specified without units, it is taken as milliseconds. \
          A value of zero disables the timeout (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
@@ -296,7 +282,6 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
     ),
     description: "Shows the PostgreSQL compatible server version (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
@@ -306,7 +291,6 @@ const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
     description: "Shows the PostgreSQL compatible server version as an integer (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
@@ -314,7 +298,6 @@ const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
     internal: false,
-    safe: true,
 };
 
 const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
@@ -322,7 +305,6 @@ const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
     value: &true,
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 const TIMEZONE: ServerVar<TimeZone> = ServerVar {
@@ -331,7 +313,6 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     value: &TimeZone::UTC,
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 pub const TRANSACTION_ISOLATION_VAR_NAME: &UncasedStr = UncasedStr::new("transaction_isolation");
@@ -340,15 +321,13 @@ const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     value: &IsolationLevel::StrictSerializable,
     description: "Sets the current transaction's isolation level (PostgreSQL).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_aws_privatelink_connections"),
     value: &0,
     description: "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
-    internal: false,
-    safe: true,
+    internal: false
 };
 
 pub const MAX_TABLES: ServerVar<u32> = ServerVar {
@@ -356,7 +335,6 @@ pub const MAX_TABLES: ServerVar<u32> = ServerVar {
     value: &25,
     description: "The maximum number of tables in the region, across all schemas (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_SOURCES: ServerVar<u32> = ServerVar {
@@ -364,7 +342,6 @@ pub const MAX_SOURCES: ServerVar<u32> = ServerVar {
     value: &25,
     description: "The maximum number of sources in the region, across all schemas (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_SINKS: ServerVar<u32> = ServerVar {
@@ -372,7 +349,6 @@ pub const MAX_SINKS: ServerVar<u32> = ServerVar {
     value: &25,
     description: "The maximum number of sinks in the region, across all schemas (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
@@ -381,7 +357,6 @@ pub const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     description:
         "The maximum number of materialized views in the region, across all schemas (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
@@ -389,7 +364,6 @@ pub const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     value: &10,
     description: "The maximum number of clusters in the region (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
@@ -397,18 +371,16 @@ pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     value: &5,
     description: "The maximum number of replicas of a single cluster (Materialize).",
     internal: false,
-    safe: true,
 };
 
 static DEFAULT_MAX_CREDIT_CONSUMPTION_RATE: Lazy<Numeric> = Lazy::new(|| 1024.into());
 pub static MAX_CREDIT_CONSUMPTION_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
     ServerVar {
-    name: UncasedStr::new("max_credit_consumption_rate"),
-    value: &DEFAULT_MAX_CREDIT_CONSUMPTION_RATE,
-    description: "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize).",
-    internal: false,
-    safe: true,
-}
+        name: UncasedStr::new("max_credit_consumption_rate"),
+        value: &DEFAULT_MAX_CREDIT_CONSUMPTION_RATE,
+        description: "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize).",
+        internal: false
+    }
 });
 
 pub const MAX_DATABASES: ServerVar<u32> = ServerVar {
@@ -416,7 +388,6 @@ pub const MAX_DATABASES: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of databases in the region (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
@@ -424,7 +395,6 @@ pub const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of schemas in a database (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
@@ -432,7 +402,6 @@ pub const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of objects in a schema (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_SECRETS: ServerVar<u32> = ServerVar {
@@ -440,7 +409,6 @@ pub const MAX_SECRETS: ServerVar<u32> = ServerVar {
     value: &100,
     description: "The maximum number of secrets in the region, across all schemas (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const MAX_ROLES: ServerVar<u32> = ServerVar {
@@ -448,7 +416,6 @@ pub const MAX_ROLES: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of roles in the region (Materialize).",
     internal: false,
-    safe: true,
 };
 
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
@@ -460,7 +427,6 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     value: &1_073_741_824,
     description: "The maximum size in bytes for a single query's result (Materialize).",
     internal: false,
-    safe: true,
 };
 
 /// The logical compaction window for builtin tables and sources that have the
@@ -474,7 +440,6 @@ pub const METRICS_RETENTION: ServerVar<Duration> = ServerVar {
     value: &Duration::from_secs(30 * 24 * 60 * 60),
     description: "The time to retain cluster utilization metrics (Materialize).",
     internal: true,
-    safe: true,
 };
 
 static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<Ident>> = Lazy::new(Vec::new);
@@ -483,7 +448,6 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(||
     value: &DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES,
     description: "The allowed sizes when creating a new cluster replica (Materialize).",
     internal: false,
-    safe: true,
 });
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::blob_target_size`].
@@ -492,7 +456,6 @@ const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
     value: &PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
     description: "A target maximum size of persist blob payloads in bytes (Materialize).",
     internal: true,
-    safe: true,
 };
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
@@ -502,7 +465,6 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     description: "The minimum amount of time to allow a persist compaction request to run before \
                   timing it out (Materialize).",
     internal: true,
-    safe: true,
 };
 
 /// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
@@ -511,7 +473,6 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = S
     value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.initial_backoff,
     description: "The initial backoff when polling for new batches from a Listen or Subscribe.",
     internal: true,
-    safe: true,
 };
 
 /// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
@@ -520,7 +481,6 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
     value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.multiplier,
     description: "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
     internal: true,
-    safe: true,
 };
 
 /// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
@@ -530,7 +490,6 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     description:
         "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
     internal: true,
-    safe: true,
 };
 
 /// The default for the `DISK` option in `UPSERT` sources.
@@ -539,7 +498,6 @@ const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
     value: &false,
     description: "The default for the `DISK` option in `UPSERT` sources.",
     internal: true,
-    safe: true,
 };
 
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
@@ -587,7 +545,6 @@ mod upsert_rocksdb {
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
-        safe: true,
     };
     pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
@@ -596,7 +553,6 @@ mod upsert_rocksdb {
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
-        safe: true,
     };
     pub const UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_level_compaction_dynamic_level_bytes"),
@@ -605,7 +561,6 @@ mod upsert_rocksdb {
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
-        safe: true,
     };
     pub const UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO: ServerVar<i32> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_universal_compaction_ratio"),
@@ -614,7 +569,6 @@ mod upsert_rocksdb {
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
-        safe: true,
     };
     pub const UPSERT_ROCKSDB_PARALLELISM: ServerVar<Option<i32>> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_parallelism"),
@@ -623,7 +577,6 @@ mod upsert_rocksdb {
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
-        safe: true,
     };
     pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compression_type"),
@@ -632,7 +585,6 @@ mod upsert_rocksdb {
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
-        safe: true,
     };
     pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
@@ -641,7 +593,6 @@ mod upsert_rocksdb {
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
-        safe: true,
     };
 }
 
@@ -652,7 +603,6 @@ const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     description: "Sets the timeout applied to socket-level connection attempts for PG \
     replication connections. (Materialize)",
     internal: true,
-    safe: true,
 };
 
 /// Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection
@@ -664,7 +614,6 @@ const PG_REPLICATION_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
         "Sets the maximum number of TCP keepalive probes that will be sent before dropping \
     a connection when connecting to PG via replication. (Materialize)",
     internal: true,
-    safe: true,
 };
 
 /// Sets the amount of idle time before a keepalive packet is sent on the connection when connecting
@@ -676,7 +625,6 @@ const PG_REPLICATION_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
         "Sets the amount of idle time before a keepalive packet is sent on the connection \
     when connecting to PG via replication. (Materialize)",
     internal: true,
-    safe: true,
 };
 
 /// Sets the time interval between TCP keepalive probes when connecting to PG via replication.
@@ -686,7 +634,6 @@ const PG_REPLICATION_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
     description: "Sets the time interval between TCP keepalive probes when connecting to PG via \
     replication. (Materialize)",
     internal: true,
-    safe: true,
 };
 
 /// Sets the TCP user timeout when connecting to PG via replication.
@@ -695,7 +642,6 @@ const PG_REPLICATION_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
     value: &mz_postgres_util::DEFAULT_REPLICATION_TCP_USER_TIMEOUT,
     description: "Sets the TCP user timeout when connecting to PG via replication. (Materialize)",
     internal: true,
-    safe: true,
 };
 
 /// Controls the connection timeout to Cockroach.
@@ -706,7 +652,6 @@ const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     value: &PersistConfig::DEFAULT_CRDB_CONNECT_TIMEOUT,
     description: "The time to connect to CockroachDB before timing out and retrying.",
     internal: true,
-    safe: true,
 };
 
 /// Controls the TCP user timeout to Cockroach.
@@ -720,7 +665,6 @@ const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
         transmitted data may remain unacknowledged before the TCP connection is forcibly \
         closed.",
     internal: true,
-    safe: true,
 };
 
 /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
@@ -730,7 +674,6 @@ const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
                   dataflows (Materialize).",
     internal: true,
-    safe: true,
 };
 
 /// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
@@ -740,8 +683,7 @@ const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     description: "In the compute persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
-    internal: true,
-    safe: true,
+    internal: true
 };
 
 /// Controls [`mz_persist_client::cfg::PersistConfig::storage_sink_minimum_batch_updates`].
@@ -752,8 +694,7 @@ const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     description: "In the storage persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
-    internal: true,
-    safe: true,
+    internal: true
 };
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_audit_percent`].
@@ -762,7 +703,6 @@ const PERSIST_STATS_AUDIT_PERCENT: ServerVar<usize> = ServerVar {
     value: &PersistConfig::DEFAULT_STATS_AUDIT_PERCENT,
     description: "Percent of filtered data to opt in to correctness auditing (Materialize).",
     internal: true,
-    safe: true,
 };
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_collection_enabled`].
@@ -772,7 +712,6 @@ const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
     description: "Whether to calculate and record statistics about the data stored in persist \
                   to be used at read time, see persist_stats_filter_enabled (Materialize).",
     internal: true,
-    safe: true,
 };
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_filter_enabled`].
@@ -782,7 +721,6 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
     description: "Whether to use recorded statistics about the data stored in persist \
                   to filter at read time, see persist_stats_collection_enabled (Materialize).",
     internal: true,
-    safe: true,
 };
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
@@ -791,7 +729,6 @@ const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
     value: &PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED,
     description: "Whether to connect to the Persist PubSub service.",
     internal: true,
-    safe: true,
 };
 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_push_diff_enabled`].
@@ -800,7 +737,6 @@ const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
     value: &PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
     description: "Whether to push state diffs to Persist PubSub.",
     internal: true,
-    safe: true,
 };
 
 /// Boolean flag indicating that the remote configuration was synchronized at
@@ -809,8 +745,7 @@ pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("config_has_synced_once"),
     value: &false,
     description: "Boolean flag indicating that the remote configuration was synchronized at least once (Materialize).",
-    internal: true,
-    safe: true,
+    internal: true
 };
 
 /// Boolean flag indicating whether to enable syncing from
@@ -820,8 +755,7 @@ pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_launchdarkly"),
     value: &true,
     description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
-    internal: true,
-    safe: true,
+    internal: true
 };
 
 /// Feature flag indicating whether real time recency is enabled. Not that
@@ -832,7 +766,6 @@ static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
     internal: false,
-    safe: false,
 };
 
 static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
@@ -840,8 +773,7 @@ static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     value: &false,
     description:
         "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize).",
-    internal: false,
-    safe: true,
+    internal: false
 };
 
 static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
@@ -849,8 +781,7 @@ static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
     value: &false,
     description:
         "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize).",
-    internal: false,
-    safe: true,
+    internal: false
 };
 
 static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
@@ -858,7 +789,6 @@ static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> 
     value: &None,
     description: "Mocked timestamp to use for audit events for testing purposes",
     internal: true,
-    safe: false,
 };
 
 pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
@@ -868,7 +798,6 @@ pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     description:
         "LD facing global boolean flag that allows turning RBAC off for everyone (Materialize).",
     internal: true,
-    safe: true,
 };
 
 pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
@@ -878,7 +807,6 @@ pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     description: "User facing global boolean flag indicating whether to apply RBAC checks before \
     executing statements (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
@@ -888,7 +816,6 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     description: "User facing session boolean flag indicating whether to apply RBAC checks before \
     executing statements (Materialize).",
     internal: false,
-    safe: true,
 };
 
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
@@ -896,8 +823,7 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     value: &true,
     description:
         "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
-    internal: false,
-    safe: true,
+    internal: false
 };
 
 pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
@@ -905,7 +831,6 @@ pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     value: &1000,
     description: "The maximum number of concurrent connections (Materialize).",
     internal: false,
-    safe: true,
 };
 
 /// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_source_status_history_entries`].
@@ -913,8 +838,7 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_source_status_history_entries"),
     value: &5,
     description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
-    internal: true,
-    safe: true,
+    internal: true
 };
 
 // Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
@@ -933,9 +857,7 @@ macro_rules! feature_flags {
                     name: UncasedStr::new(stringify!($name)),
                     value: &false,
                     description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
-                    internal: true,
-                    safe: false,
-                };
+                    internal: true                };
 
                 pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
                     flag: &[<$name:upper _VAR>],
@@ -2400,11 +2322,6 @@ pub trait Var: fmt::Debug {
     /// Variables marked as `internal` are only visible for the system user.
     fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError>;
 
-    /// Indicates wither the [`Var`] is only visible in unsafe mode.
-    ///
-    /// Variables marked as `safe` are visible outside of unsafe mode.
-    fn safe(&self) -> bool;
-
     /// Indicates wither the [`Var`] is experimental.
     ///
     /// The default implementation determines this from the [`Var`] name, as
@@ -2451,7 +2368,6 @@ where
     value: &'static V,
     description: &'static str,
     internal: bool,
-    safe: bool,
 }
 
 impl<V> Var for ServerVar<V>
@@ -2487,10 +2403,6 @@ where
         } else {
             Ok(())
         }
-    }
-
-    fn safe(&self) -> bool {
-        self.safe
     }
 }
 
@@ -2575,10 +2487,6 @@ where
 
     fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
         self.parent.visible(user, system_vars)
-    }
-
-    fn safe(&self) -> bool {
-        self.parent.safe()
     }
 }
 
@@ -2668,10 +2576,6 @@ impl Var for FeatureFlag {
 
     fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
         self.flag.visible(user, system_vars)
-    }
-
-    fn safe(&self) -> bool {
-        self.flag.safe()
     }
 }
 
@@ -2809,10 +2713,6 @@ where
 
         self.parent.visible(user, system_vars)
     }
-
-    fn safe(&self) -> bool {
-        self.parent.safe()
-    }
 }
 
 impl Var for BuildInfo {
@@ -2835,10 +2735,6 @@ impl Var for BuildInfo {
     fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
         Ok(())
     }
-
-    fn safe(&self) -> bool {
-        true
-    }
 }
 
 impl Var for User {
@@ -2860,10 +2756,6 @@ impl Var for User {
 
     fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
         Ok(())
-    }
-
-    fn safe(&self) -> bool {
-        true
     }
 }
 
