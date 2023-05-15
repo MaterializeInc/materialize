@@ -17,6 +17,7 @@ from materialize.output_consistency.operations.operation import (
     DbOperationOrFunction,
 )
 from materialize.output_consistency.operations.operation_args_validator import (
+    MaxMinusNegMaxArgsValidator,
     ValueGrowsArgsValidator,
 )
 from materialize.output_consistency.operations.operation_param import (
@@ -32,7 +33,7 @@ OPERATION_TYPES.append(
         "GREATEST",
         [
             NumericOperationParam(),
-            NumericOperationParam(),
+            NumericOperationParam(optional=True),
             NumericOperationParam(optional=True),
         ],
         DataTypeCategory.DYNAMIC,
@@ -44,7 +45,7 @@ OPERATION_TYPES.append(
         "LEAST",
         [
             NumericOperationParam(),
-            NumericOperationParam(),
+            NumericOperationParam(optional=True),
             NumericOperationParam(optional=True),
         ],
         DataTypeCategory.DYNAMIC,
@@ -107,10 +108,10 @@ OPERATION_TYPES.append(
         "$ & $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -123,10 +124,10 @@ OPERATION_TYPES.append(
         "$ | $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -139,10 +140,10 @@ OPERATION_TYPES.append(
         "$ # $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -153,7 +154,11 @@ OPERATION_TYPES.append(
 OPERATION_TYPES.append(
     DbOperation(
         "~$",
-        [NumericOperationParam(incompatibilities={ValueCharacteristics.DECIMAL_TYPED})],
+        [
+            NumericOperationParam(
+                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+            )
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
@@ -163,10 +168,13 @@ OPERATION_TYPES.append(
         "$ << $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={
+                    ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED,
+                    ValueCharacteristics.LARGER_THAN_INT4_TYPED,
+                }
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -178,10 +186,13 @@ OPERATION_TYPES.append(
         "$ >> $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                incompatibilities={
+                    ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED,
+                    ValueCharacteristics.LARGER_THAN_INT4_TYPED,
+                }
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -281,10 +292,13 @@ OPERATION_TYPES.append(
     DbFunction(
         "LOG",
         [
+            # first param is the base
             NumericOperationParam(
                 incompatibilities={
                     ValueCharacteristics.NEGATIVE,
                     ValueCharacteristics.ZERO,
+                    ValueCharacteristics.ONE,
+                    ValueCharacteristics.FLOAT_TYPED,
                 }
             ),
             # not marked as optional because if not present the operation is equal to LOG10, which is separate
@@ -292,6 +306,7 @@ OPERATION_TYPES.append(
                 incompatibilities={
                     ValueCharacteristics.NEGATIVE,
                     ValueCharacteristics.ZERO,
+                    ValueCharacteristics.FLOAT_TYPED,
                 }
             ),
         ],
@@ -312,7 +327,10 @@ OPERATION_TYPES.append(
 OPERATION_TYPES.append(
     DbFunction(
         "POW",
-        [NumericOperationParam(), NumericOperationParam()],
+        [
+            NumericOperationParam(),
+            NumericOperationParam(incompatibilities={ValueCharacteristics.MAX_VALUE}),
+        ],
         DataTypeCategory.NUMERIC,
     )
 )
@@ -323,7 +341,12 @@ OPERATION_TYPES.append(
             NumericOperationParam(),
             # negative values are allowed
             NumericOperationParam(
-                optional=True, incompatibilities={ValueCharacteristics.DECIMAL_TYPED}
+                optional=True,
+                incompatibilities={
+                    ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED,
+                    ValueCharacteristics.LARGER_THAN_INT4_TYPED,
+                    ValueCharacteristics.LARGE_VALUE,
+                },
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -362,7 +385,6 @@ OPERATION_TYPES.append(
             NumericOperationParam(
                 incompatibilities={
                     ValueCharacteristics.LARGE_VALUE,
-                    ValueCharacteristics.MAX_VALUE,
                 }
             )
         ],
@@ -406,7 +428,6 @@ OPERATION_TYPES.append(
             NumericOperationParam(
                 incompatibilities={
                     ValueCharacteristics.LARGE_VALUE,
-                    ValueCharacteristics.MAX_VALUE,
                 }
             )
         ],
@@ -453,7 +474,6 @@ OPERATION_TYPES.append(
             NumericOperationParam(
                 incompatibilities={
                     ValueCharacteristics.LARGE_VALUE,
-                    ValueCharacteristics.MAX_VALUE,
                 }
             )
         ],

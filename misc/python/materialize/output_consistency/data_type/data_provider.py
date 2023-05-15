@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from materialize.output_consistency.data_type.data_provider_util import (
+    add_characteristic_to_all_data_values,
+)
 from materialize.output_consistency.data_type.data_type import DataType, NumberDataType
 from materialize.output_consistency.data_type.value_characteristics import (
     ValueCharacteristics,
@@ -126,7 +129,13 @@ for num_data_type in NUMERIC_DATA_TYPES:
     num_data_type.add_raw_value("NULL", "NULL", {ValueCharacteristics.NULL})
     num_data_type.add_raw_value("0", "ZERO", {ValueCharacteristics.ZERO})
     num_data_type.add_raw_value(
-        "1", "ONE", {ValueCharacteristics.ONE, ValueCharacteristics.NON_EMPTY}
+        "1",
+        "ONE",
+        {
+            ValueCharacteristics.ONE,
+            ValueCharacteristics.TINY_VALUE,
+            ValueCharacteristics.NON_EMPTY,
+        },
     )
     num_data_type.add_raw_value(
         num_data_type.max_value,
@@ -134,9 +143,9 @@ for num_data_type in NUMERIC_DATA_TYPES:
         {ValueCharacteristics.MAX_VALUE, ValueCharacteristics.NON_EMPTY},
     )
 
-    if num_data_type.is_signed:
+    if num_data_type.is_signed and num_data_type.max_negative_value is not None:
         num_data_type.add_raw_value(
-            f"-{num_data_type.max_value}",
+            f"{num_data_type.max_negative_value}",
             "NEG_MAX",
             {
                 ValueCharacteristics.NEGATIVE,
@@ -148,11 +157,33 @@ for num_data_type in NUMERIC_DATA_TYPES:
     if num_data_type.is_decimal:
         num_data_type.add_raw_value(
             num_data_type.tiny_value,
-            "DECIMAL",
-            {ValueCharacteristics.DECIMAL, ValueCharacteristics.NON_EMPTY},
+            "TINY",
+            {
+                ValueCharacteristics.TINY_VALUE,
+                ValueCharacteristics.NON_EMPTY,
+                ValueCharacteristics.DECIMAL,
+            },
         )
 
 for num_data_type in NUMERIC_DATA_TYPES:
     if num_data_type.is_decimal:
-        for raw_value in num_data_type.raw_values:
-            raw_value.characteristics.add(ValueCharacteristics.DECIMAL_TYPED)
+        add_characteristic_to_all_data_values(
+            num_data_type, ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED
+        )
+
+    for value in num_data_type.raw_values:
+        if ValueCharacteristics.MAX_VALUE in value.characteristics:
+            value.characteristics.add(ValueCharacteristics.LARGE_VALUE)
+
+add_characteristic_to_all_data_values(
+    uint4_type, ValueCharacteristics.LARGER_THAN_INT4_TYPED
+)
+add_characteristic_to_all_data_values(
+    int8_type, ValueCharacteristics.LARGER_THAN_INT4_TYPED
+)
+add_characteristic_to_all_data_values(
+    uint8_type, ValueCharacteristics.LARGER_THAN_INT4_TYPED
+)
+
+add_characteristic_to_all_data_values(real_type, ValueCharacteristics.FLOAT_TYPED)
+add_characteristic_to_all_data_values(double_type, ValueCharacteristics.FLOAT_TYPED)
