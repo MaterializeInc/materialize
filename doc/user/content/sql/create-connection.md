@@ -50,7 +50,7 @@ use the following options:
 
 Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:|------------------
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
 `SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
 
@@ -81,7 +81,7 @@ Field                                   | Value            | Required | Descript
 `SASL MECHANISMS`                       | `text`           | ✓        | The SASL mechanism to use for authentication. Supported: `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
 `SASL USERNAME`                         | secret or `text` | ✓        | Your SASL username, if any. Required if `SASL MECHANISMS` is `PLAIN`.
 `SASL PASSWORD`                         | secret           | ✓        | Your SASL password, if any. Required if `SASL MECHANISMS` is `PLAIN`.
-`SSL CERTIFICATE AUTHORITY`             | secret or `text` |          | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE AUTHORITY`             | secret or `text` |          | The certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 
 ##### Example {#kafka-auth-sasl-example}
 
@@ -246,7 +246,7 @@ Registry] server. You can use Confluent Schema Registry connections in the
 Field                       | Value            | Required | Description
 ----------------------------|------------------|:--------:| ------------
 `URL`                       | `text`           | ✓        | The schema registry URL.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL CERTIFICATE`           | secret or `text` | ✓        | Your SSL certificate in PEM format. Required for SSL client authentication.
 `SSL KEY`                   | secret           | ✓        | Your SSL certificate's key in PEM format. Required for SSL client authentication.
 `PASSWORD`                  | secret           |          | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
@@ -342,7 +342,7 @@ Field                       | Value            | Required | Description
 `DATABASE`                  | `text`           | ✓        | Target database.
 `USER`                      | `text`           | ✓        | Database username.
 `PASSWORD`                  | secret           |          | Password for the connection
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The absolute path to the certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL MODE`                  | `text`           |          | Default: `disable`. Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
 `SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate in PEM format.
 `SSL KEY`                   | secret           |          | Client SSL key in PEM format.
