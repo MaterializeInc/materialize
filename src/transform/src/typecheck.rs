@@ -115,8 +115,8 @@ pub enum TypeError<'a> {
     BadTopKGroupKey {
         /// Expression with the bug
         source: &'a MirRelationExpr,
-        /// The group key used
-        key: usize,
+        /// The bad column reference in the group key
+        k: usize,
         /// The input columns (which don't have that column)
         input_type: Vec<ColumnType>,
     },
@@ -686,32 +686,32 @@ impl Typecheck {
 
                 // check that the join implementation is consistent
                 match implementation {
-                    JoinImplementation::Differential((_, first_keys, _), others) => {
-                        if let Some(keys) = first_keys {
-                            for scalar_expr in keys {
-                                let _ = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
+                    JoinImplementation::Differential((_, first_key, _), others) => {
+                        if let Some(key) = first_key {
+                            for k in key {
+                                let _ = tc.typecheck_scalar(k, expr, &t_in)?;
                             }
                         }
 
-                        for (_, keys, _) in others {
-                            for scalar_expr in keys {
-                                let _ = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
+                        for (_, key, _) in others {
+                            for k in key {
+                                let _ = tc.typecheck_scalar(k, expr, &t_in)?;
                             }
                         }
                     }
                     JoinImplementation::DeltaQuery(plans) => {
                         for plan in plans {
-                            for (_, keys, _) in plan {
-                                for scalar_expr in keys {
-                                    let _ = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
+                            for (_, key, _) in plan {
+                                for k in key {
+                                    let _ = tc.typecheck_scalar(k, expr, &t_in)?;
                                 }
                             }
                         }
                     }
-                    JoinImplementation::IndexedFilter(_global_id, keys, consts) => {
-                        let typ: Vec<ColumnType> = keys
+                    JoinImplementation::IndexedFilter(_global_id, key, consts) => {
+                        let typ: Vec<ColumnType> = key
                             .iter()
-                            .map(|scalar_expr| tc.typecheck_scalar(scalar_expr, expr, &t_in))
+                            .map(|k| tc.typecheck_scalar(k, expr, &t_in))
                             .collect::<Result<Vec<ColumnType>, TypeError>>()?;
 
                         for row in consts {
@@ -776,11 +776,11 @@ impl Typecheck {
             } => {
                 let t_in = tc.typecheck(input, ctx)?;
 
-                for &key in group_key {
-                    if key >= t_in.len() {
+                for &k in group_key {
+                    if k >= t_in.len() {
                         return Err(TypeError::BadTopKGroupKey {
                             source: expr,
-                            key,
+                            k,
                             input_type: t_in,
                         });
                     }
@@ -905,9 +905,9 @@ impl Typecheck {
             ArrangeBy { input, keys } => {
                 let t_in = tc.typecheck(input, ctx)?;
 
-                for cols in keys {
-                    for col in cols {
-                        let _ = tc.typecheck_scalar(col, expr, &t_in)?;
+                for key in keys {
+                    for k in key {
+                        let _ = tc.typecheck_scalar(k, expr, &t_in)?;
                     }
                 }
 
@@ -1448,14 +1448,14 @@ impl<'a> TypeError<'a> {
             }
             BadTopKGroupKey {
                 source: _,
-                key,
+                k,
                 input_type,
             } => {
                 let input_type = columns_pretty(input_type, humanizer);
 
                 writeln!(
                     f,
-                    "TopK group key {key} references invalid column\ncolumns: {input_type}"
+                    "TopK group key component references invalid column {k} in columns: {input_type}"
                 )?
             }
             BadTopKOrdering {
