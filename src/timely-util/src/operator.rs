@@ -221,6 +221,13 @@ where
     /// flowing into the operator is dropped.
     fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
 
+    /// Employs a `ConsolidateBuffer` to perform consolidation in-place (i.e., reusing the same buffer)
+    /// in a per-worker, pipelined fashion across input batches. The consolidation should be effective
+    /// if `(data, time, diff)` input tuples are such that `data` has a relatively small domain.
+    fn consolidate_in_place(&self) -> Self
+    where
+        D1: differential_dataflow::Data;
+
     /// Consolidates the collection if `must_consolidate` is `true` and leaves it
     /// untouched otherwise.
     fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
@@ -521,6 +528,24 @@ where
         self.inner.with_token(token).as_collection()
     }
 
+    fn consolidate_in_place(&self) -> Self
+    where
+        D1: differential_dataflow::Data,
+    {
+        self.inner
+            .unary(Pipeline, "ConsolidateInPlace", move |_, _| {
+                let mut buffer = Vec::new();
+                move |input, output| {
+                    let mut out = ConsolidateBuffer::new(output, 0);
+                    input.for_each(|time, data| {
+                        data.swap(&mut buffer);
+                        out.give_iterator(&time, buffer.drain(..));
+                    });
+                }
+            })
+            .as_collection()
+    }
+
     fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
     where
         D1: differential_dataflow::ExchangeData + Hashable,
@@ -530,7 +555,7 @@ where
         Tr::Batch: Batch,
     {
         if must_consolidate {
-            self.consolidate_named::<Tr>(name)
+            self.consolidate_in_place().consolidate_named::<Tr>(name)
         } else {
             self
         }
