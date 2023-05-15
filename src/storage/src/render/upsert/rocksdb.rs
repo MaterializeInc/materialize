@@ -14,26 +14,6 @@ use mz_rocksdb::RocksDBInstance;
 use crate::render::upsert::types::UpsertState;
 use crate::render::upsert::{UpsertKey, UpsertValue};
 
-/// Additional context required by clusterd`'s
-/// process-wide `StorageInstanceContext` used to create
-/// new properly-configured RocksDB instances.
-#[derive(Clone)]
-pub struct UpsertAdditionalContext {
-    /// A global `rocksdb::Env`, shared across ALL instances of `RocksDB` (even
-    /// across sources!).
-    pub env: rocksdb::Env,
-}
-
-impl UpsertAdditionalContext {
-    /// Create a new `UpsertAdditionalContext` that can be cheaply
-    /// cloned.
-    pub fn new() -> Result<Self, anyhow::Error> {
-        Ok(Self {
-            env: rocksdb::Env::new()?,
-        })
-    }
-}
-
 /// The maximum batch size we will write to rocksdb.
 ///
 /// This value was derived from testing with the `upsert_open_loop` example,

@@ -373,7 +373,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             now: SYSTEM_TIME.clone(),
             postgres_factory,
             metrics_registry: metrics_registry.clone(),
-            scratch_directory: None,
+            scratch_directory_enabled: false,
             persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
         },
         secrets_controller,
