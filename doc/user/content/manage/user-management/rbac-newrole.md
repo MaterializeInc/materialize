@@ -4,7 +4,7 @@ description: ""
 menu:
   main:
     parent: user-management
-    weight: 16
+    weight: 15
 ---
 
 This guide walks you through creating a new user and new role in Materialize. By
@@ -30,8 +30,8 @@ Settings > Users.
 
 Click **Invite User** and fill in the user information.
 
-The **Organization Admin** and **Organization Member** roles refer to console
-privileges and are not related to RBAC roles.
+The **Organization Admin** and **Organization Member** roles refer to `SUPERUSER`
+privileges
 
 ## Create a new role
 
@@ -62,7 +62,7 @@ to this table.
     SELECT * FROM mz_roles WHERE 'name' = dev_role;
     ```
 
-    Your `dev` role returns the following attributes:
+    Your `dev` role returns attributes similar to the following:
 
     ```
     -[ RECORD 1 ]--+------
@@ -74,6 +74,8 @@ to this table.
     create_db      | f
     create_cluster | f
     ```
+    
+    Your `id` and `oid` values will look different.
 
     The `inherit`, `create_role`, `create_db`, and `create_cluster` are the
     role attributes assigned to a role when it is created. These attributes
@@ -111,7 +113,7 @@ privileges the role needs.
    SET CLUSTER TO devcluster;
    ```
 
-1. Create a new database, schema, and table in the cluster.
+1. Create a new database, schema, and table.
 
    ```sql
    CREATE DATABASE devdb;
@@ -125,8 +127,8 @@ privileges the role needs.
    CREATE TABLE d (a int, b text NOT NULL);
    ```
 
-You just created a nested hierarchy of objects. Your schema object belongs to
-the database and the database is only accessible within the cluster. The next
+You just created a set of objects. Your schema object belongs to
+the database. You can access the cluster from any database. The next
 step is to grant privileges to your role based on the role needs.
 
 ## Grant privileges to a role
@@ -134,7 +136,7 @@ step is to grant privileges to your role based on the role needs.
 In this example, let's say your `dev` role needs the following permissions:
 
 * Read, write, and append privileges on the table
-* Update privileges on the schema
+* Usage privileges on the schema
 * All available privileges on the database
 
 1. In your terminal, grant table-level privileges to the `dev` role.
@@ -153,7 +155,7 @@ In this example, let's say your `dev` role needs the following permissions:
    GRANT USAGE, CREATE ON SCHEMA devdb.schema TO dev_role;
    ```
 
-   Schemas have `UPDATE` and `CREATE` privileges available to grant.
+   Schemas have `USAGE` and `CREATE` privileges available to grant.
 
 3. Grant database privileges to the `dev` role.
 
@@ -185,7 +187,7 @@ to a user in your Materialize organization.
 1. To review the permissions a role has, you can view the object data.
 
    ```sql
-   SELECT name, privileges::text FROM mz_tables WHERE name='t';
+   SELECT name, privileges::text FROM mz_tables WHERE name='d';
    ```
 
    The output should return the owner, the level of permission, and the name of

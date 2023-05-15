@@ -75,8 +75,8 @@ organization. You can edit these actions when you create the role:
 
 ### Privileges
 
-Privileges are the actions or operations a role is allowed to perform. When you
-create a role, you can select specific privileges for that role based on the
+Privileges are the actions or operations a role is allowed to perform on a
+specific object. After you create a role, you can select specific privileges for that role based on the
 objects that role needs to access.
 
 Materialize supports the following privileges:
