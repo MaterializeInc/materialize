@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable
+from typing import Callable, Optional
 
 from materialize.output_consistency.data_type.value_characteristics import (
     ValueCharacteristics,
@@ -40,6 +40,20 @@ class ValueGrowsArgsValidator(OperationArgsValidator):
         return index_of_further_inc_value >= 0
 
 
+class MaxMinusNegMaxArgsValidator(OperationArgsValidator):
+
+    # error if {MAX_VALUE} and {MAX_VALUE, NEGATIVE}
+    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
+        if len(args) != 2:
+            return False
+
+        return has_all_characteristics(
+            args[0], {ValueCharacteristics.MAX_VALUE}
+        ) and has_all_characteristics(
+            args[1], {ValueCharacteristics.MAX_VALUE, ValueCharacteristics.NEGATIVE}
+        )
+
+
 def index_of_characteristic(
     args: list[Expression],
     characteristic: ValueCharacteristics,
@@ -62,3 +76,11 @@ def index_of_characteristic(
             return index
 
     return -1
+
+
+def has_all_characteristics(
+    arg: Expression,
+    characteristics: set[ValueCharacteristics],
+) -> bool:
+    overlap = arg.characteristics & characteristics
+    return len(overlap) == len(characteristics)

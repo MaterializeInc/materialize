@@ -71,6 +71,7 @@ OPERATION_TYPES.append(
         "$ - $",
         [NumericOperationParam(), NumericOperationParam()],
         DataTypeCategory.NUMERIC,
+        {MaxMinusNegMaxArgsValidator()},
     )
 )
 OPERATION_TYPES.append(
