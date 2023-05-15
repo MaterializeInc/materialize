@@ -10,8 +10,8 @@ menu:
 other roles, as well as inherit all the attributes and privileges of those roles.
 
 {{< warning >}}
-Currently, roles have limited functionality in Materialize. This is part of the
-work to enable **Role-based access control** (RBAC) in a future release {{% gh 11579 %}}.
+Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
+like to enable RBAC.
 {{< /warning >}}
 
 

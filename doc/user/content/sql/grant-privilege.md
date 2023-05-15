@@ -15,8 +15,8 @@ roles have lost that privilege, if certain roles were explicitly granted that
 privilege.
 
 {{< warning >}}
-Currently, privileges have limited functionality in Materialize. This is part of the
-work to enable **Role-based access control** (RBAC) in a future release {{% gh 11579 %}}.
+Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
+like to enable RBAC.
 {{< /warning >}}
 
 

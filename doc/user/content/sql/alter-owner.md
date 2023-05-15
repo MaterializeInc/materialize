@@ -9,9 +9,8 @@ menu:
 `ALTER ... OWNER` updates the owner of an item.
 
 {{< warning >}}
-Roles in Materialize are currently limited in functionality. In the future they
-will be used for role-based access control. See GitHub issue {{% gh 11579 %}}
-for details.
+Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
+like to enable RBAC.
 {{< /warning >}}
 
 ## Syntax

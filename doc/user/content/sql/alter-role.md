@@ -9,10 +9,8 @@ menu:
 `ALTER ROLE` alters the attributes of an existing role.
 
 {{< warning >}}
-Role-based access control (RBAC) is under development {{% gh 11579 %}}.
-Currently, no role attributes or privileges are considered when executing
-`CREATE ROLE` statements, but these attributes are saved and will be considered
-in a future release.
+Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
+like to enable RBAC.
 {{< /warning >}}
 
 ## Syntax
