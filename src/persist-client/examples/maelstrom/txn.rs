@@ -720,7 +720,7 @@ impl Service for TransactorService {
 mod codec_impls {
     use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
     use mz_persist_types::columnar::{ColumnPush, DataType, Schema};
-    use mz_persist_types::part::{ColumnsMut, ColumnsRef};
+    use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef};
     use mz_persist_types::stats::StatsFn;
     use mz_persist_types::Codec;
 

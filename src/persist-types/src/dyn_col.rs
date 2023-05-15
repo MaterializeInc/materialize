@@ -7,6 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Type-erased [crate::columnar::Data::Col] and [crate::columnar::Data::Mut].
+
+use std::any::Any;
+use std::sync::Arc;
+
+use arrow2::array::Array;
+use arrow2::io::parquet::write::Encoding;
+
+use crate::columnar::sealed::ColumnRef;
+use crate::columnar::{ColumnFormat, Data, DataType};
+use crate::stats::DynStats;
+
 /// A type-erased [crate::columnar::Data::Col].
 #[derive(Debug)]
 pub struct DynColumnRef(DataType, Arc<dyn Any + Send + Sync>);
@@ -83,29 +95,31 @@ impl DynColumnRef {
         Ok(col)
     }
 
-    pub(crate) fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+    pub(crate) fn to_arrow(&self) -> (Encoding, Box<dyn Array>, bool) {
         struct ToArrowDataFn<'a>(&'a DynColumnRef);
         impl DataFn<Result<(Encoding, Box<dyn Array>), String>> for ToArrowDataFn<'_> {
             fn call<T: Data>(self) -> Result<(Encoding, Box<dyn Array>), String> {
                 Ok(self.0.downcast::<T>()?.to_arrow())
             }
         }
-        self.0
+        let (encoding, array) = self
+            .0
             .data_fn(ToArrowDataFn(self))
-            .expect("DynColumnRef DataType should be internally consistent")
+            .expect("DynColumnRef DataType should be internally consistent");
+        (encoding, array, self.0.optional)
     }
 }
 
 /// A type-erased [crate::columnar::Data::Mut].
 #[derive(Debug)]
-struct DynColumnMut(DataType, Box<dyn Any + Send + Sync>);
+pub struct DynColumnMut(DataType, Box<dyn Any + Send + Sync>);
 
 impl DynColumnMut {
     fn new<T: Data>(col: T::Mut) -> Self {
         DynColumnMut(T::TYPE.clone(), Box::new(col))
     }
 
-    fn new_untyped(typ: &DataType) -> Self {
+    pub(crate) fn new_untyped(typ: &DataType) -> Self {
         struct NewUntypedDataFn;
         impl DataFn<DynColumnMut> for NewUntypedDataFn {
             fn call<T: Data>(self) -> DynColumnMut {
@@ -125,6 +139,7 @@ impl DynColumnMut {
         Ok(col)
     }
 
+    /// Closes the column to pushes and returns it as a [DynColumnRef].
     pub fn finish<T: Data>(self) -> Result<DynColumnRef, String> {
         let col = self
             .1
@@ -136,7 +151,7 @@ impl DynColumnMut {
         Ok(col)
     }
 
-    fn finish_untyped(self) -> DynColumnRef {
+    pub(crate) fn finish_untyped(self) -> DynColumnRef {
         let typ = self.0.clone();
         struct FinishUntypedDataFn(DynColumnMut);
         impl DataFn<Result<DynColumnRef, String>> for FinishUntypedDataFn {

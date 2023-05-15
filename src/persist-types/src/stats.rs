@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use serde::ser::{SerializeMap, SerializeStruct};
 
 use crate::columnar::Data;
-use crate::part::DynColumnRef;
+use crate::dyn_col::DynColumnRef;
 use crate::stats::private::StatsCost;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));

@@ -7,14 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Type erased columnar structs.
+
+use std::collections::BTreeMap;
+
+use crate::columnar::Data;
+use crate::dyn_col::{DynColumnMut, DynColumnRef};
+use crate::stats::{DynStats, StatsFn};
+
 /// A set of shared references to named columns.
 ///
-/// This type implements a "builder"-esque pattern to help [Schema::decoder]
-/// impls. All columns should be removed via [Self::col] and the [Self::finish]
-/// called to verify that all columns have been accounted for.
+/// This type implements a "builder"-esque pattern to help
+/// [crate::columnar::Schema::decoder] impls. All columns should be removed via
+/// [Self::col] and the [Self::finish] called to verify that all columns have
+/// been accounted for.
 #[derive(Debug)]
 pub struct ColumnsRef<'a> {
-    cols: BTreeMap<&'a str, &'a DynColumnRef>,
+    pub(crate) cols: BTreeMap<&'a str, &'a DynColumnRef>,
 }
 
 impl<'a> ColumnsRef<'a> {
@@ -52,12 +61,13 @@ impl<'a> ColumnsRef<'a> {
 
 /// A set of exclusive references to named columns.
 ///
-/// This type implements a "builder"-esque pattern to help [Schema::encoder]
-/// impls. All columns should be removed via [Self::col] and the [Self::finish]
-/// called to verify that all columns have been accounted for.
+/// This type implements a "builder"-esque pattern to help
+/// [crate::columnar::Schema::encoder] impls. All columns should be removed via
+/// [Self::col] and the [Self::finish] called to verify that all columns have
+/// been accounted for.
 #[derive(Debug)]
 pub struct ColumnsMut<'a> {
-    cols: BTreeMap<&'a str, &'a mut DynColumnMut>,
+    pub(crate) cols: BTreeMap<&'a str, &'a mut DynColumnMut>,
 }
 
 impl<'a> ColumnsMut<'a> {

@@ -9,19 +9,16 @@
 
 //! A columnar representation of one blob's worth of data
 
-use std::any::Any;
-use std::collections::BTreeMap;
-use std::sync::Arc;
-
 use arrow2::array::{Array, PrimitiveArray, StructArray};
 use arrow2::buffer::Buffer;
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType as ArrowLogicalType, Field};
 use arrow2::io::parquet::write::Encoding;
 
-use crate::columnar::sealed::ColumnRef;
-use crate::columnar::{ColumnFormat, Data, DataType, Schema};
-use crate::stats::{DynStats, StatsFn, StructStats};
+use crate::columnar::Schema;
+use crate::dyn_col::{DynColumnMut, DynColumnRef};
+use crate::dyn_struct::{ColumnsMut, ColumnsRef};
+use crate::stats::StructStats;
 use crate::Codec64;
 
 /// A columnar representation of one blob's worth of data.
@@ -86,8 +83,8 @@ impl Part {
             let (mut key_fields, mut key_encodings, mut key_arrays) =
                 (Vec::new(), Vec::new(), Vec::new());
             for (name, col) in self.key.iter() {
-                let (encoding, array) = col.to_arrow();
-                key_fields.push(Field::new(name, array.data_type().clone(), col.0.optional));
+                let (encoding, array, is_nullable) = col.to_arrow();
+                key_fields.push(Field::new(name, array.data_type().clone(), is_nullable));
                 key_encodings.push(encoding);
                 key_arrays.push(array);
             }
@@ -108,8 +105,8 @@ impl Part {
             let (mut val_fields, mut val_encodings, mut val_arrays) =
                 (Vec::new(), Vec::new(), Vec::new());
             for (name, col) in self.val.iter() {
-                let (encoding, array) = col.to_arrow();
-                val_fields.push(Field::new(name, array.data_type().clone(), col.0.optional));
+                let (encoding, array, is_nullable) = col.to_arrow();
+                val_fields.push(Field::new(name, array.data_type().clone(), is_nullable));
                 val_encodings.push(encoding);
                 val_arrays.push(array);
             }

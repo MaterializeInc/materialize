@@ -52,7 +52,8 @@ use std::fmt::Debug;
 
 use crate::codec_impls::UnitSchema;
 use crate::columnar::sealed::ColumnRef;
-use crate::part::{ColumnsMut, ColumnsRef, PartBuilder};
+use crate::dyn_struct::{ColumnsMut, ColumnsRef};
+use crate::part::PartBuilder;
 use crate::stats::{ColumnStats, StatsFn};
 use crate::Codec;
 

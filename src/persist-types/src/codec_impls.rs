@@ -27,7 +27,7 @@ use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
-use crate::part::{ColumnsMut, ColumnsRef};
+use crate::dyn_struct::{ColumnsMut, ColumnsRef};
 use crate::stats::{BytesStats, OptionStats, PrimitiveStats, StatsFn};
 use crate::{Codec, Codec64, Opaque};
 

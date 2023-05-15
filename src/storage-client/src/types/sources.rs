@@ -2673,7 +2673,7 @@ impl Schema<SourceData> for RelationDesc {
 
     fn decoder<'a>(
         &self,
-        cols: mz_persist_types::part::ColumnsRef<'a>,
+        cols: mz_persist_types::dyn_struct::ColumnsRef<'a>,
     ) -> Result<Self::Decoder<'a>, String> {
         // Constructing the fake RelationDesc is wasteful, but this only gets
         // called when the feature flag is on.
@@ -2683,7 +2683,7 @@ impl Schema<SourceData> for RelationDesc {
 
     fn encoder<'a>(
         &self,
-        cols: mz_persist_types::part::ColumnsMut<'a>,
+        cols: mz_persist_types::dyn_struct::ColumnsMut<'a>,
     ) -> Result<Self::Encoder<'a>, String> {
         // Constructing the fake RelationDesc is wasteful, but this only gets
         // called when the feature flag is on.
