@@ -189,9 +189,7 @@ impl Server {
             })()
             .await;
             if incremented_connection_count {
-                let mut connections = active_connection_count2
-                    .lock()
-                    .expect("poisoned lock");
+                let mut connections = active_connection_count2.lock().expect("poisoned lock");
                 assert_ne!(0, connections.current);
                 connections.current -= 1;
             }

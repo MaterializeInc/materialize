@@ -1571,7 +1571,8 @@ impl SystemVars {
             vars: Default::default(),
             active_connection_count,
         };
-        let mut vars = vars.with_var(&CONFIG_HAS_SYNCED_ONCE)
+        let mut vars = vars
+            .with_var(&CONFIG_HAS_SYNCED_ONCE)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
             .with_var(&MAX_SOURCES)
@@ -1745,7 +1746,8 @@ impl SystemVars {
     /// variable will be be `reset` to. If no default is set, the static default in the
     /// variable definition is used instead.
     pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
-        let result = self.vars
+        let result = self
+            .vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
@@ -1784,9 +1786,9 @@ impl SystemVars {
 
     fn refresh_state(&mut self) {
         self.active_connection_count
-        .lock()
-        .expect("lock poisoned")
-        .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
+            .lock()
+            .expect("lock poisoned")
+            .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
