@@ -13,7 +13,13 @@ from materialize.output_consistency.data_type.value_characteristics import (
 )
 
 int2_type = NumberDataType(
-    "INT2", "INT2", is_signed=True, is_decimal=False, tiny_value="1", max_value="32767"
+    "INT2",
+    "INT2",
+    is_signed=True,
+    is_decimal=False,
+    tiny_value="1",
+    max_value="32767",
+    max_negative_value="-32768",
 )
 int4_type = NumberDataType(
     "INT4",
@@ -22,6 +28,7 @@ int4_type = NumberDataType(
     is_decimal=False,
     tiny_value="1",
     max_value="2147483647",
+    max_negative_value="-2147483648",
 )
 int8_type = NumberDataType(
     "INT8",
@@ -30,6 +37,7 @@ int8_type = NumberDataType(
     is_decimal=False,
     tiny_value="1",
     max_value="9223372036854775807",
+    max_negative_value="-9223372036854775808",
 )
 
 uint2_type = NumberDataType(
@@ -39,6 +47,7 @@ uint2_type = NumberDataType(
     is_decimal=False,
     tiny_value="1",
     max_value="65535",
+    max_negative_value=None,
 )
 uint4_type = NumberDataType(
     "UINT4",
@@ -47,6 +56,7 @@ uint4_type = NumberDataType(
     is_decimal=False,
     tiny_value="1",
     max_value="4294967295",
+    max_negative_value=None,
 )
 uint8_type = NumberDataType(
     "UINT8",
@@ -55,6 +65,7 @@ uint8_type = NumberDataType(
     is_decimal=False,
     tiny_value="1",
     max_value="18446744073709551615",
+    max_negative_value=None,
 )
 
 # configurable decimal digits
@@ -65,6 +76,7 @@ decimal39_0_type = NumberDataType(
     is_decimal=True,
     tiny_value="1",
     max_value="999999999999999999999999999999999999999",
+    max_negative_value="-999999999999999999999999999999999999999",
 )
 decimal39_4_type = NumberDataType(
     "DECIMAL_39_4",
@@ -73,6 +85,7 @@ decimal39_4_type = NumberDataType(
     is_decimal=True,
     tiny_value="0.0001",
     max_value="99999999999999999999999999999999999.9999",
+    max_negative_value="-99999999999999999999999999999999999.9999",
 )
 
 real_type = NumberDataType(
@@ -82,6 +95,7 @@ real_type = NumberDataType(
     is_decimal=True,
     tiny_value="0.000000000000000000000000000000000000001",
     max_value="99999999999999999999999999999999999999",
+    max_negative_value="99999999999999999999999999999999999999",
 )
 double_type = NumberDataType(
     "DOUBLE",
@@ -90,6 +104,7 @@ double_type = NumberDataType(
     is_decimal=True,
     tiny_value="0.000000000000000000000000000000000000001",
     max_value="999999999999999999999999999999999999999",
+    max_negative_value="-999999999999999999999999999999999999999",
 )
 
 NUMERIC_DATA_TYPES: list[NumberDataType] = [
