@@ -87,14 +87,22 @@ class QueryExecutionManager:
                 query, index, "", self.evaluation_strategies
             )
 
+            abort_early = False
+
             for test_outcome in test_outcomes:
                 count_executed += 1
 
                 if test_outcome.success():
                     count_passed += 1
+                elif self.config.fail_fast:
+                    abort_early = True
 
                 if test_outcome.has_warnings():
+                    print("Early abort due to comparison failure")
                     count_with_warning += 1
+
+            if abort_early:
+                break
 
         self.commit_tx()
 
