@@ -11,7 +11,6 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.util import MzVersion
 
 
 class RenameIndex(Check):
@@ -28,19 +27,6 @@ class RenameIndex(Check):
         )
 
     def manipulate(self) -> List[Testdrive]:
-        fix_ownership = (
-            """
-                # When upgrading from old version without roles the indexes are
-                # owned by default_role, thus we have to change the owner
-                # before altering them:
-                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
-                ALTER INDEX rename_index_index1 OWNER TO materialize;
-                ALTER INDEX rename_index_index2 OWNER TO materialize;
-                """
-            if self.base_version >= MzVersion.parse("0.47.0")
-            else ""
-        )
-
         return [
             Testdrive(dedent(s))
             for s in [
@@ -51,8 +37,14 @@ class RenameIndex(Check):
                 > CREATE MATERIALIZED VIEW rename_index_view2 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
                 > INSERT INTO rename_index_table VALUES (3,3);
                 """,
-                fix_ownership
-                + """
+                """
+                # When upgrading from old version without roles the indexes are
+                # owned by default_role, thus we have to change the owner
+                # before altering them:
+                (>=4700)$ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER INDEX rename_index_index1 OWNER TO materialize;
+                ALTER INDEX rename_index_index2 OWNER TO materialize;
+
                 > INSERT INTO rename_index_table VALUES (4,4);
                 > CREATE MATERIALIZED VIEW rename_index_view3 AS SELECT f2 FROM rename_index_table WHERE f2 > 0;
                 > ALTER INDEX rename_index_index2 RENAME TO rename_index_index3;

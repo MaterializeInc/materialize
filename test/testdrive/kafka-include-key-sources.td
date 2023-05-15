@@ -302,4 +302,4 @@ $ kafka-ingest topic=proto-structured
 > SELECT key::text, (key).id1, (key).id2, measurement FROM input_proto_structured
 key    id1  id2  measurement
 ----------------------------
-(1,2)  1    2    10
+\(1,2)  1    2    10

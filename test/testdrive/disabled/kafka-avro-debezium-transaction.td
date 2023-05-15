@@ -343,12 +343,12 @@ $ unset-regex
   ENVELOPE NONE
 
 > SELECT after::text FROM data_sink_reingest ORDER BY transaction ASC
-(1,1)
-(2,3)
-(4,5)
-(8,9)
-(2,7)
-(3,9)
+\(1,1)
+\(2,3)
+\(4,5)
+\(8,9)
+\(2,7)
+\(3,9)
 
 > SELECT COUNT(*) AS event_count FROM data_sink_reingest GROUP BY transaction ORDER BY transaction ASC
 3

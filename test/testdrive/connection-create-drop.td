@@ -258,7 +258,7 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
 > SELECT importee1::text, importee2::text FROM import_connection_csr
 importee1  importee2
 --------------------------------
-(f)        "(\"(1234,5678)\")"
+\(f)        "(\"(1234,5678)\")"
 
 # SSH
 
