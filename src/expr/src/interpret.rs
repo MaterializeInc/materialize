@@ -36,6 +36,16 @@ enum Monotonic {
     No,
 }
 
+impl From<bool> for Monotonic {
+    fn from(value: bool) -> Self {
+        if value {
+            Monotonic::Yes
+        } else {
+            Monotonic::No
+        }
+    }
+}
+
 fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
     use Monotonic::*;
     use UnaryFunc::*;
@@ -74,31 +84,6 @@ fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
         IsNull(_) => Yes,
         AbsInt64(_) => No,
         _ => Maybe,
-    }
-}
-
-/// Describes the pointwise behaviour of each of the two arguments of the function.
-/// (ie. the first element of the tuple is `Monotonic::Yes` if, for any value of the second argument
-/// increasing the first argument causes the result of the function to either monotonically
-/// increase or decrease.) For example, subtraction is considered monotonic in both arguments:
-/// in the first because `a - C` increases monotonically as `a` increases, and in the second because
-/// `C - b` decreases monotonically as `b` increases.
-fn binary_monotonic(func: &BinaryFunc) -> (Monotonic, Monotonic) {
-    use BinaryFunc::*;
-    use Monotonic::*;
-
-    match func {
-        AddInt64 | MulInt64 | AddNumeric | MulNumeric | SubInt64 | SubNumeric => (Yes, Yes),
-        AddInterval | SubInterval => (Yes, Yes),
-        AddTimestampInterval
-        | AddTimestampTzInterval
-        | SubTimestampInterval
-        | SubTimestampTzInterval => (Yes, Yes),
-        // Monotonic in the left argument, but the right hand side has a discontinuity.
-        // Could be treated as monotonic if we also captured the valid domain of the function args.
-        DivInt64 | DivNumeric => (Yes, No),
-        Lt | Lte | Gt | Gte => (Yes, Yes),
-        _ => (Maybe, Maybe),
     }
 }
 
@@ -678,23 +663,18 @@ impl Interpreter for Trace {
         // TODO: this is duplicative! If we have more than one or two special-cased functions
         // we should find some way to share the list between `Trace` and `ColumnSpecs`.
         let (left_monotonic, right_monotonic) = match func {
-            BinaryFunc::JsonbGetString { stringify: false } => (Monotonic::Yes, Monotonic::No),
-            _ => binary_monotonic(func),
+            BinaryFunc::JsonbGetString { stringify: false } => (true, false),
+            _ => func.is_monotone(),
         };
-        left.apply_fn(left_monotonic)
-            .union(right.apply_fn(right_monotonic))
+        left.apply_fn(left_monotonic.into())
+            .union(right.apply_fn(right_monotonic.into()))
     }
 
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
-        let is_monotonic = if func.is_monotone() {
-            Monotonic::Yes
-        } else {
-            Monotonic::No
-        };
         exprs
             .into_iter()
             .fold(RelationTrace::new(), |acc, columns| {
-                acc.union(columns.apply_fn(is_monotonic))
+                acc.union(columns.apply_fn(func.is_monotone().into()))
             })
     }
 
@@ -864,7 +844,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         left: Self::Summary,
         right: Self::Summary,
     ) -> Self::Summary {
-        let (left_monotonic, right_monotonic) = binary_monotonic(func);
+        let (left_monotonic, right_monotonic) = func.is_monotone();
 
         let special_spec = match func {
             BinaryFunc::JsonbGetString { stringify } => {
@@ -912,17 +892,13 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             expr1: Box::new(Self::placeholder(left.col_type.clone())),
             expr2: Box::new(Self::placeholder(right.col_type.clone())),
         };
-        let mapped_spec = left
-            .range
-            .flat_map(left_monotonic == Monotonic::Yes, |left_result| {
-                Self::set_argument(&mut expr, 0, left_result);
-                right
-                    .range
-                    .flat_map(right_monotonic == Monotonic::Yes, |right_result| {
-                        Self::set_argument(&mut expr, 1, right_result);
-                        self.eval_result(expr.eval(&[], self.arena))
-                    })
-            });
+        let mapped_spec = left.range.flat_map(left_monotonic, |left_result| {
+            Self::set_argument(&mut expr, 0, left_result);
+            right.range.flat_map(right_monotonic, |right_result| {
+                Self::set_argument(&mut expr, 1, right_result);
+                self.eval_result(expr.eval(&[], self.arena))
+            })
+        });
 
         let col_type = func.output_type(left.col_type, right.col_type);
 
