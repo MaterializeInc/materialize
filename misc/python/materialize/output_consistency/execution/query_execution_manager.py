@@ -70,13 +70,14 @@ class QueryExecutionManager:
     ) -> ConsistencyTestSummary:
         if len(queries) == 0:
             print("No queries found!")
-            return ConsistencyTestSummary(0, 0, self.config.dry_run)
+            return ConsistencyTestSummary(0, 0, 0, self.config.dry_run)
 
         print(f"Processing {len(queries)} queries.")
 
         # can be larger than the number of queries in case of retries with split queries
         count_executed = 0
         count_passed = 0
+        count_with_warning = 0
 
         for index, query in enumerate(queries):
             if index % self.config.queries_per_tx == 0:
@@ -92,11 +93,15 @@ class QueryExecutionManager:
                 if test_outcome.success():
                     count_passed += 1
 
+                if test_outcome.has_warnings():
+                    count_with_warning += 1
+
         self.commit_tx()
 
         return ConsistencyTestSummary(
             count_executed_query_templates=count_executed,
             count_successful_query_templates=count_passed,
+            count_with_warning_query_templates=count_with_warning,
             dry_run=self.config.dry_run,
         )
 

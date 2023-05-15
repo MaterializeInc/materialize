@@ -13,10 +13,12 @@ class ConsistencyTestSummary:
         self,
         count_executed_query_templates: int,
         count_successful_query_templates: int,
+        count_with_warning_query_templates: int,
         dry_run: bool,
     ):
         self.count_executed_query_templates = count_executed_query_templates
         self.count_successful_query_templates = count_successful_query_templates
+        self.count_with_warning_query_templates = count_with_warning_query_templates
         self.mode = "DB" if not dry_run else "DRY_RUN"
 
     def all_passed(self) -> bool:
@@ -25,4 +27,8 @@ class ConsistencyTestSummary:
         )
 
     def __str__(self) -> str:
-        return f"{self.count_successful_query_templates}/{self.count_executed_query_templates} passed in mode '{self.mode}'."
+        output_rows = [
+            f"{self.count_successful_query_templates}/{self.count_executed_query_templates} passed in mode '{self.mode}'.",
+            f"{self.count_with_warning_query_templates} queries had warnings.",
+        ]
+        return "\n".join(output_rows)
