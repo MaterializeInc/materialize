@@ -158,7 +158,7 @@ class QueryExecutionManager:
                 query_execution.outcomes.append(failure)
 
         if self.config.dry_run:
-            return [ValidationOutcome(query_execution)]
+            return [ValidationOutcome()]
 
         validation_outcome = self.comparator.compare_results(query_execution)
         self.print_test_result(query_id, query_execution, validation_outcome)

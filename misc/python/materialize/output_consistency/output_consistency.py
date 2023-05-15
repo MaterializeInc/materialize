@@ -79,7 +79,7 @@ def run_output_consistency_tests(
     execution_manager.setup_database_objects(DATA_TYPES, evaluation_strategies)
 
     if not config.verbose_output:
-        print("Printing only queries with inconsistencies or warnings.")
+        print("Printing only queries with inconsistencies or warnings in non-verbose mode.")
 
     test_summary = execution_manager.execute_queries(queries)
 

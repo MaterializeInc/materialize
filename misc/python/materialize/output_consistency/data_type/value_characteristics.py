@@ -12,18 +12,19 @@ from enum import Enum
 
 class ValueCharacteristics(Enum):
     NULL = 0
-    ZERO = 1
     # not (NULL or ZERO)
-    NON_EMPTY = 2
+    NON_EMPTY = 1
 
-    ONE = 100
-    TINY_VALUE = 101
-    LARGE_VALUE = 102
-    MAX_VALUE = 103
-    OVERSIZE = 104
-    NEGATIVE = 105
+    ZERO = 100
+    ONE = 101
+    TINY_VALUE = 102
+    LARGE_VALUE = 103
+    MAX_VALUE = 104
+
+    OVERSIZE = 120
+    NEGATIVE = 121
     # value is not an integer
-    DECIMAL = 106
+    DECIMAL = 122
 
     DECIMAL_OR_FLOAT_TYPED = 150
     LARGER_THAN_INT4_TYPED = 151

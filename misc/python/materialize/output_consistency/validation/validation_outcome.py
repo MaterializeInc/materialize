@@ -9,7 +9,6 @@
 from typing import Optional, Sequence
 
 from materialize.output_consistency.common.format_constants import LI_PREFIX
-from materialize.output_consistency.query.query_result import QueryExecution
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
     ValidationMessage,
@@ -19,8 +18,7 @@ from materialize.output_consistency.validation.validation_message import (
 
 
 class ValidationOutcome:
-    def __init__(self, query_execution: QueryExecution) -> None:
-        self.query_id = query_execution.query_id
+    def __init__(self) -> None:
         self.success_reason: Optional[str] = None
         self.errors: list[ValidationError] = []
         self.warnings: list[ValidationWarning] = []

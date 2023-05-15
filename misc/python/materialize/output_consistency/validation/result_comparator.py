@@ -28,7 +28,7 @@ from materialize.output_consistency.validation.validation_outcome import (
 
 class ResultComparator:
     def compare_results(self, query_execution: QueryExecution) -> ValidationOutcome:
-        validation_outcome = ValidationOutcome(query_execution)
+        validation_outcome = ValidationOutcome()
 
         if len(query_execution.outcomes) == 0:
             raise RuntimeError("Contains no outcomes!")

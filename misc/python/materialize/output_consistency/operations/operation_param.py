@@ -35,7 +35,6 @@ class OperationParam:
         if incompatibilities is not None:
             self.incompatibility_combinations.extend([incompatibilities])
 
-
     def supports_arg(self, arg: Expression) -> bool:
         for incompatibility_combination in self.incompatibility_combinations:
             overlapping_incompatibility_combination = (
