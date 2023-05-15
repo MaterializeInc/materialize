@@ -308,6 +308,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(RAISE) => Ok(self.parse_raise()?),
                 Token::Keyword(GRANT) => Ok(self.parse_grant()?),
                 Token::Keyword(REVOKE) => Ok(self.parse_revoke()?),
+                Token::Keyword(REASSIGN) => Ok(self.parse_reassign_owned()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -6285,6 +6286,19 @@ impl<'a> Parser<'a> {
     fn expect_role_specification(&mut self) -> Result<Ident, ParserError> {
         let _ = self.parse_keyword(GROUP);
         self.parse_identifier()
+    }
+
+    /// Parse a `REASSIGN OWNED` statement, assuming that the `REASSIGN` token
+    /// has already been consumed.
+    fn parse_reassign_owned(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[OWNED, BY])?;
+        let old_roles = self.parse_comma_separated(Parser::parse_identifier)?;
+        self.expect_keyword(TO)?;
+        let new_role = self.parse_identifier()?;
+        Ok(Statement::ReassignOwned(ReassignOwnedStatement {
+            old_roles,
+            new_role,
+        }))
     }
 }
 

@@ -2328,6 +2328,20 @@ REVOKE CREATE ON CLUSTER c FROM joe, mike, yisachar
 RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike"), Ident("yisachar")] })
 
 parse-statement
+REASSIGN OWNED BY joe TO yisachar
+----
+REASSIGN OWNED BY joe TO yisachar
+=>
+ReassignOwned(ReassignOwnedStatement { old_roles: [Ident("joe")], new_role: Ident("yisachar") })
+
+parse-statement
+REASSIGN OWNED BY joe, mike TO yisachar
+----
+REASSIGN OWNED BY joe, mike TO yisachar
+=>
+ReassignOwned(ReassignOwnedStatement { old_roles: [Ident("joe"), Ident("mike")], new_role: Ident("yisachar") })
+
+parse-statement
 DROP OWNED BY joe
 ----
 DROP OWNED BY joe

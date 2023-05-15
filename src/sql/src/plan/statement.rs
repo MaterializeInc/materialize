@@ -146,6 +146,7 @@ pub fn describe(
         Statement::RevokeRole(stmt) => ddl::describe_revoke_role(&scx, stmt)?,
         Statement::GrantPrivilege(stmt) => ddl::describe_grant_privilege(&scx, stmt)?,
         Statement::RevokePrivilege(stmt) => ddl::describe_revoke_privilege(&scx, stmt)?,
+        Statement::ReassignOwned(stmt) => ddl::describe_reassign_owned(&scx, stmt)?,
 
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => {
@@ -282,6 +283,7 @@ pub fn plan(
         Statement::RevokeRole(stmt) => ddl::plan_revoke_role(scx, stmt),
         Statement::GrantPrivilege(stmt) => ddl::plan_grant_privilege(scx, stmt),
         Statement::RevokePrivilege(stmt) => ddl::plan_revoke_privilege(scx, stmt),
+        Statement::ReassignOwned(stmt) => ddl::plan_reassign_owned(scx, stmt),
 
         // DML statements.
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
