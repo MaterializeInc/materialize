@@ -472,6 +472,9 @@ impl Typecheck {
     /// It should be linear in the size of the AST.
     ///
     /// ??? should we also compute keys and return a `RelationType`?
+    ///   ggevay: Checking keys would have the same problem as checking nullability: key inference
+    ///   is very heuristic (even more so than nullability inference), so it's almost impossible to
+    ///   reliably keep it stable across transformations.
     pub fn typecheck<'a>(
         &self,
         expr: &'a MirRelationExpr,

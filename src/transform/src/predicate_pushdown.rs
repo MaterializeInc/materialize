@@ -22,6 +22,9 @@
 //! the literal errors will be unconditionally evaluated. For example, the pushdown
 //! will not happen if not all predicates can be pushed down (e.g. reduce and map),
 //! or if we are not certain that the input is non-empty (e.g. join).
+//! Note that this is not addressing the problem in its full generality, because this problem can
+//! occur with any function call that might error (although much more rarely than with literal
+//! errors). See <https://github.com/MaterializeInc/materialize/issues/17189#issuecomment-1547391011>
 //!
 //! ```rust
 //! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
@@ -449,10 +452,28 @@ impl PredicatePushdown {
                                 self.action(input, get_predicates)?;
                             }
                         }
-                        MirRelationExpr::Negate { input: inner } => {
-                            let predicates = std::mem::take(predicates);
-                            *relation = inner.take_dangerous().filter(predicates).negate();
-                            self.action(relation, get_predicates)?;
+                        MirRelationExpr::Negate { input } => {
+                            // Don't push literal errors past a Negate. The problem is that it's
+                            // hard to appropriately reflect the negation in the error stream:
+                            // - If we don't negate, then errors that should cancel out will not
+                            //   cancel out. For example, see
+                            //   https://github.com/MaterializeInc/materialize/issues/19179
+                            // - If we negate, then unrelated errors might cancel out. E.g., there
+                            //   might be a division-by-0 in both inputs to an EXCEPT ALL, but
+                            //   on different input data. These shouldn't cancel out.
+                            let (retained, pushdown): (Vec<_>, Vec<_>) = std::mem::take(predicates)
+                                .into_iter()
+                                .partition(|p| p.is_literal_err());
+                            let mut result = input.take_dangerous();
+                            if !pushdown.is_empty() {
+                                result = result.filter(pushdown);
+                            }
+                            self.action(&mut result, get_predicates)?;
+                            result = result.negate();
+                            if !retained.is_empty() {
+                                result = result.filter(retained);
+                            }
+                            *relation = result;
                         }
                         x => {
                             x.try_visit_mut_children(|e| self.action(e, get_predicates))?;
