@@ -94,10 +94,11 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
         echo "lint: $(red error:) python formatting discrepancies found"
         echo "hint: run bin/pyfmt" >&2
     fi
-    try bin/lint-cargo
-    try bin/gen-completion check
-    try bin/gen-lints
-    try git diff --compact-summary --exit-code
 fi
+
+try bin/lint-cargo
+try bin/gen-completion check
+try bin/gen-lints
+try git diff --compact-summary --exit-code
 
 try_finish
