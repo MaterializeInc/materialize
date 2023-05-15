@@ -27,14 +27,9 @@ steps:
         required: false
     if: build.source == "ui"
 
-  - id: build-x86_64
-    label: Build x86_64
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
-    timeout_in_minutes: 60
-    agents:
-      queue: builder-linux-x86_64
-
-  - wait: ~
+  # There is intentionally no build command here since we want to make sure we
+  # use a properly tagged version when testing the upcoming release, and don't
+  # build our own version just for the tests.
 
   - command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.trim_pipeline release-qualification
     if: build.source == "ui"
