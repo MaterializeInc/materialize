@@ -4,7 +4,7 @@ description: ""
 menu:
   main:
     parent: user-management
-    weight: 10
+    weight: 16
 ---
 
 This guide walks you through creating a new user and new role in Materialize. By
@@ -104,14 +104,14 @@ privileges the role needs.
    CREATE CLUSTER devcluster;
    ```
    
-   Change into the example cluster.
+1. Change into the example cluster.
    
    
    ```sql
    SET CLUSTER TO devcluster;
    ```
    
-   Create a new database and schema in the cluster.
+1. Create a new database, schema, and table in the cluster.
    
    ```sql
    CREATE DATABASE devdb;
@@ -189,14 +189,14 @@ to a user in your Materialize organization.
    The output should return the owner, the level of permission, and the name of
    the role on the table.
    
-   ```
+   ```shell
    name|privileges
-   t|{admin@mz.com=arwd/admin@mz.com,new_user@mz.com=arw/admin@mz.com}
+   t|{admin@mz.com=arwd/admin@mz.com,dev_role=arw/admin@mz.com}
    (1 row)
    ```
    
    In this example, the administrator has append, read, write, and delete
-   privileges on the table. The new user has append, read, and write privileges,
+   privileges on the table. The `dev` role has append, read, and write privileges,
    which were assigned by the admin user.
    
 
@@ -206,9 +206,10 @@ You just used RBAC to manage user privileges in Materialize! The next guide will
 cover altering and dropping user roles. Move to the next guide in the series, or
 destroy the objects you created for this guide.
 
-    ```sql
-    DROP CLUSTER devcluster CASCADE;
-    ```
+```
+DROP CLUSTER devcluster CASCADE;
+```
+    
     
 For more information on RBAC in Materialize, review the reference documentation:
 
