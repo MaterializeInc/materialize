@@ -220,8 +220,6 @@ pub mod sinks;
 pub mod sources;
 mod upsert;
 
-pub use upsert::UpsertAdditionalContext;
-
 /// Assemble the "ingestion" side of a dataflow, i.e. the sources.
 ///
 /// This method creates a new dataflow to host the implementations of sources for the `dataflow`

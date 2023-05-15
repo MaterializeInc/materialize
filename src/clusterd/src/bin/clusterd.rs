@@ -101,9 +101,9 @@ use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::GrpcServer;
 use mz_service::secrets::SecretsReaderCliArgs;
+use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::instances::StorageInstanceContext;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
@@ -303,11 +303,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.aws_external_id,
             secrets_reader,
         ),
-        StorageInstanceContext::new(
-            args.scratch_directory,
-            mz_storage::render::UpsertAdditionalContext::new()?,
-        )
-        .await?,
+        StorageInstanceContext::new(args.scratch_directory).await?,
     )?;
     info!(
         "listening for storage controller connections on {}",

@@ -29,19 +29,17 @@ use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
-use crate::source::types::UpsertMetrics;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
-use mz_storage_client::types::instances::StorageInstanceContext;
 use mz_storage_client::types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 
 use self::types::{InMemoryHashMap, StatsState, UpsertState};
+use crate::source::types::UpsertMetrics;
+use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
 mod types;
-
-pub use self::rocksdb::UpsertAdditionalContext;
 
 pub type UpsertValue = Result<Row, UpsertError>;
 
@@ -203,7 +201,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     previous: Collection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Rc<dyn Any>>,
     source_config: crate::source::RawSourceCreationConfig,
-    instance_context: &StorageInstanceContext<UpsertAdditionalContext>,
+    instance_context: &StorageInstanceContext,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
 ) -> Collection<G, Result<Row, DataflowError>, Diff>
 where
@@ -232,7 +230,7 @@ where
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
 
-        let env = instance_context.additional.env.clone();
+        let env = instance_context.rocksdb_env.clone();
 
         upsert_inner(
             input,

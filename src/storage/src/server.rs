@@ -20,12 +20,11 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_storage_client::client::StorageClient;
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::instances::StorageInstanceContext;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::storage_state::Worker;
+use crate::storage_state::{StorageInstanceContext, Worker};
 use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
@@ -36,7 +35,7 @@ pub struct Config {
     /// Configuration for source and sink connection.
     pub connection_context: ConnectionContext,
     /// Other configuration for storage instances.
-    pub instance_context: StorageInstanceContext<crate::render::UpsertAdditionalContext>,
+    pub instance_context: StorageInstanceContext,
 
     /// Metrics for sources.
     pub source_metrics: SourceBaseMetrics,
@@ -58,7 +57,7 @@ pub fn serve(
     generic_config: mz_cluster::server::ClusterConfig,
     now: NowFn,
     connection_context: ConnectionContext,
-    instance_context: StorageInstanceContext<crate::render::UpsertAdditionalContext>,
+    instance_context: StorageInstanceContext,
 ) -> Result<
     (
         TimelyContainerRef<StorageCommand, StorageResponse, Thread>,
