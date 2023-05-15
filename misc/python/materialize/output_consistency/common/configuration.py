@@ -14,6 +14,7 @@ class ConsistencyTestConfiguration:
         queries_per_tx: int,
         max_cols_per_query: int,
         random_seed: int,
+        split_and_retry_on_db_error: bool,
         dry_run: bool,
         fail_fast: bool,
         execute_setup: bool,
@@ -22,6 +23,7 @@ class ConsistencyTestConfiguration:
         self.queries_per_tx = queries_per_tx
         self.max_cols_per_query = max_cols_per_query
         self.random_seed = random_seed
+        self.split_and_retry_on_db_error = split_and_retry_on_db_error
         self.dry_run = dry_run
         self.fail_fast = fail_fast
         self.execute_setup = execute_setup
@@ -31,6 +33,7 @@ class ConsistencyTestConfiguration:
 DEFAULT_CONFIG = ConsistencyTestConfiguration(
     queries_per_tx=20,
     random_seed=0,
+    split_and_retry_on_db_error=True,
     max_cols_per_query=8,
     dry_run=False,
     fail_fast=False,

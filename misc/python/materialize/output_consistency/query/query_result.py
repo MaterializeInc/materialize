@@ -17,9 +17,9 @@ from materialize.output_consistency.query.query_template import QueryTemplate
 
 
 class QueryExecution:
-    def __init__(self, query: QueryTemplate, index: int):
+    def __init__(self, query: QueryTemplate, query_id: str):
         self.generic_sql = query.to_sql(DummyEvaluation(), QueryOutputFormat.MULTI_LINE)
-        self.index = index
+        self.query_id = query_id
         self.outcomes: list[QueryOutcome] = []
 
     def __str__(self) -> str:

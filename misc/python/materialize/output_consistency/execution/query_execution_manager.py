@@ -74,23 +74,28 @@ class QueryExecutionManager:
 
         print(f"Processing {len(queries)} queries.")
 
+        # can be larger than the number of queries in case of retries with split queries
+        count_executed = 0
         count_passed = 0
 
         for index, query in enumerate(queries):
             if index % self.config.queries_per_tx == 0:
                 self.begin_tx(commit_previous_tx=index > 0)
 
-            test_passed = self.fire_and_compare_queries(
-                query, index, self.evaluation_strategies
+            test_outcomes = self.fire_and_compare_query(
+                query, index, "", self.evaluation_strategies
             )
 
-            if test_passed:
-                count_passed += 1
+            for test_outcome in test_outcomes:
+                count_executed += 1
+
+                if test_outcome.success():
+                    count_passed += 1
 
         self.commit_tx()
 
         return ConsistencyTestSummary(
-            count_executed_query_templates=len(queries),
+            count_executed_query_templates=count_executed,
             count_successful_query_templates=count_passed,
             dry_run=self.config.dry_run,
         )
@@ -110,43 +115,93 @@ class QueryExecutionManager:
         if start_new_tx:
             self.begin_tx(commit_previous_tx=False)
 
-    def fire_and_compare_queries(
+    # May return multiple outcomes if a query is split and retried. Will always return at least one outcome.
+    def fire_and_compare_query(
         self,
-        query: QueryTemplate,
+        query_template: QueryTemplate,
         query_index: int,
+        query_id_prefix: str,
         evaluation_strategies: list[EvaluationStrategy],
-    ) -> bool:
-        query_execution = QueryExecution(query, query_index)
-
-        query_no = query_execution.index + 1
+    ) -> list[ValidationOutcome]:
+        query_no = query_index + 1
+        query_id = f"{query_id_prefix}{query_no}"
+        query_execution = QueryExecution(query_template, query_id)
 
         for strategy in evaluation_strategies:
-            sql_query_string = query.to_sql(strategy, QueryOutputFormat.SINGLE_LINE)
+            sql_query_string = query_template.to_sql(
+                strategy, QueryOutputFormat.SINGLE_LINE
+            )
 
             try:
                 data = self.executor.query(sql_query_string)
                 result = QueryResult(
-                    strategy, sql_query_string, query.column_count(), data
+                    strategy, sql_query_string, query_template.column_count(), data
                 )
                 query_execution.outcomes.append(result)
             except SqlExecutionError as err:
-                failure = QueryFailure(
-                    strategy, sql_query_string, query.column_count(), str(err)
-                )
-                query_execution.outcomes.append(failure)
                 self.rollback_tx(start_new_tx=True)
 
+                if self.shall_retry_with_smaller_query(query_template):
+                    # abort and retry with smaller query
+                    return self.split_and_retry_queries(
+                        query_template, query_id, evaluation_strategies
+                    )
+
+                failure = QueryFailure(
+                    strategy, sql_query_string, query_template.column_count(), str(err)
+                )
+                query_execution.outcomes.append(failure)
+
         if self.config.dry_run:
-            return True
+            return [ValidationOutcome(query_execution)]
 
         validation_outcome = self.comparator.compare_results(query_execution)
-        self.print_test_result(query_no, query_execution, validation_outcome)
+        self.print_test_result(query_id, query_execution, validation_outcome)
 
-        return validation_outcome.success()
+        return [validation_outcome]
+
+    def shall_retry_with_smaller_query(self, query_template: QueryTemplate) -> bool:
+        return (
+            self.config.split_and_retry_on_db_error
+            and query_template.column_count() > 1
+        )
+
+    def split_and_retry_queries(
+        self,
+        original_query_template: QueryTemplate,
+        query_id: str,
+        evaluation_strategies: list[EvaluationStrategy],
+    ) -> list[ValidationOutcome]:
+        args_count = len(original_query_template.select_expressions)
+
+        if args_count < 2:
+            raise RuntimeError("Cannot split query")
+
+        arg_split_index = int(args_count / 2)
+        query1_args = original_query_template.select_expressions[arg_split_index:]
+        query2_args = original_query_template.select_expressions[:arg_split_index]
+
+        new_query_template1 = QueryTemplate(query1_args)
+        new_query_template2 = QueryTemplate(query2_args)
+        query_id_prefix = f"{query_id}."
+
+        validation_outcomes = []
+        validation_outcomes.extend(
+            self.fire_and_compare_query(
+                new_query_template1, 0, query_id_prefix, evaluation_strategies
+            )
+        )
+        validation_outcomes.extend(
+            self.fire_and_compare_query(
+                new_query_template2, 1, query_id_prefix, evaluation_strategies
+            )
+        )
+
+        return validation_outcomes
 
     def print_test_result(
         self,
-        query_no: int,
+        query_id: str,
         query_execution: QueryExecution,
         validation_outcome: ValidationOutcome,
     ) -> None:
@@ -158,7 +213,7 @@ class QueryExecutionManager:
             return
 
         print(CONTENT_SEPARATOR_1)
-        print(f"{COMMENT_PREFIX} Test query #{query_no}:")
+        print(f"{COMMENT_PREFIX} Test query #{query_id}:")
         print(query_execution.generic_sql)
 
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
@@ -170,7 +225,7 @@ class QueryExecutionManager:
         )
 
         print(
-            f"{COMMENT_PREFIX} Test with query #{query_no} {result_desc}{success_reason}."
+            f"{COMMENT_PREFIX} Test with query #{query_id} {result_desc}{success_reason}."
         )
 
         if validation_outcome.has_errors():

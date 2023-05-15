@@ -20,7 +20,7 @@ from materialize.output_consistency.validation.validation_message import (
 
 class ValidationOutcome:
     def __init__(self, query_execution: QueryExecution) -> None:
-        self.query_execution = query_execution.index
+        self.query_id = query_execution.query_id
         self.success_reason: Optional[str] = None
         self.errors: list[ValidationError] = []
         self.warnings: list[ValidationWarning] = []

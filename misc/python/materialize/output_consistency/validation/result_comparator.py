@@ -178,6 +178,7 @@ class ResultComparator:
         validation_outcome: ValidationOutcome,
     ) -> None:
         if failure.query_column_count > 1:
+            # this should not occur if the config property 'split_and_retry_on_db_error' is enabled
             validation_outcome.add_warning(
                 ValidationWarning(
                     "Query error with multiple columns",
