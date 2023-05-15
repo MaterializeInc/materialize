@@ -71,3 +71,6 @@ class RawValue(Expression):
 
     def to_sql_as_value(self) -> str:
         return f"{self.value}::{self.data_type.type_name}"
+
+    def __str__(self) -> str:
+        return f"{self.column_name} ({self.value})"
