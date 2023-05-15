@@ -97,7 +97,7 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     try bin/lint-cargo
     try bin/gen-completion check
     try bin/gen-lints
-    try git diff --exit-code
+    try git diff --compact-summary --exit-code
 fi
 
 try_finish
