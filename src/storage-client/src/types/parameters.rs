@@ -24,7 +24,7 @@ include!(concat!(
 ///
 /// Parameters can be set (`Some`) or unset (`None`).
 /// Unset parameters should be interpreted to mean "use the previous value".
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct StorageParameters {
     /// Controls whether or not to use the new storage `persist_sink` implementation in storage
     /// ingestions.
@@ -35,7 +35,7 @@ pub struct StorageParameters {
     pub keep_n_source_status_history_entries: usize,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
     /// `None` means the defaults.
-    pub upsert_rocksdb_tuning_config: Option<mz_rocksdb::RocksDBTuningParameters>,
+    pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBTuningParameters,
 }
 
 impl StorageParameters {
@@ -67,14 +67,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
             ),
-            upsert_rocksdb_tuning_config: self.upsert_rocksdb_tuning_config.as_ref().map(|u| {
-                // We use `serde_json` as this struct is directly deserialized, using `serde_json`
-                // from LaunchDarkly.
-                //
-                // Neither error listed here should occur:
-                // https://docs.rs/serde_json/latest/serde_json/fn.to_string.html#errors
-                serde_json::to_string(u).unwrap()
-            }),
+            upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
         }
     }
 
@@ -93,12 +86,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             ),
             upsert_rocksdb_tuning_config: proto
                 .upsert_rocksdb_tuning_config
-                .map(|u| {
-                    // This should always succeed as the string is from the `into_proto`
-                    // definition.
-                    serde_json::from_str(&u)
-                })
-                .transpose()?,
+                .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
         })
     }
 }
