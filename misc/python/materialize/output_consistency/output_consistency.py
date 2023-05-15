@@ -77,10 +77,11 @@ def run_output_consistency_tests(
         evaluation_strategies, config, sql_executor, comparator
     )
     execution_manager.setup_database_objects(DATA_TYPES, evaluation_strategies)
-    test_summary = execution_manager.execute_queries(queries)
 
     if not config.verbose_output:
-        print("Printing only queries with inconsistencies.")
+        print("Printing only queries with inconsistencies or warnings.")
+
+    test_summary = execution_manager.execute_queries(queries)
 
     print(CONTENT_SEPARATOR_1)
     print(f"Test summary: {test_summary}")
@@ -118,8 +119,6 @@ def main() -> int:
     parser.add_argument("--host", default="localhost", type=str)
     parser.add_argument("--port", default=6875, type=int)
     args = parser.parse_args()
-
-    print(f"execute-setup={args.execute_setup}, dry-run={args.dry_run}")
 
     conn = pg8000.connect(host=args.host, port=args.port, user="materialize")
     conn.autocommit = True

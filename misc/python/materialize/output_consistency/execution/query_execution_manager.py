@@ -150,7 +150,11 @@ class QueryExecutionManager:
         query_execution: QueryExecution,
         validation_outcome: ValidationOutcome,
     ) -> None:
-        if validation_outcome.success() and not self.config.verbose_output:
+        if (
+            validation_outcome.success()
+            and not validation_outcome.has_warnings()
+            and not self.config.verbose_output
+        ):
             return
 
         print(CONTENT_SEPARATOR_1)
