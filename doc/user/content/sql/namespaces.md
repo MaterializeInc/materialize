@@ -9,15 +9,61 @@ menu:
     weight: 126
 ---
 
-Materialize mimics SQL standard's namespace hierarchy, which is:
+Materialize follows SQL standard's namespace hierarchy for most objects. The
+Materialize structure is:
 
 - Databases (highest level)
 - Schemas
-- Tables, views, sources
+- Tables
+- Sources
+- Views
+- Materialized views
+- Sinks
+- Indexes
+- Types
+- Functions
+- Secrets
 - Columns (lowest level)
 
 Each layer in the hierarchy can contain elements directly beneath it. For
 example, databases can contain schemas.
+
+## Independent Objects
+
+The Materialzie objects that exist outside of the standard namespace hierarchy
+are:
+
+- Clusters
+- Cluster replicas
+- Roles
+
+These objects are independent of other objects and are not referenced by the
+standard SQL namespace.
+
+For example, to create a materialized view in a specific cluster, your SQL
+statement would be:
+
+```sql
+CREATE MATERIALIZED VIEW mv IN CLUSTER cluster1 AS ... 
+```
+
+Replicas are referenced as `<cluster-name>.<replica-name>`.
+
+For example, to delete replica `r1` in cluster `cluster1`, your SQL statement
+would be:
+
+```sql
+DROP CLUSTER REPLICA cluster1.r1
+```
+
+Roles are referenced by their name. For example, to alter the `manager` role, your SQL statement would be:
+
+```sql
+ALTER ROLE manager ...
+```
+
+No two clusters or roles can have the same name. Replicas can have the same name
+if they are in different clusters.
 
 ## Details
 
