@@ -673,7 +673,6 @@ where
     }
 
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
-    #[inline(never)]
     fn work<L, I>(
         &mut self,
         output: &mut OutputHandle<T, (D, T, Diff), Tee<T, (D, T, Diff)>>,
