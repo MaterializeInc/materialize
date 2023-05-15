@@ -1571,7 +1571,7 @@ impl SystemVars {
             vars: Default::default(),
             active_connection_count,
         };
-        vars.with_var(&CONFIG_HAS_SYNCED_ONCE)
+        let mut vars = vars.with_var(&CONFIG_HAS_SYNCED_ONCE)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
             .with_var(&MAX_SOURCES)
@@ -1621,7 +1621,9 @@ impl SystemVars {
             .with_var(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
-            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES);
+        vars.refresh_state();
+        vars
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1734,10 +1736,7 @@ impl SystemVars {
             .and_then(|v| v.set(input))?;
 
         if name == MAX_CONNECTIONS.name {
-            self.active_connection_count
-                .lock()
-                .expect("lock poisoned")
-                .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
+            self.refresh_state();
         }
         Ok(result)
     }
@@ -1746,10 +1745,15 @@ impl SystemVars {
     /// variable will be be `reset` to. If no default is set, the static default in the
     /// variable definition is used instead.
     pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
-        self.vars
+        let result = self.vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .and_then(|v| v.set_default(input))
+            .and_then(|v| v.set_default(input))?;
+
+        if name == MAX_CONNECTIONS.name {
+            self.refresh_state();
+        }
+        Ok(result)
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -1773,12 +1777,16 @@ impl SystemVars {
             .map(|v| v.reset())?;
 
         if name == MAX_CONNECTIONS.name {
-            self.active_connection_count
-                .lock()
-                .expect("lock poisoned")
-                .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
+            self.refresh_state();
         }
         Ok(result)
+    }
+
+    fn refresh_state(&mut self) {
+        self.active_connection_count
+        .lock()
+        .expect("lock poisoned")
+        .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.

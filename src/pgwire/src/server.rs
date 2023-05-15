@@ -189,10 +189,11 @@ impl Server {
             })()
             .await;
             if incremented_connection_count {
-                active_connection_count2
+                let mut connections = active_connection_count2
                     .lock()
-                    .expect("poisoned lock")
-                    .current -= 1;
+                    .expect("poisoned lock");
+                assert_ne!(0, connections.current);
+                connections.current -= 1;
             }
             let status = match result {
                 Ok(()) => "success",
