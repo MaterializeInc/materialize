@@ -104,9 +104,6 @@ class ResultComparator:
                 cast(QueryFailure, outcome2),
                 validation_outcome,
             )
-            validation_outcome.add_remark(
-                ValidationRemark("DB error", failure1.error_message)
-            )
 
         if not both_successful:
             any_failure = cast(
@@ -114,7 +111,7 @@ class ResultComparator:
             )
             validation_outcome.add_remark(
                 ValidationRemark(
-                    f"DB error ({any_failure.strategy.name})", any_failure.error_message
+                    f"DB error in '{any_failure.strategy.name}' was: {any_failure.error_message}"
                 )
             )
             self.warn_on_failure_with_multiple_columns(any_failure, validation_outcome)
