@@ -198,6 +198,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::Row;
@@ -467,6 +468,7 @@ mod tests {
         Arc::new(PersistClientCache::new(
             PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
         ))
     }
 

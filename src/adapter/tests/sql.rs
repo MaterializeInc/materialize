@@ -104,7 +104,7 @@ use mz_sql::DEFAULT_SCHEMA;
 
 #[tokio::test]
 async fn datadriven() {
-    datadriven::walk_async("tests/testdata", |mut f| async {
+    datadriven::walk_async("tests/testdata/sql", |mut f| async {
         // The datadriven API takes an `FnMut` closure, and can't express to Rust that
         // it will finish polling each returned future before calling the closure
         // again, so we have to wrap the catalog in a share-able type. Datadriven

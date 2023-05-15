@@ -116,7 +116,12 @@ impl MonotonicFlag {
                     }
                     result
                 }
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    max_iters: _,
+                    body,
+                } => {
                     for id in ids.iter() {
                         if locals.contains(id) {
                             panic!("Shadowing of identifier: {:?}", id);
@@ -132,6 +137,8 @@ impl MonotonicFlag {
                     // assume all bindings were monotonic, and iteratively remove
                     // any that are determined to be non-monotonic; only once this
                     // concludes can we apply any transformations, however.
+                    // Don't forget to handle `max_iters` when changing to the
+                    // optimistic approach!
                     let mut added = true;
                     while added {
                         added = false;

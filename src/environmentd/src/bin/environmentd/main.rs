@@ -97,9 +97,14 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
+use mz_ore::task::RuntimeExt;
+use mz_persist_client::rpc::{
+    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
+};
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
+use tracing::{error, info, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use url::Url;
@@ -213,6 +218,18 @@ pub struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
+    /// The address on which to listen for Persist PubSub connections.
+    ///
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose the listen address
+    /// to the public internet or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR",
+        default_value = "127.0.0.1:6879"
+    )]
+    internal_persist_pubsub_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -403,6 +420,15 @@ pub struct Args {
     /// The PostgreSQL URL for the storage stash.
     #[clap(long, env = "STORAGE_STASH_URL", value_name = "POSTGRES_URL")]
     storage_stash_url: String,
+    /// The Persist PubSub URL.
+    ///
+    /// This URL is passed to `clusterd` for discovery of the Persist PubSub service.
+    #[clap(
+        long,
+        env = "PERSIST_PUBSUB_URL",
+        default_value = "http://localhost:6879"
+    )]
+    persist_pubsub_url: String,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -446,15 +472,15 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_cluster_replica_size: String,
-    /// An list of NAME=VALUE pairs for bootstrapping system parameters that are
-    /// not already modified.
+    /// An list of NAME=VALUE pairs used to override static defaults
+    /// for system parameters.
     #[clap(
         long,
-        env = "BOOTSTRAP_SYSTEM_PARAMETER",
+        env = "SYSTEM_PARAMETER_DEFAULT",
         multiple = true,
         value_delimiter = ';'
     )]
-    bootstrap_system_parameter: Vec<KeyValueArg<String, String>>,
+    system_parameter_default: Vec<KeyValueArg<String, String>>,
     /// Default storage host size
     #[clap(long, env = "DEFAULT_STORAGE_HOST_SIZE")]
     default_storage_host_size: Option<String>,
@@ -734,13 +760,42 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
-    let persist_clients = PersistClientCache::new(
-        PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
-        &metrics_registry,
+
+    let persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
+    let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
+    let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+
+    let _server = runtime.spawn_named(
+        || "persist::rpc::server",
+        async move {
+            info!(
+                "listening for Persist PubSub connections on {}",
+                args.internal_persist_pubsub_listen_addr
+            );
+            // Intentionally do not bubble up errors here, we don't want to take
+            // down environmentd if there are any issues with the pubsub server.
+            let res = persist_pubsub_server
+                .serve(args.internal_persist_pubsub_listen_addr)
+                .await;
+            error!("Persist Pubsub server exited {:?}", res);
+        }
+        .instrument(tracing::info_span!("persist::rpc::server")),
     );
+
+    let persist_clients = {
+        // PersistClientCache may spawn tasks, so run within a tokio runtime context
+        let _tokio_guard = runtime.enter();
+        PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
+            let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                persist_pubsub_client.sender,
+                metrics,
+            ));
+            PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
+        })
+    };
+
     let persist_clients = Arc::new(persist_clients);
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
-
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
@@ -756,6 +811,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
         scratch_directory: args.orchestrator_process_scratch_directory,
+        persist_pubsub_url: args.persist_pubsub_url,
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
@@ -796,8 +852,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         default_storage_cluster_size: args.default_storage_host_size,
         bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
-        bootstrap_system_parameters: args
-            .bootstrap_system_parameter
+        system_parameter_defaults: args
+            .system_parameter_default
             .into_iter()
             .map(|kv| (kv.key, kv.value))
             .collect(),
@@ -848,6 +904,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     println!(
         " Internal HTTP address: {}",
         server.internal_http_local_addr()
+    );
+    println!(
+        " Internal Persist PubSub address: {}",
+        args.internal_persist_pubsub_listen_addr
     );
 
     println!(" Root trace ID: {id}");

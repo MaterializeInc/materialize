@@ -63,6 +63,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
@@ -100,7 +101,8 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
         | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_) => return TargetCluster::Active,
+        | Plan::RevokePrivilege(_)
+        | Plan::ReassignOwned(_) => return TargetCluster::Active,
     };
 
     // Bail if the user has disabled it via the SessionVar.
@@ -263,6 +265,7 @@ pub fn user_privilege_hack(
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterIndexSetOptions(_)
@@ -283,7 +286,8 @@ pub fn user_privilege_hack(
         | Plan::RevokeRole(_)
         | Plan::GrantPrivilege(_)
         | Plan::RevokePrivilege(_)
-        | Plan::CopyRows(_) => {
+        | Plan::CopyRows(_)
+        | Plan::ReassignOwned(_) => {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::MzIntrospection {
                     action: plan.name().to_string(),

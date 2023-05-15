@@ -44,7 +44,7 @@ use mz_controller::clusters::ClusterId;
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::adt::mz_acl_item::AclMode;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
@@ -103,6 +103,7 @@ pub enum Plan {
     DiscardTemp,
     DiscardAll,
     DropObjects(DropObjectsPlan),
+    DropOwned(DropOwnedPlan),
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
@@ -143,6 +144,7 @@ pub enum Plan {
     RevokeRole(RevokeRolePlan),
     GrantPrivilege(GrantPrivilegePlan),
     RevokePrivilege(RevokePrivilegePlan),
+    ReassignOwned(ReassignOwnedPlan),
 }
 
 impl Plan {
@@ -195,6 +197,7 @@ impl Plan {
             StatementKind::Delete => vec![PlanKind::ReadThenWrite],
             StatementKind::Discard => vec![PlanKind::DiscardAll, PlanKind::DiscardTemp],
             StatementKind::DropObjects => vec![PlanKind::DropObjects],
+            StatementKind::DropOwned => vec![PlanKind::DropOwned],
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::Explain => vec![PlanKind::Explain],
             StatementKind::Fetch => vec![PlanKind::Fetch],
@@ -203,6 +206,7 @@ impl Plan {
             StatementKind::Insert => vec![PlanKind::Insert],
             StatementKind::Prepare => vec![PlanKind::Prepare],
             StatementKind::Raise => vec![PlanKind::Raise],
+            StatementKind::ReassignOwned => vec![PlanKind::ReassignOwned],
             StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
             StatementKind::RevokePrivilege => vec![PlanKind::RevokePrivilege],
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
@@ -259,6 +263,7 @@ impl Plan {
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
             },
+            Plan::DropOwned(_) => "drop owned",
             Plan::EmptyQuery => "do nothing",
             Plan::ShowAllVariables => "show all variables",
             Plan::ShowCreate(_) => "show create",
@@ -335,6 +340,7 @@ impl Plan {
             Plan::RevokeRole(_) => "revoke role",
             Plan::GrantPrivilege(_) => "grant privilege",
             Plan::RevokePrivilege(_) => "revoke privilege",
+            Plan::ReassignOwned(_) => "reassign owned",
         }
     }
 }
@@ -579,6 +585,16 @@ pub struct DropObjectsPlan {
     /// The type of object that was dropped explicitly in the DROP statement. `ids` may contain
     /// objects of different types due to CASCADE.
     pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct DropOwnedPlan {
+    /// The role IDs that own the objects.
+    pub role_ids: Vec<RoleId>,
+    /// All object IDs to drop.
+    pub drop_ids: Vec<ObjectId>,
+    /// The privileges to revoke.
+    pub revokes: Vec<(ObjectId, MzAclItem)>,
 }
 
 #[derive(Debug)]
@@ -885,6 +901,16 @@ pub struct RevokePrivilegePlan {
     pub grantor: RoleId,
 }
 
+#[derive(Debug)]
+pub struct ReassignOwnedPlan {
+    /// The roles whose owned objects are being reassigned.
+    pub old_roles: Vec<RoleId>,
+    /// The new owner of the objects.
+    pub new_role: RoleId,
+    /// All object IDs to reassign.
+    pub reassign_ids: Vec<ObjectId>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
@@ -970,7 +996,7 @@ pub struct Type {
 }
 
 /// Specifies when a `Peek` or `Subscribe` should occur.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
@@ -1022,8 +1048,8 @@ impl QueryWhen {
     /// Returns whether the candidate can be advanced to the timeline's timestamp.
     pub fn can_advance_to_timeline_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
-            QueryWhen::AtTimestamp(_) => false,
+            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the timeline's timestamp.

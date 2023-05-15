@@ -102,3 +102,4 @@ DROP TABLE IF EXISTS t;
 
 - [`CREATE TABLE`](../create-table)
 - [`INSERT`](../insert)
+- [DROP OWNED](../drop-owned)

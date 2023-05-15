@@ -74,6 +74,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [dev-dependencies]
 criterion = { version = "0.4.0", features = ["async_tokio"] }
 datadriven = "0.6.0"
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 
 [[bench]]
 name = "catalog"

@@ -33,6 +33,7 @@ use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHand
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::read::{Listen, ListenEvent};
+use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, ShardId};
 
@@ -672,7 +673,12 @@ impl Service for TransactorService {
 
         // Wire up the TransactorService.
         let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-        let shared_states = Arc::new(StateCache::new(Arc::clone(&metrics)));
+        let pubsub_sender = PubSubClientConnection::noop().sender;
+        let shared_states = Arc::new(StateCache::new(
+            &config,
+            Arc::clone(&metrics),
+            Arc::clone(&pubsub_sender),
+        ));
         let client = PersistClient::new(
             config,
             blob,
@@ -680,6 +686,7 @@ impl Service for TransactorService {
             metrics,
             cpu_heavy_runtime,
             shared_states,
+            pubsub_sender,
         )?;
         let transactor = Transactor::new(&client, handle.node_id(), shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));

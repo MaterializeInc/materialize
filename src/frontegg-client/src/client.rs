@@ -33,6 +33,7 @@ use crate::config::{ClientBuilder, ClientConfig};
 use crate::error::{ApiError, Error};
 
 pub mod app_password;
+pub mod role;
 pub mod user;
 
 const AUTH_PATH: [&str; 5] = ["identity", "resources", "auth", "v1", "api-token"];
@@ -183,6 +184,7 @@ impl Client {
             None => {
                 // No auth available in the client, request a new one.
                 req = self.build_request(Method::POST, AUTH_PATH);
+
                 let authentication_request = AuthenticationRequest {
                     client_id: &self.app_password.client_id.to_string(),
                     secret: &self.app_password.secret_key.to_string(),
@@ -193,6 +195,7 @@ impl Client {
 
         // Do the request.
         let res: AuthenticationResponse = self.send_unauthenticated_request(req).await?;
+
         *auth = Some(Auth {
             token: res.access_token.clone(),
             // Refresh twice as frequently as we need to, to be safe.

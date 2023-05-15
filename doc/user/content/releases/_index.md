@@ -5,7 +5,7 @@ disable_list: true
 menu:
   main:
     parent: 'about'
-    weight: 10
+    weight: 5
 ---
 
 We are continually improving Materialize with new features and bug fixes. We

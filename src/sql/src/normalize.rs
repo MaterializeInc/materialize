@@ -25,8 +25,8 @@ use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, CteBlock, Function,
-    FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction,
-    UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
+    TableFunction, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -214,7 +214,7 @@ pub fn create_statement(
                         self.ctes.push(cte.alias.name.clone());
                     }
                 }
-                CteBlock::MutuallyRecursive(ctes) => {
+                CteBlock::MutuallyRecursive(MutRecBlock { options: _, ctes }) => {
                     for cte in ctes.iter() {
                         self.ctes.push(cte.name.clone());
                     }

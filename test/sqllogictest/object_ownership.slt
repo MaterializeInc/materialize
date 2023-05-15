@@ -2056,7 +2056,459 @@ DROP TABLE t
 ----
 COMPLETE 0
 
+# Test DROP OWNED
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON DATABASE materialize TO PUBLIC;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO PUBLIC;
+----
+COMPLETE 0
+
+statement ok
+CREATE DATABASE db
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+db
+
+statement ok
+CREATE SCHEMA s
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+s
+
+statement ok
+CREATE TABLE t ();
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+t
+
+statement ok
+CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+c
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+replica1
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW v AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON v TO materialize;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  mz_system=r/mz_system
+v  materialize=r/mz_system
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+COMPLETE 0
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  mz_system=r/mz_system
+
+simple conn=mz_system,user=mz_system
+DROP VIEW v;
+----
+COMPLETE 0
+
+## Test invalid revokes
+
+statement ok
+CREATE DATABASE db
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+db
+
+statement ok
+CREATE SCHEMA s
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+s
+
+statement ok
+CREATE TABLE t ();
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+t
+
+statement ok
+CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+c
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+replica1
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW v AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON v TO materialize;
+----
+COMPLETE 0
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  mz_system=r/mz_system
+v  materialize=r/mz_system
+
+simple conn=materialize,user=materialize
+DROP OWNED BY materialize;
+----
+COMPLETE 0
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+
+query TT
+SELECT name, unnest(privileges)::text FROM mz_views WHERE name = 'v'
+----
+v  mz_system=r/mz_system
+v  materialize=r/mz_system
+
+simple conn=mz_system,user=mz_system
+DROP VIEW v;
+----
+COMPLETE 0
+
+## Test CASCADE
+
+statement ok
+CREATE DATABASE db
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+db
+
+statement ok
+CREATE SCHEMA s
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+s
+
+statement ok
+CREATE TABLE t ();
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+t
+
+statement ok
+CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+c
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+replica1
+
+simple conn=mz_system,user=mz_system
+CREATE SCHEMA db.s;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: database "db" cannot be dropped without CASCADE while it contains non-owned schemas
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW s.v AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: schema "materialize.s" cannot be dropped without CASCADE while it contains non-owned objects
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW v AS SELECT * FROM t;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: cannot drop "materialize.public.t" without CASCADE: still depended upon by non-owned catalog items "materialize.public.v"
+
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: cannot drop cluster "c" without CASCADE while it contains active objects
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize CASCADE;
+----
+COMPLETE 0
+
+query T
+SELECT name FROM mz_databases WHERE name = 'db'
+----
+
+query T
+SELECT name FROM mz_schemas WHERE name = 's'
+----
+
+query T
+SELECT name FROM mz_tables WHERE name = 't'
+----
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'c'
+----
+
+query T
+SELECT name FROM mz_cluster_replicas WHERE name = 'replica1'
+----
+
+## Test dropping system objects
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY mz_system CASCADE;
+----
+db error: ERROR: cannot drop objects owned by role "mz_system" because they are required by the database system
+
+## Test dropping PUBLIC objects
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY PUBLIC;
+----
+db error: ERROR: role name "public" is reserved
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+
+# Test REASSIGN OWNED
+
+statement ok
+CREATE DATABASE db
+
+query T
+SELECT mz_roles.name
+  FROM mz_databases
+  LEFT JOIN mz_roles ON mz_databases.owner_id = mz_roles.id
+  WHERE mz_databases.name = 'db'
+----
+materialize
+
+statement ok
+CREATE SCHEMA s
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 's'
+----
+materialize
+
+statement ok
+CREATE TABLE t ();
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 't'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE TABLE t1 ();
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 't1'
+----
+joe
+
+statement ok
+CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+
+query T
+SELECT mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'replica1'
+----
+materialize
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY materialize, joe TO group1;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_databases
+  LEFT JOIN mz_roles ON mz_databases.owner_id = mz_roles.id
+  WHERE mz_databases.name = 'db'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 's'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 't'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 't1'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'replica1'
+----
+group1
+
+## Test reassigning system objects
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY mz_system TO materialize;
+----
+db error: ERROR: cannot reassign objects owned by role "mz_system" because they are required by the database system
+
+## Test reassigning PUBLIC objects
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY PUBLIC TO materialize;
+----
+db error: ERROR: role name "public" is reserved
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY materialize TO PUBLIC;
+----
+db error: ERROR: role name "public" is reserved
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+
 # Disable rbac checks.
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----

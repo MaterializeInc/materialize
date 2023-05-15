@@ -89,9 +89,11 @@ use postgres::types::{FromSql, Type};
 use postgres::{NoTls, Socket};
 use regex::Regex;
 use tempfile::TempDir;
+use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
+use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 
 use mz_controller::ControllerConfig;
@@ -108,6 +110,7 @@ use mz_ore::tracing::{
 };
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
@@ -296,7 +299,32 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // Tune down the number of connections to make this all work a little easier
     // with local postgres.
     persist_cfg.consensus_connection_pool_max_size = 1;
-    let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
+
+    let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_cfg, &metrics_registry);
+    let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+    let persist_pubsub_tcp_listener = runtime
+        .block_on(TcpListener::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        )))
+        .expect("pubsub addr binding");
+    let persist_pubsub_server_port = persist_pubsub_tcp_listener
+        .local_addr()
+        .expect("pubsub addr has local addr")
+        .port();
+    let _persist_pubsub_server = {
+        let _tokio_guard = runtime.enter();
+        mz_ore::task::spawn(|| "persist_pubsub_server", async move {
+            persist_pubsub_server
+                .serve_with_stream(TcpListenerStream::new(persist_pubsub_tcp_listener))
+                .await
+                .expect("success")
+        });
+    };
+    let persist_clients = {
+        let _tokio_guard = runtime.enter();
+        PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client)
+    };
     let persist_clients = Arc::new(persist_clients);
     let postgres_factory = StashFactory::new(&metrics_registry);
     let secrets_controller = Arc::clone(&orchestrator);
@@ -346,6 +374,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             postgres_factory,
             metrics_registry: metrics_registry.clone(),
             scratch_directory: None,
+            persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
         },
         secrets_controller,
         cloud_resource_controller: None,
@@ -364,7 +393,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         default_storage_cluster_size: None,
         bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
         bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
-        bootstrap_system_parameters: Default::default(),
+        system_parameter_defaults: Default::default(),
         availability_zones: Default::default(),
         connection_context,
         tracing_handle,

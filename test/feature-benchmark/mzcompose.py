@@ -22,6 +22,7 @@ from scenarios import *  # noqa: F401 F403
 from scenarios import Scenario
 from scenarios_concurrency import *  # noqa: F401 F403
 from scenarios_optbench import *  # noqa: F401 F403
+from scenarios_scale import *  # noqa: F401 F403
 from scenarios_subscribe import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
@@ -81,7 +82,7 @@ def make_comparator(name: str) -> Comparator:
     return RelativeThresholdComparator(name, threshold=0.10)
 
 
-default_timeout = "30m"
+default_timeout = "1800s"
 
 SERVICES = [
     Zookeeper(),
@@ -91,6 +92,7 @@ SERVICES = [
     Materialized(),
     Testdrive(
         default_timeout=default_timeout,
+        materialize_params={"statement_timeout": f"'{default_timeout}'"},
     ),
     KgenService(),
     Postgres(),

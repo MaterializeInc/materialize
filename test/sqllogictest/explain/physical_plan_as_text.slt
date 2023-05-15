@@ -855,3 +855,51 @@ Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
 
 EOF
+
+# Test `LetRec` printing, with and without ITERATION LIMIT
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT * FROM (
+    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 5)
+        foo (a int8) AS (SELECT DISTINCT a FROM foo)
+    SELECT * FROM foo
+)
+UNION ALL
+SELECT * FROM (
+    WITH MUTUALLY RECURSIVE
+        bar (a int8) AS (SELECT DISTINCT a - 2 FROM bar)
+    SELECT * FROM bar
+);
+----
+Explained Query:
+  Return
+    Union
+      Get::PassArrangements l0
+        raw=true
+      Get::PassArrangements l1
+        raw=true
+  With Mutually Recursive
+    cte l1 =
+      ArrangeBy
+        input_key=[#0]
+        raw=true
+        Reduce::Distinct
+          val_plan
+            project=()
+          key_plan
+            project=(#1)
+            map=((#0 - 2))
+          Get::PassArrangements l1
+            raw=true
+    cte [iteration_limit=5] l0 =
+      ArrangeBy
+        input_key=[#0]
+        raw=true
+        Reduce::Distinct
+          val_plan
+            project=()
+          key_plan=id
+          Get::PassArrangements l0
+            raw=true
+
+EOF

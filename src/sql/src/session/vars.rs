@@ -229,6 +229,8 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
 const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
+// Schema can be used an alias for a search path with a single element.
+pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
 static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
@@ -660,6 +662,24 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
     value: &PersistConfig::DEFAULT_STATS_FILTER_ENABLED,
     description: "Whether to use recorded statistics about the data stored in persist \
                   to filter at read time, see persist_stats_collection_enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
+const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_pubsub_client_enabled"),
+    value: &PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED,
+    description: "Whether to connect to the Persist PubSub service.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_push_diff_enabled`].
+const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_pubsub_push_diff_enabled"),
+    value: &PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
+    description: "Whether to push state diffs to Persist PubSub.",
     internal: true,
     safe: true,
 };
@@ -1556,6 +1576,8 @@ impl Default for SystemVars {
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
+            .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
+            .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&METRICS_RETENTION)
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
@@ -1606,6 +1628,14 @@ impl SystemVars {
         var.value_any()
             .downcast_ref()
             .expect("provided var type should matched stored var")
+    }
+
+    /// Reset all the values to their defaults (preserving
+    /// defaults from `VarMut::set_default).
+    pub fn reset_all(&mut self) {
+        for (_, var) in &mut self.vars {
+            var.reset();
+        }
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1683,6 +1713,16 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))
+    }
+
+    /// Set the default for this variable. This is the value this
+    /// variable will be be `reset` to. If no default is set, the static default in the
+    /// variable definition is used instead.
+    pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
+        self.vars
+            .get_mut(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.into()))
+            .and_then(|v| v.set_default(input))
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -1888,6 +1928,16 @@ impl SystemVars {
         *self.expect_value(&PERSIST_STATS_FILTER_ENABLED)
     }
 
+    /// Returns the `persist_pubsub_client_enabled` configuration parameter.
+    pub fn persist_pubsub_client_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_PUBSUB_CLIENT_ENABLED)
+    }
+
+    /// Returns the `persist_pubsub_push_diff_enabled` configuration parameter.
+    pub fn persist_pubsub_push_diff_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
+    }
+
     /// Returns the `metrics_retention` configuration parameter.
     pub fn metrics_retention(&self) -> Duration {
         *self.expect_value(&METRICS_RETENTION)
@@ -2026,6 +2076,10 @@ pub trait VarMut: Var + Send + Sync {
 
     /// Reset the stored value to the default.
     fn reset(&mut self) -> bool;
+
+    /// Set the default for this variable. This is the value this
+    /// variable will be be `reset` to.
+    fn set_default(&mut self, input: VarInput) -> Result<(), VarError>;
 }
 
 /// A `ServerVar` is the default value for a configuration parameter.
@@ -2079,6 +2133,7 @@ where
     V::Owned: fmt::Debug,
 {
     persisted_value: Option<V::Owned>,
+    dynamic_default: Option<V::Owned>,
     parent: &'static ServerVar<V>,
 }
 
@@ -2091,6 +2146,7 @@ where
     fn clone(&self) -> Self {
         SystemVar {
             persisted_value: self.persisted_value.clone(),
+            dynamic_default: self.dynamic_default.clone(),
             parent: self.parent,
         }
     }
@@ -2104,6 +2160,7 @@ where
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
             persisted_value: None,
+            dynamic_default: None,
             parent,
         }
     }
@@ -2116,7 +2173,12 @@ where
         self.persisted_value
             .as_ref()
             .map(|v| v.borrow())
-            .unwrap_or(self.parent.value)
+            .unwrap_or_else(|| {
+                self.dynamic_default
+                    .as_ref()
+                    .map(|v| v.borrow())
+                    .unwrap_or(self.parent.value)
+            })
     }
 }
 
@@ -2195,6 +2257,16 @@ where
             true
         } else {
             false
+        }
+    }
+
+    fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
+        match V::parse(input) {
+            Ok(v) => {
+                self.dynamic_default = Some(v);
+                Ok(())
+            }
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
         }
     }
 }
@@ -2960,4 +3032,6 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
+        || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
+        || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
 }

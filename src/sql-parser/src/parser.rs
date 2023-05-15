@@ -308,6 +308,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(RAISE) => Ok(self.parse_raise()?),
                 Token::Keyword(GRANT) => Ok(self.parse_grant()?),
                 Token::Keyword(REVOKE) => Ok(self.parse_revoke()?),
+                Token::Keyword(REASSIGN) => Ok(self.parse_reassign_owned()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -3246,6 +3247,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
+        if self.parse_keyword(OWNED) {
+            return self.parse_drop_owned();
+        }
+
         let object_type = self.expect_object_type()?;
         let if_exists = self.parse_if_exists()?;
         match object_type {
@@ -3349,6 +3354,19 @@ impl<'a> Parser<'a> {
             if_exists,
             names,
             cascade: false,
+        }))
+    }
+
+    fn parse_drop_owned(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(BY)?;
+        let role_names = self.parse_comma_separated(Parser::parse_identifier)?;
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
+        Ok(Statement::DropOwned(DropOwnedStatement {
+            role_names,
+            cascade,
         }))
     }
 
@@ -4620,7 +4638,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a query expression, i.e. a `SELECT` statement optionally
-    /// preceeded with some `WITH` CTE declarations and optionally followed
+    /// preceded with some `WITH` CTE declarations and optionally followed
     /// by `ORDER BY`. Unlike some other parse_... methods, this one doesn't
     /// expect the initial keyword to be already consumed
     fn parse_query(&mut self) -> Result<Query<Raw>, ParserError> {
@@ -4628,9 +4646,18 @@ impl<'a> Parser<'a> {
             let cte_block = if parser.parse_keyword(WITH) {
                 if parser.parse_keyword(MUTUALLY) {
                     parser.expect_keyword(RECURSIVE)?;
-                    CteBlock::MutuallyRecursive(
-                        parser.parse_comma_separated(Parser::parse_cte_mut_rec)?,
-                    )
+                    let options = if parser.consume_token(&Token::LParen) {
+                        let options =
+                            parser.parse_comma_separated(Self::parse_mut_rec_block_option)?;
+                        parser.expect_token(&Token::RParen)?;
+                        options
+                    } else {
+                        vec![]
+                    };
+                    CteBlock::MutuallyRecursive(MutRecBlock {
+                        options,
+                        ctes: parser.parse_comma_separated(Parser::parse_cte_mut_rec)?,
+                    })
                 } else {
                     // TODO: optional RECURSIVE
                     CteBlock::Simple(parser.parse_comma_separated(Parser::parse_cte)?)
@@ -4642,6 +4669,15 @@ impl<'a> Parser<'a> {
             let body = parser.parse_query_body(SetPrecedence::Zero)?;
 
             parser.parse_query_tail(cte_block, body)
+        })
+    }
+
+    fn parse_mut_rec_block_option(&mut self) -> Result<MutRecBlockOption<Raw>, ParserError> {
+        self.expect_keywords(&[ITERATION, LIMIT])?;
+        let name = MutRecBlockOptionName::IterLimit;
+        Ok(MutRecBlockOption {
+            name,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -4988,14 +5024,18 @@ impl<'a> Parser<'a> {
                     variable = Ident::new("client_encoding");
                     normal = true;
                 }
-                Ok(SCHEMA) => {
-                    variable = Ident::new("search_path");
-                    normal = true;
-                }
                 _ => {}
             }
         }
-        if normal {
+        if variable.as_str().parse() == Ok(SCHEMA) {
+            variable = Ident::new("search_path");
+            let to = self.parse_set_variable_value()?;
+            Ok(Statement::SetVariable(SetVariableStatement {
+                local: modifier == Some(LOCAL),
+                variable,
+                to: SetVariableTo::Values(vec![to]),
+            }))
+        } else if normal {
             let to = self.parse_set_variable_to()?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
@@ -6246,6 +6286,19 @@ impl<'a> Parser<'a> {
     fn expect_role_specification(&mut self) -> Result<Ident, ParserError> {
         let _ = self.parse_keyword(GROUP);
         self.parse_identifier()
+    }
+
+    /// Parse a `REASSIGN OWNED` statement, assuming that the `REASSIGN` token
+    /// has already been consumed.
+    fn parse_reassign_owned(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[OWNED, BY])?;
+        let old_roles = self.parse_comma_separated(Parser::parse_identifier)?;
+        self.expect_keyword(TO)?;
+        let new_role = self.parse_identifier()?;
+        Ok(Statement::ReassignOwned(ReassignOwnedStatement {
+            old_roles,
+            new_role,
+        }))
     }
 }
 

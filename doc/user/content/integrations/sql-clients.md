@@ -8,7 +8,7 @@ aliases:
 menu:
   main:
     parent: "integrations"
-    weight: 5
+    weight: 10
     name: "SQL clients"
 ---
 

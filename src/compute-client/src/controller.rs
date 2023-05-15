@@ -77,7 +77,7 @@ pub mod error;
 pub type ComputeInstanceId = StorageInstanceId;
 
 /// Identifier of a replica.
-pub type ReplicaId = u64;
+pub type ReplicaId = mz_cluster_client::ReplicaId;
 
 /// Identifier of a replica.
 // TODO(#18377): Replace `ReplicaId` with this type.

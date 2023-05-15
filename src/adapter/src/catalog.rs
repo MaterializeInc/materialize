@@ -44,21 +44,22 @@ use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{to_datetime, EpochMillis, NowFn};
+use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::soft_assert;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId, IdReference,
-    NameReference, PrivilegeMap, RoleAttributes, SessionCatalog, TypeReference,
+    CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
+    CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference, RoleAttributes,
+    SessionCatalog, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -189,6 +190,41 @@ pub struct CatalogState {
 }
 
 impl CatalogState {
+    pub fn empty() -> Self {
+        CatalogState {
+            database_by_name: Default::default(),
+            database_by_id: Default::default(),
+            entry_by_id: Default::default(),
+            ambient_schemas_by_name: Default::default(),
+            ambient_schemas_by_id: Default::default(),
+            temporary_schemas: Default::default(),
+            clusters_by_id: Default::default(),
+            clusters_by_name: Default::default(),
+            clusters_by_linked_object_id: Default::default(),
+            roles_by_name: Default::default(),
+            roles_by_id: Default::default(),
+            config: CatalogConfig {
+                start_time: Default::default(),
+                start_instant: Instant::now(),
+                nonce: Default::default(),
+                environment_id: EnvironmentId::for_tests(),
+                session_id: Default::default(),
+                unsafe_mode: Default::default(),
+                build_info: &DUMMY_BUILD_INFO,
+                timestamp_interval: Default::default(),
+                now: NOW_ZERO.clone(),
+            },
+            oid_counter: Default::default(),
+            cluster_replica_sizes: Default::default(),
+            default_storage_cluster_size: Default::default(),
+            availability_zones: Default::default(),
+            system_configuration: Default::default(),
+            egress_ips: Default::default(),
+            aws_principal_context: Default::default(),
+            aws_privatelink_availability_zones: Default::default(),
+        }
+    }
+
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         let oid = self.oid_counter;
         if oid == u32::max_value() {
@@ -308,7 +344,7 @@ impl CatalogState {
             for item_id in cluster.bound_objects() {
                 dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
             }
-            for replica_id in cluster.replicas().values() {
+            for replica_id in cluster.replica_ids().values() {
                 dependents.extend_from_slice(&self.cluster_replica_dependents(
                     cluster_id,
                     *replica_id,
@@ -358,7 +394,7 @@ impl CatalogState {
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
             let database = self.get_database(&database_id);
-            for schema_id in database.schemas().values() {
+            for schema_id in database.schema_ids().values() {
                 dependents.extend_from_slice(&self.schema_dependents(
                     ResolvedDatabaseSpecifier::Id(database_id),
                     SchemaSpecifier::Id(*schema_id),
@@ -389,7 +425,7 @@ impl CatalogState {
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
             let schema = self.get_schema(&database_spec, &schema_spec, conn_id);
-            for item_id in schema.items().values() {
+            for item_id in schema.item_ids().values() {
                 dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
             }
             dependents.push(object_id)
@@ -498,6 +534,19 @@ impl CatalogState {
             database,
             schema,
             item: name.item.clone(),
+        }
+    }
+
+    fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
+        let database = match &name.database {
+            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+            ResolvedDatabaseSpecifier::Id(id) => {
+                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
+            }
+        };
+        FullSchemaName {
+            database,
+            schema: name.schema.clone(),
         }
     }
 
@@ -662,7 +711,8 @@ impl CatalogState {
         let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer = Optimizer::logical_optimizer();
+                let optimizer =
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let optimized_expr = optimizer.optimize(view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -885,7 +935,7 @@ impl CatalogState {
                     custom_logical_compaction_window: None,
                 }),
                 MZ_SYSTEM_ROLE_ID,
-                PrivilegeMap::new(),
+                PrivilegeMap::default(),
             );
             log_indexes.insert(log.variant.clone(), index_id);
         }
@@ -1020,6 +1070,15 @@ impl CatalogState {
         Ok(self.system_configuration.get(name)?)
     }
 
+    /// Set the default value for `name`, which is the value it will be reset to.
+    fn set_system_configuration_default(
+        &mut self,
+        name: &str,
+        value: VarInput,
+    ) -> Result<(), AdapterError> {
+        Ok(self.system_configuration.set_default(name, value)?)
+    }
+
     /// Insert system configuration `name` with `value`.
     ///
     /// Return a `bool` value indicating whether the configuration was modified
@@ -1042,7 +1101,7 @@ impl CatalogState {
 
     /// Remove all system configurations.
     fn clear_system_configuration(&mut self) {
-        self.system_configuration = SystemVars::default();
+        self.system_configuration.reset_all();
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -1241,6 +1300,27 @@ impl CatalogState {
         }
 
         Err(SqlCatalogError::UnknownSchema(schema_name.into()))
+    }
+
+    pub fn resolve_search_path(
+        &self,
+        session: &Session,
+    ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        let database = self
+            .database_by_name
+            .get(session.vars().database())
+            .map(|id| id.clone());
+
+        session
+            .vars()
+            .search_path()
+            .iter()
+            .map(|schema| {
+                self.resolve_schema(database.as_ref(), None, schema.as_str(), session.conn_id())
+            })
+            .filter_map(|schema| schema.ok())
+            .map(|schema| (schema.name().database.clone(), schema.id().clone()))
+            .collect()
     }
 
     pub fn resolve_cluster(&self, name: &str) -> Result<&Cluster, SqlCatalogError> {
@@ -1566,6 +1646,7 @@ impl Database {
             .collect();
         let privileges_by_str: BTreeMap<String, _> = self
             .privileges
+            .0
             .iter()
             .map(|(key, value)| (key.to_string(), value))
             .collect();
@@ -1599,6 +1680,7 @@ impl Schema {
     fn debug_json(&self) -> serde_json::Value {
         let privileges_by_str: BTreeMap<String, _> = self
             .privileges
+            .0
             .iter()
             .map(|(key, value)| (key.to_string(), value))
             .collect();
@@ -2570,7 +2652,9 @@ impl CatalogItemRebuilder {
         id: GlobalId,
         ancestor_ids: &BTreeMap<GlobalId, GlobalId>,
     ) -> Self {
-        if id.is_system() && (entry.is_table() || entry.is_introspection_source()) {
+        if id.is_system()
+            && (entry.is_table() || entry.is_introspection_source() || entry.is_source())
+        {
             Self::SystemSource(entry.item().clone())
         } else {
             let create_sql = entry.create_sql().to_string();
@@ -2805,7 +2889,7 @@ impl Catalog {
 
         catalog
             .load_system_configuration(
-                config.bootstrap_system_parameters,
+                config.system_parameter_defaults,
                 config.system_parameter_frontend,
             )
             .await?;
@@ -2966,7 +3050,7 @@ impl Catalog {
                             name.clone(),
                             CatalogItem::Func(Func { inner: func.inner }),
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::new(),
+                            PrivilegeMap::default(),
                         );
                     }
 
@@ -3132,7 +3216,7 @@ impl Catalog {
                         name,
                         item,
                         MZ_SYSTEM_ROLE_ID,
-                        PrivilegeMap::new(),
+                        PrivilegeMap::default(),
                     );
                 }
                 Builtin::Log(_)
@@ -3335,9 +3419,8 @@ impl Catalog {
     ///
     /// 1. Load parameters from the configuration persisted in the catalog
     ///    storage backend.
-    /// 2. Overwrite without persisting selected parameter values from the
-    ///    configuration passed in the provided `bootstrap_system_parameters`
-    ///    map.
+    /// 2. Set defaults from configuration passed in the provided
+    ///    `system_parameter_defaults` map.
     /// 3. Overwrite and persist selected parameter values from the
     ///    configuration that can be pulled from the provided
     ///    `system_parameter_frontend` (if present).
@@ -3346,7 +3429,7 @@ impl Catalog {
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_system_configuration(
         &mut self,
-        bootstrap_system_parameters: BTreeMap<String, String>,
+        system_parameter_defaults: BTreeMap<String, String>,
         system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     ) -> Result<(), AdapterError> {
         let (system_config, boot_ts) = {
@@ -3355,10 +3438,10 @@ impl Catalog {
             let boot_ts = storage.boot_ts();
             (system_config, boot_ts)
         };
-        for (name, value) in &bootstrap_system_parameters {
+        for (name, value) in &system_parameter_defaults {
             match self
                 .state
-                .insert_system_configuration(name, VarInput::Flat(value))
+                .set_system_configuration_default(name, VarInput::Flat(value))
             {
                 Ok(_) => (),
                 Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
@@ -4083,7 +4166,7 @@ impl Catalog {
             metrics_registry,
             cluster_replica_sizes: Default::default(),
             default_storage_cluster_size: None,
-            bootstrap_system_parameters: Default::default(),
+            system_parameter_defaults: Default::default(),
             availability_zones: vec![],
             secrets_reader,
             egress_ips: vec![],
@@ -4103,20 +4186,11 @@ impl Catalog {
     }
 
     pub fn for_session_state<'a>(state: &'a CatalogState, session: &'a Session) -> ConnCatalog<'a> {
+        let search_path = state.resolve_search_path(session);
         let database = state
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
-        let search_path = session
-            .vars()
-            .search_path()
-            .iter()
-            .map(|schema| {
-                state.resolve_schema(database.as_ref(), None, schema.as_str(), session.conn_id())
-            })
-            .filter_map(|schema| schema.ok())
-            .map(|schema| (schema.name().database.clone(), schema.id().clone()))
-            .collect();
         ConnCatalog {
             state: Cow::Borrowed(state),
             conn_id: session.conn_id(),
@@ -4284,6 +4358,13 @@ impl Catalog {
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
+    }
+
+    pub fn resolve_search_path(
+        &self,
+        session: &Session,
+    ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        self.state.resolve_search_path(session)
     }
 
     /// Resolves `name` to a non-function [`CatalogEntry`].
@@ -5475,6 +5556,11 @@ impl Catalog {
                 Op::DropObject(id) => match id {
                     ObjectId::Database(id) => {
                         let database = &state.database_by_id[&id];
+                        if id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyDatabase(database.name().to_string()),
+                            )));
+                        }
                         tx.remove_database(&id)?;
                         builtin_table_updates.push(state.pack_database_update(database, -1));
                         state.add_to_audit_log(
@@ -5506,7 +5592,14 @@ impl Catalog {
                             ResolvedDatabaseSpecifier::Ambient => None,
                             ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
                         };
-                        let schema_id = schema_spec.into();
+                        let schema_id: SchemaId = schema_spec.into();
+                        if schema_id.is_system() {
+                            let name = schema.name();
+                            let full_name = state.resolve_full_schema_name(name);
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
+                            )));
+                        }
                         tx.remove_schema(&database_id, &schema_id)?;
                         builtin_table_updates.push(state.pack_schema_update(
                             &database_spec,
@@ -5566,7 +5659,7 @@ impl Catalog {
                     ObjectId::Cluster(id) => {
                         let cluster = state.get_cluster(id);
                         let name = &cluster.name;
-                        if is_reserved_name(name) {
+                        if id.is_system() {
                             return Err(AdapterError::Catalog(Error::new(
                                 ErrorKind::ReadOnlyCluster(name.clone()),
                             )));
@@ -5691,6 +5784,14 @@ impl Catalog {
                     }
                     ObjectId::Item(id) => {
                         let entry = state.get_entry(&id);
+                        if id.is_system() {
+                            let name = entry.name();
+                            let full_name = state
+                                .resolve_full_name(name, session.map(|session| session.conn_id()));
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyItem(full_name.to_string()),
+                            )));
+                        }
                         if !entry.item().is_temporary() {
                             tx.remove_item(id)?;
                         }
@@ -6349,7 +6450,7 @@ impl Catalog {
     }
 
     fn grant_object_privilege(privileges: &mut PrivilegeMap, privilege: MzAclItem) {
-        let grantee_privileges = privileges.entry(privilege.grantee).or_default();
+        let grantee_privileges = privileges.0.entry(privilege.grantee).or_default();
         if let Some(existing_privilege) = grantee_privileges
             .iter_mut()
             .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
@@ -6366,7 +6467,7 @@ impl Catalog {
     }
 
     fn revoke_object_privilege(privileges: &mut PrivilegeMap, privilege: MzAclItem) {
-        let grantee_privileges = privileges.entry(privilege.grantee).or_default();
+        let grantee_privileges = privileges.0.entry(privilege.grantee).or_default();
         if let Some(existing_privilege) = grantee_privileges
             .iter_mut()
             .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
@@ -6383,7 +6484,7 @@ impl Catalog {
         // Remove empty privileges
         grantee_privileges.retain(|privilege| !privilege.acl_mode.is_empty());
         if grantee_privileges.is_empty() {
-            privileges.remove(&privilege.grantee);
+            privileges.0.remove(&privilege.grantee);
         }
     }
 
@@ -6508,7 +6609,8 @@ impl Catalog {
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer = Optimizer::logical_optimizer();
+                let optimizer =
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let optimized_expr = optimizer.optimize(view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -6522,7 +6624,8 @@ impl Catalog {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
-                let optimizer = Optimizer::logical_optimizer();
+                let optimizer =
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let optimized_expr = optimizer.optimize(materialized_view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
                 CatalogItem::MaterializedView(MaterializedView {
@@ -6768,6 +6871,8 @@ impl Catalog {
             stats_audit_percent: Some(config.persist_stats_audit_percent()),
             stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
             stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
+            pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
+            pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         }
     }
 
@@ -7284,6 +7389,16 @@ impl SessionCatalog for ConnCatalog<'_> {
             .expect("database doesn't exist")
     }
 
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn get_databases(&self) -> Vec<&dyn CatalogDatabase> {
+        self.state
+            .database_by_id
+            .values()
+            .map(|database| database as &dyn CatalogDatabase)
+            .collect()
+    }
+
     fn resolve_schema(
         &self,
         database_name: Option<&str>,
@@ -7314,6 +7429,22 @@ impl SessionCatalog for ConnCatalog<'_> {
     ) -> &dyn CatalogSchema {
         self.state
             .get_schema(database_spec, schema_spec, self.conn_id)
+    }
+
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn get_schemas(&self) -> Vec<&dyn CatalogSchema> {
+        self.get_databases()
+            .into_iter()
+            .flat_map(|database| database.schemas().into_iter())
+            .chain(
+                self.state
+                    .ambient_schemas_by_id
+                    .values()
+                    .chain(self.state.temporary_schemas.values())
+                    .map(|schema| schema as &dyn CatalogSchema),
+            )
+            .collect()
     }
 
     fn is_system_schema(&self, schema: &str) -> bool {
@@ -7407,12 +7538,30 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_entry(id)
     }
 
+    fn get_items(&self) -> Vec<&dyn mz_sql::catalog::CatalogItem> {
+        self.get_schemas()
+            .into_iter()
+            .flat_map(|schema| schema.item_ids().into_iter())
+            .map(|(_, global_id)| self.get_item(global_id))
+            .collect()
+    }
+
     fn item_exists(&self, name: &QualifiedItemName) -> bool {
         self.state.item_exists(name, self.conn_id)
     }
 
     fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster {
         &self.state.clusters_by_id[&id]
+    }
+
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn get_clusters(&self) -> Vec<&dyn mz_sql::catalog::CatalogCluster> {
+        self.state
+            .clusters_by_id
+            .values()
+            .map(|cluster| cluster as &dyn mz_sql::catalog::CatalogCluster)
+            .collect()
     }
 
     fn get_cluster_replica(
@@ -7424,6 +7573,13 @@ impl SessionCatalog for ConnCatalog<'_> {
         cluster.replica(replica_id)
     }
 
+    fn get_cluster_replicas(&self) -> Vec<&dyn mz_sql::catalog::CatalogClusterReplica> {
+        self.get_clusters()
+            .into_iter()
+            .flat_map(|cluster| cluster.replicas().into_iter())
+            .collect()
+    }
+
     fn find_available_name(&self, name: QualifiedItemName) -> QualifiedItemName {
         self.state.find_available_name(name, self.conn_id)
     }
@@ -7433,16 +7589,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
-        let database = match &name.database {
-            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
-            ResolvedDatabaseSpecifier::Id(id) => {
-                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
-            }
-        };
-        FullSchemaName {
-            database,
-            schema: name.schema.clone(),
-        }
+        self.state.resolve_full_schema_name(name)
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -7552,8 +7699,17 @@ impl mz_sql::catalog::CatalogDatabase for Database {
         !self.schemas_by_name.is_empty()
     }
 
-    fn schemas(&self) -> &BTreeMap<String, SchemaId> {
+    fn schema_ids(&self) -> &BTreeMap<String, SchemaId> {
         &self.schemas_by_name
+    }
+
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn schemas(&self) -> Vec<&dyn CatalogSchema> {
+        self.schemas_by_id
+            .values()
+            .map(|schema| schema as &dyn CatalogSchema)
+            .collect()
     }
 
     fn owner_id(&self) -> RoleId {
@@ -7582,7 +7738,7 @@ impl mz_sql::catalog::CatalogSchema for Schema {
         !self.items.is_empty()
     }
 
-    fn items(&self) -> &BTreeMap<String, GlobalId> {
+    fn item_ids(&self) -> &BTreeMap<String, GlobalId> {
         &self.items
     }
 
@@ -7642,8 +7798,17 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         &self.bound_objects
     }
 
-    fn replicas(&self) -> &BTreeMap<String, ReplicaId> {
+    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId> {
         &self.replica_id_by_name
+    }
+
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica> {
+        self.replicas_by_id
+            .values()
+            .map(|replica| replica as &dyn CatalogClusterReplica)
+            .collect()
     }
 
     fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica {
@@ -7783,10 +7948,10 @@ mod tests {
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
-    use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+    use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
-    use mz_sql::catalog::{CatalogDatabase, PrivilegeMap, SessionCatalog};
+    use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
     use mz_sql::names;
     use mz_sql::names::{
         DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
@@ -8796,8 +8961,8 @@ mod tests {
         let other_role = RoleId::User(3);
 
         // older owner exists as grantor.
-        let mut privileges = PrivilegeMap::new();
-        privileges.insert(
+        let mut privileges = PrivilegeMap::default();
+        privileges.0.insert(
             other_role,
             vec![
                 MzAclItem {
@@ -8813,19 +8978,22 @@ mod tests {
             ],
         );
         Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
-        assert_eq!(1, privileges.len());
+        assert_eq!(1, privileges.0.len());
         assert_eq!(
             &vec![MzAclItem {
                 grantee: other_role,
                 grantor: new_owner,
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
-            privileges.get(&other_role).expect("other_role is grantee")
+            privileges
+                .0
+                .get(&other_role)
+                .expect("other_role is grantee")
         );
 
         // older owner exists as grantee.
-        let mut privileges = PrivilegeMap::new();
-        privileges.insert(
+        let mut privileges = PrivilegeMap::default();
+        privileges.0.insert(
             old_owner,
             vec![MzAclItem {
                 grantee: old_owner,
@@ -8833,7 +9001,7 @@ mod tests {
                 acl_mode: AclMode::UPDATE,
             }],
         );
-        privileges.insert(
+        privileges.0.insert(
             new_owner,
             vec![MzAclItem {
                 grantee: new_owner,
@@ -8842,19 +9010,19 @@ mod tests {
             }],
         );
         Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
-        assert_eq!(1, privileges.len());
+        assert_eq!(1, privileges.0.len());
         assert_eq!(
             &vec![MzAclItem {
                 grantee: new_owner,
                 grantor: other_role,
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
-            privileges.get(&new_owner).expect("new_owner is grantee")
+            privileges.0.get(&new_owner).expect("new_owner is grantee")
         );
 
         // older owner exists as grantee and grantor.
-        let mut privileges = PrivilegeMap::new();
-        privileges.insert(
+        let mut privileges = PrivilegeMap::default();
+        privileges.0.insert(
             old_owner,
             vec![MzAclItem {
                 grantee: old_owner,
@@ -8862,7 +9030,7 @@ mod tests {
                 acl_mode: AclMode::UPDATE,
             }],
         );
-        privileges.insert(
+        privileges.0.insert(
             new_owner,
             vec![MzAclItem {
                 grantee: new_owner,
@@ -8871,14 +9039,14 @@ mod tests {
             }],
         );
         Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
-        assert_eq!(1, privileges.len());
+        assert_eq!(1, privileges.0.len());
         assert_eq!(
             &vec![MzAclItem {
                 grantee: new_owner,
                 grantor: new_owner,
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
-            privileges.get(&new_owner).expect("new_owner is grantee")
+            privileges.0.get(&new_owner).expect("new_owner is grantee")
         );
     }
 

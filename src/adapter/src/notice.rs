@@ -43,6 +43,9 @@ pub enum AdapterNotice {
     ClusterDoesNotExist {
         name: String,
     },
+    NoResolvableSearchPathSchema {
+        search_path: Vec<String>,
+    },
     ExistingTransactionInProgress,
     ExplicitTransactionControlInImplicitTransaction,
     UserRequested {
@@ -93,6 +96,9 @@ pub enum AdapterNotice {
     AlterIndexOwner {
         name: String,
     },
+    CannotRevoke {
+        name: String,
+    },
 }
 
 impl AdapterNotice {
@@ -106,6 +112,7 @@ impl AdapterNotice {
         match self {
             AdapterNotice::DatabaseDoesNotExist { name: _ } => Some("Create the database with CREATE DATABASE or pick an extant database with SET DATABASE = name. List available databases with SHOW DATABASES.".into()),
             AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
+            AdapterNotice::NoResolvableSearchPathSchema { search_path: _ } => Some("Create a schema with CREATE SCHEMA or pick an extant schema with SET SCHEMA = name. List available schemas with SHOW SCHEMAS.".into()),
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
             AdapterNotice::ClusterReplicaStatusChanged { status, .. } => {
@@ -143,6 +150,13 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::ClusterDoesNotExist { name } => {
                 write!(f, "cluster {} does not exist", name.quoted())
+            }
+            AdapterNotice::NoResolvableSearchPathSchema { search_path } => {
+                write!(
+                    f,
+                    "no schema on the search path exists: {}",
+                    search_path.join(", ")
+                )
             }
             AdapterNotice::ExistingTransactionInProgress => {
                 write!(f, "there is already a transaction in progress")
@@ -236,6 +250,9 @@ impl fmt::Display for AdapterNotice {
             ),
             AdapterNotice::AlterIndexOwner { name } => {
                 write!(f, "cannot change owner of {}", name.quoted())
+            }
+            AdapterNotice::CannotRevoke { name } => {
+                write!(f, "no privileges could be revoked for {}", name.quoted())
             }
         }
     }

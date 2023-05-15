@@ -38,3 +38,4 @@ DROP CLUSTER REPLICA auction_house.bigger;
 ## Related pages
 
 - [`SHOW CLUSTER REPLICAS`](../show-cluster-replicas)
+- [DROP OWNED](../drop-owned)

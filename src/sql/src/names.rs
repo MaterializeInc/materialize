@@ -15,6 +15,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
@@ -24,6 +25,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::MutRecBlock;
 use mz_sql_parser::ast::UnresolvedObjectName;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
@@ -306,6 +308,10 @@ impl SchemaSpecifier {
             SchemaSpecifier::Temporary => false,
             SchemaSpecifier::Id(id) => id.is_system(),
         }
+    }
+
+    pub fn is_temporary(&self) -> bool {
+        matches!(self, SchemaSpecifier::Temporary)
     }
 }
 
@@ -677,7 +683,9 @@ impl AstInfo for Aug {
 }
 
 /// The identifier for a schema.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum SchemaId {
     User(u64),
     System(u64),
@@ -725,7 +733,9 @@ impl FromStr for SchemaId {
 }
 
 /// The identifier for a database.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum DatabaseId {
     User(u64),
     System(u64),
@@ -821,6 +831,18 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
         }
     }
+
+    pub fn is_system(&self) -> bool {
+        match self {
+            ObjectId::Cluster(cluster_id) => cluster_id.is_system(),
+            // replica IDs aren't namespaced so we rely on the cluster ID.
+            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_system(),
+            ObjectId::Database(database_id) => database_id.is_system(),
+            ObjectId::Schema((_database_id, schema_id)) => schema_id.is_system(),
+            ObjectId::Role(role_id) => role_id.is_system(),
+            ObjectId::Item(global_id) => global_id.is_system(),
+        }
+    }
 }
 
 impl TryFrom<ResolvedObjectName> for ObjectId {
@@ -896,6 +918,18 @@ impl From<ItemQualifiers> for ObjectId {
 impl From<&ItemQualifiers> for ObjectId {
     fn from(qualifiers: &ItemQualifiers) -> Self {
         ObjectId::Schema((qualifiers.database_spec, qualifiers.schema_spec))
+    }
+}
+
+impl From<(ResolvedDatabaseSpecifier, SchemaSpecifier)> for ObjectId {
+    fn from(id: (ResolvedDatabaseSpecifier, SchemaSpecifier)) -> Self {
+        ObjectId::Schema(id)
+    }
+}
+
+impl From<&(ResolvedDatabaseSpecifier, SchemaSpecifier)> for ObjectId {
+    fn from(id: &(ResolvedDatabaseSpecifier, SchemaSpecifier)) -> Self {
+        ObjectId::Schema(*id)
     }
 }
 
@@ -1065,7 +1099,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 CteBlock::Simple(result_ctes)
             }
-            CteBlock::MutuallyRecursive(ctes) => {
+            CteBlock::MutuallyRecursive(MutRecBlock { options, ctes }) => {
                 let mut result_ctes = Vec::<CteMutRec<Aug>>::new();
 
                 let initial_id = self.ctes.len();
@@ -1094,7 +1128,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         query,
                     });
                 }
-                CteBlock::MutuallyRecursive(result_ctes)
+                CteBlock::MutuallyRecursive(MutRecBlock {
+                    options: options
+                        .into_iter()
+                        .map(|option| self.fold_mut_rec_block_option(option))
+                        .collect(),
+                    ctes: result_ctes,
+                })
             }
         };
 

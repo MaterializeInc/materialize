@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+import subprocess
 from textwrap import dedent
 from typing import Tuple
 
@@ -92,7 +94,12 @@ def test_crash_storage(mz: MaterializeApplication) -> None:
     pod_name = cluster_pod_name(cluster_id, replica_id)
 
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
-    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd` || true")
+    try:
+        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+    except subprocess.CalledProcessError as e:
+        # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
+        assert e.returncode == 137
+
     wait(condition="jsonpath={.status.phase}=Running", resource=pod_name)
 
     validate(mz, 1)

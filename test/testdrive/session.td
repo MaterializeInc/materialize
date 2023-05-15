@@ -21,7 +21,7 @@ database                                materialize            "Sets the current
 DateStyle                               "ISO, MDY"             "Sets the display format for date and time values (PostgreSQL)."
 enable_rbac_checks                      off                    "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 enable_session_rbac_checks              off                    "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
-enable_envelope_upsert_in_subscribe     off                    "Feature flag indicating whether `ENVELOPE UPSERT` can be used in `SUBSCRIBE` queries (Materialize)."
+enable_envelope_upsert_in_subscribe     on                     "Feature flag indicating whether `ENVELOPE UPSERT` can be used in `SUBSCRIBE` queries (Materialize)."
 enable_envelope_debezium_in_subscribe   off                    "Feature flag indicating whether `ENVELOPE DEBEZIUM` can be used in `SUBSCRIBE` queries (Materialize)."
 enable_within_timestamp_order_by_in_subscribe off              "Feature flag indicating whether `WITHIN TIMESTAMP ORDER BY` can be used in `SUBSCRIBE` queries (Materialize)."
 emit_timestamp_notice                   off                    "Boolean flag indicating whether to send a NOTICE specifying query timestamps (Materialize)."
