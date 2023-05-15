@@ -1784,6 +1784,8 @@ impl SystemVars {
         Ok(result)
     }
 
+    /// Refresh the internal state (currently just active_connection_count) when any of
+    /// the system vars that may affect them changes. Today only when MAX_CONNECTIONS changes.
     fn refresh_state(&mut self) {
         self.active_connection_count
             .lock()
