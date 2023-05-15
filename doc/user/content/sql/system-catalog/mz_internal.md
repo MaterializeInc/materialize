@@ -138,6 +138,8 @@ created and (if applicable) dropped.
 | Field              | Type                         | Meaning                                                                                                                                   |
 |--------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
 | `replica_id`       | [`text`]                     | The ID of a cluster replica.                                                                                                              |
+| `cluster_name`     | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
+| `replica_name`     | [`text`]                     | The name of the replica.                                                                                                                  |
 | `size`             | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
 | `created_at`       | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`       | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
