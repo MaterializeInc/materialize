@@ -17,6 +17,10 @@
 //!
 //! Consult the user-facing documentation for details.
 
+use mz_frontegg_client::client::user::{CreateUserRequest, RemoveUserRequest};
+use serde::{Deserialize, Serialize};
+use tabled::Tabled;
+
 use crate::{context::ProfileContext, error::Error};
 
 pub struct CreateArgs<'a> {
@@ -28,11 +32,37 @@ pub async fn create(
     cx: &mut ProfileContext,
     CreateArgs { email, name }: CreateArgs<'_>,
 ) -> Result<(), Error> {
-    todo!()
+    let roles = cx.admin_client().list_roles().await?;
+
+    cx.admin_client()
+        .create_user(CreateUserRequest {
+            email: email.to_string(),
+            name: name.to_string(),
+            provider: "local".to_string(),
+            role_ids: roles.into_iter().map(|role| role.id).collect(),
+        })
+        .await?;
+
+    Ok(())
 }
 
 pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
-    todo!()
+    #[derive(Deserialize, Serialize, Tabled)]
+    pub struct User {
+        #[tabled(rename = "Email")]
+        email: String,
+        #[tabled(rename = "Name")]
+        name: String,
+    }
+
+    let users = cx.admin_client().list_users().await?;
+    let output_formatter = cx.output_formatter();
+    output_formatter.output_table(users.into_iter().map(|x| User {
+        email: x.email,
+        name: x.name,
+    }))?;
+
+    Ok(())
 }
 
 pub struct RemoveArgs<'a> {
@@ -43,5 +73,15 @@ pub async fn remove(
     cx: &mut ProfileContext,
     RemoveArgs { email }: RemoveArgs<'_>,
 ) -> Result<(), Error> {
-    todo!()
+    let users = cx.admin_client().list_users().await?;
+    let user = users
+        .into_iter()
+        .find(|x| x.email == email)
+        .expect("email not found.");
+
+    cx.admin_client()
+        .remove_user(RemoveUserRequest { user_id: user.id })
+        .await?;
+
+    Ok(())
 }

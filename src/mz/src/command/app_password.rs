@@ -17,7 +17,7 @@
 //!
 //! Consult the user-facing documentation for details.
 
-use mz_frontegg_client::client::app_password::{CreateAppPasswordRequest};
+use mz_frontegg_client::client::app_password::CreateAppPasswordRequest;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
@@ -51,7 +51,7 @@ pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
     let output_formatter = cx.output_formatter();
     output_formatter.output_table(passwords.iter().map(|x| AppPassword {
         description: x.description.clone(),
-        created_at: x.created_at.clone()
+        created_at: x.created_at.clone(),
     }))?;
 
     Ok(())
