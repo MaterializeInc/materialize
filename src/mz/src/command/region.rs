@@ -24,8 +24,9 @@ use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
 pub async fn enable(cx: &mut RegionContext) -> Result<(), Error> {
+    // TODO: Handle error creating environment
     cx.cloud_client().create_environment(None, vec![], cx.get_region().await?).await?;
-    todo!()
+    Ok(())
 }
 
 pub async fn list(cx: &mut RegionContext) -> Result<(), Error> {
