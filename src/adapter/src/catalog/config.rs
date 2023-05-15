@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytesize::ByteSize;
+use mz_sql::session::vars::ConnectionCounter;
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
@@ -74,6 +75,8 @@ pub struct Config<'a> {
     /// TODO(migration): delete in version v.51 (released in v0.49 + 1
     /// additional release)
     pub connection_context: Option<mz_storage_client::types::connections::ConnectionContext>,
+    /// Global connection limit and count
+    pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

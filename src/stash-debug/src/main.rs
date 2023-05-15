@@ -82,7 +82,7 @@ use std::{
     path::PathBuf,
     process,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use anyhow::Context;
@@ -104,7 +104,7 @@ use mz_ore::{
     now::SYSTEM_TIME,
 };
 use mz_secrets::InMemorySecretsController;
-use mz_sql::catalog::EnvironmentId;
+use mz_sql::{catalog::EnvironmentId, session::vars::ConnectionCounter};
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller as storage;
 
@@ -402,6 +402,7 @@ impl Usage {
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
+
         let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -421,6 +422,7 @@ impl Usage {
             system_parameter_frontend: None,
             storage_usage_retention_period: None,
             connection_context: None,
+            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
         })
         .await?;
 
