@@ -488,6 +488,7 @@ class Cockroach(Service):
         setup_materialize: bool = True,
         in_memory: bool = False,
         healthcheck: Optional[ServiceHealthcheck] = None,
+        restart: str = "no",
     ):
         volumes = []
 
@@ -526,6 +527,7 @@ class Cockroach(Service):
                 "volumes": volumes,
                 "init": True,
                 "healthcheck": healthcheck,
+                "restart": restart,
             },
         )
 

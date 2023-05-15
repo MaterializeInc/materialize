@@ -36,7 +36,7 @@ SERVICES = [
     SchemaRegistry(),
     Debezium(),
     Postgres(),
-    Cockroach(setup_materialize=True),
+    Cockroach(),
     Minio(setup_materialize=True),
     # Those two are overriden below
     Materialized(),
@@ -136,7 +136,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     random.seed(args.seed)
 
     with c.override(
-        Cockroach(image=f"cockroachdb/cockroach:{args.cockroach_tag}"),
+        Cockroach(
+            image=f"cockroachdb/cockroach:{args.cockroach_tag}",
+            # Workaround for #19276
+            restart="on-failure:5",
+            setup_materialize=True,
+        ),
         Testdrive(
             no_reset=True,
             seed=1,
