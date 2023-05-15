@@ -24,23 +24,19 @@ class OperationParam:
         incompatibilities: Optional[set[ValueCharacteristics]] = None,
         incompatibility_combinations: Optional[list[set[ValueCharacteristics]]] = None,
     ):
-        if incompatibilities is None:
-            incompatibilities = set()
+        self.type_category = type_category
+        self.optional = optional
 
         if incompatibility_combinations is None:
             incompatibility_combinations = list()
 
-        self.type_category = type_category
-        self.optional = optional
-        self.incompatibilities: set[ValueCharacteristics] = incompatibilities
         self.incompatibility_combinations = incompatibility_combinations
 
+        if incompatibilities is not None:
+            self.incompatibility_combinations.extend([incompatibilities])
+
+
     def supports_arg(self, arg: Expression) -> bool:
-        overlapping_incompatibilities = self.incompatibilities & arg.characteristics
-
-        if len(overlapping_incompatibilities) > 0:
-            return False
-
         for incompatibility_combination in self.incompatibility_combinations:
             overlapping_incompatibility_combination = (
                 incompatibility_combination & arg.characteristics
