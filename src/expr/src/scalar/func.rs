@@ -6920,6 +6920,55 @@ impl VariadicFunc {
             _ => true,
         }
     }
+
+    /// Returns true if the function is monotone. Monotone functions map ranges to ranges: ie. given
+    /// a range of possible inputs, we can determine the range of possible outputs just by mapping
+    /// the endpoints.
+    ///
+    /// This describes the *pointwise* behaviour of the function:
+    /// ie. if more than one argument is provided, this describes the behaviour of
+    /// any specific argument as the others are held constant. (For example, `COALESCE(a, b)` is
+    /// monotone because for any particular value of `b`, increasing `a` will never cause the result
+    /// to decrease.)
+    ///
+    /// For monotone functions, this will return true whether the function is *non-decreasing*
+    /// or *non-increasing*.
+    ///
+    /// This property describes the behaviour of the function over ranges where the function is defined:
+    /// ie. the arguments and the result are non-null datums.
+    pub fn is_monotone(&self) -> bool {
+        match self {
+            VariadicFunc::Coalesce
+            | VariadicFunc::Greatest
+            | VariadicFunc::Least
+            | VariadicFunc::And
+            | VariadicFunc::Or => true,
+            VariadicFunc::Concat
+            | VariadicFunc::MakeTimestamp
+            | VariadicFunc::PadLeading
+            | VariadicFunc::Substr
+            | VariadicFunc::Replace
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::ArrayCreate { .. }
+            | VariadicFunc::ArrayToString { .. }
+            | VariadicFunc::ArrayIndex { .. }
+            | VariadicFunc::ListCreate { .. }
+            | VariadicFunc::RecordCreate { .. }
+            | VariadicFunc::ListIndex
+            | VariadicFunc::ListSliceLinear
+            | VariadicFunc::SplitPart
+            | VariadicFunc::RegexpMatch
+            | VariadicFunc::HmacString
+            | VariadicFunc::HmacBytes
+            | VariadicFunc::ErrorIfNull
+            | VariadicFunc::DateBinTimestamp
+            | VariadicFunc::DateBinTimestampTz
+            | VariadicFunc::RangeCreate { .. }
+            | VariadicFunc::MakeMzAclItem
+            | VariadicFunc::Translate => false,
+        }
+    }
 }
 
 impl fmt::Display for VariadicFunc {

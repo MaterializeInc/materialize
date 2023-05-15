@@ -102,18 +102,6 @@ fn binary_monotonic(func: &BinaryFunc) -> (Monotonic, Monotonic) {
     }
 }
 
-/// Describes the pointwise behaviour of each of the arguments to our variadic function.
-/// (ie. returns `Monotonic::Yes` if, for each argument of the function, increasing that argument
-/// causes the result of the function to either monotonically increase or decrease.)
-fn variadic_monotonic(func: &VariadicFunc) -> Monotonic {
-    use Monotonic::*;
-    use VariadicFunc::*;
-    match func {
-        And | Or | Coalesce => Yes,
-        _ => Maybe,
-    }
-}
-
 /// An inclusive range of non-null datum values.
 #[derive(Clone, Eq, PartialEq, Debug)]
 enum Values<'a> {
@@ -360,7 +348,7 @@ impl<'a> ResultSpec<'a> {
     /// - using a safe default when we can't infer a tighter bound on the set, eg. [Self::anything].
     fn flat_map(
         &self,
-        is_monotonic: Monotonic,
+        is_monotonic: bool,
         mut result_map: impl FnMut(Result<Datum<'a>, EvalError>) -> ResultSpec<'a>,
     ) -> ResultSpec<'a> {
         let null_spec = if self.nullable {
@@ -394,24 +382,21 @@ impl<'a> ResultSpec<'a> {
             }
             // Otherwise, if our function is monotonic, we can try mapping the input
             // range to an output range.
-            Values::Within(min, max) => match is_monotonic {
-                Monotonic::Yes => {
-                    let min_column = result_map(Ok(min));
-                    let max_column = result_map(Ok(max));
-                    if min_column.nullable
-                        || min_column.fallible
-                        || max_column.nullable
-                        || max_column.fallible
-                    {
-                        ResultSpec::anything()
-                    } else {
-                        min_column.union(max_column)
-                    }
+            Values::Within(min, max) if is_monotonic => {
+                let min_column = result_map(Ok(min));
+                let max_column = result_map(Ok(max));
+                if min_column.nullable
+                    || min_column.fallible
+                    || max_column.nullable
+                    || max_column.fallible
+                {
+                    ResultSpec::anything()
+                } else {
+                    min_column.union(max_column)
                 }
-                Monotonic::Maybe | Monotonic::No => ResultSpec::anything(),
-            },
+            }
             // TODO: we could return a narrower result for eg. `Values::Nested` with all-`Within` fields.
-            Values::Nested(_) | Values::All => ResultSpec::anything(),
+            Values::Within(_, _) | Values::Nested(_) | Values::All => ResultSpec::anything(),
         };
 
         null_spec.union(error_spec).union(values_spec)
@@ -701,7 +686,11 @@ impl Interpreter for Trace {
     }
 
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
-        let is_monotonic = variadic_monotonic(func);
+        let is_monotonic = if func.is_monotone() {
+            Monotonic::Yes
+        } else {
+            Monotonic::No
+        };
         exprs
             .into_iter()
             .fold(RelationTrace::new(), |acc, columns| {
@@ -853,7 +842,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
-        let is_monotonic = unary_monotonic(func);
+        let is_monotonic = unary_monotonic(func) == Monotonic::Yes;
         let mut expr = MirScalarExpr::CallUnary {
             func: func.clone(),
             expr: Box::new(Self::placeholder(summary.col_type.clone())),
@@ -923,13 +912,17 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             expr1: Box::new(Self::placeholder(left.col_type.clone())),
             expr2: Box::new(Self::placeholder(right.col_type.clone())),
         };
-        let mapped_spec = left.range.flat_map(left_monotonic, |left_result| {
-            Self::set_argument(&mut expr, 0, left_result);
-            right.range.flat_map(right_monotonic, |right_result| {
-                Self::set_argument(&mut expr, 1, right_result);
-                self.eval_result(expr.eval(&[], self.arena))
-            })
-        });
+        let mapped_spec = left
+            .range
+            .flat_map(left_monotonic == Monotonic::Yes, |left_result| {
+                Self::set_argument(&mut expr, 0, left_result);
+                right
+                    .range
+                    .flat_map(right_monotonic == Monotonic::Yes, |right_result| {
+                        Self::set_argument(&mut expr, 1, right_result);
+                        self.eval_result(expr.eval(&[], self.arena))
+                    })
+            });
 
         let col_type = func.output_type(left.col_type, right.col_type);
 
@@ -941,7 +934,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
         fn eval_loop<'a>(
-            is_monotonic: Monotonic,
+            is_monotonic: bool,
             expr: &mut MirScalarExpr,
             args: &[ColumnSpec<'a>],
             index: usize,
@@ -964,13 +957,9 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                 .map(|spec| Self::placeholder(spec.col_type.clone()))
                 .collect(),
         };
-        let mapped_spec = eval_loop(
-            variadic_monotonic(func),
-            &mut fn_expr,
-            &args,
-            0,
-            &mut |expr| self.eval_result(expr.eval(&[], self.arena)),
-        );
+        let mapped_spec = eval_loop(func.is_monotone(), &mut fn_expr, &args, 0, &mut |expr| {
+            self.eval_result(expr.eval(&[], self.arena))
+        });
 
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
         let col_type = func.output_type(col_types);
@@ -988,7 +977,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         let range = cond
             .range
-            .flat_map(Monotonic::Yes, |datum| match datum {
+            .flat_map(true, |datum| match datum {
                 Ok(Datum::True) => then.range.clone(),
                 Ok(Datum::False) => els.range.clone(),
                 _ => ResultSpec::fails(),
