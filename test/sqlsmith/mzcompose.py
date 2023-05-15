@@ -249,7 +249,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # The error message indicates a panic, if we happen to get multiple
         # distinct panics we want to have all the responsible queries instead
         # of just one:
-        if "server closed the connection unexpectedly" in errors[0]["message"]:
+        if "server closed the connection unexpectedly" in key["message"]:
             for i, error in enumerate(errors, start=1):
                 print(f"Query {i}: {error['query']}")
         else:
