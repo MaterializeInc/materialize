@@ -1059,9 +1059,9 @@ fn test_max_statement_batch_size() {
         let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
         match msg {
             WebSocketResponse::Error(err) => assert!(
-                err.contains("statement batch size cannot exceed"),
+                err.message.contains("statement batch size cannot exceed"),
                 "error should indicate that the statement was too large: {}",
-                err
+                err.message,
             ),
             msg @ WebSocketResponse::ReadyForQuery(_)
             | msg @ WebSocketResponse::Notice(_)
