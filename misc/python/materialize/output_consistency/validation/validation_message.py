@@ -36,12 +36,15 @@ class ValidationRemark(ValidationMessage):
         self,
         message: str,
         description: Optional[str] = None,
+        sql: Optional[str] = None,
     ):
         super().__init__(message, description)
+        self.sql = sql
 
     def __str__(self) -> str:
         remark_desc = f" ({self.description})" if self.description else ""
-        return f"{self.message}{remark_desc}"
+        query_desc = f"\n  Query: {self.sql}" if self.sql else ""
+        return f"{self.message}{remark_desc}{query_desc}"
 
 
 class ValidationWarning(ValidationMessage):
