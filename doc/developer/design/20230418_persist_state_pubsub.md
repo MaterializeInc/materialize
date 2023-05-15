@@ -19,7 +19,7 @@ tl;dr
 Full context:
 
 Persist stores the state related to a particular shard in `Consensus`, which today is implemented on CockroachDB (CRDB).
-When any changes to state occur, such a frontier advancement or new data being written, a diff with the relevant change
+When any changes to state occur, such as frontier advancement or new data being written, a diff with the relevant change
 is appended into `Consensus`. Any handles to the shard can read these diffs, and apply them to their state to observe
 the latest updates.
 
