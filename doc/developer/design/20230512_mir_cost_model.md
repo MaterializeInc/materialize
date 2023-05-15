@@ -1,5 +1,5 @@
 - Feature name: MIR cost model
-- Associated: 
+- Associated:
   * https://github.com/MaterializeInc/materialize/issues/17883
   * https://github.com/MaterializeInc/materialize/issues/16511
   * https://github.com/MaterializeInc/materialize/issues/15244
@@ -8,7 +8,7 @@
   * https://github.com/MaterializeInc/materialize/issues/9157
   * https://github.com/MaterializeInc/materialize/issues/14663
   * https://github.com/MaterializeInc/materialize/issues/13046
-          
+
 Authors: Michael Greenberg
 Created: May 5, 2023 10:25 AM
 Status: Draft
@@ -23,7 +23,7 @@ A *cost model* tries to predict a program’s behavior given information about i
 
 Our cost model should be in terms of the dimensions that are relevant to us:
 
-- Latency (rehydration time; latency per update)
+- Latency (hydration time; latency per update)
 - Storage (memory footprint/implicit storage)
 - Scalability (to what degree can this query be spread across workers)
 
@@ -70,6 +70,7 @@ The general approach can be the same as `mz_transform::Typecheck`: recursively w
 Traditional databases track cardinality data and statistics about various columns. We will be interested in other statistics, too. Some possible examples:
 
 - How frequently does data arrive?
+- What are the key uniqueness and foreign key constraints?
 - Is the given input physically monotonic or append-only? (I.e., there are no retractions.)
 - At what rate do we expect new data to arrive?
 - Some kind of locality property?
@@ -78,14 +79,14 @@ Traditional databases track cardinality data and statistics about various column
 
 A symbolic cost is a polynomial over the features of the input relations. For example, a batch query that loops over relation `R` twice and then computes its cross product with relation `Q` will have cost `2|R| + |R|*|Q|`. A traditional database typically computes cost just in terms of overall batch query time, but our costs are multi-dimensional. In rough feasibility order:
 
-| Dimension          | Input features                                               | Outputs                         |
-| ------------------ | ------------------------------------------------------------ | ------------------------------- |
-| Rehydration time   | Source cardinality                                           | Time estimate                   |
-| Latency per update | Source cardinality, expected per-update delta on each source | Time estimate (per source)      |
-| Storage            | Source cardinality, existing indices, cardinality of groups  | Arrangements and size estimates |
-| Scalability        | Distribution of keys (e.g., cardinality of distinct keys)    | Data parallelism estimate       |
+| Dimension          | Input features                                               | Outputs                         | Output type |
+| ------------------ | ------------------------------------------------------------ | ------------------------------- | ----------- |
+| Hyydration time    | Source cardinality                                           | Time estimate                   |             |
+| Latency per update | Source cardinality, expected per-update delta on each source | Time estimate (per source)      |             |
+| Storage            | Source cardinality, existing indices, cardinality of groups  | Arrangements and size estimates |             |
+| Scalability        | Distribution of keys (e.g., cardinality of distinct keys)    | Data parallelism estimate       |             |
 
-The *rehydration time* dimension is effectively a classical batch database cost model: given cardinalities on the input relations, predict how much work a given plan has to do.
+The *hydration time* dimension is effectively a classical batch database cost model: given cardinalities on the input relations, predict how much work a given plan has to do.
 
 The *latency per update* dimension is unique to our streaming setting. Different query plans will lead to different costs when different sources produce new data. If a calculus metaphor is helpful, you can think of the cost model here producing a partial derivative with respect to each input; alternatively, the cost model’s aggregate *latency per update* cost is the [Jacobian](https://en.wikipedia.org/wiki/Jacobian_matrix_and_determinant) of that query.
 
@@ -106,10 +107,13 @@ This hasn't been implemented yet.
 
 Testing can be split into two categories:
 
-- Validation of the cost model in terms of a corpus of interesting/worthwhile queries.
-- Correctness of the cost model in terms of the costs it assigns to particular small queries.
+- High-level _validation_ of the cost model in terms of a corpus of interesting/worthwhile queries.
+- Low-level _correctness_ of the cost model in terms of the costs it assigns to particular small queries.
 
 High-level validation requires running queries on meaningful amounts of data; low-level correctness checking might be able to run via `datadriven::walk` without using any data at all, just checking that certain queries are always given better costs than other queries.
+
+Low-level correctness can live in CI, but high-level validation may be costly enough to need to live elsewhere. We should ensure that high-level validation is run with some frequency to avoid drift.
+
 
 ## Lifecycle
 [lifecycle]: #lifecycle
@@ -133,7 +137,7 @@ An alternative implementation approach would be to build a completely empirical 
 ## Unresolved questions
 [unresolved-questions]: #unresolved-questions
 
-Which loads should we test on? No cost model is perfect, but more testing with better/more realistic loads will give us a 
+Which loads should we test on? No cost model is perfect, but more testing with better/more realistic loads will give us some confidence that our model will help us make good decisions.
 
 Should the cost model work on `MirRelationExpression` or `LirRelationExpression`? Join planning happens at the MIR level, and join planning is a natural first client of the cost model.
 
