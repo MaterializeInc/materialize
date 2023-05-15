@@ -151,8 +151,9 @@ in another `clusterd` receiving that update to be in the 1-10ms range.
 
 ### Service Discovery
 
-`clusterd` will need to know the address of the `environmentd` process in order to connect to the PubSub server. Locally,
-this will be done through a standard `127.0.0.1:6879` port and passed in to `clusterd` via command line argument.
+`clusterd` will need to know the address of the `environmentd` process in order to connect to the PubSub server. When
+running with the process orchestrator, all processes will exist on the same machine so discovery can be done through
+a simple `127.0.0.1:6879` lookup.
 
 In Kubernetes, we will create a new headless `Service` in the `environment-controller` that routes to the pubsub port
 (likely 6879) of the current generation of `envd`:
