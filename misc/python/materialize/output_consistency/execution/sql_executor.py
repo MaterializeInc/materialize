@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Any, Sequence
+from typing import Any, Sequence, Union
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -18,8 +18,8 @@ from materialize.output_consistency.common.configuration import (
 
 
 class SqlExecutionError(Exception):
-    def __init__(self, original_exception: Exception):
-        super().__init__(str(original_exception))
+    def __init__(self, message: str):
+        super().__init__(message)
 
 
 class SqlExecutor:
@@ -50,7 +50,7 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         try:
             self.cursor.execute(sql)
         except (ProgrammingError, DatabaseError) as err:
-            raise SqlExecutionError(err)
+            raise SqlExecutionError(self._extract_message_from_error(err))
 
     def begin_tx(self, isolation_level: str) -> None:
         self._execute_with_cursor(f"BEGIN ISOLATION LEVEL {isolation_level};")
@@ -66,13 +66,25 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
             self._execute_with_cursor(sql)
             return self.cursor.fetchall()
         except (ProgrammingError, DatabaseError) as err:
-            raise SqlExecutionError(err)
+            raise SqlExecutionError(self._extract_message_from_error(err))
 
     def _execute_with_cursor(self, sql: str) -> None:
         try:
             self.cursor.execute(sql)
         except (ProgrammingError, DatabaseError) as err:
-            raise SqlExecutionError(err)
+            raise SqlExecutionError(self._extract_message_from_error(err))
+
+    def _extract_message_from_error(
+        self, error: Union[ProgrammingError, DatabaseError]
+    ) -> str:
+        error_args = error.args[0]
+        message = error_args.get("M")
+        details = error_args.get("H")
+
+        if details is None:
+            return f"{message}"
+        else:
+            return f"{message} ({details})"
 
 
 class DryRunSqlExecutor(SqlExecutor):
