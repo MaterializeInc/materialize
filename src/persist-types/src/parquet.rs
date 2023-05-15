@@ -109,6 +109,9 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
     }
     let part = part.finish()?;
 
+    // Sanity check that we can compute stats.
+    let _stats = part.key_stats().expect("stats should be compute-able");
+
     let mut encoded = Vec::new();
     let () = encode_part(&mut encoded, &part).map_err(|err| err.to_string())?;
     let part = decode_part(&mut std::io::Cursor::new(&encoded), schema, &UnitSchema)

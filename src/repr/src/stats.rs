@@ -199,7 +199,7 @@ fn jsonb_stats_datum(stats: &mut JsonStats, datum: Datum<'_>) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{Data, PartEncoder, Schema};
+    use mz_persist_types::columnar::{Data, PartEncoder};
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::{ColumnStats, DynStats, StructStats};
     use mz_proto::RustType;
@@ -214,7 +214,7 @@ mod tests {
         let mut part = PartBuilder::new(schema, &UnitSchema);
         {
             let mut part_mut = part.get_mut();
-            let mut encoder = schema.encoder(part_mut.key).unwrap();
+            let ((), mut encoder) = schema.encoder(part_mut.key).unwrap();
             for datum in datums {
                 encoder.encode(datum);
                 part_mut.ts.push(1u64);
@@ -222,7 +222,7 @@ mod tests {
             }
         }
         let part = part.finish().unwrap();
-        let expected = part.key_stats(schema).unwrap();
+        let expected = part.key_stats().unwrap();
         let mut actual = StructStats::from_proto(RustType::into_proto(&expected)).unwrap();
         // It's not particularly easy to give StructStats a PartialEq impl, but
         // verifying that there weren't any panics gets us pretty far.

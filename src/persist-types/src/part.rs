@@ -9,24 +9,24 @@
 
 //! A columnar representation of one blob's worth of data
 
-use arrow2::array::{Array, PrimitiveArray, StructArray};
+use arrow2::array::{Array, PrimitiveArray};
 use arrow2::buffer::Buffer;
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType as ArrowLogicalType, Field};
 use arrow2::io::parquet::write::Encoding;
 
+use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::Schema;
-use crate::dyn_col::{DynColumnMut, DynColumnRef};
-use crate::dyn_struct::{ColumnsMut, ColumnsRef};
+use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg, DynStructCol, DynStructMut};
 use crate::stats::StructStats;
 use crate::Codec64;
 
 /// A columnar representation of one blob's worth of data.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Part {
     len: usize,
-    key: Vec<(String, DynColumnRef)>,
-    val: Vec<(String, DynColumnRef)>,
+    key: DynStructCol,
+    val: DynStructCol,
     ts: Buffer<i64>,
     diff: Buffer<i64>,
 }
@@ -40,39 +40,18 @@ impl Part {
 
     /// Returns a [ColumnsRef] for the key columns.
     pub fn key_ref<'a>(&'a self) -> ColumnsRef<'a> {
-        ColumnsRef {
-            cols: self
-                .key
-                .iter()
-                .map(|(name, col)| (name.as_str(), col))
-                .collect(),
-        }
+        self.key.as_ref()
     }
 
     /// Returns a [ColumnsRef] for the val columns.
     pub fn val_ref<'a>(&'a self) -> ColumnsRef<'a> {
-        ColumnsRef {
-            cols: self
-                .val
-                .iter()
-                .map(|(name, col)| (name.as_str(), col))
-                .collect(),
-        }
+        self.val.as_ref()
     }
 
     /// Computes a [StructStats] for the key columns.
-    pub fn key_stats<K, KS: Schema<K>>(&self, schema: &KS) -> Result<StructStats, String> {
-        let mut stats = StructStats {
-            len: self.len(),
-            cols: Default::default(),
-        };
-        let mut cols = self.key_ref();
-        for (name, _typ, stats_fn) in schema.columns() {
-            let col_stats = cols.stats(&name, stats_fn)?;
-            stats.cols.insert(name, col_stats);
-        }
-        cols.finish()?;
-        Ok(stats)
+    pub fn key_stats(&self) -> Result<StructStats, String> {
+        let stats = self.key.stats()?;
+        Ok(stats.some)
     }
 
     pub(crate) fn to_arrow(&self) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {
@@ -80,46 +59,28 @@ impl Part {
             (Vec::new(), Vec::new(), Vec::<Box<dyn Array>>::new());
 
         {
-            let (mut key_fields, mut key_encodings, mut key_arrays) =
-                (Vec::new(), Vec::new(), Vec::new());
-            for (name, col) in self.key.iter() {
-                let (encoding, array, is_nullable) = col.to_arrow();
-                key_fields.push(Field::new(name, array.data_type().clone(), is_nullable));
-                key_encodings.push(encoding);
-                key_arrays.push(array);
-            }
             // arrow2 doesn't allow empty struct arrays. To make a future schema
             // migration for <no columns> <-> <one optional column> easier, we
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested
             // structs.
-            if !key_arrays.is_empty() {
-                let key = StructArray::new(ArrowLogicalType::Struct(key_fields), key_arrays, None);
-                fields.push(Field::new("k", key.data_type().clone(), false));
+            if let Some((key_array, key_encodings)) = self.key.to_arrow_struct() {
+                fields.push(Field::new("k", key_array.data_type().clone(), false));
                 encodings.push(key_encodings);
-                arrays.push(Box::new(key));
+                arrays.push(Box::new(key_array));
             }
         }
 
         {
-            let (mut val_fields, mut val_encodings, mut val_arrays) =
-                (Vec::new(), Vec::new(), Vec::new());
-            for (name, col) in self.val.iter() {
-                let (encoding, array, is_nullable) = col.to_arrow();
-                val_fields.push(Field::new(name, array.data_type().clone(), is_nullable));
-                val_encodings.push(encoding);
-                val_arrays.push(array);
-            }
             // arrow2 doesn't allow empty struct arrays. To make a future schema
             // migration for <no columns> <-> <one optional column> easier, we
             // model this as a missing column (rather than something like
             // NullArray). This also matches how we'd do the same for nested
             // structs.
-            if !val_arrays.is_empty() {
-                let val = StructArray::new(ArrowLogicalType::Struct(val_fields), val_arrays, None);
-                fields.push(Field::new("v", val.data_type().clone(), false));
+            if let Some((val_array, val_encodings)) = self.val.to_arrow_struct() {
+                fields.push(Field::new("v", val_array.data_type().clone(), false));
                 encodings.push(val_encodings);
-                arrays.push(Box::new(val));
+                arrays.push(Box::new(val_array));
             }
         }
 
@@ -150,7 +111,7 @@ impl Part {
 
         let len = chunk.len();
         let mut chunk = chunk.arrays().iter();
-        let key = if key_schema.is_empty() {
+        let key = if key_schema.cols.is_empty() {
             None
         } else {
             Some(
@@ -159,7 +120,7 @@ impl Part {
                     .ok_or_else(|| "missing key column".to_owned())?,
             )
         };
-        let val = if val_schema.is_empty() {
+        let val = if val_schema.cols.is_empty() {
             None
         } else {
             Some(
@@ -177,47 +138,13 @@ impl Part {
         }
 
         let key = match key {
-            None => Vec::new(),
-            Some(key) => {
-                if let Some(key_array) = key.as_any().downcast_ref::<StructArray>() {
-                    assert!(key_array.validity().is_none());
-                    assert_eq!(key_schema.len(), key_array.values().len());
-                    let mut key = Vec::new();
-                    for ((name, typ, _stats_fn), array) in key_schema.iter().zip(key_array.values())
-                    {
-                        let col = DynColumnRef::from_arrow(typ, array)?;
-                        key.push((name.clone(), col));
-                    }
-                    key
-                } else {
-                    return Err(format!(
-                        "expected key to be Null or Struct array got {:?}",
-                        key.data_type()
-                    ));
-                }
-            }
+            None => DynStructCol::empty(key_schema),
+            Some(key) => DynStructCol::from_arrow(key_schema, key)?,
         };
 
         let val = match val {
-            None => Vec::new(),
-            Some(val) => {
-                if let Some(val_array) = val.as_any().downcast_ref::<StructArray>() {
-                    assert!(val_array.validity().is_none());
-                    assert_eq!(val_schema.len(), val_array.values().len());
-                    let mut val = Vec::new();
-                    for ((name, typ, _stats_fn), array) in val_schema.iter().zip(val_array.values())
-                    {
-                        let col = DynColumnRef::from_arrow(typ, array)?;
-                        val.push((name.clone(), col));
-                    }
-                    val
-                } else {
-                    return Err(format!(
-                        "expected val to be Null or Struct array got {:?}",
-                        val.data_type()
-                    ));
-                }
-            }
+            None => DynStructCol::empty(val_schema),
+            Some(val) => DynStructCol::from_arrow(val_schema, val)?,
         };
 
         let diff = diff
@@ -256,38 +183,34 @@ impl Part {
     }
 
     fn validate(&self) -> Result<(), String> {
-        for (name, col) in self.key.iter() {
-            if self.len != col.len() {
-                return Err(format!(
-                    "key col {} len {} didn't match part len {}",
-                    name,
-                    col.len(),
-                    self.len()
-                ));
-            }
+        let () = self.key.validate()?;
+        if !self.key.cols.is_empty() && self.len != self.key.len() {
+            return Err(format!(
+                "key len {} didn't match part len {}",
+                self.key.len(),
+                self.len
+            ));
         }
-        for (name, col) in self.val.iter() {
-            if self.len != col.len() {
-                return Err(format!(
-                    "val col {} len {} didn't match part len {}",
-                    name,
-                    col.len(),
-                    self.len()
-                ));
-            }
+        let () = self.val.validate()?;
+        if !self.val.cols.is_empty() && self.len != self.val.len() {
+            return Err(format!(
+                "val len {} didn't match part len {}",
+                self.val.len(),
+                self.len
+            ));
         }
         if self.len != self.ts.len() {
             return Err(format!(
                 "ts col len {} didn't match part len {}",
                 self.ts.len(),
-                self.len()
+                self.len
             ));
         }
         if self.len != self.diff.len() {
             return Err(format!(
                 "diff col len {} didn't match part len {}",
                 self.diff.len(),
-                self.len()
+                self.len
             ));
         }
         // TODO: Also validate the col types match schema.
@@ -296,10 +219,10 @@ impl Part {
 }
 
 /// An in-progress columnar constructor for one blob's worth of data.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PartBuilder {
-    key: Vec<(String, DynColumnMut)>,
-    val: Vec<(String, DynColumnMut)>,
+    key: DynStructMut,
+    val: DynStructMut,
     ts: Vec<i64>,
     diff: Vec<i64>,
 }
@@ -307,16 +230,8 @@ pub struct PartBuilder {
 impl PartBuilder {
     /// Returns a new PartBuilder with the given schema.
     pub fn new<K, KS: Schema<K>, V, VS: Schema<V>>(key_schema: &KS, val_schema: &VS) -> Self {
-        let key = key_schema
-            .columns()
-            .into_iter()
-            .map(|(name, data_type, _stats_fn)| (name, DynColumnMut::new_untyped(&data_type)))
-            .collect();
-        let val = val_schema
-            .columns()
-            .into_iter()
-            .map(|(name, data_type, _stats_fn)| (name, DynColumnMut::new_untyped(&data_type)))
-            .collect();
+        let key = ColumnMut::<DynStructCfg>::new(&key_schema.columns());
+        let val = ColumnMut::<DynStructCfg>::new(&val_schema.columns());
         let ts = Vec::new();
         let diff = Vec::new();
         PartBuilder { key, val, ts, diff }
@@ -324,23 +239,9 @@ impl PartBuilder {
 
     /// Returns a [PartMut] for this in-progress part.
     pub fn get_mut<'a>(&'a mut self) -> PartMut<'a> {
-        let key = ColumnsMut {
-            cols: self
-                .key
-                .iter_mut()
-                .map(|(name, col)| (name.as_str(), col))
-                .collect(),
-        };
-        let val = ColumnsMut {
-            cols: self
-                .val
-                .iter_mut()
-                .map(|(name, col)| (name.as_str(), col))
-                .collect(),
-        };
         PartMut {
-            key,
-            val,
+            key: self.key.as_mut(),
+            val: self.val.as_mut(),
             ts: Codec64Mut(&mut self.ts),
             diff: Codec64Mut(&mut self.diff),
         }
@@ -348,16 +249,8 @@ impl PartBuilder {
 
     /// Completes construction of the [Part].
     pub fn finish(self) -> Result<Part, String> {
-        let key = self
-            .key
-            .into_iter()
-            .map(|(name, col)| (name, col.finish_untyped()))
-            .collect();
-        let val = self
-            .val
-            .into_iter()
-            .map(|(name, col)| (name, col.finish_untyped()))
-            .collect();
+        let key = DynStructCol::from(self.key);
+        let val = DynStructCol::from(self.val);
         let ts = Buffer::from(self.ts);
         let diff = Buffer::from(self.diff);
 

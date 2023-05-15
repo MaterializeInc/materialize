@@ -51,10 +51,10 @@
 use std::fmt::Debug;
 
 use crate::codec_impls::UnitSchema;
-use crate::columnar::sealed::ColumnRef;
-use crate::dyn_struct::{ColumnsMut, ColumnsRef};
+use crate::columnar::sealed::{ColumnMut, ColumnRef};
+use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use crate::part::PartBuilder;
-use crate::stats::{ColumnStats, StatsFn};
+use crate::stats::ColumnStats;
 use crate::Codec;
 
 /// A type understood by persist.
@@ -74,15 +74,20 @@ use crate::Codec;
 /// There is a 1:1 mapping between implementors of [Data] and variants of the
 /// [DataType] enum. The parallel hierarchy exists so that Data can be ergonomic
 /// while DataType is object-safe and has exhaustiveness checking. A Data impl
-/// can be mapped to it's corresponding DataType via [Data::TYPE] and back via
-/// DataType::data_fn.
+/// can be mapped to its corresponding DataType via [ColumnCfg::as_type] and
+/// back via DataType::data_fn.
 pub trait Data: Debug + Send + Sync + Sized + 'static {
-    /// The DataType variant corresponding to this data type.
-    const TYPE: DataType;
+    /// If necessary, whatever information beyond the type of `Self` needed to
+    /// produce a columnar schema for this type.
+    ///
+    /// Conceptually: type of `Self` + this config => columnar schema.
+    ///
+    /// For most Data impls, this is not necessary and set to `()`.
+    type Cfg: ColumnCfg<Self>;
 
     /// The associated reference type of [Self] used for reads and writes on
     /// columns of this type.
-    type Ref<'a>
+    type Ref<'a>: Default
     where
         Self: 'a;
 
@@ -90,20 +95,31 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
     type Col: ColumnGet<Self> + From<Self::Mut>;
 
     /// The exclusive builder of columns of this type of data.
-    type Mut: ColumnPush<Self> + Default;
+    type Mut: ColumnPush<Self>;
 
     /// The statistics type of columns of this type of data.
     type Stats: ColumnStats<Self> + for<'a> From<&'a Self::Col>;
 }
 
+/// If necessary, whatever information beyond the type of `Self` needed to
+/// produce a columnar schema for this type.
+///
+/// Conceptually: type of `Self` + this config => columnar schema.
+///
+/// For most Data impls, this is not necessary and set to `()`.
+pub trait ColumnCfg<T: Data> {
+    /// Returns the [DataType] for an instance of `T` with this configuration.
+    fn as_type(&self) -> DataType;
+}
+
 /// A type that may be retrieved from a column of `[T]`.
-pub trait ColumnGet<T: Data>: ColumnRef {
+pub trait ColumnGet<T: Data>: ColumnRef<T::Cfg> {
     /// Retrieves the value at index.
     fn get<'a>(&'a self, idx: usize) -> T::Ref<'a>;
 }
 
 /// A type that may be added into a column of `[T]`.
-pub trait ColumnPush<T: Data>: Send + Sync {
+pub trait ColumnPush<T: Data>: ColumnMut<T::Cfg> {
     /// Pushes a new value into this column.
     fn push<'a>(&mut self, val: T::Ref<'a>);
 }
@@ -112,8 +128,31 @@ pub(crate) mod sealed {
     use arrow2::array::Array;
     use arrow2::io::parquet::write::Encoding;
 
+    /// A common trait implemented by all `Data::Mut` types.
+    pub trait ColumnMut<Cfg>: Sized + Send + Sync {
+        /// Construct an empty instance of this type with the given
+        /// configuration.
+        fn new(cfg: &Cfg) -> Self;
+
+        /// Returns the [super::ColumnCfg] for this column.
+        fn cfg(&self) -> &Cfg;
+    }
+
+    impl<T: Default + Send + Sync> ColumnMut<()> for T {
+        fn new(_cfg: &()) -> Self {
+            T::default()
+        }
+
+        fn cfg(&self) -> &() {
+            &()
+        }
+    }
+
     /// A common trait implemented by all `Data::Col` types.
-    pub trait ColumnRef: Sized + Send + Sync {
+    pub trait ColumnRef<Cfg>: Sized + Send + Sync {
+        /// Returns the [super::ColumnCfg] for this column.
+        fn cfg(&self) -> &Cfg;
+
         /// Returns the number of elements in this column.
         fn len(&self) -> usize;
 
@@ -122,7 +161,7 @@ pub(crate) mod sealed {
 
         /// Constructs the column from an arrow2 Array.
         #[allow(clippy::borrowed_box)]
-        fn from_arrow(array: &Box<dyn Array>) -> Result<Self, String>;
+        fn from_arrow(cfg: &Cfg, array: &Box<dyn Array>) -> Result<Self, String>;
     }
 }
 
@@ -131,9 +170,10 @@ pub(crate) mod sealed {
 /// There is a 1:1 mapping between implementors of [Data] and variants of the
 /// [DataType] enum. The parallel hierarchy exists so that Data can be ergonomic
 /// while DataType is object-safe and has exhaustiveness checking. A Data impl
-/// can be mapped to it's corresponding DataType via [Data::TYPE] and back via
-/// DataType::data_fn.
-#[derive(Debug, Clone, PartialEq)]
+/// can be mapped to its corresponding DataType via [ColumnCfg::as_type] and
+/// back via DataType::data_fn.
+#[derive(Debug, Clone)]
+#[cfg_attr(debug_assertions, derive(PartialEq))]
 pub struct DataType {
     /// Whether this type is optional.
     pub optional: bool,
@@ -150,7 +190,8 @@ pub struct DataType {
 /// It also represents slightly different semantics. The arrow2 DataType always
 /// indicates an optional field, where as these all indicate non-optional fields
 /// (which may be made optional via [DataType]).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
+#[cfg_attr(debug_assertions, derive(PartialEq))]
 pub enum ColumnFormat {
     /// A column of type [bool].
     Bool,
@@ -178,8 +219,9 @@ pub enum ColumnFormat {
     Bytes,
     /// A column of type [String].
     String,
+    /// A column of type [crate::dyn_struct::DynStruct].
+    Struct(DynStructCfg),
     // TODO: FixedSizedBytes for UUIDs?
-    // TODO: Struct?
 }
 
 /// An encoder for values of a fixed schema
@@ -211,13 +253,7 @@ pub trait Schema<T>: Debug + Send + Sync {
     type Decoder<'a>: PartDecoder<'a, T>;
 
     /// Returns the name and types of the columns in this type.
-    ///
-    /// TODO: This is the only place where DataType leaks externally. We could
-    /// tighten up the abstraction by instead passing into this method some
-    /// object with a method like `fn add<T: Data>(name: String)`. If we decide
-    /// to support struct columns, a hypothetical StructSchemaBuilder would look
-    /// very much like this. Decide if this is better/worth it.
-    fn columns(&self) -> Vec<(String, DataType, StatsFn)>;
+    fn columns(&self) -> DynStructCfg;
 
     /// Returns a [Self::Decoder<'a>] for the given columns.
     fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String>;
@@ -240,6 +276,9 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
         part_mut.diff.push(1i64);
     }
     let part = part.finish()?;
+
+    // Sanity check that we can compute stats.
+    let _stats = part.key_stats().expect("stats should be compute-able");
 
     let mut actual = T::default();
     assert_eq!(part.len(), 1);

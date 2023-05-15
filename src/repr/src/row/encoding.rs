@@ -17,10 +17,10 @@ use dec::Decimal;
 use enum_dispatch::enum_dispatch;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::{
-    ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
+    ColumnCfg, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
 use mz_persist_types::dyn_col::DynColumnRef;
-use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef};
+use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use mz_persist_types::stats::{AtomicBytesStats, BytesStats, DynStats, OptionStats, StatsFn};
 use mz_persist_types::Codec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
@@ -155,7 +155,15 @@ impl ColumnType {
 /// `VarChar`).
 pub trait DatumToPersist {
     /// The persist columnar type we're mapping to/from.
-    type Data: Data;
+    type Data: Data<Cfg = Self::Cfg>;
+
+    /// Any information, in addition to the type of `Self::Data`, that is
+    /// necessary to derive the columnar schema of this type. E.g. for
+    /// ScalarType::Record, this will be the schema of the record.
+    type Cfg: ColumnCfg<Self::Data>;
+    // TODO: This `const CFG` model won't work for things where Self::Cfg is not
+    // (). Revisit when we get there.
+    const CFG: Self::Cfg;
 
     /// Which logic to use for computing aggregate stats.
     const STATS_FN: StatsFn;
@@ -164,6 +172,16 @@ pub trait DatumToPersist {
     ///
     /// Panics if the Datum doesn't match the persist column type.
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum);
+
+    /// Pushes the default value for this type into the column.
+    ///
+    /// NB: This is because Arrow's optional struct array representation is
+    /// "dense". Even for entries in where the struct's validity bit is false,
+    /// we still have to encode some ignored value. Unfortunately, we can't just
+    /// call `Self::encode` with a `Datum::Null` without tripping up some
+    /// (useful) debug assertions. Feel free to remove this method if you can
+    /// find a nice way to do it.
+    fn encode_default(col: &mut <Self::Data as Data>::Mut);
 
     /// Decodes the data with the given reference into a Datum. This Datum is
     /// returned by pushing it in to the given RowPacker.
@@ -184,9 +202,14 @@ macro_rules! data_to_persist_primitive {
     ($data:ty, $unwrap:ident) => {
         impl DatumToPersist for $data {
             type Data = $data;
+            type Cfg = ();
+            const CFG: Self::Cfg = ();
             const STATS_FN: StatsFn = StatsFn::Default;
             fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
                 ColumnPush::<Self::Data>::push(col, datum.$unwrap());
+            }
+            fn encode_default(col: &mut <Self::Data as Data>::Mut) {
+                ColumnPush::<Self::Data>::push(col, <$data as Data>::Ref::default());
             }
             fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
                 row.push(Datum::from(val))
@@ -194,6 +217,8 @@ macro_rules! data_to_persist_primitive {
         }
         impl DatumToPersist for Option<$data> {
             type Data = Option<$data>;
+            type Cfg = ();
+            const CFG: Self::Cfg = ();
             const STATS_FN: StatsFn = StatsFn::Default;
             fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
                 if datum.is_null() {
@@ -201,6 +226,9 @@ macro_rules! data_to_persist_primitive {
                 } else {
                     ColumnPush::<Self::Data>::push(col, Some(datum.$unwrap()));
                 }
+            }
+            fn encode_default(col: &mut <Self::Data as Data>::Mut) {
+                ColumnPush::<Self::Data>::push(col, None);
             }
             fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
                 row.push(Datum::from(val))
@@ -229,6 +257,8 @@ pub struct ProtoDatumToPersist;
 
 impl DatumToPersist for ProtoDatumToPersist {
     type Data = Vec<u8>;
+    type Cfg = ();
+    const CFG: Self::Cfg = ();
     const STATS_FN: StatsFn =
         StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
             let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
@@ -242,6 +272,9 @@ impl DatumToPersist for ProtoDatumToPersist {
         let proto = ProtoDatum::from(datum);
         let buf = proto.encode_to_vec();
         ColumnPush::<Self::Data>::push(col, &buf);
+    }
+    fn encode_default(col: &mut <Self::Data as Data>::Mut) {
+        ColumnPush::<Self::Data>::push(col, &[]);
     }
     fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
         let proto = ProtoDatum::decode(val).expect("col should be valid ProtoDatum");
@@ -257,6 +290,8 @@ pub struct NullableProtoDatumToPersist;
 
 impl DatumToPersist for NullableProtoDatumToPersist {
     type Data = Option<Vec<u8>>;
+    type Cfg = ();
+    const CFG: Self::Cfg = ();
     const STATS_FN: StatsFn =
         StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
             let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
@@ -274,6 +309,9 @@ impl DatumToPersist for NullableProtoDatumToPersist {
             ColumnPush::<Self::Data>::push(col, Some(&buf));
         }
     }
+    fn encode_default(col: &mut <Self::Data as Data>::Mut) {
+        ColumnPush::<Self::Data>::push(col, None);
+    }
     fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
         let Some(val) = val else {
             row.push(Datum::Null);
@@ -287,6 +325,8 @@ impl DatumToPersist for NullableProtoDatumToPersist {
 
 impl DatumToPersist for Jsonb {
     type Data = <ProtoDatumToPersist as DatumToPersist>::Data;
+    type Cfg = ();
+    const CFG: Self::Cfg = ();
     const STATS_FN: StatsFn =
         StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
             let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Vec<u8>>()?)?;
@@ -296,6 +336,9 @@ impl DatumToPersist for Jsonb {
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         ProtoDatumToPersist::encode(col, datum)
     }
+    fn encode_default(col: &mut <Self::Data as Data>::Mut) {
+        ProtoDatumToPersist::encode_default(col)
+    }
     fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
         ProtoDatumToPersist::decode(val, row)
     }
@@ -303,6 +346,8 @@ impl DatumToPersist for Jsonb {
 
 impl DatumToPersist for Option<Jsonb> {
     type Data = <NullableProtoDatumToPersist as DatumToPersist>::Data;
+    type Cfg = ();
+    const CFG: Self::Cfg = ();
     const STATS_FN: StatsFn =
         StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
             let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Option<Vec<u8>>>()?)?;
@@ -313,6 +358,9 @@ impl DatumToPersist for Option<Jsonb> {
         });
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         NullableProtoDatumToPersist::encode(col, datum)
+    }
+    fn encode_default(col: &mut <Self::Data as Data>::Mut) {
+        NullableProtoDatumToPersist::encode_default(col)
     }
     fn decode(val: <Self::Data as Data>::Ref<'_>, row: &mut RowPacker) {
         NullableProtoDatumToPersist::decode(val, row)
@@ -360,6 +408,7 @@ pub enum DatumEncoder<'a> {
 #[enum_dispatch(DatumEncoder)]
 pub trait DatumEncoderT<'a> {
     fn encode(&mut self, datum: Datum);
+    fn encode_default(&mut self);
 }
 
 /// A newtype wrapper for `&mut T::Mut`.
@@ -379,6 +428,9 @@ impl<T: DatumToPersist> std::fmt::Debug for DataMut<'_, T> {
 impl<'a, T: DatumToPersist> DatumEncoderT<'a> for DataMut<'a, T> {
     fn encode(&mut self, datum: Datum) {
         T::encode(self.0, datum);
+    }
+    fn encode_default(&mut self) {
+        T::encode_default(self.0);
     }
 }
 
@@ -488,29 +540,13 @@ impl<'a> PartDecoder<'a, Row> for RowDecoder<'a> {
     }
 }
 
-impl Schema<Row> for RelationDesc {
-    type Encoder<'a> = RowEncoder<'a>;
-    type Decoder<'a> = RowDecoder<'a>;
-
-    fn columns(&self) -> Vec<(String, DataType, StatsFn)> {
-        struct ToPersist;
-        impl DatumToPersistFn<(DataType, StatsFn)> for ToPersist {
-            fn call<T: DatumToPersist>(self) -> (DataType, StatsFn) {
-                (<T::Data as Data>::TYPE, T::STATS_FN)
-            }
-        }
-
-        self.iter()
-            .map(|(name, typ)| {
-                let (data_type, stats_fn) = typ.to_persist(ToPersist);
-                (name.0.clone(), data_type, stats_fn)
-            })
-            .collect()
-    }
-
-    fn decoder<'a>(&self, mut part: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
-        struct DatumDecoderFn<'a, 'b>(&'b str, &'b mut ColumnsRef<'a>);
-        impl<'a, 'b> DatumToPersistFn<DatumDecoder<'a>> for DatumDecoderFn<'a, 'b> {
+impl RelationDesc {
+    pub fn decoder<'a, V>(
+        &self,
+        mut part: ColumnsRef<'a, V>,
+    ) -> Result<(V, RowDecoder<'a>), String> {
+        struct DatumDecoderFn<'a, 'b, V>(&'b str, &'b mut ColumnsRef<'a, V>);
+        impl<'a, 'b, V> DatumToPersistFn<DatumDecoder<'a>> for DatumDecoderFn<'a, 'b, V> {
             fn call<T: DatumToPersist>(self) -> DatumDecoder<'a>
             where
                 for<'c> DatumDecoder<'c>: From<DataRef<'c, T>>,
@@ -528,13 +564,16 @@ impl Schema<Row> for RelationDesc {
             let col_decoder = typ.to_persist(DatumDecoderFn(name.as_str(), &mut part));
             col_decoders.push(col_decoder);
         }
-        let () = part.finish()?;
-        Ok(RowDecoder { col_decoders })
+        let validity = part.finish()?;
+        Ok((validity, RowDecoder { col_decoders }))
     }
 
-    fn encoder<'a>(&self, mut part: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        struct DatumEncoderFn<'a, 'b>(&'b str, &'b mut ColumnsMut<'a>);
-        impl<'a, 'b> DatumToPersistFn<DatumEncoder<'a>> for DatumEncoderFn<'a, 'b> {
+    pub fn encoder<'a, V>(
+        &self,
+        mut part: ColumnsMut<'a, V>,
+    ) -> Result<(V, RowEncoder<'a>), String> {
+        struct DatumEncoderFn<'a, 'b, V>(&'b str, &'b mut ColumnsMut<'a, V>);
+        impl<'a, 'b, V> DatumToPersistFn<DatumEncoder<'a>> for DatumEncoderFn<'a, 'b, V> {
             fn call<T: DatumToPersist>(self) -> DatumEncoder<'a>
             where
                 for<'c> DatumEncoder<'c>: From<DataMut<'c, T>>,
@@ -552,8 +591,41 @@ impl Schema<Row> for RelationDesc {
             let col_encoder = typ.to_persist(DatumEncoderFn(name.as_str(), &mut part));
             col_encoders.push(col_encoder);
         }
-        let () = part.finish()?;
-        Ok(RowEncoder { col_encoders })
+        let validity = part.finish()?;
+        Ok((validity, RowEncoder { col_encoders }))
+    }
+}
+
+impl Schema<Row> for RelationDesc {
+    type Encoder<'a> = RowEncoder<'a>;
+    type Decoder<'a> = RowDecoder<'a>;
+
+    fn columns(&self) -> DynStructCfg {
+        struct ToPersist;
+        impl DatumToPersistFn<(DataType, StatsFn)> for ToPersist {
+            fn call<T: DatumToPersist>(self) -> (DataType, StatsFn) {
+                (ColumnCfg::<T::Data>::as_type(&T::CFG), T::STATS_FN)
+            }
+        }
+
+        let cols = self
+            .iter()
+            .map(|(name, typ)| {
+                let (data_type, stats_fn) = typ.to_persist(ToPersist);
+                (name.0.clone(), data_type, stats_fn)
+            })
+            .collect::<Vec<_>>();
+        DynStructCfg::from(cols)
+    }
+
+    fn decoder<'a>(&self, part: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
+        let ((), decoder) = self.decoder(part)?;
+        Ok(decoder)
+    }
+
+    fn encoder<'a>(&self, part: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
+        let ((), encoder) = self.encoder(part)?;
+        Ok(encoder)
     }
 }
 

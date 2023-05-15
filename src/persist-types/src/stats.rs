@@ -30,6 +30,35 @@ pub enum StatsFn {
     Custom(fn(&DynColumnRef) -> Result<Box<dyn DynStats>, String>),
 }
 
+#[cfg(debug_assertions)]
+impl PartialEq for StatsFn {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (StatsFn::Default, StatsFn::Default) => true,
+            (StatsFn::Custom(s), StatsFn::Custom(o)) => {
+                let s: fn(&'static DynColumnRef) -> Result<Box<dyn DynStats>, String> = *s;
+                let o: fn(&'static DynColumnRef) -> Result<Box<dyn DynStats>, String> = *o;
+                // I think this is not always correct, but it's only used in
+                // debug_assertions so as long as CI is happy with it, probably
+                // good enough.
+                s == o
+            }
+            (StatsFn::Default, StatsFn::Custom(_)) | (StatsFn::Custom(_), StatsFn::Default) => {
+                false
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for StatsFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Default => write!(f, "Default"),
+            Self::Custom(_) => f.debug_struct("Custom").finish_non_exhaustive(),
+        }
+    }
+}
+
 /// Aggregate statistics about a column of type `T`.
 pub trait ColumnStats<T: Data>: DynStats {
     /// An inclusive lower bound on the data contained in the column, if known.
@@ -425,6 +454,7 @@ mod impls {
     use serde::Serialize;
 
     use crate::columnar::Data;
+    use crate::dyn_struct::{DynStruct, DynStructCol};
     use crate::stats::private::StatsCost;
     use crate::stats::{
         proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
@@ -727,6 +757,32 @@ mod impls {
         }
     }
 
+    impl ColumnStats<DynStruct> for StructStats {
+        fn lower<'a>(&'a self) -> Option<<DynStruct as Data>::Ref<'a>> {
+            // Not meaningful for structs
+            None
+        }
+        fn upper<'a>(&'a self) -> Option<<DynStruct as Data>::Ref<'a>> {
+            // Not meaningful for structs
+            None
+        }
+        fn none_count(&self) -> usize {
+            0
+        }
+    }
+
+    impl ColumnStats<Option<DynStruct>> for OptionStats<StructStats> {
+        fn lower<'a>(&'a self) -> Option<<Option<DynStruct> as Data>::Ref<'a>> {
+            self.some.lower().map(Some)
+        }
+        fn upper<'a>(&'a self) -> Option<<Option<DynStruct> as Data>::Ref<'a>> {
+            self.some.upper().map(Some)
+        }
+        fn none_count(&self) -> usize {
+            self.none
+        }
+    }
+
     impl From<&Bitmap> for PrimitiveStats<bool> {
         fn from(value: &Bitmap) -> Self {
             // Needing this Array is a bit unfortunate, but the clone is cheap.
@@ -865,6 +921,19 @@ mod impls {
                 none,
                 some: PrimitiveStats { lower, upper },
             }
+        }
+    }
+
+    impl From<&DynStructCol> for StructStats {
+        fn from(value: &DynStructCol) -> Self {
+            assert!(value.validity.is_none());
+            value.stats().expect("valid stats").some
+        }
+    }
+
+    impl From<&DynStructCol> for OptionStats<StructStats> {
+        fn from(value: &DynStructCol) -> Self {
+            value.stats().expect("valid stats")
         }
     }
 
@@ -1178,6 +1247,7 @@ mod tests {
     use arrow2::array::BinaryArray;
     use proptest::prelude::*;
 
+    use crate::columnar::sealed::ColumnMut;
     use crate::columnar::ColumnPush;
 
     use super::*;
@@ -1301,11 +1371,11 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn primitive_cost_trim_proptest() {
-        fn primitive_stats<'a, T: Data, F>(xs: &'a [T], f: F) -> (&'a [T], T::Stats)
+        fn primitive_stats<'a, T: Data<Cfg = ()>, F>(xs: &'a [T], f: F) -> (&'a [T], T::Stats)
         where
             F: for<'b> Fn(&'b T) -> T::Ref<'b>,
         {
-            let mut col = T::Mut::default();
+            let mut col = T::Mut::new(&());
             for x in xs {
                 col.push(f(x));
             }
