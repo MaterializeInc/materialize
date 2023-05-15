@@ -617,10 +617,13 @@ impl Typecheck {
                 equivalences,
                 implementation,
             } => {
-                let mut t_in = Vec::new();
+                let mut t_in_global = Vec::new();
+                let mut t_in_local = vec![Vec::new(); inputs.len()];
 
-                for input in inputs.iter() {
-                    t_in.extend(tc.typecheck(input, ctx)?);
+                for (i, input) in inputs.iter().enumerate() {
+                    let input_t = tc.typecheck(input, ctx)?;
+                    t_in_global.extend(input_t.clone());
+                    t_in_local[i] = input_t;
                 }
 
                 for eq_class in equivalences {
@@ -629,7 +632,8 @@ impl Typecheck {
                     let mut all_nullable = true;
 
                     for scalar_expr in eq_class {
-                        let t_expr = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
+                        // Note: the equivalences have global column references
+                        let t_expr = tc.typecheck_scalar(scalar_expr, expr, &t_in_global)?;
 
                         if !t_expr.nullable {
                             all_nullable = false;
@@ -686,24 +690,24 @@ impl Typecheck {
 
                 // check that the join implementation is consistent
                 match implementation {
-                    JoinImplementation::Differential((_, first_key, _), others) => {
+                    JoinImplementation::Differential((start_idx, first_key, _), others) => {
                         if let Some(key) = first_key {
                             for k in key {
-                                let _ = tc.typecheck_scalar(k, expr, &t_in)?;
+                                let _ = tc.typecheck_scalar(k, expr, &t_in_local[*start_idx])?;
                             }
                         }
 
-                        for (_, key, _) in others {
+                        for (idx, key, _) in others {
                             for k in key {
-                                let _ = tc.typecheck_scalar(k, expr, &t_in)?;
+                                let _ = tc.typecheck_scalar(k, expr, &t_in_local[*idx])?;
                             }
                         }
                     }
                     JoinImplementation::DeltaQuery(plans) => {
                         for plan in plans {
-                            for (_, key, _) in plan {
+                            for (idx, key, _) in plan {
                                 for k in key {
-                                    let _ = tc.typecheck_scalar(k, expr, &t_in)?;
+                                    let _ = tc.typecheck_scalar(k, expr, &t_in_local[*idx])?;
                                 }
                             }
                         }
@@ -711,7 +715,7 @@ impl Typecheck {
                     JoinImplementation::IndexedFilter(_global_id, key, consts) => {
                         let typ: Vec<ColumnType> = key
                             .iter()
-                            .map(|k| tc.typecheck_scalar(k, expr, &t_in))
+                            .map(|k| tc.typecheck_scalar(k, expr, &t_in_global))
                             .collect::<Result<Vec<ColumnType>, TypeError>>()?;
 
                         for row in consts {
@@ -743,7 +747,7 @@ impl Typecheck {
                     JoinImplementation::Unimplemented => (),
                 }
 
-                Ok(t_in)
+                Ok(t_in_global)
             }
             Reduce {
                 input,
