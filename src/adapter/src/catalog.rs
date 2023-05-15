@@ -6851,21 +6851,32 @@ impl Catalog {
             keep_n_source_status_history_entries: self
                 .system_config()
                 .keep_n_source_status_history_entries(),
-            upsert_rocksdb_tuning_config: Some({
-                let config_str = self.system_config().upsert_rocksdb_tuning_config();
-                match serde_json::from_str(config_str) {
+            upsert_rocksdb_tuning_config: {
+                match mz_rocksdb::RocksDBTuningParameters::from_parameters(
+                    self.system_config().upsert_rocksdb_compaction_style(),
+                    self.system_config()
+                        .upsert_rocksdb_optimize_compaction_memtable_budget(),
+                    self.system_config()
+                        .upsert_rocksdb_level_compaction_dynamic_level_bytes(),
+                    self.system_config()
+                        .upsert_rocksdb_universal_compaction_ratio(),
+                    self.system_config().upsert_rocksdb_parallelism(),
+                    self.system_config().upsert_rocksdb_compression_type(),
+                    self.system_config()
+                        .upsert_rocksdb_bottommost_compression_type(),
+                ) {
                     Ok(u) => u,
                     Err(e) => {
                         tracing::warn!(
-                            "Failed to deserialize {} into a `RocksDBTuningParameters`, \
+                            "Failed to deserialize upsert_rocksdb parameters \
+                            into a `RocksDBTuningParameters`, \
                             failing back to reasonable defaults: {}",
-                            config_str,
                             e.display_with_causes()
                         );
-                        mz_rocksdb::RocksDBTuningParameters::reasonable_defaults()
+                        mz_rocksdb::RocksDBTuningParameters::default()
                     }
                 }
-            }),
+            },
         }
     }
 

@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// This module is mostly boilerplate, with all relevant
+// documentation on `RocksDBTuningParameters`.
+#![allow(missing_docs)]
+
 //! This module offers a `serde::Deserialize` implementation (to be used
 //! with LaunchDarkly) `RocksDBTuningParameters` that can be used
 //! to tune a RocksDB instance. The supported options are carefully
@@ -33,10 +37,19 @@
 //! - <https://www.eecg.toronto.edu/~stumm/Papers/Dong-CIDR-16.pdf>
 //! - <http://smalldatum.blogspot.com/2015/11/read-write-space-amplification-pick-2_23.html>
 
+use std::str::FromStr;
+
+use proptest_derive::Arbitrary;
 use rocksdb::{DBCompactionStyle, DBCompressionType};
+use serde::{Deserialize, Serialize};
+
+use mz_ore::cast::CastFrom;
+use mz_proto::{RustType, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_rocksdb.tuning.rs"));
 
 /// A set of parameters to tune RocksDB.
-#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug, Arbitrary)]
 pub struct RocksDBTuningParameters {
     /// RocksDB has 2 primary styles of compaction:
     /// - The default, usually referred to as "level" compaction
@@ -50,7 +63,6 @@ pub struct RocksDBTuningParameters {
     /// more space temporarily while performing compaction.
     ///
     /// For these reasons, the default is `CompactionStyle::Level`.
-    #[serde(default)]
     pub compaction_style: CompactionStyle,
     /// The `RocksDB` api offers a single configuration method that sets some
     /// reasonable defaults for heavy-write workloads, either
@@ -61,7 +73,6 @@ pub struct RocksDBTuningParameters {
     /// by the size of the memtable (basically the in-memory buffer used to avoid IO). The default
     /// here is ~512MB, which is the default from here: <https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h#L102>,
     /// and about twice the global RocksDB default.
-    #[serde(default = "default_compaction_optimization")]
     pub optimize_compaction_memtable_budget: usize,
 
     /// This option, when enabled, dynamically tunes
@@ -74,14 +85,12 @@ pub struct RocksDBTuningParameters {
     ///
     /// This option defaults to true, as its basically free saved-space, and only applies to
     /// `CompactionStyle::Level`.
-    #[serde(default = "default_true")]
     pub level_compaction_dynamic_level_bytes: bool,
 
     /// The additional space-amplification used with universal compaction.
     /// Only applies to `CompactionStyle::Universal`.
     ///
     /// See `compaction_style` for more information.
-    #[serde(default = "default_universal_ratio")]
     pub universal_compaction_target_ratio: i32,
 
     /// By default, RocksDB uses only 1 thread to perform compaction and other background tasks.
@@ -104,20 +113,68 @@ pub struct RocksDBTuningParameters {
     /// more space. The default is `Zstd`, which many think has the best compression ratio. Note
     /// that tuning the bottommost layer separately only makes sense when you have free cpu,
     /// which we have in the case of the `UPSERT` usecase.
-    #[serde(default = "default_compression")]
     pub compression_type: CompressionType,
 
     /// See `compression_type` for more information.
-    #[serde(default = "default_bottommost_compression")]
     pub bottommost_compression_type: CompressionType,
 }
 
-impl RocksDBTuningParameters {
-    /// Setup some reasonable defaults for turning `RocksDB`
-    pub fn reasonable_defaults() -> Self {
-        // This is the best way to ensure this default is the same that `serde` will give.
-        serde_json::from_str("{}").unwrap()
+impl Default for RocksDBTuningParameters {
+    fn default() -> Self {
+        Self {
+            compaction_style: defaults::DEFAULT_COMPACTION_STYLE,
+            optimize_compaction_memtable_budget:
+                defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+            level_compaction_dynamic_level_bytes:
+                defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+            universal_compaction_target_ratio: defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
+            parallelism: defaults::DEFAULT_PARALLELISM,
+            compression_type: defaults::DEFAULT_COMPRESSION_TYPE,
+            bottommost_compression_type: defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+        }
     }
+}
+
+impl RocksDBTuningParameters {
+    /// Build a `RocksDBTuningParameters` from strings and values from LD parameters.
+    pub fn from_parameters(
+        compaction_style: &str,
+        optimize_compaction_memtable_budget: usize,
+        level_compaction_dynamic_level_bytes: bool,
+        universal_compaction_target_ratio: i32,
+        parallelism: Option<i32>,
+        compression_type: &str,
+        bottommost_compression_type: &str,
+    ) -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            compaction_style: compaction_style.parse()?,
+            optimize_compaction_memtable_budget,
+            level_compaction_dynamic_level_bytes,
+            universal_compaction_target_ratio: if universal_compaction_target_ratio > 100 {
+                universal_compaction_target_ratio
+            } else {
+                return Err(anyhow::anyhow!(
+                    "universal_compaction_target_ratio ({}) must be > 100",
+                    universal_compaction_target_ratio
+                ));
+            },
+            parallelism: match parallelism {
+                Some(parallelism) => {
+                    if parallelism < 1 {
+                        return Err(anyhow::anyhow!(
+                            "parallelism({}) must be > 1, or not specified",
+                            universal_compaction_target_ratio
+                        ));
+                    }
+                    Some(parallelism)
+                }
+                None => None,
+            },
+            compression_type: compression_type.parse()?,
+            bottommost_compression_type: bottommost_compression_type.parse()?,
+        })
+    }
+
     /// Apply these tuning parameters to a `rocksdb::Options`. Some may
     /// be applied to a shared `Env` underlying the `Options`.
     pub fn apply_to_options(&self, options: &mut rocksdb::Options) {
@@ -174,13 +231,25 @@ impl RocksDBTuningParameters {
 
 /// The 2 primary compaction styles in RocksDB`. See `RocksDBTuningParameters::compaction_style`
 /// for more information.
-#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Arbitrary)]
 pub enum CompactionStyle {
-    #[serde(rename = "level")]
-    #[default]
     Level,
-    #[serde(rename = "universal")]
     Universal,
+}
+
+impl FromStr for CompactionStyle {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "level" => Ok(Self::Level),
+            "universal" => Ok(Self::Universal),
+            other => Err(anyhow::anyhow!(
+                "{} is not a supported compaction style",
+                other
+            )),
+        }
+    }
 }
 
 impl From<CompactionStyle> for DBCompactionStyle {
@@ -195,17 +264,29 @@ impl From<CompactionStyle> for DBCompactionStyle {
 
 /// Mz-supported compression types in RocksDB`. See `RocksDBTuningParameters::compression_type`
 /// for more information.
-#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Arbitrary)]
 pub enum CompressionType {
-    #[serde(rename = "zstd")]
-    #[default]
     Zstd,
-    #[serde(rename = "snappy")]
     Snappy,
-    #[serde(rename = "lz4")]
     Lz4,
-    #[serde(rename = "none")]
     None,
+}
+
+impl FromStr for CompressionType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "zstd" => Ok(Self::Zstd),
+            "snappy" => Ok(Self::Snappy),
+            "lz4" => Ok(Self::Lz4),
+            "None" => Ok(Self::None),
+            other => Err(anyhow::anyhow!(
+                "{} is not a supported compression type",
+                other
+            )),
+        }
+    }
 }
 
 impl From<CompressionType> for DBCompressionType {
@@ -220,47 +301,161 @@ impl From<CompressionType> for DBCompressionType {
     }
 }
 
-// The following are functions used to define defaults for the `serde::Deserialize` implementation
-// for `RocksDBTuningParameters`.
+impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
+    fn into_proto(&self) -> ProtoRocksDbTuningParameters {
+        use proto_rocks_db_tuning_parameters::{
+            proto_compaction_style, proto_compression_type, ProtoCompactionStyle,
+            ProtoCompressionType,
+        };
 
-fn default_true() -> bool {
-    true
-}
-/// From here: <https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h#L102>
-fn default_compaction_optimization() -> usize {
-    512 * 1024 * 1024
+        fn compression_into_proto(compression_type: &CompressionType) -> ProtoCompressionType {
+            ProtoCompressionType {
+                kind: Some(match compression_type {
+                    CompressionType::Zstd => proto_compression_type::Kind::Zstd(()),
+                    CompressionType::Snappy => proto_compression_type::Kind::Snappy(()),
+                    CompressionType::Lz4 => proto_compression_type::Kind::Lz4(()),
+                    CompressionType::None => proto_compression_type::Kind::None(()),
+                }),
+            }
+        }
+        ProtoRocksDbTuningParameters {
+            compaction_style: Some(ProtoCompactionStyle {
+                kind: Some(match self.compaction_style {
+                    CompactionStyle::Level => proto_compaction_style::Kind::Level(()),
+                    CompactionStyle::Universal => proto_compaction_style::Kind::Universal(()),
+                }),
+            }),
+            optimize_compaction_memtable_budget: u64::cast_from(
+                self.optimize_compaction_memtable_budget,
+            ),
+            level_compaction_dynamic_level_bytes: self.level_compaction_dynamic_level_bytes,
+            universal_compaction_target_ratio: self.universal_compaction_target_ratio,
+            parallelism: self.parallelism,
+            compression_type: Some(compression_into_proto(&self.compression_type)),
+            bottommost_compression_type: Some(compression_into_proto(
+                &self.bottommost_compression_type,
+            )),
+        }
+    }
+
+    fn from_proto(proto: ProtoRocksDbTuningParameters) -> Result<Self, TryFromProtoError> {
+        use proto_rocks_db_tuning_parameters::{
+            proto_compaction_style, proto_compression_type, ProtoCompactionStyle,
+            ProtoCompressionType,
+        };
+
+        fn compression_from_proto(
+            compression_type: Option<ProtoCompressionType>,
+        ) -> Result<CompressionType, TryFromProtoError> {
+            match compression_type {
+                Some(ProtoCompressionType {
+                    kind: Some(proto_compression_type::Kind::Zstd(())),
+                }) => Ok(CompressionType::Zstd),
+                Some(ProtoCompressionType {
+                    kind: Some(proto_compression_type::Kind::Snappy(())),
+                }) => Ok(CompressionType::Snappy),
+                Some(ProtoCompressionType {
+                    kind: Some(proto_compression_type::Kind::Lz4(())),
+                }) => Ok(CompressionType::Lz4),
+                Some(ProtoCompressionType {
+                    kind: Some(proto_compression_type::Kind::None(())),
+                }) => Ok(CompressionType::None),
+                Some(ProtoCompressionType { kind: None }) => Err(TryFromProtoError::MissingField(
+                    "ProtoRocksDbTuningParameters::compression_type::kind".into(),
+                )),
+                None => Err(TryFromProtoError::MissingField(
+                    "ProtoRocksDbTuningParameters::compression_type".into(),
+                )),
+            }
+        }
+        Ok(Self {
+            compaction_style: match proto.compaction_style {
+                Some(ProtoCompactionStyle {
+                    kind: Some(proto_compaction_style::Kind::Level(())),
+                }) => CompactionStyle::Level,
+                Some(ProtoCompactionStyle {
+                    kind: Some(proto_compaction_style::Kind::Universal(())),
+                }) => CompactionStyle::Universal,
+                Some(ProtoCompactionStyle { kind: None }) => {
+                    return Err(TryFromProtoError::MissingField(
+                        "ProtoRocksDbTuningParameters::compaction_style::kind".into(),
+                    ))
+                }
+                None => {
+                    return Err(TryFromProtoError::MissingField(
+                        "ProtoRocksDbTuningParameters::compaction_style".into(),
+                    ))
+                }
+            },
+            optimize_compaction_memtable_budget: usize::cast_from(
+                proto.optimize_compaction_memtable_budget,
+            ),
+            level_compaction_dynamic_level_bytes: proto.level_compaction_dynamic_level_bytes,
+            universal_compaction_target_ratio: proto.universal_compaction_target_ratio,
+            parallelism: proto.parallelism,
+            compression_type: compression_from_proto(proto.compression_type)?,
+            bottommost_compression_type: compression_from_proto(proto.bottommost_compression_type)?,
+        })
+    }
 }
 
-/// From here: <https://docs.rs/rocksdb/latest/rocksdb/struct.UniversalCompactOptions.html>
-fn default_universal_ratio() -> i32 {
-    200
-}
-fn default_compression() -> CompressionType {
-    CompressionType::Lz4
-}
-fn default_bottommost_compression() -> CompressionType {
-    CompressionType::Zstd
+/// The following are defaults (and default strings for LD parameters)
+/// for `RocksDBTuningParameters`.
+pub mod defaults {
+    use super::*;
+    use once_cell::sync::Lazy;
+
+    pub const DEFAULT_COMPACTION_STYLE: CompactionStyle = CompactionStyle::Level;
+    pub static DEFAULT_COMPACTION_STYLE_STR: Lazy<String> = Lazy::new(|| "level".to_string());
+
+    /// From here: <https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h#L102>
+    pub const DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: usize = 512 * 1024 * 1024;
+
+    pub const DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: bool = true;
+
+    /// From here: <https://docs.rs/rocksdb/latest/rocksdb/struct.UniversalCompactOptions.html>
+    pub const DEFAULT_UNIVERSAL_COMPACTION_RATIO: i32 = 200;
+
+    pub const DEFAULT_PARALLELISM: Option<i32> = None;
+
+    pub const DEFAULT_COMPRESSION_TYPE: CompressionType = CompressionType::Lz4;
+    pub static DEFAULT_COMPRESSION_TYPE_STR: Lazy<String> = Lazy::new(|| "lz4".to_string());
+    pub const DEFAULT_BOTTOMMOST_COMPRESSION_TYPE: CompressionType = CompressionType::Zstd;
+    pub static DEFAULT_BOTTOMMOST_COMPRESSION_TYPE_STR: Lazy<String> =
+        Lazy::new(|| "zstd".to_string());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_proto::protobuf_roundtrip;
+    use proptest::prelude::*;
 
     #[test]
-    fn ensure_default() {
-        let r: RocksDBTuningParameters = serde_json::from_str("{}").unwrap();
+    fn defaults_equality() {
+        let r = RocksDBTuningParameters::from_parameters(
+            &*defaults::DEFAULT_COMPACTION_STYLE_STR,
+            defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+            defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+            defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
+            defaults::DEFAULT_PARALLELISM,
+            &*defaults::DEFAULT_COMPRESSION_TYPE_STR,
+            &*defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE_STR,
+        )
+        .unwrap();
 
-        assert_eq!(
-            r,
-            RocksDBTuningParameters {
-                compaction_style: CompactionStyle::Level,
-                optimize_compaction_memtable_budget: 512 * 1024 * 1024,
-                level_compaction_dynamic_level_bytes: true,
-                universal_compaction_target_ratio: 200,
-                parallelism: None,
-                compression_type: CompressionType::Lz4,
-                bottommost_compression_type: CompressionType::Zstd,
-            }
-        );
+        assert_eq!(r, RocksDBTuningParameters::default());
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn rocksdb_tuning_roundtrip() {
+        mz_ore::test::init_logging();
+        proptest!(|(expect in any::<RocksDBTuningParameters>())| {
+            let actual = protobuf_roundtrip::<_, ProtoRocksDbTuningParameters>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+
+        });
     }
 }

@@ -73,76 +73,21 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use mz_ore::metrics::HistogramVecExt;
-use mz_rocksdb::{Options, RocksDBInstance, RocksDBMetrics, RocksDBTuningParameters};
-use prometheus::{HistogramOpts, HistogramVec};
+use std::env;
 
-fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
-    let fake_hist_vec =
-        HistogramVec::new(HistogramOpts::new("fake", "fake_help"), &["fake_label"])?;
+fn main() {
+    env::set_var("PROTOC", protobuf_src::protoc());
 
-    Ok(Box::new(RocksDBMetrics {
-        multi_get_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["one".to_string()]),
-        multi_get_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["two".to_string()]),
-        multi_put_latency: fake_hist_vec.get_delete_on_drop_histogram(vec!["three".to_string()]),
-        multi_put_size: fake_hist_vec.get_delete_on_drop_histogram(vec!["four".to_string()]),
-    }))
-}
+    let mut config = prost_build::Config::new();
+    config.btree_map(["."]);
 
-#[tokio::test]
-async fn basic() -> Result<(), anyhow::Error> {
-    // If the test aborts, this may not be cleaned up.
-    let t = tempfile::tempdir()?;
-
-    let mut instance = RocksDBInstance::<String, String>::new(
-        t.path(),
-        Options::defaults_with_env(rocksdb::Env::new()?),
-        RocksDBTuningParameters::default(),
-        metrics_for_tests()?,
-    )
-    .await?;
-
-    let mut ret = vec![None; 1];
-    instance
-        .multi_get(vec!["one".to_string()], ret.iter_mut())
-        .await?;
-
-    assert_eq!(ret.split_off(0), vec![None]);
-
-    instance
-        .multi_put(vec![
-            ("one".to_string(), Some("onev".to_string())),
-            // Deleting a non-existent key shouldn't do anything
-            ("two".to_string(), None),
-        ])
-        .await?;
-
-    let mut ret = vec![None; 2];
-    instance
-        .multi_get(vec!["one".to_string(), "two".to_string()], ret.iter_mut())
-        .await?;
-
-    assert_eq!(ret.split_off(0), vec![Some("onev".to_string()), None]);
-
-    instance
-        .multi_put(vec![
-            // Double-writing a key should keep the last one.
-            ("two".to_string(), Some("twov1".to_string())),
-            ("two".to_string(), Some("twov2".to_string())),
-        ])
-        .await?;
-
-    let mut ret = vec![None; 2];
-    instance
-        .multi_get(vec!["one".to_string(), "two".to_string()], ret.iter_mut())
-        .await?;
-
-    assert_eq!(
-        ret.split_off(0),
-        vec![Some("onev".to_string()), Some("twov2".to_string())]
-    );
-
-    instance.close().await?;
-
-    Ok(())
+    tonic_build::configure()
+        // Enabling `emit_rerun_if_changed` will rerun the build script when
+        // anything in the include directory (..) changes. This causes quite a
+        // bit of spurious recompilation, so we disable it. The default behavior
+        // is to re-run if any file in the crate changes; that's still a bit too
+        // broad, but it's better.
+        .emit_rerun_if_changed(false)
+        .compile_with_config(config, &["rocksdb/src/tuning.proto"], &[".."])
+        .unwrap_or_else(|e| panic!("{e}"))
 }

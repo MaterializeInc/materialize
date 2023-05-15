@@ -96,8 +96,9 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropHistogram;
 
-mod tuning;
+pub mod tuning;
 
+pub use tuning::defaults;
 pub use tuning::RocksDBTuningParameters;
 
 /// An error using this RocksDB wrapper.

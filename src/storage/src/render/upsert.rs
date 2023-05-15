@@ -216,11 +216,7 @@ where
     );
 
     if upsert_envelope.disk {
-        let tuning = dataflow_paramters
-            .upsert_rocksdb_tuning_config
-            .as_ref()
-            .cloned()
-            .unwrap_or(mz_rocksdb::RocksDBTuningParameters::reasonable_defaults());
+        let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
         tracing::info!(
             ?tuning,
