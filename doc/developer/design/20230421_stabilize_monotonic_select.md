@@ -22,7 +22,7 @@ An MVP version of this approach was introduced in PR MaterializeInc/materialize#
 
 The MVP PR gated the execution of monotonic one-shot `SELECT`s behind the feature flag `enable_monotonic_oneshot_selects`, turned off by default. The goal of this design is to outline the necessary steps to stabilize this feature and retire the feature flag.
 
-# Concepts and Challanges
+# Concepts and Challenges
 [explanation]: #explanation
 
 This section explains relevant concepts for monotonic one-shot `SELECT`s. We focus here on important background and challenges to stabilization, while the [Reference Explanation](#reference-explanation) section introduces proposed solution approaches to the challenges identified.
