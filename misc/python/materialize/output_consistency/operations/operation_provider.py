@@ -409,7 +409,10 @@ OPERATION_TYPES.append(
                 incompatibilities={
                     ValueCharacteristics.ZERO,
                     ValueCharacteristics.NEGATIVE,
-                }
+                },
+                incompatibility_combinations=[
+                    {ValueCharacteristics.DECIMAL, ValueCharacteristics.TINY_VALUE}
+                ],
             )
         ],
         DataTypeCategory.NUMERIC,

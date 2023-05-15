@@ -136,12 +136,10 @@ class ExpressionGenerator:
             if validator.is_expected_to_cause_error(args):
                 return True
 
-        for param_index in range(operation.max_param_count):
-            incompatibility = operation.params[param_index].incompatibilities
-            characteristics = args[param_index].characteristics
-            overlap = incompatibility & characteristics
+        for arg_index, arg in enumerate(args):
+            param = operation.params[arg_index]
 
-            if len(overlap) > 0:
+            if not param.supports_arg(arg):
                 return True
 
         return False
