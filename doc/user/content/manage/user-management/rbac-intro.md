@@ -12,7 +12,7 @@ granular privileges to your Materialize objects and clusters. Organizations
 using RBAC can manage user roles and privileges to ensure there is not
 unauthorized or improper access to sensitive objects.
 
-In Materialize, Role-Based Access Control allows organization administrators to: 
+In Materialize, Role-Based Access Control allows organization administrators to:
 
 * determine which users have read or write permissions for specific objects
 
@@ -36,7 +36,7 @@ the objects within Materialize.
 
 First, we need to make a distinction between authentication and authorization.
 Authentication dictates who can log in to a system while authorization
-determines what a user can access within a system. 
+determines what a user can access within a system.
 
 Authentication in Materialize is handled when you sign up or are invited to a
 Materialize organization. Your immediate privileges are determined by your
@@ -45,13 +45,13 @@ when you sign up.
 
 Authorization is determined in RBAC by your organization administrator. When you
 invite users to your Materialize organization, you have the option to give the
-user more elevated privileges in the Materialize administrator console . 
+user more elevated privileges in the Materialize administrator console.
 
 ## RBAC Structure
 
 RBAC in practice is a group of roles with assigned privileges and attributes.
 You can assign specific users to roles or assign privileges to users to inherit
-from other roles. 
+from other roles.
 
 ### Roles
 
