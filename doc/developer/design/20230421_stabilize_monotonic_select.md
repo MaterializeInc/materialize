@@ -49,7 +49,7 @@ Given the mechanic above, consider the output produced by `EXPLAIN OPTIMIZED PLA
 
 ## Relationship to CI Testing
 
-In the MVP PR MaterializeInc/materialize#18546, the LIR plan refinement step to employ monotonic operators is gated behind a feature flag called `enable_monotonic_oneshot_selects`. By default, the feature flag is off and thus one-shot `SELECT`s are planned as if they were going to be executed in indexed or materialized views. However, stabilization of the feature implies that we would like to enable the feature by defaul and eventually even retire the feature flag. In this case, the plans for one-shot `SELECTs` will be specialized.
+In the MVP PR MaterializeInc/materialize#18546, the LIR plan refinement step to employ monotonic operators is gated behind a feature flag called `enable_monotonic_oneshot_selects`. By default, the feature flag is off and thus one-shot `SELECT`s are planned as if they were going to be executed in indexed or materialized views. However, stabilization of the feature implies that we would like to enable the feature by default and eventually even retire the feature flag. In this case, the plans for one-shot `SELECTs` will be specialized.
 
 Currently, we maintain, but also reuse `sqllogictest` corpora. The reused tests come from other DBMS where the distinction between one-shot `SELECT` planning and planning for indexed or materialized views may not be relevant. Many of these tests thus issue directly one-shot `SELECT`s, and we assume that these tests exercise enough of our planning and execution for indexed or materialized views. Thus, enabling the feature brings about the risk that we will no longer extensively test plans for indexed or materialized views if the tests only employ one-shot `SELECT`s.
 
