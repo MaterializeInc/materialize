@@ -65,7 +65,16 @@ class QueryExecutionManager:
 
             for sql_statement in ddl_statements:
                 print(sql_statement)
-                self.executor.ddl(sql_statement)
+
+                try:
+                    self.executor.ddl(sql_statement)
+                except SqlExecutionError as e:
+                    print(
+                        f"Setting up data structures failed ({e.message})!"
+                        + " Hint: Does the table already contain the structure?"
+                        + " Consider using flag --no-execute-setup"
+                    )
+                    exit()
 
     def execute_queries(
         self,

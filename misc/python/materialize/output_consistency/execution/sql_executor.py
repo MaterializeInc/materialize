@@ -20,6 +20,8 @@ from materialize.output_consistency.common.configuration import (
 class SqlExecutionError(Exception):
     def __init__(self, message: str):
         super().__init__(message)
+        # storing it here as well makes it easier to access the message
+        self.message = message
 
 
 class SqlExecutor:
