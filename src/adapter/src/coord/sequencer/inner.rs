@@ -3178,7 +3178,7 @@ impl Coordinator {
         depends_on: Vec<GlobalId>,
     ) {
         guard_write_critical_section!(self, tx, session, Plan::ReadThenWrite(plan));
-        tracing::info!("start read then write");
+
         let ReadThenWritePlan {
             id,
             kind,
@@ -3253,8 +3253,6 @@ impl Coordinator {
 
         let (peek_tx, peek_rx) = oneshot::channel();
         let peek_client_tx = ClientTransmitter::new(peek_tx, self.internal_cmd_tx.clone());
-        tracing::info!("sequenced peek start");
-
         self.sequence_peek(
             peek_client_tx,
             session,
@@ -3268,7 +3266,6 @@ impl Coordinator {
             TargetCluster::Active,
         )
         .await;
-        tracing::info!("sequenced peek done");
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
@@ -3286,7 +3283,6 @@ impl Coordinator {
                 // It is not an error for these results to be ready after `peek_client_tx` has been dropped.
                 Err(e) => return warn!("internal_cmd_rx dropped before we could send: {:?}", e),
             };
-            tracing::info!("got peek response: {peek_response:?}");
             let timeout_dur = *session.vars().statement_timeout();
             let arena = RowArena::new();
             let diffs = match peek_response {
@@ -3351,7 +3347,6 @@ impl Coordinator {
                                 }(rows)
                             }
                             PeekResponseUnary::Canceled => {
-                                tracing::info!("got cancelled in insert");
                                 Err(AdapterError::Unstructured(anyhow!("execution canceled")))
                             }
                             PeekResponseUnary::Error(e) => {
@@ -3363,7 +3358,6 @@ impl Coordinator {
                             // best-effort and doesn't guarantee we won't
                             // receive a response.
                             // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
-                            tracing::info!("sending remove pending peeks to {} b/c of statement timeout", session.conn_id());
                             let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
                                 conn_id: session.conn_id(),
                             });
@@ -3374,10 +3368,7 @@ impl Coordinator {
                         }
                     }
                 }
-                resp @ ExecuteResponse::Canceled => {
-                    tracing::info!("got cancelled when looking for peek response");
-                    return tx.send(Ok(resp), session)
-                }
+                resp @ ExecuteResponse::Canceled => return tx.send(Ok(resp), session),
                 resp => Err(AdapterError::Unstructured(anyhow!(
                     "unexpected peek response: {resp:?}"
                 ))),

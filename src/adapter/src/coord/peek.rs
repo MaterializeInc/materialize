@@ -503,7 +503,6 @@ impl crate::coord::Coordinator {
                 // while the peek was in progress. In this case we ignore the error and move on
                 // because the dataflow no longer exists.
                 // TODO(jkosh44) Dropping a cluster should actively cancel all pending queries.
-                tracing::info!("cancel_pending_peeks for {conn_id}: {uuids:?}");
                 let _ = self
                     .controller
                     .active_compute()

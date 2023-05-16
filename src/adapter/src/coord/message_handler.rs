@@ -75,7 +75,6 @@ impl Coordinator {
             // in any situation where you use it, you must also have a code
             // path that responds to the client (e.g. reporting an error).
             Message::RemovePendingPeeks { conn_id } => {
-                tracing::info!("remove pending peeks");
                 self.cancel_pending_peeks(&conn_id);
             }
             Message::LinearizeReads(pending_read_txns) => {

@@ -315,7 +315,6 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     }
 
     fn handle_cancel_peeks(&mut self, uuids: BTreeSet<uuid::Uuid>) {
-        tracing::info!("got cancel peeks for {uuids:?}");
         let pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
         for (uuid, peek) in pending_peeks {
             if uuids.contains(&uuid) {

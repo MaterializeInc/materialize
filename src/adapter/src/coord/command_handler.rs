@@ -588,7 +588,6 @@ impl Coordinator {
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
     fn handle_cancel(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        tracing::info!("handle_cancel for {conn_id}");
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -660,7 +659,6 @@ impl Coordinator {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
-        tracing::info!("handle_terminate for {}", session.conn_id());
         if self.active_conns.get(&session.conn_id()).is_none() {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
             // Instead we explicitly panic here while dumping the entire Coord to the logs to help
