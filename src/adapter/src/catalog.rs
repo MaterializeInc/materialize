@@ -1367,6 +1367,7 @@ impl CatalogState {
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
         conn_id: ConnectionId,
+        err_gen: fn(String) -> SqlCatalogError,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
         // schema. If no schema was specified, try to find the item in the connection's
@@ -1405,7 +1406,7 @@ impl CatalogState {
                 return Ok(&self.entry_by_id[id]);
             }
         }
-        Err(SqlCatalogError::UnknownItem(name.to_string()))
+        Err(err_gen(name.to_string()))
     }
 
     /// Resolves `name` to a non-function [`CatalogEntry`].
@@ -1422,6 +1423,7 @@ impl CatalogState {
             search_path,
             name,
             conn_id,
+            SqlCatalogError::UnknownItem,
         )
     }
 
@@ -1439,6 +1441,7 @@ impl CatalogState {
             search_path,
             name,
             conn_id,
+            SqlCatalogError::UnknownFunction,
         )
     }
 
