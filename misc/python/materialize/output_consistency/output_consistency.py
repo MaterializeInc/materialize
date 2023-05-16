@@ -15,13 +15,9 @@ from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.common.format_constants import CONTENT_SEPARATOR_1
-from materialize.output_consistency.data_type.data_provider import DATA_TYPES
 from materialize.output_consistency.execution.evaluation_strategy import (
     ConstantFoldingEvaluation,
     DataFlowRenderingEvaluation,
-)
-from materialize.output_consistency.execution.query_execution_manager import (
-    QueryExecutionManager,
 )
 from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
@@ -32,7 +28,7 @@ from materialize.output_consistency.known_inconsistencies.known_deviation_filter
     KnownOutputInconsistenciesFilter,
 )
 from materialize.output_consistency.query.query_generator import QueryGenerator
-from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
+from materialize.output_consistency.runner.test_runner import ConsistencyTestRunner
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 
@@ -51,7 +47,6 @@ def run_output_consistency_tests(
     config.fail_fast = fail_fast
     config.execute_setup = execute_setup
     config.verbose_output = verbose_output
-    num_expressions_to_select = 20
 
     evaluation_strategies = [
         DataFlowRenderingEvaluation(),
@@ -60,34 +55,27 @@ def run_output_consistency_tests(
 
     known_inconsistencies_filter = KnownOutputInconsistenciesFilter()
 
-    data_generator = ExpressionGenerator(config, known_inconsistencies_filter)
-    expressions = data_generator.generate_expressions()
-    print(f"Created {len(expressions)} expressions.")
-
-    randomized_picker = RandomizedPicker(config)
-    expressions = randomized_picker.select(
-        expressions, num_elements=num_expressions_to_select
-    )
-    print(f"Selected {len(expressions)} expressions.")
-
+    expression_generator = ExpressionGenerator(config, known_inconsistencies_filter)
     query_generator = QueryGenerator(config)
-    queries = query_generator.generate_queries(expressions)
-    print(f"Created {len(queries)} queries.")
-
-    comparator = ResultComparator()
+    output_comparator = ResultComparator()
     sql_executor = create_sql_executor(config, cursor)
 
-    execution_manager = QueryExecutionManager(
-        evaluation_strategies, config, sql_executor, comparator
+    test_runner = ConsistencyTestRunner(
+        config,
+        evaluation_strategies,
+        expression_generator,
+        query_generator,
+        output_comparator,
+        sql_executor,
     )
-    execution_manager.setup_database_objects(DATA_TYPES, evaluation_strategies)
+    test_runner.setup()
 
     if not config.verbose_output:
         print(
             "Printing only queries with inconsistencies or warnings in non-verbose mode."
         )
 
-    test_summary = execution_manager.execute_queries(queries)
+    test_summary = test_runner.start()
 
     print(CONTENT_SEPARATOR_1)
     print(f"Test summary: {test_summary}")
