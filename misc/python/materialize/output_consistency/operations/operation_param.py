@@ -10,7 +10,7 @@
 from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.data_type.value_characteristics import (
+from materialize.output_consistency.data_values.value_characteristics import (
     ValueCharacteristics,
 )
 from materialize.output_consistency.expressions.expression import Expression

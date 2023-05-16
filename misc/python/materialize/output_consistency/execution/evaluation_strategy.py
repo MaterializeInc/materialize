@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.data_type.data_type import DataType
+from materialize.output_consistency.data_values.data_type_with_values import (
+    DataTypeWithValues,
+)
 
 
 class EvaluationStrategy:
@@ -16,7 +18,9 @@ class EvaluationStrategy:
         self.db_object_name = key
         self.name = name
 
-    def generate_source(self, data_types: list[DataType]) -> list[str]:
+    def generate_source(
+        self, data_type_with_values: list[DataTypeWithValues]
+    ) -> list[str]:
         raise RuntimeError("Not implemented")
 
     def __str__(self) -> str:
@@ -27,7 +31,9 @@ class DummyEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__("<source>", "Dummy")
 
-    def generate_source(self, data_types: list[DataType]) -> list[str]:
+    def generate_source(
+        self, data_type_with_values: list[DataTypeWithValues]
+    ) -> list[str]:
         return []
 
 
@@ -35,13 +41,15 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__("t_dfr", "Dataflow rendering")
 
-    def generate_source(self, data_types: list[DataType]) -> list[str]:
-        column_specs = create_column_specs(data_types, True)
+    def generate_source(
+        self, data_type_with_values: list[DataTypeWithValues]
+    ) -> list[str]:
+        column_specs = create_column_specs(data_type_with_values, True)
         create_table_statement = (
             f"CREATE TABLE {self.db_object_name} ({', '.join(column_specs)});"
         )
 
-        value_row = create_value_row(data_types)
+        value_row = create_value_row(data_type_with_values)
         fill_table_statement = (
             f"INSERT INTO {self.db_object_name} VALUES ({value_row});"
         )
@@ -53,33 +61,37 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__("v_ctf", "Constant folding")
 
-    def generate_source(self, data_types: list[DataType]) -> list[str]:
-        column_specs = create_column_specs(data_types, False)
+    def generate_source(
+        self, data_type_with_values: list[DataTypeWithValues]
+    ) -> list[str]:
+        column_specs = create_column_specs(data_type_with_values, False)
 
-        value_row = create_value_row(data_types)
+        value_row = create_value_row(data_type_with_values)
 
         create_view_statement = f"CREATE VIEW {self.db_object_name} ({', '.join(column_specs)}) AS SELECT {value_row};"
 
         return [create_view_statement]
 
 
-def create_column_specs(data_types: list[DataType], include_type: bool) -> list[str]:
+def create_column_specs(
+    data_type_with_values: list[DataTypeWithValues], include_type: bool
+) -> list[str]:
     column_specs = []
-    for data_type in data_types:
-        for data_value in data_type.raw_values:
+    for type_with_values in data_type_with_values:
+        for data_value in type_with_values.raw_values:
             column_specs.append(
                 data_value.column_name
-                + (f" {data_type.type_name}" if include_type else "")
+                + (f" {type_with_values.data_type.type_name}" if include_type else "")
             )
 
     return column_specs
 
 
-def create_value_row(data_types: list[DataType]) -> str:
+def create_value_row(data_type_with_values: list[DataTypeWithValues]) -> str:
     row_values = []
 
-    for data_type in data_types:
-        for data_value in data_type.raw_values:
+    for type_with_values in data_type_with_values:
+        for data_value in type_with_values.raw_values:
             row_values.append(data_value.to_sql_as_value())
 
     return f"{', '.join(row_values)}"

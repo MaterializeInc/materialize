@@ -9,7 +9,7 @@
 
 from typing import Callable, Optional
 
-from materialize.output_consistency.data_type.value_characteristics import (
+from materialize.output_consistency.data_values.value_characteristics import (
     ValueCharacteristics,
 )
 from materialize.output_consistency.expressions.expression import Expression

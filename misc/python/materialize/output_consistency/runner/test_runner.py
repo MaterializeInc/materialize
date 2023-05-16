@@ -9,7 +9,9 @@
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.data_type.data_provider import DATA_TYPES
+from materialize.output_consistency.data_values.data_value_provider import (
+    DATA_TYPES_WITH_VALUES,
+)
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -48,7 +50,7 @@ class ConsistencyTestRunner:
 
     def setup(self) -> None:
         self.execution_manager.setup_database_objects(
-            DATA_TYPES, self.evaluation_strategies
+            DATA_TYPES_WITH_VALUES, self.evaluation_strategies
         )
 
     def start(self) -> ConsistencyTestSummary:

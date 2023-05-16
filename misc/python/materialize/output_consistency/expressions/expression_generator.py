@@ -10,9 +10,11 @@
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.data_type.data_provider import DATA_TYPES
-from materialize.output_consistency.data_type.data_type import RawValue
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.data_values.data_value import RawValue
+from materialize.output_consistency.data_values.data_value_provider import (
+    DATA_TYPES_WITH_VALUES,
+)
 from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.expressions.expression_with_args import (
     ExpressionWithNArgs,
@@ -36,9 +38,9 @@ class ExpressionGenerator:
     def generate_expressions(self) -> list[Expression]:
         expressions: list[Expression] = []
 
-        for data_type in DATA_TYPES:
+        for type_with_values in DATA_TYPES_WITH_VALUES:
 
-            if len(data_type.raw_values) == 0:
+            if len(type_with_values.raw_values) == 0:
                 continue
 
             for operation in OPERATION_TYPES:
@@ -48,8 +50,8 @@ class ExpressionGenerator:
 
                 # TODO: data_type of all data types combined with data_type of all data types
                 combinations = self.generate_combinations(
-                    data_type.raw_values,
-                    offset_value=data_type.raw_values[0],
+                    type_with_values.raw_values,
+                    offset_value=type_with_values.raw_values[0],
                     length=operation.max_param_count,
                     with_self=True,
                     with_earlier=not operation.commutative,

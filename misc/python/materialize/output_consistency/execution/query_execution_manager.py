@@ -13,7 +13,9 @@ from materialize.output_consistency.common.format_constants import (
     COMMENT_PREFIX,
     CONTENT_SEPARATOR_1,
 )
-from materialize.output_consistency.data_type.data_type import DataType
+from materialize.output_consistency.data_values.data_type_with_values import (
+    DataTypeWithValues,
+)
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -50,7 +52,7 @@ class QueryExecutionManager:
 
     def setup_database_objects(
         self,
-        data_types: list[DataType],
+        data_type_with_values: list[DataTypeWithValues],
         evaluation_strategies: list[EvaluationStrategy],
     ) -> None:
         if not self.config.execute_setup:
@@ -58,7 +60,7 @@ class QueryExecutionManager:
 
         for strategy in evaluation_strategies:
             print(f"{COMMENT_PREFIX} Setup for evaluation strategy '{strategy.name}'")
-            ddl_statements = strategy.generate_source(data_types)
+            ddl_statements = strategy.generate_source(data_type_with_values)
 
             for sql_statement in ddl_statements:
                 print(sql_statement)

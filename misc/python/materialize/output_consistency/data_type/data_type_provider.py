@@ -8,13 +8,9 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.data_type.data_type import DataType
-from materialize.output_consistency.data_type.value_characteristics import (
-    ValueCharacteristics,
+from materialize.output_consistency.data_type.number_data_type_provider import (
+    NUMERIC_DATA_TYPES,
 )
 
-
-def add_characteristic_to_all_data_values(
-    data_type: DataType, characteristic: ValueCharacteristics
-) -> None:
-    for raw_value in data_type.raw_values:
-        raw_value.characteristics.add(characteristic)
+DATA_TYPES: list[DataType] = []
+DATA_TYPES.extend(NUMERIC_DATA_TYPES)
