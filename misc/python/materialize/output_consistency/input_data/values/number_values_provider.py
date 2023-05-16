@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.data_type.data_type import NumberDataType
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
@@ -21,6 +20,7 @@ from materialize.output_consistency.input_data.types.number_types_provider impor
     REAL_TYPE,
     UINT4_TYPE,
     UINT8_TYPE,
+    NumberDataType,
 )
 
 VALUES_PER_NUMERIC_DATA_TYPE: dict[NumberDataType, DataTypeWithValues] = dict()
