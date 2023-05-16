@@ -27,14 +27,15 @@ use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as Asyn
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
+use crate::render::sources::{OutputIndex, WorkerId};
 use crate::render::upsert::types::{
     upsert_bincode_opts, InMemoryHashMap, UpsertState, UpsertStateBackend,
 };
-use crate::source::types::UpsertMetrics;
+use crate::source::types::{HealthStatusUpdate, UpsertMetrics};
 use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
@@ -137,7 +138,10 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     source_config: crate::source::RawSourceCreationConfig,
     instance_context: &StorageInstanceContext,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
-) -> Collection<G, Result<Row, DataflowError>, Diff>
+) -> (
+    Collection<G, Result<Row, DataflowError>, Diff>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+)
 where
     G::Timestamp: TotalOrder,
 {
@@ -218,7 +222,10 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::RawSourceCreationConfig,
     state: F,
-) -> Collection<G, Result<Row, DataflowError>, Diff>
+) -> (
+    Collection<G, Result<Row, DataflowError>, Diff>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+)
 where
     G::Timestamp: TotalOrder,
     F: FnOnce() -> Fut + 'static,
@@ -252,6 +259,7 @@ where
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
     );
     let (mut output_handle, output) = builder.new_output();
+    let (_health_output, health_stream) = builder.new_output();
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     builder.build(move |caps| async move {
@@ -434,8 +442,11 @@ where
         }
     });
 
-    output.as_collection().map(|result| match result {
-        Ok(ok) => Ok(ok),
-        Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
-    })
+    (
+        output.as_collection().map(|result| match result {
+            Ok(ok) => Ok(ok),
+            Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
+        }),
+        health_stream,
+    )
 }
