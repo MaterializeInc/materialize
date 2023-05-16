@@ -25,7 +25,9 @@ use tabled::Tabled;
 
 pub async fn enable(cx: &mut RegionContext) -> Result<(), Error> {
     // TODO: Handle error creating environment
-    cx.cloud_client().create_environment(None, vec![], cx.get_region().await?).await?;
+    cx.cloud_client()
+        .create_environment(None, vec![], cx.get_region().await?)
+        .await?;
     Ok(())
 }
 
@@ -68,7 +70,13 @@ pub async fn show(cx: &mut RegionContext) -> Result<(), Error> {
     let output_formatter = cx.output_formatter();
     // TODO: Display region is healthy after the psql work is done.
     // output_formatter.output_scalar(Some(format!("Healthy: \t", region.cluster)));
-    output_formatter.output_scalar(Some(&format!("SQL address: \t{}", environment.environmentd_pgwire_address)))?;
-    output_formatter.output_scalar(Some(&format!("HTTP URL: \t{}", environment.environmentd_https_address)))?;
+    output_formatter.output_scalar(Some(&format!(
+        "SQL address: \t{}",
+        environment.environmentd_pgwire_address
+    )))?;
+    output_formatter.output_scalar(Some(&format!(
+        "HTTP URL: \t{}",
+        environment.environmentd_https_address
+    )))?;
     Ok(())
 }

@@ -33,8 +33,14 @@ pub enum Error {
     #[error("Error parsing TOML file: {0}")]
     TomlParseError(#[from] toml_edit::de::Error),
     /// Error parsing TOML.
+    #[error("Error serializing the profile: {0}")]
+    TomlSerializingError(#[from] toml::ser::Error),
+    /// Error parsing TOML.
     #[error(transparent)]
     TomlError(#[from] toml_edit::TomlError),
+    /// Error parsing UUID.
+    #[error(transparent)]
+    UuidError(#[from] uuid::Error),
     /// I/O Error
     #[error(transparent)]
     IOError(#[from] std::io::Error),

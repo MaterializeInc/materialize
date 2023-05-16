@@ -75,7 +75,6 @@ pub async fn init(scx: &mut Context, profile_name: Option<String>) -> Result<(),
                         cloud_endpoint: None
                     };
                     // TODO:
-
                     // * Replace default with env/config value
                     scx.config_file().add_profile(profile_name.map_or("default".to_string(), |n| n), new_profile).await?;
                 },
@@ -91,18 +90,13 @@ pub async fn list(cx: &mut Context) -> Result<(), Error> {
     if let Some(profiles) = cx.config_file().profiles() {
         let output = cx.output_formatter();
 
-        // Structure to format the output. The name of the field equals the column name.
+        // Output formatting structure.
         #[derive(Clone, Serialize, Deserialize, Tabled)]
         struct ProfileName<'a> {
-            #[warn(non_snake_case)]
-            Name: &'a str,
+            #[tabled(rename = "Name")]
+            name: &'a str,
         }
-        output.output_table(
-            profiles
-                .keys()
-                .into_iter()
-                .map(|name| ProfileName { Name: name }),
-        )?;
+        output.output_table(profiles.keys().into_iter().map(|name| ProfileName { name }))?;
     }
 
     Ok(())
@@ -115,7 +109,7 @@ pub async fn remove(cx: &mut Context) -> Result<(), Error> {
 }
 
 pub struct ConfigGetArgs<'a> {
-    pub name: &'a ConfigArg,
+    pub name: &'a str,
 }
 
 #[derive(Clone, Debug)]
@@ -158,7 +152,7 @@ pub async fn config_get(
     cx: &mut ProfileContext,
     ConfigGetArgs { name }: ConfigGetArgs<'_>,
 ) -> Result<(), Error> {
-    let value = cx.config_file().get_profile_param(name.clone()).unwrap();
+    let value = cx.config_file().get_profile_param(name).unwrap();
     cx.output_formatter().output_scalar(value.as_deref())?;
     Ok(())
 }
@@ -170,22 +164,22 @@ pub async fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
     // Structure to format the output. The name of the field equals the column name.
     #[derive(Clone, Serialize, Deserialize, Tabled)]
     struct ProfileParam<'a> {
-        #[warn(non_snake_case)]
-        Name: &'a str,
-        #[warn(non_snake_case)]
-        Value: &'a str,
+        #[tabled(rename = "Name")]
+        name: &'a str,
+        #[tabled(rename = "Value")]
+        value: &'a str,
     }
 
     // TODO: Improve map?
     output.output_table(profile_params.iter().map(|(name, value)| ProfileParam {
-        Name: name,
-        Value: value.or(Some("")).unwrap(),
+        name,
+        value: value.or(Some("")).unwrap(),
     }))?;
     Ok(())
 }
 
 pub struct ConfigSetArgs<'a> {
-    pub name: &'a ConfigArg,
+    pub name: &'a str,
     pub value: &'a str,
 }
 
@@ -194,12 +188,12 @@ pub async fn config_set(
     ConfigSetArgs { name, value }: ConfigSetArgs<'_>,
 ) -> Result<(), Error> {
     cx.config_file()
-        .set_profile_param(name.clone(), Some(value))
+        .set_profile_param(name, Some(value))
         .await
 }
 
 pub struct ConfigRemoveArgs<'a> {
-    pub name: &'a ConfigArg,
+    pub name: &'a str,
 }
 
 pub async fn config_remove(

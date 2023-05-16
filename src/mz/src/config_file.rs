@@ -25,9 +25,9 @@ use mz_ore::str::StrExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
-use toml_edit::Document;
+use toml_edit::{Document};
 
-use crate::{command::profile::ConfigArg, error::Error};
+use crate::{error::Error};
 
 static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
     btreemap! {
@@ -90,69 +90,60 @@ impl ConfigFile {
         })
     }
 
+    /// Loads a profile from the configuration file.
+    /// Panics if the profile is not found.
     pub fn load_profile<'a>(&'a self, name: &'a str) -> Result<Profile, Error> {
         match &self.parsed.profiles {
             Some(profiles) => match profiles.get(name) {
                 None => panic!("unknown profile {}", name.quoted()),
-                Some(parsed) => Ok(Profile {
+                Some(parsed_profile) => Ok(Profile {
                     name,
-                    parsed,
+                    parsed: parsed_profile,
                     config_file: self,
                 }),
             },
-            None => panic!("no profiles found"),
+            None => panic!("unknown profile {}", name.quoted()),
         }
     }
 
+    /// Adds a new profile to the config file.
     pub async fn add_profile(&self, name: String, profile: TomlProfile) -> Result<(), Error> {
-        let new_profiles = &mut self
-            .parsed
-            .profiles
-            .clone()
-            .map_or_else(BTreeMap::new, |btree| btree);
-        new_profiles.insert(name, profile);
+        let mut editable = self.editable.clone();
+        let profiles = editable["profiles"].as_table_mut().unwrap();
 
-        self.save_profiles(new_profiles.clone()).await
-    }
+        profiles[&name]["admin_endpoint"] = toml_edit::value(profile.admin_endpoint.unwrap_or(String::new()));
+        profiles[&name]["app_password"] = toml_edit::value(profile.app_password.unwrap_or(String::new()));
+        profiles[&name]["cloud_endpoint"] = toml_edit::value(profile.cloud_endpoint.unwrap_or(String::new()));
+        profiles[&name]["region"] = toml_edit::value(profile.region.unwrap_or(String::new()));
+        profiles[&name]["vault"] = toml_edit::value(profile.vault.unwrap_or(String::new()));
 
-    async fn save_profiles<'a>(
-        &self,
-        profiles: BTreeMap<String, TomlProfile>,
-    ) -> Result<(), Error> {
-        let new_config_content = TomlConfigFile {
-            profile: self.parsed.profile.clone(),
-            profiles: Some(profiles),
-            vault: self.parsed.vault.clone(),
-        };
+        fs::write(&self.path, editable.to_string()).await?;
 
-        // TODO: Handle error
-        fs::write(
-            &self.path,
-            toml::to_string_pretty(&new_config_content).unwrap(),
-        )
-        .await?;
         Ok(())
     }
 
+    /// Removes a profile from the configuration file.
     pub async fn remove_profile<'a>(&self, name: &str) -> Result<(), Error> {
-        let new_profiles = &mut self
-            .parsed
-            .profiles
-            .clone()
-            .map_or_else(BTreeMap::new, |btree| btree);
-        new_profiles.remove(name);
+        let mut editable = self.editable.clone();
+        let profiles = editable["profiles"].as_table_mut().unwrap();
+        profiles.remove(name);
 
-        self.save_profiles(new_profiles.clone()).await
+        fs::write(&self.path, editable.to_string()).await?;
+
+        Ok(())
     }
 
+    /// Retrieves the default profile
     pub fn profile(&self) -> &str {
         (GLOBAL_PARAMS["profile"].get)(&self.parsed).unwrap()
     }
 
+    /// Retrieves the default vault value
     pub fn vault(&self) -> &str {
         (GLOBAL_PARAMS["vault"].get)(&self.parsed).unwrap()
     }
 
+    /// Retrieves all the available profiles
     pub fn profiles(&self) -> Option<BTreeMap<String, TomlProfile>> {
         self.parsed.profiles.clone()
     }
@@ -169,9 +160,9 @@ impl ConfigFile {
     }
 
     /// Gets the value of a profile's configuration parameter.
-    pub fn get_profile_param(&self, name: ConfigArg) -> Result<Option<String>, Error> {
-        let profiles = self.parsed.clone().profiles.unwrap();
-        let value = profiles.get(self.profile()).unwrap().clone().get(name);
+    pub fn get_profile_param(&self, name: &str) -> Result<Option<&str>, Error> {
+        let profile = self.load_profile(self.profile())?;
+        let value = (PROFILE_PARAMS[name].get)(profile.parsed);
 
         Ok(value)
     }
@@ -179,31 +170,24 @@ impl ConfigFile {
     /// Sets the value of a profile's configuration parameter.
     pub async fn set_profile_param(
         &self,
-        name: ConfigArg,
+        name: &str,
         value: Option<&str>,
     ) -> Result<(), Error> {
-        // // TODO: Replace unwraps with custom errors
         let mut editable = self.editable.clone();
-        let mut table = editable.get("profiles").unwrap().clone();
-        let mut profile_table = table
-            .get(self.profile())
-            .unwrap()
-            .as_table()
-            .unwrap()
-            .clone();
 
+        // Update the value
         match value {
             None => {
-                if profile_table.contains_key(&name.to_string()) {
-                    profile_table.remove(&name.to_string());
+                let profile = editable["profiles"][self.profile()].as_table_mut().unwrap();
+                if profile.contains_key(&name.to_string()) {
+                    profile.remove(&name.to_string());
                 }
             }
-            Some(value) => profile_table[&name.to_string()] = toml_edit::value(value),
+            Some(value) => editable["profiles"][self.profile()][name] = toml_edit::value(value),
         }
 
-        table[self.profile()] = toml_edit::Item::Table(profile_table.clone());
-        editable["profiles"] = table.clone();
         fs::write(&self.path, editable.to_string()).await?;
+
         Ok(())
     }
 
@@ -316,26 +300,4 @@ pub struct TomlProfile {
     pub vault: Option<String>,
     pub admin_endpoint: Option<String>,
     pub cloud_endpoint: Option<String>,
-}
-
-impl TomlProfile {
-    pub fn update(mut self, name: ConfigArg, value: Option<String>) {
-        match name {
-            ConfigArg::AdminAPI => self.admin_endpoint = value,
-            ConfigArg::AppPassword => self.app_password = value,
-            ConfigArg::CloudAPI => self.cloud_endpoint = value,
-            ConfigArg::Region => self.region = value,
-            ConfigArg::Vault => self.vault = value,
-        }
-    }
-
-    pub fn get(self, name: ConfigArg) -> Option<String> {
-        match name {
-            ConfigArg::AdminAPI => self.admin_endpoint,
-            ConfigArg::AppPassword => self.app_password,
-            ConfigArg::CloudAPI => self.cloud_endpoint,
-            ConfigArg::Region => self.region,
-            ConfigArg::Vault => self.vault,
-        }
-    }
 }

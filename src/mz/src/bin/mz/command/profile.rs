@@ -49,7 +49,7 @@ pub enum ProfileConfigSubcommand {
     /// Get a configuration parameter in an authentication profile.
     Get {
         /// The name of the configuration parameter to get.
-        name: ConfigArg,
+        name: String,
     },
     /// List all configuration parameters in an authentication profile.
     #[clap(alias = "ls")]
@@ -57,7 +57,7 @@ pub enum ProfileConfigSubcommand {
     /// Set a configuration parameter in an authentication profile.
     Set {
         /// The name of the configuration parameter to set.
-        name: ConfigArg,
+        name: String,
         /// The value to set the configuration parameter to.
         value: String,
     },
@@ -65,7 +65,7 @@ pub enum ProfileConfigSubcommand {
     #[clap(alias = "rm")]
     Remove {
         /// The name of the configuration parameter to remove.
-        name: ConfigArg,
+        name: String,
     },
 }
 

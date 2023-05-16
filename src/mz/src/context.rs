@@ -21,12 +21,12 @@
 
 use std::path::PathBuf;
 
-use crate::config_file::{ConfigFile, Profile};
+use crate::config_file::ConfigFile;
 use crate::error::Error;
 use crate::ui::{OutputFormat, OutputFormatter};
-use mz_cloud_api::client::Client as CloudClient;
 use mz_cloud_api::client::environment::Environment;
 use mz_cloud_api::client::region::Region;
+use mz_cloud_api::client::Client as CloudClient;
 use mz_cloud_api::config::{
     ClientBuilder as CloudClientBuilder, ClientConfig as CloudClientConfig,
 };
@@ -34,7 +34,6 @@ use mz_frontegg_client::client::Client as AdminClient;
 use mz_frontegg_client::config::{
     ClientBuilder as AdminClientBuilder, ClientConfig as AdminClientConfig,
 };
-use url::Url;
 
 /// Arguments for [`Context::load`].
 pub struct ContextLoadArgs {
@@ -101,7 +100,8 @@ impl Context {
         let config_file = self.config_file.clone();
         let profile = config_file.load_profile(&profile_name)?;
 
-        // TODO: Only one client should do the work. Remove repeated code;
+        // TODO:
+        // Only one client should do the work. Remove repeated code;
         // Build cloud client
         let mut cloud_client_builder = CloudClientBuilder::default();
 
@@ -121,7 +121,7 @@ impl Context {
 
         Ok(ProfileContext {
             context: self,
-            profile_name: profile_name.clone(),
+            profile_name,
             admin_client,
             cloud_client,
         })
@@ -206,7 +206,10 @@ impl RegionContext {
         let client = &self.context.cloud_client;
         let cloud_providers = client.list_cloud_providers().await?;
         // TODO: Replace unwrap wih custom error
-        let provider = cloud_providers.into_iter().find(|x| x.id == self.region_name).unwrap();
+        let provider = cloud_providers
+            .into_iter()
+            .find(|x| x.id == self.region_name)
+            .unwrap();
         let region = client.get_region(provider).await?;
 
         Ok(region)
@@ -221,13 +224,22 @@ impl RegionContext {
 
     /// Returns a SQL client connected to region associated with this context.
     pub fn sql_client(&self) {
-        todo!()
+        // let error = Command::new("psql")
+        //     .args(self.psql_args())
+        //     .env("PGPASSWORD", self..get_profile_param(crate::command::profile::ConfigArg::AppPassword))
+        //     .env("PGAPPNAME", PG_APPLICATION_NAME)
+        //     .exec();
+
+        // Err(error).context("failed to spawn psql")
     }
 
     /// Returns the `psql` arguments required to connect to the region
     /// associated with this context.
-    pub fn psql_args(&self) {
-        todo!()
+    pub fn psql_args(&self) -> Vec<String> {
+        // TODO: Environment should be retrieved when activate is ran.
+
+        // vec![self.get_environment(self.get_region().await)]
+        vec![]
     }
 
     /// Returns the configuration file loaded by this context.

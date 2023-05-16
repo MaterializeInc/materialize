@@ -33,13 +33,14 @@ pub async fn create(
     CreateArgs { email, name }: CreateArgs<'_>,
 ) -> Result<(), Error> {
     let roles = cx.admin_client().list_roles().await?;
+    let role_ids = roles.into_iter().map(|role| role.id).collect();
 
     cx.admin_client()
         .create_user(CreateUserRequest {
             email: email.to_string(),
             name: name.to_string(),
             provider: "local".to_string(),
-            role_ids: roles.into_iter().map(|role| role.id).collect(),
+            role_ids,
         })
         .await?;
 
