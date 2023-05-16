@@ -23,4 +23,3 @@ build:
   excludes:
     # external code
     - testdrive/ci/protobuf-install
-
