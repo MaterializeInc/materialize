@@ -14,23 +14,26 @@ Materialize structure is:
 
 - Databases (highest level)
 - Schemas
-- Tables
-- Sources
-- Views
-- Materialized views
-- Sinks
-- Indexes
-- Types
-- Functions
-- Secrets
+    - Tables
+    - Views
+    - Materialized views
+    - Sources
+    - Sinks
+    - Indexes
+    - Types
+    - Functions
+    - Secrets
 - Columns (lowest level)
 
-Each layer in the hierarchy can contain elements directly beneath it. For
+The root layer in the hierarchy can contain elements directly beneath it. For
 example, databases can contain schemas.
+
+Objects within the schema layer are not in a hierarchy and do not necessarily
+share a relationship with one another.
 
 ## Independent Objects
 
-The Materialzie objects that exist outside of the standard namespace hierarchy
+The Materialize objects that exist outside the standard namespace hierarchy
 are:
 
 - Clusters
@@ -62,7 +65,8 @@ Roles are referenced by their name. For example, to alter the `manager` role, yo
 ALTER ROLE manager ...
 ```
 
-No two clusters or roles can have the same name. Replicas can have the same name
+Two clusters or two roles cannot have the same name, however, a cluster and a
+role can share the same name. Replicas can have the same name
 if they are in different clusters.
 
 ## Details
