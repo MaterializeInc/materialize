@@ -3242,6 +3242,8 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 SELECT
                     details ->> 'logical_size' AS size,
                     details ->> 'replica_id' AS replica_id,
+                    details ->> 'replica_name' AS replica_name,
+                    details ->> 'cluster_name' AS cluster_name,
                     occurred_at
                 FROM mz_catalog.mz_audit_events
                 WHERE
@@ -3258,8 +3260,10 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 WHERE object_type = 'cluster-replica' AND event_type = 'drop'
             )
         SELECT
-            creates.replica_id,
+            creates.replica_id AS internal_replica_id,
             creates.size,
+            creates.cluster_name,
+            creates.replica_name,
             creates.occurred_at AS created_at,
             drops.occurred_at AS dropped_at,
             mz_internal.mz_error_if_null(
