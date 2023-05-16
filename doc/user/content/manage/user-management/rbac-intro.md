@@ -73,6 +73,8 @@ organization. You can edit these actions when you create the role:
 | `INHERIT`       | Can inherit the privileges of roles that it is a member of. On by default.      |
 | `CREATECLUSTER` | Can create a cluster.                                                           |
 
+Currently, `INHERIT` cannot be turned off.
+
 ### Privileges
 
 Privileges are the actions or operations a role is allowed to perform on a
@@ -85,8 +87,8 @@ Materialize supports the following privileges:
 |-----------|--------------------------------------------------------------------------|---------------|
 | `SELECT`  | Allows reading rows from an object.                                      | `r`("read")   |
 | `INSERT`  | Allows inserting into an object.                                         | `a`("append") |
-| `UPDATE`  | Allows updating an object (requires SELECT if a read is necessary).      | `w`("write")  |
-| `DELETE`  | Allows deleting from an object (requires SELECT if a read is necessary). | `d`           |
+| `UPDATE`  | Allows updating an object (requires SELECT).      | `w`("write")  |
+| `DELETE`  | Allows deleting from an object (requires SELECT). | `d`           |
 | `CREATE`  | Allows creating a new object within another object.                      | `C`           |
 | `USAGE`   | Allows using an object or looking up members of an object.               | `U`           |
 

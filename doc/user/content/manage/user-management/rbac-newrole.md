@@ -41,7 +41,7 @@ to this table.
 
 1. In the [Materialize UI](https://console.materialize.com/), enable the region where you want to run Materialize.
 
-1. On the **Connect** screen, create a new app password and then copy the `psql` command.
+. On the **Connect** screen, create a new app password and then copy the `psql` command.
 
     The app password will be displayed only once, so be sure to copy the password somewhere safe. If you forget your password, you can create a new one.
 
@@ -212,6 +212,8 @@ destroy the objects you created for this guide.
 
 ```
 DROP CLUSTER devcluster CASCADE;
+DROP DATABASE devdb CASCADE;
+DROP TABLE d;
 ```
 
 
