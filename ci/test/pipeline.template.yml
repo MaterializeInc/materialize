@@ -651,6 +651,19 @@ steps:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     coverage: skip
 
+  - id: release-qualification
+    label: Release qualification
+    depends_on: devel-docker-tags
+    trigger: release-qualification
+    async: true
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
+    if: build.tag != "" && build.branch =~ /^v/
+    coverage: skip
+
   - wait: ~
     continue_on_failure: true
 

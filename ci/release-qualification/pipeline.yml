@@ -27,9 +27,20 @@ steps:
         required: false
     if: build.source == "ui"
 
-  # There is intentionally no build command here since we want to make sure we
-  # use a properly tagged version when testing the upcoming release, and don't
-  # build our own version just for the tests.
+  - id: build-x86_64
+    label: Build x86_64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
+    timeout_in_minutes: 60
+    agents:
+      queue: builder-linux-x86_64
+    # Don't build for "trigger_job" source, which indicates that this release
+    # qualification pipeline was triggered automatically by the tests pipeline
+    # because there is a new tag on a v* branch. In this case we want to make
+    # sure we use the exact same version for testing here as was tagged and
+    # will be released, and don't build our own version just for the tests.
+    if: build.source == "ui" || build.source == "schedule"
+
+  - wait: ~
 
   - command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.trim_pipeline release-qualification
     if: build.source == "ui"
