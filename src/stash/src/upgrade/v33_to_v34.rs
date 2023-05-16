@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use crate::objects::{wire_compatible, WireCompatible};
 use crate::upgrade::MigrationAction;
 use crate::{StashError, Transaction, TypedCollection};
@@ -22,6 +24,7 @@ pub mod v34 {
 wire_compatible!(v33::ClusterReplicaValue with v34::ClusterReplicaValue);
 wire_compatible!(v33::IdAllocKey with v34::IdAllocKey);
 wire_compatible!(v33::IdAllocValue with v34::IdAllocValue);
+wire_compatible!(v33::AuditLogKey with v34::AuditLogKey);
 
 const CLUSTER_REPLICA_COLLECTION: TypedCollection<
     v33::ClusterReplicaKey,
@@ -31,13 +34,19 @@ const CLUSTER_REPLICA_COLLECTION: TypedCollection<
 const ID_ALLOCATOR_COLLECTION: TypedCollection<v33::IdAllocKey, v33::IdAllocValue> =
     TypedCollection::new("id_alloc");
 
+const AUDIT_LOG_COLLECTION: TypedCollection<v33::AuditLogKey, ()> =
+    TypedCollection::new("audit_log");
+
 const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
+const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 
 /// Migrate replica IDs from 'NNN' to 'uNNN'/'sNNN' format.
 pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
+    let now = mz_ore::now::SYSTEM_TIME();
+
     initialize_system_replica_id_allocator(tx).await?;
     migrate_cluster_replicas(tx).await?;
-    Ok(())
+    migrate_audit_log(tx, now).await
 }
 
 /// Initialize the "system_replica" ID allocator.
@@ -96,6 +105,127 @@ async fn migrate_cluster_replicas(tx: &mut Transaction<'_>) -> Result<(), StashE
         .await
 }
 
+/// Migrate the audit log to the new replica ID format.
+///
+/// Instead of replacing existing log entries, we add `drop` events for entries with the old ID
+/// format and corresponding `create` events with the new format. This way we avoid confusing
+/// consumers of the audit log that might have stashed old events at some external place.
+async fn migrate_audit_log(tx: &mut Transaction<'_>, now: u64) -> Result<(), StashError> {
+    // We need to allocate additional audit events, which need IDs.
+    // Gather the current next_id.
+    let coll = ID_ALLOCATOR_COLLECTION.from_tx(tx).await?;
+    let key = v33::IdAllocKey {
+        name: AUDIT_LOG_ID_ALLOC_KEY.to_string(),
+    };
+    let mut next_audit_log_id = tx.peek_key_one(coll, &key).await?.unwrap().next_id;
+
+    // Collect all existing audit log events.
+    let coll = AUDIT_LOG_COLLECTION.from_tx(tx).await?;
+    let audit_events = tx.peek_one(coll).await?;
+    let mut events: Vec<_> = audit_events
+        .into_keys()
+        .map(|key| {
+            let v33::audit_log_key::Event::V1(event) = key.event.unwrap();
+            event
+        })
+        .collect();
+
+    // Find live replicas by iterating through the events in order and keeping track of the
+    // set of replicas not yet dropped. When every event is processed, this set contains
+    // only the currently live replicas.
+    events.sort_by_key(|e| e.id);
+    let mut live_replicas = BTreeMap::new();
+    for event in events {
+        let details = event.details.unwrap();
+        match details {
+            v33::audit_log_event_v1::Details::CreateClusterReplicaV1(details) => {
+                let key = (details.cluster_id.clone(), details.replica_id.clone());
+                let prev = live_replicas.insert(key, details);
+                assert_eq!(prev, None, "replica created twice");
+            }
+            v33::audit_log_event_v1::Details::DropClusterReplicaV1(details) => {
+                let key = (details.cluster_id, details.replica_id);
+                let prev = live_replicas.remove(&key);
+                assert!(prev.is_some(), "non-existing replica dropped");
+            }
+            _ => (),
+        };
+    }
+
+    // For each live replica, add a `drop` event with the old ID and a `create` event with
+    // the new ID.
+    let mut updates = Vec::with_capacity(live_replicas.len() * 2);
+    for (_, details) in live_replicas {
+        let old_id = details.replica_id.unwrap().inner;
+        let numeric_id = old_id.parse::<u64>().unwrap();
+        assert!(
+            details.cluster_id.starts_with('u'),
+            "non-user cluster in audit_log"
+        );
+        let new_id = format!("u{numeric_id}");
+
+        let drop_event = v34::AuditLogEventV1 {
+            id: next_audit_log_id,
+            event_type: v34::audit_log_event_v1::EventType::Drop.into(),
+            object_type: v34::audit_log_event_v1::ObjectType::ClusterReplica.into(),
+            details: Some(v34::audit_log_event_v1::Details::DropClusterReplicaV1(
+                v34::audit_log_event_v1::DropClusterReplicaV1 {
+                    cluster_id: details.cluster_id.clone(),
+                    cluster_name: details.cluser_name.clone(),
+                    replica_id: Some(v34::StringWrapper { inner: old_id }),
+                    replica_name: details.replica_name.clone(),
+                },
+            )),
+            user: None,
+            occurred_at: Some(v34::EpochMillis { millis: now }),
+        };
+        let create_event = v34::AuditLogEventV1 {
+            id: next_audit_log_id + 1,
+            event_type: v34::audit_log_event_v1::EventType::Create.into(),
+            object_type: v34::audit_log_event_v1::ObjectType::ClusterReplica.into(),
+            details: Some(v34::audit_log_event_v1::Details::CreateClusterReplicaV1(
+                v34::audit_log_event_v1::CreateClusterReplicaV1 {
+                    cluster_id: details.cluster_id,
+                    cluser_name: details.cluser_name,
+                    replica_id: Some(v34::StringWrapper { inner: new_id }),
+                    replica_name: details.replica_name,
+                    logical_size: details.logical_size,
+                    disk: details.disk,
+                },
+            )),
+            user: None,
+            occurred_at: Some(v34::EpochMillis { millis: now }),
+        };
+
+        next_audit_log_id += 2;
+
+        let events = [
+            v34::AuditLogKey {
+                event: Some(v34::audit_log_key::Event::V1(drop_event)),
+            },
+            v34::AuditLogKey {
+                event: Some(v34::audit_log_key::Event::V1(create_event)),
+            },
+        ];
+        let actions = events.into_iter().map(|e| MigrationAction::Insert(e, ()));
+        updates.extend(actions);
+    }
+
+    AUDIT_LOG_COLLECTION.migrate_compat(tx, |_| updates).await?;
+
+    ID_ALLOCATOR_COLLECTION
+        .migrate_compat(tx, |_| {
+            let key = v34::IdAllocKey {
+                name: AUDIT_LOG_ID_ALLOC_KEY.to_string(),
+            };
+            let value = v34::IdAllocValue {
+                next_id: next_audit_log_id,
+            };
+            vec![MigrationAction::Update(key.clone(), (key, value))]
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use crate::DebugStashFactory;
@@ -109,6 +239,9 @@ mod tests {
 
     const ID_ALLOCATOR_COLLECTION_V34: TypedCollection<v34::IdAllocKey, v34::IdAllocValue> =
         TypedCollection::new("id_alloc");
+
+    const AUDIT_LOG_COLLECTION_V34: TypedCollection<v34::AuditLogKey, ()> =
+        TypedCollection::new("audit_log");
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
@@ -147,6 +280,22 @@ mod tests {
                         },
                     ),
                 ],
+            )
+            .await
+            .unwrap();
+
+        AUDIT_LOG_COLLECTION
+            .insert_without_overwrite(&mut stash, vec![])
+            .await
+            .unwrap();
+
+        ID_ALLOCATOR_COLLECTION
+            .insert_key_without_overwrite(
+                &mut stash,
+                v33::IdAllocKey {
+                    name: AUDIT_LOG_ID_ALLOC_KEY.into(),
+                },
+                v33::IdAllocValue { next_id: 1 },
             )
             .await
             .unwrap();
@@ -217,6 +366,249 @@ mod tests {
         assert_eq!(
             next_system_replica_id,
             Some(v34::IdAllocValue { next_id: 6 })
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn audit_log_migration() {
+        let factory = DebugStashFactory::new().await;
+        let mut stash = factory.open_debug().await;
+
+        AUDIT_LOG_COLLECTION
+            .insert_without_overwrite(
+                &mut stash,
+                vec![
+                    (
+                        v33::AuditLogKey {
+                            event: Some(v33::audit_log_key::Event::V1(v33::AuditLogEventV1 {
+                                id: 1,
+                                event_type: v33::audit_log_event_v1::EventType::Create.into(),
+                                object_type: v33::audit_log_event_v1::ObjectType::ClusterReplica
+                                    .into(),
+                                details: Some(
+                                    v33::audit_log_event_v1::Details::CreateClusterReplicaV1(
+                                        v33::audit_log_event_v1::CreateClusterReplicaV1 {
+                                            cluster_id: "u1".into(),
+                                            cluser_name: "c1".into(),
+                                            replica_id: Some(v33::StringWrapper {
+                                                inner: "1".into(),
+                                            }),
+                                            replica_name: "r1".into(),
+                                            logical_size: "small".into(),
+                                            disk: false,
+                                        },
+                                    ),
+                                ),
+                                user: None,
+                                occurred_at: Some(v33::EpochMillis { millis: 100 }),
+                            })),
+                        },
+                        (),
+                    ),
+                    (
+                        v33::AuditLogKey {
+                            event: Some(v33::audit_log_key::Event::V1(v33::AuditLogEventV1 {
+                                id: 2,
+                                event_type: v33::audit_log_event_v1::EventType::Create.into(),
+                                object_type: v33::audit_log_event_v1::ObjectType::ClusterReplica
+                                    .into(),
+                                details: Some(
+                                    v33::audit_log_event_v1::Details::CreateClusterReplicaV1(
+                                        v33::audit_log_event_v1::CreateClusterReplicaV1 {
+                                            cluster_id: "u2".into(),
+                                            cluser_name: "c2".into(),
+                                            replica_id: Some(v33::StringWrapper {
+                                                inner: "2".into(),
+                                            }),
+                                            replica_name: "r2".into(),
+                                            logical_size: "big".into(),
+                                            disk: true,
+                                        },
+                                    ),
+                                ),
+                                user: None,
+                                occurred_at: Some(v33::EpochMillis { millis: 200 }),
+                            })),
+                        },
+                        (),
+                    ),
+                    (
+                        v33::AuditLogKey {
+                            event: Some(v33::audit_log_key::Event::V1(v33::AuditLogEventV1 {
+                                id: 3,
+                                event_type: v33::audit_log_event_v1::EventType::Drop.into(),
+                                object_type: v33::audit_log_event_v1::ObjectType::ClusterReplica
+                                    .into(),
+                                details: Some(
+                                    v33::audit_log_event_v1::Details::DropClusterReplicaV1(
+                                        v33::audit_log_event_v1::DropClusterReplicaV1 {
+                                            cluster_id: "u1".into(),
+                                            cluster_name: "c1".into(),
+                                            replica_id: Some(v33::StringWrapper {
+                                                inner: "1".into(),
+                                            }),
+                                            replica_name: "r1".into(),
+                                        },
+                                    ),
+                                ),
+                                user: None,
+                                occurred_at: Some(v33::EpochMillis { millis: 300 }),
+                            })),
+                        },
+                        (),
+                    ),
+                ],
+            )
+            .await
+            .unwrap();
+
+        ID_ALLOCATOR_COLLECTION
+            .insert_key_without_overwrite(
+                &mut stash,
+                v33::IdAllocKey {
+                    name: AUDIT_LOG_ID_ALLOC_KEY.into(),
+                },
+                v33::IdAllocValue { next_id: 4 },
+            )
+            .await
+            .unwrap();
+
+        // Run the migration.
+        stash
+            .with_transaction(|mut tx| {
+                Box::pin(async move {
+                    migrate_audit_log(&mut tx, 500).await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+
+        let mut events: Vec<_> = AUDIT_LOG_COLLECTION_V34
+            .peek_one(&mut stash)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+        events.sort();
+
+        assert_eq!(
+            events,
+            vec![
+                (
+                    v34::AuditLogKey {
+                        event: Some(v34::audit_log_key::Event::V1(v34::AuditLogEventV1 {
+                            id: 1,
+                            event_type: v34::audit_log_event_v1::EventType::Create.into(),
+                            object_type: v34::audit_log_event_v1::ObjectType::ClusterReplica.into(),
+                            details: Some(
+                                v34::audit_log_event_v1::Details::CreateClusterReplicaV1(
+                                    v34::audit_log_event_v1::CreateClusterReplicaV1 {
+                                        cluster_id: "u1".into(),
+                                        cluser_name: "c1".into(),
+                                        replica_id: Some(v34::StringWrapper { inner: "1".into() }),
+                                        replica_name: "r1".into(),
+                                        logical_size: "small".into(),
+                                        disk: false,
+                                    },
+                                ),
+                            ),
+                            user: None,
+                            occurred_at: Some(v34::EpochMillis { millis: 100 }),
+                        })),
+                    },
+                    (),
+                ),
+                (
+                    v34::AuditLogKey {
+                        event: Some(v34::audit_log_key::Event::V1(v34::AuditLogEventV1 {
+                            id: 2,
+                            event_type: v34::audit_log_event_v1::EventType::Create.into(),
+                            object_type: v34::audit_log_event_v1::ObjectType::ClusterReplica.into(),
+                            details: Some(
+                                v34::audit_log_event_v1::Details::CreateClusterReplicaV1(
+                                    v34::audit_log_event_v1::CreateClusterReplicaV1 {
+                                        cluster_id: "u2".into(),
+                                        cluser_name: "c2".into(),
+                                        replica_id: Some(v34::StringWrapper { inner: "2".into() }),
+                                        replica_name: "r2".into(),
+                                        logical_size: "big".into(),
+                                        disk: true,
+                                    },
+                                ),
+                            ),
+                            user: None,
+                            occurred_at: Some(v34::EpochMillis { millis: 200 }),
+                        })),
+                    },
+                    (),
+                ),
+                (
+                    v34::AuditLogKey {
+                        event: Some(v34::audit_log_key::Event::V1(v34::AuditLogEventV1 {
+                            id: 3,
+                            event_type: v34::audit_log_event_v1::EventType::Drop.into(),
+                            object_type: v34::audit_log_event_v1::ObjectType::ClusterReplica.into(),
+                            details: Some(v34::audit_log_event_v1::Details::DropClusterReplicaV1(
+                                v34::audit_log_event_v1::DropClusterReplicaV1 {
+                                    cluster_id: "u1".into(),
+                                    cluster_name: "c1".into(),
+                                    replica_id: Some(v34::StringWrapper { inner: "1".into() }),
+                                    replica_name: "r1".into(),
+                                },
+                            )),
+                            user: None,
+                            occurred_at: Some(v34::EpochMillis { millis: 300 }),
+                        })),
+                    },
+                    (),
+                ),
+                (
+                    v34::AuditLogKey {
+                        event: Some(v34::audit_log_key::Event::V1(v34::AuditLogEventV1 {
+                            id: 4,
+                            event_type: v34::audit_log_event_v1::EventType::Drop.into(),
+                            object_type: v34::audit_log_event_v1::ObjectType::ClusterReplica.into(),
+                            details: Some(v34::audit_log_event_v1::Details::DropClusterReplicaV1(
+                                v34::audit_log_event_v1::DropClusterReplicaV1 {
+                                    cluster_id: "u2".into(),
+                                    cluster_name: "c2".into(),
+                                    replica_id: Some(v34::StringWrapper { inner: "2".into() }),
+                                    replica_name: "r2".into(),
+                                },
+                            )),
+                            user: None,
+                            occurred_at: Some(v34::EpochMillis { millis: 500 }),
+                        })),
+                    },
+                    (),
+                ),
+                (
+                    v34::AuditLogKey {
+                        event: Some(v34::audit_log_key::Event::V1(v34::AuditLogEventV1 {
+                            id: 5,
+                            event_type: v34::audit_log_event_v1::EventType::Create.into(),
+                            object_type: v34::audit_log_event_v1::ObjectType::ClusterReplica.into(),
+                            details: Some(
+                                v34::audit_log_event_v1::Details::CreateClusterReplicaV1(
+                                    v34::audit_log_event_v1::CreateClusterReplicaV1 {
+                                        cluster_id: "u2".into(),
+                                        cluser_name: "c2".into(),
+                                        replica_id: Some(v34::StringWrapper { inner: "u2".into() }),
+                                        replica_name: "r2".into(),
+                                        logical_size: "big".into(),
+                                        disk: true,
+                                    },
+                                )
+                            ),
+                            user: None,
+                            occurred_at: Some(v34::EpochMillis { millis: 500 }),
+                        })),
+                    },
+                    (),
+                ),
+            ]
         );
     }
 }
