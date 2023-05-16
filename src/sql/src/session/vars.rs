@@ -1778,9 +1778,9 @@ impl SystemVars {
     fn propagate_var_change(&mut self, name: &str) {
         if name == MAX_CONNECTIONS.name {
             self.active_connection_count
-            .lock()
-            .expect("lock poisoned")
-            .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
+                .lock()
+                .expect("lock poisoned")
+                .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
         }
     }
 
