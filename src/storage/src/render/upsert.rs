@@ -19,7 +19,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_client::types::sources::UpsertEnvelope;
@@ -35,7 +35,7 @@ use crate::render::sources::{OutputIndex, WorkerId};
 use crate::render::upsert::types::{
     upsert_bincode_opts, InMemoryHashMap, UpsertState, UpsertStateBackend,
 };
-use crate::source::types::{HealthStatusUpdate, UpsertMetrics};
+use crate::source::types::{HealthStatus, HealthStatusUpdate, UpsertMetrics};
 use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
@@ -259,11 +259,13 @@ where
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
     );
     let (mut output_handle, output) = builder.new_output();
-    let (_health_output, health_stream) = builder.new_output();
+    let (mut health_output, health_stream) = builder.new_output();
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
-    builder.build(move |caps| async move {
-        let mut output_cap = caps.into_element();
+    builder.build(move |mut caps| async move {
+        let health_cap = caps.pop().unwrap();
+        let mut output_cap = caps.pop().unwrap();
+        assert!(caps.is_empty());
 
         let mut state = UpsertState::new(
             state().await,
@@ -362,10 +364,21 @@ where
                     // is an `IndexMap`.
                     multi_get_scratch.clear();
                     multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
-                    state
+                    match state
                         .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
                         .await
-                        .expect("hashmap impl to not fail");
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            let update =
+                                get_health_update(e, "failure while fetching records from state");
+                            health_output
+                                .give(&health_cap, (source_config.worker_id, 0, update))
+                                .await;
+                            std::future::pending::<()>().await;
+                            unreachable!("pending future never returns");
+                        }
+                    }
 
                     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
                     // order to only process the command with the maximum order within the (ts,
@@ -414,7 +427,7 @@ where
                         }
                     }
 
-                    state
+                    match state
                         .multi_put(commands_state.drain(..).map(|(k, cv)| {
                             (
                                 k,
@@ -427,7 +440,18 @@ where
                             )
                         }))
                         .await
-                        .expect("hashmap impl to not fail");
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            let update =
+                                get_health_update(e, "failure while updating records in state");
+                            health_output
+                                .give(&health_cap, (source_config.worker_id, 0, update))
+                                .await;
+                            std::future::pending::<()>().await;
+                            unreachable!("pending future never returns");
+                        }
+                    }
 
                     // Emit the _consolidated_ changes to the output.
                     output_handle
@@ -449,4 +473,14 @@ where
         }),
         health_stream,
     )
+}
+
+fn get_health_update(e: anyhow::Error, msg: &str) -> HealthStatusUpdate {
+    HealthStatusUpdate {
+        update: HealthStatus::StalledWithError {
+            error: format!("{}: {}", msg, e.display_with_causes()),
+            hint: None,
+        },
+        should_halt: true,
+    }
 }
