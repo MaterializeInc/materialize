@@ -14,7 +14,7 @@ from materialize.output_consistency.data_type.value_characteristics import (
 
 class Expression:
     def __init__(
-        self, characteristics: set[ValueCharacteristics], is_expect_error: bool = False
+        self, characteristics: set[ValueCharacteristics], is_expect_error: bool
     ):
         self.is_expect_error = is_expect_error
         self.characteristics = characteristics

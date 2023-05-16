@@ -19,7 +19,7 @@ class ExpressionWithNArgs(Expression):
         self,
         operation: DbOperationOrFunction,
         args: list[Expression],
-        is_expect_error: bool = False,
+        is_expect_error: bool,
     ):
         super().__init__(set(), is_expect_error)
         self.pattern = operation.to_pattern(len(args))

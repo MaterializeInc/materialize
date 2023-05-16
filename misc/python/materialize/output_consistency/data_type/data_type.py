@@ -58,7 +58,7 @@ class RawValue(Expression):
         value_identifier: str,
         characteristics: set[ValueCharacteristics],
     ):
-        super().__init__(characteristics)
+        super().__init__(characteristics, False)
         self.value = value
         self.data_type = data_type
         self.column_name = f"{data_type.identifier.lower()}_{value_identifier.lower()}"

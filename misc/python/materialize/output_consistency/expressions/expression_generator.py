@@ -44,11 +44,17 @@ class ExpressionGenerator:
                     if not self.satisfies_data_types(operation, combination):
                         continue
 
-                    if self.is_expected_to_cause_error(operation, combination):
+                    expected_db_error = self.is_expected_to_cause_error(
+                        operation, combination
+                    )
+
+                    if expected_db_error:
                         # exclude for now, handle separately later
                         continue
 
-                    expression = ExpressionWithNArgs(operation, args=combination)
+                    expression = ExpressionWithNArgs(
+                        operation, args=combination, is_expect_error=expected_db_error
+                    )
                     expressions.append(expression)
 
         return expressions
