@@ -11,14 +11,14 @@
 class ConsistencyTestConfiguration:
     def __init__(
         self,
-        queries_per_tx: int,
-        max_cols_per_query: int,
-        random_seed: int,
-        split_and_retry_on_db_error: bool,
-        dry_run: bool,
-        fail_fast: bool,
-        execute_setup: bool,
-        verbose_output: bool,
+        queries_per_tx: int = 20,
+        max_cols_per_query: int = 8,
+        random_seed: int = 0,
+        split_and_retry_on_db_error: bool = True,
+        dry_run: bool = False,
+        fail_fast: bool = False,
+        execute_setup: bool = True,
+        verbose_output: bool = False,
     ):
         self.queries_per_tx = queries_per_tx
         self.max_cols_per_query = max_cols_per_query
@@ -28,15 +28,3 @@ class ConsistencyTestConfiguration:
         self.fail_fast = fail_fast
         self.execute_setup = execute_setup
         self.verbose_output = verbose_output
-
-
-DEFAULT_CONFIG = ConsistencyTestConfiguration(
-    queries_per_tx=20,
-    random_seed=0,
-    split_and_retry_on_db_error=True,
-    max_cols_per_query=8,
-    dry_run=False,
-    fail_fast=False,
-    execute_setup=True,
-    verbose_output=False,
-)

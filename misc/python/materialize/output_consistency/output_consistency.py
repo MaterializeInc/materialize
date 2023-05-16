@@ -12,7 +12,6 @@ import pg8000
 from pg8000 import Cursor
 
 from materialize.output_consistency.common.configuration import (
-    DEFAULT_CONFIG,
     ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.common.format_constants import CONTENT_SEPARATOR_1
@@ -46,7 +45,7 @@ def run_output_consistency_tests(
     execute_setup: bool,
     verbose_output: bool,
 ) -> ConsistencyTestSummary:
-    config: ConsistencyTestConfiguration = DEFAULT_CONFIG
+    config = ConsistencyTestConfiguration()
     config.random_seed = random_seed
     config.dry_run = dry_run
     config.fail_fast = fail_fast
