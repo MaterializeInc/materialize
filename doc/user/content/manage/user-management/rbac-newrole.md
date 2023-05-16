@@ -62,7 +62,7 @@ to this table.
     SELECT * FROM mz_roles WHERE 'name' = dev_role;
     ```
 
-    Your `dev` role returns attributes similar to the following:
+    Your `dev_role` returns attributes similar to the following:
 
     ```
     -[ RECORD 1 ]--+------
@@ -94,7 +94,7 @@ to this table.
 
 ## Create example objects
 
-Your `dev` role has the default system level permissions and needs object
+Your `dev_role` has the default system level permissions and needs object
 specific privileges. RBAC allows you to apply granular privileges to objects in the SQL hierarchy. Let's create some example objects in the system and determine what
 privileges the role needs.
 
@@ -102,28 +102,28 @@ privileges the role needs.
    other environments.
 
    ```sql
-   CREATE CLUSTER devcluster;
+   CREATE CLUSTER dev_cluster REPLICAS (devr1 (SIZE = '3xsmall'));
    ```
 
 1. Change into the example cluster.
 
 
    ```sql
-   SET CLUSTER TO devcluster;
+   SET CLUSTER TO dev_cluster;
    ```
 
 1. Create a new database, schema, and table.
 
    ```sql
-   CREATE DATABASE devdb;
+   CREATE DATABASE dev_db;
    ```
 
    ```sql
-   CREATE SCHEMA devdb.schema;
+   CREATE SCHEMA dev_db.schema;
    ```
 
    ```sql
-   CREATE TABLE d (a int, b text NOT NULL);
+   CREATE TABLE dev_table (a int, b text NOT NULL);
    ```
 
 You just created a set of objects. Your schema object belongs to
@@ -132,40 +132,40 @@ step is to grant privileges to your role based on the role needs.
 
 ## Grant privileges to a role
 
-In this example, let's say your `dev` role needs the following permissions:
+In this example, let's say your `dev_role` needs the following permissions:
 
 * Read, write, and append privileges on the table
 * Usage privileges on the schema
 * All available privileges on the database
 
-1. In your terminal, grant table-level privileges to the `dev` role.
+1. In your terminal, grant table-level privileges to the `dev_role`.
 
    ```sql
-   GRANT SELECT, UPDATE, INSERT ON d TO dev_role;
+   GRANT SELECT, UPDATE, INSERT ON dev_table TO dev_role;
    ```
 
    Table objects have four available privileges - `read`, `write`, `insert`, and
-   `delete`. The `dev` role doesn't need `delete` permissions, so it is not
+   `delete`. The `dev_role` doesn't need `delete` permissions, so it is not
    applied in the GRANT statement above.
 
-2. Grant schema privileges to the `dev` role.
+2. Grant schema privileges to the `dev_role`.
 
    ```sql
-   GRANT USAGE, CREATE ON SCHEMA devdb.schema TO dev_role;
+   GRANT USAGE, CREATE ON SCHEMA dev_db.schema TO dev_role;
    ```
 
    Schemas have `USAGE` and `CREATE` privileges available to grant.
 
-3. Grant database privileges to the `dev` role.
+3. Grant database privileges to the `dev_role`.
 
    ```sql
-   GRANT USAGE, CREATE ON DATABASE devdb TO dev_role;
+   GRANT USAGE, CREATE ON DATABASE dev_db TO dev_role;
    ```
 
-4. Grant cluster privileges to the `dev` role.
+4. Grant cluster privileges to the `dev_role`.
 
    ```sql
-   GRANT USAGE, CREATE ON CLUSTER devcluster TO dev_role;
+   GRANT USAGE, CREATE ON CLUSTER dev_cluster TO dev_role;
    ```
 
    Materialize cluster privileges are unique to the Materialize RBAC structure.
@@ -174,19 +174,19 @@ In this example, let's say your `dev` role needs the following permissions:
 
 ## Assign a role to a user
 
-The `dev` role now has the acceptable privileges it needs. Let's apply this role
+The `dev_role` now has the acceptable privileges it needs. Let's apply this role
 to a user in your Materialize organization.
 
 1. In your terminal, use the `GRANT` statement to apply a role to your new user.
 
    ```sql
-   GRANT dev TO <new_user>;
+   GRANT dev_role TO <new_user>;
    ```
 
 1. To review the permissions a role has, you can view the object data.
 
    ```sql
-   SELECT name, privileges::text FROM mz_tables WHERE name='d';
+   SELECT name, privileges::text FROM mz_tables WHERE name='dev_table';
    ```
 
    The output should return the owner, the level of permission, and the name of
@@ -199,7 +199,7 @@ to a user in your Materialize organization.
    ```
 
    In this example, the administrator has append, read, write, and delete
-   privileges on the table. The `dev` role has append, read, and write privileges,
+   privileges on the table. The `dev_role` has append, read, and write privileges,
    which were assigned by the admin user.
 
 
@@ -210,9 +210,9 @@ cover altering and dropping user roles. Move to the next guide in the series, or
 destroy the objects you created for this guide.
 
 ```
-DROP CLUSTER devcluster CASCADE;
-DROP DATABASE devdb CASCADE;
-DROP TABLE d;
+DROP CLUSTER dev_cluster CASCADE;
+DROP DATABASE dev_db CASCADE;
+DROP TABLE dev_table;
 ```
 
 
