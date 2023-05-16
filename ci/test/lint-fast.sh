@@ -28,7 +28,7 @@ ci_try cargo hakari manage-deps --dry-run
 ci_try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
 
-if [[ "$BUILDKITE_PULL_REQUEST" != "false" ]]; then
+if [[ "${BUILDKITE_PULL_REQUEST:-true}" != "false" ]]; then
   fetch_pr_target_branch
 
   ci_collapsed_heading "Lint protobuf"
