@@ -93,7 +93,8 @@ Consider writing a design document:
    phases that need clearly delimited scope.
 
 Many smaller changes do still benefit from a quick design doc to clarify
-thinking. Err on the side of writing a design document.
+thinking. Err on the side of writing a design document. If in doubt, keep it
+short.
 
 ## How should you make a design document?
 
@@ -117,13 +118,36 @@ thinking. Err on the side of writing a design document.
    of people that you identified at step 3. or folks that noticed your design
    document from the (optional) announcement.
 
-### Finalization
+### Request approval
 
 7. If no comments have raised new issues or if no one has asked for additional
    time to review, merge the design document. Do _not_ assume _silent
    consensus_: if you did not hear back from important stakeholders, don't take
    this as approval. Make sure the relevant people have in fact seen your design
    and had a chance to object or propose changes.
+
+## Refinement
+
+If you discover substantial flaws in your design during implementation, update
+the design document, open a PR with the changes, and repeat steps 3-7.
+
+For minor errors, just correct the design document in place in your
+implementation PRs.
+
+Use your judgment as to which scenario applies.
+
+## Finalization
+
+You should **not** maintain the design doc forever. The doc is meant to be a
+point-in-time artifact that describes the historical context for the design.
+Once the described work is complete, you can stop updating the design doc.
+
+Instead, invest in evergreen content. Add comments in the code itself (module
+comments can be particularly valuable) and reference documentation in
+[doc/developer/reference](/doc/developer/reference/README.md). For larger
+components, consider putting together an architecture presentation (see, for
+example, the `persist` lectures); slides and a talk track can be a more
+efficient means of communicating some types of technical content.
 
 ## How should you push back on aspects of a design document?
 
