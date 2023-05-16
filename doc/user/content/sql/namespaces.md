@@ -31,7 +31,7 @@ example, databases can contain schemas.
 Objects within the schema layer are not in a hierarchy and do not necessarily
 share a relationship with one another.
 
-## Independent Objects
+## Independent objects
 
 The Materialize objects that exist outside the standard namespace hierarchy
 are:

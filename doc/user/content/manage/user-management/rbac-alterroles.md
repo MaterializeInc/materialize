@@ -28,7 +28,7 @@ tutorial, you will create a new role with different privileges to other objects.
 Then you will apply those privileges to the `dev` role and alter or drop
 privileges as needed.
 
-1. Create a `qa_role` in your Materialize account.
+1. Create a second role your Materialize account:
 
    ```sql
    CREATE ROLE qa WITH CREATEDB;
@@ -36,13 +36,13 @@ privileges as needed.
 
    This role has permission to create a new database in the Materialize account.
 
-2. Create a `qa_db`.
+2. Create a new `qa_db` database:
 
    ```sql
-   CREATE DATABASE qa_db
+   CREATE DATABASE qa_db;
    ```
 
-3. Apply `USAGE` and `CREATE` privileges to the `qa_role` role for the new database.
+3. Apply `USAGE` and `CREATE` privileges to the `qa_role` role for the new database:
 
    ```sql
    ```
@@ -53,7 +53,7 @@ Your `dev_role` also needs access to `qa_db`. You can apply these
 privileges individually or you can choose to grant the `dev_role` the same
 permissions as the `qa_role`.
 
-1. Add `dev_role` as a member of `qa_role`.
+1. Add `dev_role` as a member of `qa_role`:
 
    ```sql
    GRANT qa_role TO dev_role;
@@ -63,7 +63,7 @@ permissions as the `qa_role`.
    Making roles members of other roles allows you to manage sets of
    permissions, rather than granting privileges to roles on an individual basis.
 
-2. Review the privileges of `qa_role` and `dev_role`.
+2. Review the privileges of `qa_role` and `dev_role`:
 
    ```sql
    SELECT name, privileges FROM mz_databases WHERE name='qa_db';
@@ -71,7 +71,7 @@ permissions as the `qa_role`.
 
    Your output will be similar to the example below:
 
-   ```sql
+   ```nofmt
    name|privileges
    qa_db|{u1=UC/u1,u9=UC/u1}
    (1 row)
@@ -87,7 +87,7 @@ Your `dev_role` and `qa_role` have the same role attributes. You can alter or
 revoke certain attributes and privileges for each role, even if they are
 inherited from another role.
 
-1. Update the `CREATEROLE` attribute for the `dev_role`.
+1. Update the `CREATEROLE` attribute for the `dev_role`:
 
    ```sql
    ALTER ROLE dev WITH CREATEROLE;
@@ -96,7 +96,7 @@ inherited from another role.
    The `qa_role` will not have the `CREATEROLE` attribute enabled because the
    attribute was enabled _after_ the role grant.
 
-2. Compare the attributes of the `qa_role` and `dev_role`.
+2. Compare the attributes of the `qa_role` and `dev_role`:
 
    ```sql
    SELECT * FROM mz_roles;
@@ -111,7 +111,7 @@ inherited from another role.
    ```
 
 3. Let's say you decide `dev_role` no longer needs `CREATE` privileges on the
-   `qa_db` object. You can revoke that privilege for the role.
+   `qa_db` object. You can revoke that privilege for the role:
 
    ```sql
    REVOKE CREATE ON DATABASE qa_db FROM dev_role;
@@ -119,7 +119,7 @@ inherited from another role.
 
    Your output should contain the new privileges for `dev_role`:
 
-   ```sql
+   ```nofmt
    name|privileges
    qa_db|{u1=UC/u1,u8=U/u1,u9=UC/u1}
    (1 row)
@@ -130,14 +130,14 @@ inherited from another role.
 You just altered privileges and attributes on your Materialize roles! Remember
 to destroy the objects you created for this guide.
 
-1. The `DROP ROLE` statement removes a role from your Materialize instance.
+1. Drop the roles you created:
 
    ```sql
    DROP ROLE qa_role;
    DROP ROLE dev_role;
    ```
 
-   Drop the objects you created for this guide:
+1. Drop the other objects you created:
 
    ```sql
    DROP CLUSTER dev_cluster CASCADE;
@@ -148,6 +148,6 @@ to destroy the objects you created for this guide.
 
 For more information on RBAC in Materialize, review the reference documentation:
 
-* [ALTER ROLE](https://materialize.com/docs/sql/alter-role/)
-* [REVOKE PRIVILEGE](https://materialize.com/docs/sql/revoke-privilege/)
-* [DROP ROLE](https://materialize.com/docs/sql/drop-role/)
+* [`ALTER ROLE`](https://materialize.com/docs/sql/alter-role/)
+* [`REVOKE PRIVILEGE`](https://materialize.com/docs/sql/revoke-privilege/)
+* [`DROP ROLE`](https://materialize.com/docs/sql/drop-role/)

@@ -1,5 +1,5 @@
 ---
-title: "Role Based Access Management"
+title: "Role-based access management"
 description: "How Materialize implements RBAC"
 menu:
   main:
@@ -12,7 +12,7 @@ granular privileges to your Materialize objects and clusters. Organizations
 using RBAC can manage user roles and privileges to ensure there is not
 unauthorized or improper access to sensitive objects.
 
-In Materialize, Role-Based Access Control allows organization administrators to:
+In Materialize, RBAC allows organization administrators to:
 
 * determine which users have read or write permissions for specific objects
 
@@ -32,7 +32,7 @@ the same level of access to the cluster.
 The next sections go over the concepts of authorization and authentication and
 the objects within Materialize.
 
-## Authentication vs. Authorization
+## Authentication vs. authorization
 
 First, we need to make a distinction between authentication and authorization.
 Authentication dictates who can log in to a system while authorization
@@ -47,7 +47,7 @@ Authorization is determined in RBAC by your organization administrator. When you
 invite users to your Materialize organization, you have the option to give the
 user more elevated privileges in the Materialize administrator console.
 
-## RBAC Structure
+## RBAC structure
 
 RBAC in practice is a group of roles with assigned privileges and attributes.
 You can assign specific users to roles or assign privileges to users to inherit
@@ -60,7 +60,7 @@ easier to assign or revoke privileges on Materialize objects. You can group
 users into specified roles with different levels of permissions and adjust those
 permissions to ensure they have the correct level of access to objects.
 
-### Role Attributes
+### Role attributes
 
 Role attributes are actions available to any role you create. Attributes are
 independent of any other object in Materialize and apply to the entire
@@ -87,8 +87,8 @@ Materialize supports the following privileges:
 |-----------|--------------------------------------------------------------------------|---------------|
 | `SELECT`  | Allows reading rows from an object.                                      | `r`("read")   |
 | `INSERT`  | Allows inserting into an object.                                         | `a`("append") |
-| `UPDATE`  | Allows updating an object (requires SELECT).      | `w`("write")  |
-| `DELETE`  | Allows deleting from an object (requires SELECT). | `d`           |
+| `UPDATE`  | Allows updating an object (requires `SELECT`).      | `w`("write")  |
+| `DELETE`  | Allows deleting from an object (requires `SELECT`). | `d`           |
 | `CREATE`  | Allows creating a new object within another object.                      | `C`           |
 | `USAGE`   | Allows using an object or looking up members of an object.               | `U`           |
 
@@ -115,7 +115,7 @@ Inheritance in RBAC allows you to create roles that inherit permissions
 from other roles. Inheriting permissions allows you to minimize the number of
 roles you have to manage.
 
-## Next Steps
+## Next steps
 
 In the next guide, you will create a new user and a new role. Later in this
 tutorial series, you will assign and manage privileges for roles.

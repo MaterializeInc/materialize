@@ -127,7 +127,7 @@ name = "Manage Materialize"
 weight= 14
 
 [[menu.main]]
-name = "User Management"
+name = "User management"
 parent = "manage"
 identifier = "user-management"
 weight = 15

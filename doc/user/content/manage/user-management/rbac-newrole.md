@@ -1,5 +1,5 @@
 ---
-title: "Create a New User and Role"
+title: "Create a new user and role"
 description: ""
 menu:
   main:
@@ -25,7 +25,7 @@ If you have not signed up for a free trial, [sign up now](https://materialize.co
 
 ## Invite a new user
 
-First, login to your Materialize console and navigate to Account > Account
+First, [login to the Materialize console](https://console.materialize.com/) and navigate to Account > Account
 Settings > Users.
 
 Click **Invite User** and fill in the user information.
@@ -56,7 +56,7 @@ to this table.
 
 1. Each role you create has default **role attributes** that determine how they
     can interact with Materialize objects. Let's look at the role attributes of
-    the role you created.
+    the role you created:
 
     ```sql
     SELECT * FROM mz_roles WHERE 'name' = dev_role;
@@ -64,7 +64,7 @@ to this table.
 
     Your `dev_role` returns attributes similar to the following:
 
-    ```
+    ```nofmt
     -[ RECORD 1 ]--+------
     id             | u8
     oid            | 50991
@@ -94,25 +94,25 @@ to this table.
 
 ## Create example objects
 
-Your `dev_role` has the default system level permissions and needs object
+Your `dev_role` has the default system-level permissions and needs object
 specific privileges. RBAC allows you to apply granular privileges to objects in the SQL hierarchy. Let's create some example objects in the system and determine what
 privileges the role needs.
 
 1. In your `psql` terminal, create a new example cluster to avoid impacting
-   other environments.
+   other environments:
 
    ```sql
    CREATE CLUSTER dev_cluster REPLICAS (devr1 (SIZE = '3xsmall'));
    ```
 
-1. Change into the example cluster.
+1. Change into the example cluster:
 
 
    ```sql
    SET CLUSTER TO dev_cluster;
    ```
 
-1. Create a new database, schema, and table.
+1. Create a new database, schema, and table:
 
    ```sql
    CREATE DATABASE dev_db;
@@ -138,7 +138,7 @@ In this example, let's say your `dev_role` needs the following permissions:
 * Usage privileges on the schema
 * All available privileges on the database
 
-1. In your terminal, grant table-level privileges to the `dev_role`.
+1. In your terminal, grant table-level privileges to the `dev_role`:
 
    ```sql
    GRANT SELECT, UPDATE, INSERT ON dev_table TO dev_role;
@@ -146,9 +146,9 @@ In this example, let's say your `dev_role` needs the following permissions:
 
    Table objects have four available privileges - `read`, `write`, `insert`, and
    `delete`. The `dev_role` doesn't need `delete` permissions, so it is not
-   applied in the GRANT statement above.
+   applied in the `GRANT` statement above.
 
-2. Grant schema privileges to the `dev_role`.
+2. Grant schema privileges to the `dev_role`:
 
    ```sql
    GRANT USAGE, CREATE ON SCHEMA dev_db.schema TO dev_role;
@@ -156,13 +156,13 @@ In this example, let's say your `dev_role` needs the following permissions:
 
    Schemas have `USAGE` and `CREATE` privileges available to grant.
 
-3. Grant database privileges to the `dev_role`.
+3. Grant database privileges to the `dev_role`:
 
    ```sql
    GRANT USAGE, CREATE ON DATABASE dev_db TO dev_role;
    ```
 
-4. Grant cluster privileges to the `dev_role`.
+4. Grant cluster privileges to the `dev_role`:
 
    ```sql
    GRANT USAGE, CREATE ON CLUSTER dev_cluster TO dev_role;
@@ -177,13 +177,13 @@ In this example, let's say your `dev_role` needs the following permissions:
 The `dev_role` now has the acceptable privileges it needs. Let's apply this role
 to a user in your Materialize organization.
 
-1. In your terminal, use the `GRANT` statement to apply a role to your new user.
+1. In your terminal, use the `GRANT` statement to apply a role to your new user:
 
    ```sql
    GRANT dev_role TO <new_user>;
    ```
 
-1. To review the permissions a role has, you can view the object data.
+1. To review the permissions a role has, you can view the object data:
 
    ```sql
    SELECT name, privileges::text FROM mz_tables WHERE name='dev_table';
@@ -192,7 +192,7 @@ to a user in your Materialize organization.
    The output should return the owner, the level of permission, and the name of
    the role on the table.
 
-   ```shell
+   ```nofmt
    name|privileges
    t|{admin@mz.com=arwd/admin@mz.com,dev_role=arw/admin@mz.com}
    (1 row)
@@ -203,7 +203,7 @@ to a user in your Materialize organization.
    which were assigned by the admin user.
 
 
-## Next Steps
+## Next steps
 
 You just used RBAC to manage user privileges in Materialize! The next guide will
 cover altering and dropping user roles. Move to the next guide in the series, or
