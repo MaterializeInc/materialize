@@ -6,6 +6,10 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+from materialize.output_consistency.common.configuration import (
+    ConsistencyTestConfiguration,
+)
 from materialize.output_consistency.data_type.data_provider import DATA_TYPES
 from materialize.output_consistency.data_type.data_type import RawValue
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -13,11 +17,22 @@ from materialize.output_consistency.expressions.expression import Expression
 from materialize.output_consistency.expressions.expression_with_args import (
     ExpressionWithNArgs,
 )
+from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
+    KnownOutputInconsistenciesFilter,
+)
 from materialize.output_consistency.operations.operation import DbOperationOrFunction
 from materialize.output_consistency.operations.operation_provider import OPERATION_TYPES
 
 
 class ExpressionGenerator:
+    def __init__(
+        self,
+        config: ConsistencyTestConfiguration,
+        known_inconsistencies_filter: KnownOutputInconsistenciesFilter,
+    ):
+        self.config = config
+        self.known_inconsistencies_filter = known_inconsistencies_filter
+
     def generate_expressions(self) -> list[Expression]:
         expressions: list[Expression] = []
 
@@ -55,6 +70,14 @@ class ExpressionGenerator:
                     expression = ExpressionWithNArgs(
                         operation, args=combination, is_expect_error=expected_db_error
                     )
+
+                    if self.known_inconsistencies_filter.matches(expression):
+                        if self.config.verbose_output:
+                            print(
+                                f"Skipping expression with known inconsistency: {expression.to_sql()}"
+                            )
+
+                        continue
                     expressions.append(expression)
 
         return expressions

@@ -29,6 +29,9 @@ from materialize.output_consistency.execution.test_summary import ConsistencyTes
 from materialize.output_consistency.expressions.expression_generator import (
     ExpressionGenerator,
 )
+from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
+    KnownOutputInconsistenciesFilter,
+)
 from materialize.output_consistency.query.query_generator import QueryGenerator
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.validation.result_comparator import ResultComparator
@@ -56,7 +59,9 @@ def run_output_consistency_tests(
         ConstantFoldingEvaluation(),
     ]
 
-    data_generator = ExpressionGenerator()
+    known_inconsistencies_filter = KnownOutputInconsistenciesFilter()
+
+    data_generator = ExpressionGenerator(config, known_inconsistencies_filter)
     expressions = data_generator.generate_expressions()
     print(f"Created {len(expressions)} expressions.")
 
@@ -79,7 +84,9 @@ def run_output_consistency_tests(
     execution_manager.setup_database_objects(DATA_TYPES, evaluation_strategies)
 
     if not config.verbose_output:
-        print("Printing only queries with inconsistencies or warnings in non-verbose mode.")
+        print(
+            "Printing only queries with inconsistencies or warnings in non-verbose mode."
+        )
 
     test_summary = execution_manager.execute_queries(queries)
 
