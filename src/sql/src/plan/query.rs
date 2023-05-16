@@ -4480,25 +4480,40 @@ fn plan_function<'a>(
     if *distinct {
         sql_bail!(
             "DISTINCT specified, but {} is not an aggregate function",
-            name
+            ecx.qcx
+                .scx
+                .humanize_resolved_name(name)
+                .expect("already resolved")
         );
     }
     if filter.is_some() {
         sql_bail!(
             "FILTER specified, but {} is not an aggregate function",
-            name
+            ecx.qcx
+                .scx
+                .humanize_resolved_name(name)
+                .expect("already resolved")
         );
     }
 
     let scalar_args = match &args {
         FunctionArgs::Star => {
-            sql_bail!("* argument is invalid with non-aggregate function {}", name)
+            sql_bail!(
+                "* argument is invalid with non-aggregate function {}",
+                ecx.qcx
+                    .scx
+                    .humanize_resolved_name(name)
+                    .expect("already resolved")
+            )
         }
         FunctionArgs::Args { args, order_by } => {
             if !order_by.is_empty() {
                 sql_bail!(
                     "ORDER BY specified, but {} is not an aggregate function",
-                    name
+                    ecx.qcx
+                        .scx
+                        .humanize_resolved_name(name)
+                        .expect("already resolved")
                 );
             }
             plan_exprs(ecx, args)?
