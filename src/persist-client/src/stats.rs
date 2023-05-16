@@ -25,6 +25,13 @@ pub struct PartStats {
     pub key: StructStats,
 }
 
+impl serde::Serialize for PartStats {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let PartStats { key } = self;
+        key.serialize(s)
+    }
+}
+
 impl PartStats {
     pub(crate) fn new<K: Codec, V: Codec>(
         schemas: &Schemas<K, V>,

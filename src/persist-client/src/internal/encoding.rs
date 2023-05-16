@@ -1335,6 +1335,6 @@ mod tests {
             assert_eq!(before, after);
         }
 
-        proptest!(|(state in any_state::<u64>(2))| testcase(state));
+        proptest!(|(state in any_state::<u64>(0..3))| testcase(state));
     }
 }

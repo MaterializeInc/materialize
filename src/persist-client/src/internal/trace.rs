@@ -1327,6 +1327,8 @@ pub mod datadriven {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::ops::Range;
+
     use proptest::prelude::*;
 
     use crate::internal::state::tests::any_hollow_batch;
@@ -1334,12 +1336,12 @@ pub(crate) mod tests {
     use super::*;
 
     pub fn any_trace<T: Arbitrary + Timestamp + Lattice>(
-        max_batches: usize,
+        num_batches: Range<usize>,
     ) -> impl Strategy<Value = Trace<T>> {
         Strategy::prop_map(
             (
                 any::<Option<T>>(),
-                proptest::collection::vec(any_hollow_batch::<T>(), 0..=max_batches),
+                proptest::collection::vec(any_hollow_batch::<T>(), num_batches),
             ),
             |(since, mut batches)| {
                 let mut trace = Trace::<T>::default();

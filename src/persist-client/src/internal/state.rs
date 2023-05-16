@@ -26,6 +26,8 @@ use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
 use semver::Version;
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::info;
@@ -54,7 +56,8 @@ include!(concat!(
 
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.
-#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(into = "String")]
 pub struct IdempotencyToken(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for IdempotencyToken {
@@ -77,6 +80,12 @@ impl std::str::FromStr for IdempotencyToken {
     }
 }
 
+impl From<IdempotencyToken> for String {
+    fn from(x: IdempotencyToken) -> Self {
+        x.to_string()
+    }
+}
+
 impl IdempotencyToken {
     pub(crate) fn new() -> Self {
         IdempotencyToken(*Uuid::new_v4().as_bytes())
@@ -84,7 +93,7 @@ impl IdempotencyToken {
     pub(crate) const SENTINEL: IdempotencyToken = IdempotencyToken([17u8; 16]);
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LeasedReaderState<T> {
     /// The seqno capability of this reader.
     pub seqno: SeqNo,
@@ -99,10 +108,17 @@ pub struct LeasedReaderState<T> {
     pub debug: HandleDebugState,
 }
 
-#[derive(Arbitrary, Clone, Debug, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize)]
+#[serde(into = "u64")]
 pub struct OpaqueState(pub [u8; 8]);
 
-#[derive(Clone, Debug, PartialEq)]
+impl From<OpaqueState> for u64 {
+    fn from(value: OpaqueState) -> Self {
+        u64::from_le_bytes(value.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CriticalReaderState<T> {
     /// The since capability of this reader.
     pub since: Antichain<T>,
@@ -114,7 +130,7 @@ pub struct CriticalReaderState<T> {
     pub debug: HandleDebugState,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct WriterState<T> {
     /// UNIX_EPOCH timestamp (in millis) of this writer's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
@@ -132,7 +148,7 @@ pub struct WriterState<T> {
 }
 
 /// Debugging info for a reader or writer.
-#[derive(Arbitrary, Clone, Debug, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize)]
 pub struct HandleDebugState {
     /// Hostname of the persist user that registered this writer or reader. For
     /// critical readers, this is the _most recent_ registration.
@@ -142,7 +158,7 @@ pub struct HandleDebugState {
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
-#[derive(Arbitrary, Clone, Debug)]
+#[derive(Arbitrary, Clone, Debug, Serialize)]
 pub struct HollowBatchPart {
     /// Pointer usable to retrieve the updates.
     pub key: PartialBatchKey,
@@ -205,6 +221,24 @@ pub struct HollowBatch<T> {
     ///     parts=[p1, p2, p3], runs=[1, 2] --> runs are [p1], [p2], [p3]
     /// ```
     pub runs: Vec<usize>,
+}
+
+impl<T: Serialize> serde::Serialize for HollowBatch<T> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let HollowBatch {
+            desc,
+            len,
+            parts: _,
+            runs: _,
+        } = self;
+        let mut s = s.serialize_struct("HollowBatch", 5)?;
+        let () = s.serialize_field("lower", &desc.lower().elements())?;
+        let () = s.serialize_field("upper", &desc.upper().elements())?;
+        let () = s.serialize_field("since", &desc.since().elements())?;
+        let () = s.serialize_field("len", len)?;
+        let () = s.serialize_field("part_runs", &self.runs().collect::<Vec<_>>())?;
+        s.end()
+    }
 }
 
 impl<T: Ord> PartialOrd for HollowBatch<T> {
@@ -292,7 +326,7 @@ impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
 }
 
 /// A pointer to a rollup stored externally.
-#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct HollowRollup {
     /// Pointer usable to retrieve the rollup.
     pub key: PartialRollupKey,
@@ -1336,6 +1370,47 @@ where
     }
 }
 
+// This Serialize impl is used for debugging/testing and exposed via SQL. It's
+// intentionally gated from users, so not strictly subject to our backward
+// compatibility guarantees, but still probably best to be thoughtful about
+// making unnecessary changes. Additionally, it's nice to make the output as
+// nice to use as possible without tying our hands for the actual code usages.
+impl<T: Serialize> Serialize for State<T> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let State {
+            applier_version,
+            shard_id,
+            seqno,
+            walltime_ms,
+            hostname,
+            collections:
+                StateCollections {
+                    last_gc_req,
+                    rollups,
+                    leased_readers,
+                    critical_readers,
+                    writers,
+                    trace,
+                },
+        } = self;
+        let mut s = s.serialize_struct("State", 13)?;
+        let () = s.serialize_field("applier_version", &applier_version.to_string())?;
+        let () = s.serialize_field("shard_id", shard_id)?;
+        let () = s.serialize_field("seqno", seqno)?;
+        let () = s.serialize_field("walltime_ms", walltime_ms)?;
+        let () = s.serialize_field("hostname", hostname)?;
+        let () = s.serialize_field("last_gc_req", last_gc_req)?;
+        let () = s.serialize_field("rollups", rollups)?;
+        let () = s.serialize_field("leased_readers", leased_readers)?;
+        let () = s.serialize_field("critical_readers", critical_readers)?;
+        let () = s.serialize_field("writers", writers)?;
+        let () = s.serialize_field("since", &trace.since().elements())?;
+        let () = s.serialize_field("upper", &trace.upper().elements())?;
+        let () = s.serialize_field("batches", &trace.batches().into_iter().collect::<Vec<_>>())?;
+        s.end()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct StateSizeMetrics {
     pub hollow_batch_count: usize,
@@ -1372,9 +1447,12 @@ impl<T> Determinacy for Upper<T> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::ops::Range;
+
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
     use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
 
     use crate::internal::trace::tests::any_trace;
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
@@ -1481,7 +1559,7 @@ pub(crate) mod tests {
     }
 
     pub fn any_state<T: Arbitrary + Timestamp + Lattice>(
-        max_trace_batches: usize,
+        num_trace_batches: Range<usize>,
     ) -> impl Strategy<Value = State<T>> {
         Strategy::prop_map(
             (
@@ -1502,7 +1580,7 @@ pub(crate) mod tests {
                     1..3,
                 ),
                 proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
-                any_trace::<T>(max_trace_batches),
+                any_trace::<T>(num_trace_batches),
             ),
             |(
                 shard_id,
@@ -2162,6 +2240,28 @@ pub(crate) mod tests {
         assert_eq!(
             IdempotencyToken::SENTINEL.to_string(),
             "i11111111-1111-1111-1111-111111111111"
+        );
+    }
+
+    /// This test generates an "arbitrary" State, but uses a fixed seed for the
+    /// randomness, so that it's deterministic. This lets us assert the
+    /// serialization of that State against a golden file that's committed,
+    /// making it easy to see what the serialization (used in an upcoming
+    /// INSPECT feature) looks like.
+    ///
+    /// This golden will have to be updated each time we change State, but
+    /// that's a feature, not a bug.
+    #[test]
+    fn state_inspect_serde_json() {
+        const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
+        let mut runner = proptest::test_runner::TestRunner::deterministic();
+        let tree = any_state::<u64>(5..6).new_tree(&mut runner).unwrap();
+        let json = serde_json::to_string_pretty(&tree.current()).unwrap();
+        assert_eq!(
+            json.trim(),
+            STATE_SERDE_JSON.trim(),
+            "\n\nNEW GOLDEN\n{}\n",
+            json
         );
     }
 }
