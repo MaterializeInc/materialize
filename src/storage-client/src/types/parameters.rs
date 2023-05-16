@@ -26,9 +26,6 @@ include!(concat!(
 /// Unset parameters should be interpreted to mean "use the previous value".
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct StorageParameters {
-    /// Controls whether or not to use the new storage `persist_sink` implementation in storage
-    /// ingestions.
-    pub enable_multi_worker_storage_persist_sink: bool,
     /// Persist client configuration.
     pub persist: PersistParameters,
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
@@ -43,14 +40,12 @@ impl StorageParameters {
     pub fn update(
         &mut self,
         StorageParameters {
-            enable_multi_worker_storage_persist_sink,
             persist,
             pg_replication_timeouts,
             keep_n_source_status_history_entries,
             upsert_rocksdb_tuning_config,
         }: StorageParameters,
     ) {
-        self.enable_multi_worker_storage_persist_sink = enable_multi_worker_storage_persist_sink;
         self.persist.update(persist);
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
@@ -61,7 +56,6 @@ impl StorageParameters {
 impl RustType<ProtoStorageParameters> for StorageParameters {
     fn into_proto(&self) -> ProtoStorageParameters {
         ProtoStorageParameters {
-            enable_multi_worker_storage_persist_sink: self.enable_multi_worker_storage_persist_sink,
             persist: Some(self.persist.into_proto()),
             pg_replication_timeouts: Some(self.pg_replication_timeouts.into_proto()),
             keep_n_source_status_history_entries: u64::cast_from(
@@ -73,8 +67,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
 
     fn from_proto(proto: ProtoStorageParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            enable_multi_worker_storage_persist_sink: proto
-                .enable_multi_worker_storage_persist_sink,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoStorageParameters::persist")?,

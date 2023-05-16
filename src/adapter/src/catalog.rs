@@ -6847,9 +6847,6 @@ impl Catalog {
     /// Return the current storage configuration, derived from the system configuration.
     pub fn storage_config(&self) -> StorageParameters {
         StorageParameters {
-            enable_multi_worker_storage_persist_sink: self
-                .system_config()
-                .enable_multi_worker_storage_persist_sink(),
             persist: self.persist_config(),
             pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
                 connect_timeout: Some(self.system_config().pg_replication_connect_timeout()),

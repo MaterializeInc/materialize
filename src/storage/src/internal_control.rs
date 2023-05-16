@@ -25,10 +25,6 @@ use mz_storage_client::types::sources::IngestionDescription;
 /// creation.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DataflowParameters {
-    /// Whether or not to use the new multi-worker storage `persist_sink`
-    /// implementation in storage ingestions. Is applied only
-    /// when a cluster or dataflow is restarted.
-    pub enable_multi_worker_storage_persist_sink: bool,
     /// Configured PG replication timeouts,
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
