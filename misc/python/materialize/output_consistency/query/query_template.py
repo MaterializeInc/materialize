@@ -25,9 +25,9 @@ class QueryTemplate:
     def add_select_exp(self, expr: Expression) -> None:
         self.select_expressions.append(expr)
 
-    def to_sql(self, strategy: EvaluationStrategy, format: QueryOutputFormat) -> str:
+    def to_sql(self, strategy: EvaluationStrategy, output_format: QueryOutputFormat) -> str:
         expressions_as_sql = [expr.to_sql() for expr in self.select_expressions]
-        space_separator = "\n  " if format == QueryOutputFormat.MULTI_LINE else " "
+        space_separator = "\n  " if output_format == QueryOutputFormat.MULTI_LINE else " "
 
         column_sql = f",{space_separator}".join(expressions_as_sql)
 
@@ -35,7 +35,7 @@ class QueryTemplate:
 SELECT{space_separator}{column_sql}
 FROM{space_separator}{strategy.db_object_name};""".strip()
 
-        if format == QueryOutputFormat.SINGLE_LINE:
+        if output_format == QueryOutputFormat.SINGLE_LINE:
             sql = sql.replace("\n", " ")
 
         return sql
