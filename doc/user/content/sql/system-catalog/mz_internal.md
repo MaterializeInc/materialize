@@ -135,15 +135,15 @@ extant cluster replicas.
 The `mz_cluster_replica_history` gives the times each replica was
 created and (if applicable) dropped.
 
-| Field              | Type                         | Meaning                                                                                                                                   |
-|--------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| `replica_id`       | [`text`]                     | The ID of a cluster replica.                                                                                                              |
-| `cluster_name`     | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
-| `replica_name`     | [`text`]                     | The name of the replica.                                                                                                                  |
-| `size`             | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
-| `created_at`       | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
-| `dropped_at`       | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
-| `credits_per_hour` | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credtis_per_hour`](#mz_cluster_replica_sizes). |
+| Field                 | Type                         | Meaning                                                                                                                                   |
+|-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `internal_replica_id` | [`text`]                     | An internal identifier of a cluster replica. Guaranteed to be unique, but not guaranteed to correspond to any user-facing replica ID.     |
+| `cluster_name`        | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
+| `replica_name`        | [`text`]                     | The name of the replica.                                                                                                                  |
+| `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
+| `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
+| `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
+| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credtis_per_hour`](#mz_cluster_replica_sizes). |
 
 ### `mz_sessions`
 

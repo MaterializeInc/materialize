@@ -3260,13 +3260,7 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 WHERE object_type = 'cluster-replica' AND event_type = 'drop'
             )
         SELECT
-            -- [btv] We have two notions of replica ID: the old one,
-            -- which is only present in `mz_audit_events`, and
-            -- the new one. We convert from old to new by
-            -- prepending with `u` here,
-            -- so as to not leak implementation details of `mz_audit_events`
-            -- into this more-broadly-useful view.
-            'u' || creates.replica_id AS replica_id,
+            creates.replica_id AS internal_replica_id,
             creates.size,
             creates.cluster_name,
             creates.replica_name,
