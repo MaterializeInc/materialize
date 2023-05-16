@@ -7,14 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from enum import Enum
+from materialize.output_consistency.data_type.data_type import DataType
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 
-
-class DataTypeCategory(Enum):
-    # only allowed for input parameters
-    ANY = 1
-    # only allowed for expression output, must be resolved from the first arg
-    DYNAMIC = 2
-    NUMERIC = 3
-    BOOLEAN = 4
-    TEXT = 5
+BOOLEAN_DATA_TYPE = DataType("BOOL", "BOOL", DataTypeCategory.BOOLEAN)

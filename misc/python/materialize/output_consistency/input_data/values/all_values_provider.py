@@ -10,9 +10,13 @@
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
+from materialize.output_consistency.input_data.values.boolean_values_provider import (
+    BOOLEAN_DATA_TYPE_WITH_VALUES,
+)
 from materialize.output_consistency.input_data.values.number_values_provider import (
     VALUES_PER_NUMERIC_DATA_TYPE,
 )
 
 DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = []
 DATA_TYPES_WITH_VALUES.extend(list(VALUES_PER_NUMERIC_DATA_TYPE.values()))
+DATA_TYPES_WITH_VALUES.append(BOOLEAN_DATA_TYPE_WITH_VALUES)
