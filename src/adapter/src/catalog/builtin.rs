@@ -4417,7 +4417,7 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 WHERE object_type = 'cluster-replica' AND event_type = 'drop'
             )
         SELECT
-            creates.replica_id AS internal_replica_id,
+            creates.replica_id,
             creates.size,
             creates.cluster_name,
             creates.replica_name,

@@ -130,7 +130,7 @@ each replica, including the times at which it was created and dropped
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_history -->
 | Field                 | Type                         | Meaning                                                                                                                                   |
 |-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| `internal_replica_id` | [`text`]                     | An internal identifier of a cluster replica. Guaranteed to be unique, but not guaranteed to correspond to any user-facing replica ID.     |
+| `replica_id`          | [`text`]                     | The ID of a cluster replica.                                                                                                              |
 | `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
 | `cluster_name`        | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
 | `replica_name`        | [`text`]                     | The name of the replica.                                                                                                                  |
