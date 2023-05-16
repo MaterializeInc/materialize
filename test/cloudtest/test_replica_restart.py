@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import subprocess
 import threading
 import time
 from io import StringIO
@@ -88,8 +89,12 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
         )
     )
 
-    # Wait for the cluster pod to OOM
-    verify_cluster_oomed()
+    try:
+        subprocess.run('sysctl -w kernel.printk="1 4 1 7"', shell=True, check=True)
+        # Wait for the cluster pod to OOM
+        verify_cluster_oomed()
+    finally:
+        subprocess.run('sysctl -w kernel.printk="4 4 1 7"', shell=True, check=True)
 
     mz.environmentd.sql("DROP CLUSTER oom CASCADE; DROP VIEW oom CASCADE")
 
