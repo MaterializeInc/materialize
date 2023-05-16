@@ -541,6 +541,7 @@ async fn migrate(
                 if &cluster_value.name == MZ_SYSTEM_CLUSTER.name
                     && !cluster_value
                         .privileges
+                        .as_ref()
                         .map(|privilege| privilege.contains(&mz_introspection_privilege))
                         .unwrap_or(false)
                 {
