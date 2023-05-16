@@ -231,7 +231,7 @@
   - signature: 'tan(x: double precision) -> double precision'
     description: The tangent of `x`, with `x` in radians.
 
-  - signature: 'asin(x: double precision) -> double precision'
+  - signature: 'atan(x: double precision) -> double precision'
     description: The inverse tangent of `x`, result in radians.
 
   - signature: 'tanh(x: double precision) -> double precision'

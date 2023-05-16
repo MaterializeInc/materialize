@@ -115,8 +115,8 @@ pub enum TypeError<'a> {
     BadTopKGroupKey {
         /// Expression with the bug
         source: &'a MirRelationExpr,
-        /// The group key used
-        key: usize,
+        /// The bad column reference in the group key
+        k: usize,
         /// The input columns (which don't have that column)
         input_type: Vec<ColumnType>,
     },
@@ -472,6 +472,9 @@ impl Typecheck {
     /// It should be linear in the size of the AST.
     ///
     /// ??? should we also compute keys and return a `RelationType`?
+    ///   ggevay: Checking keys would have the same problem as checking nullability: key inference
+    ///   is very heuristic (even more so than nullability inference), so it's almost impossible to
+    ///   reliably keep it stable across transformations.
     pub fn typecheck<'a>(
         &self,
         expr: &'a MirRelationExpr,
@@ -617,10 +620,13 @@ impl Typecheck {
                 equivalences,
                 implementation,
             } => {
-                let mut t_in = Vec::new();
+                let mut t_in_global = Vec::new();
+                let mut t_in_local = vec![Vec::new(); inputs.len()];
 
-                for input in inputs.iter() {
-                    t_in.extend(tc.typecheck(input, ctx)?);
+                for (i, input) in inputs.iter().enumerate() {
+                    let input_t = tc.typecheck(input, ctx)?;
+                    t_in_global.extend(input_t.clone());
+                    t_in_local[i] = input_t;
                 }
 
                 for eq_class in equivalences {
@@ -629,7 +635,8 @@ impl Typecheck {
                     let mut all_nullable = true;
 
                     for scalar_expr in eq_class {
-                        let t_expr = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
+                        // Note: the equivalences have global column references
+                        let t_expr = tc.typecheck_scalar(scalar_expr, expr, &t_in_global)?;
 
                         if !t_expr.nullable {
                             all_nullable = false;
@@ -686,32 +693,32 @@ impl Typecheck {
 
                 // check that the join implementation is consistent
                 match implementation {
-                    JoinImplementation::Differential((_, first_keys, _), others) => {
-                        if let Some(keys) = first_keys {
-                            for scalar_expr in keys {
-                                let _ = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
+                    JoinImplementation::Differential((start_idx, first_key, _), others) => {
+                        if let Some(key) = first_key {
+                            for k in key {
+                                let _ = tc.typecheck_scalar(k, expr, &t_in_local[*start_idx])?;
                             }
                         }
 
-                        for (_, keys, _) in others {
-                            for scalar_expr in keys {
-                                let _ = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
+                        for (idx, key, _) in others {
+                            for k in key {
+                                let _ = tc.typecheck_scalar(k, expr, &t_in_local[*idx])?;
                             }
                         }
                     }
                     JoinImplementation::DeltaQuery(plans) => {
                         for plan in plans {
-                            for (_, keys, _) in plan {
-                                for scalar_expr in keys {
-                                    let _ = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
+                            for (idx, key, _) in plan {
+                                for k in key {
+                                    let _ = tc.typecheck_scalar(k, expr, &t_in_local[*idx])?;
                                 }
                             }
                         }
                     }
-                    JoinImplementation::IndexedFilter(_global_id, keys, consts) => {
-                        let typ: Vec<ColumnType> = keys
+                    JoinImplementation::IndexedFilter(_global_id, key, consts) => {
+                        let typ: Vec<ColumnType> = key
                             .iter()
-                            .map(|scalar_expr| tc.typecheck_scalar(scalar_expr, expr, &t_in))
+                            .map(|k| tc.typecheck_scalar(k, expr, &t_in_global))
                             .collect::<Result<Vec<ColumnType>, TypeError>>()?;
 
                         for row in consts {
@@ -743,7 +750,7 @@ impl Typecheck {
                     JoinImplementation::Unimplemented => (),
                 }
 
-                Ok(t_in)
+                Ok(t_in_global)
             }
             Reduce {
                 input,
@@ -776,11 +783,11 @@ impl Typecheck {
             } => {
                 let t_in = tc.typecheck(input, ctx)?;
 
-                for &key in group_key {
-                    if key >= t_in.len() {
+                for &k in group_key {
+                    if k >= t_in.len() {
                         return Err(TypeError::BadTopKGroupKey {
                             source: expr,
-                            key,
+                            k,
                             input_type: t_in,
                         });
                     }
@@ -905,9 +912,9 @@ impl Typecheck {
             ArrangeBy { input, keys } => {
                 let t_in = tc.typecheck(input, ctx)?;
 
-                for cols in keys {
-                    for col in cols {
-                        let _ = tc.typecheck_scalar(col, expr, &t_in)?;
+                for key in keys {
+                    for k in key {
+                        let _ = tc.typecheck_scalar(k, expr, &t_in)?;
                     }
                 }
 
@@ -1448,14 +1455,14 @@ impl<'a> TypeError<'a> {
             }
             BadTopKGroupKey {
                 source: _,
-                key,
+                k,
                 input_type,
             } => {
                 let input_type = columns_pretty(input_type, humanizer);
 
                 writeln!(
                     f,
-                    "TopK group key {key} references invalid column\ncolumns: {input_type}"
+                    "TopK group key component references invalid column {k} in columns: {input_type}"
                 )?
             }
             BadTopKOrdering {

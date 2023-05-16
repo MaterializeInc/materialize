@@ -2366,6 +2366,147 @@ DROP OWNED BY PUBLIC;
 db error: ERROR: role name "public" is reserved
 DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
 
+# Test REASSIGN OWNED
+
+statement ok
+CREATE DATABASE db
+
+query T
+SELECT mz_roles.name
+  FROM mz_databases
+  LEFT JOIN mz_roles ON mz_databases.owner_id = mz_roles.id
+  WHERE mz_databases.name = 'db'
+----
+materialize
+
+statement ok
+CREATE SCHEMA s
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 's'
+----
+materialize
+
+statement ok
+CREATE TABLE t ();
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 't'
+----
+materialize
+
+simple conn=joe,user=joe
+CREATE TABLE t1 ();
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 't1'
+----
+joe
+
+statement ok
+CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+
+query T
+SELECT mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c'
+----
+materialize
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'replica1'
+----
+materialize
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY materialize, joe TO group1;
+----
+COMPLETE 0
+
+query T
+SELECT mz_roles.name
+  FROM mz_databases
+  LEFT JOIN mz_roles ON mz_databases.owner_id = mz_roles.id
+  WHERE mz_databases.name = 'db'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_schemas
+  LEFT JOIN mz_roles ON mz_schemas.owner_id = mz_roles.id
+  WHERE mz_schemas.name = 's'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 't'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_tables
+  LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
+  WHERE mz_tables.name = 't1'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_clusters
+  LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
+  WHERE mz_clusters.name = 'c'
+----
+group1
+
+query T
+SELECT mz_roles.name
+  FROM mz_cluster_replicas
+  LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
+  WHERE mz_cluster_replicas.name = 'replica1'
+----
+group1
+
+## Test reassigning system objects
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY mz_system TO materialize;
+----
+db error: ERROR: cannot reassign objects owned by role "mz_system" because they are required by the database system
+
+## Test reassigning PUBLIC objects
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY PUBLIC TO materialize;
+----
+db error: ERROR: role name "public" is reserved
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+
+simple conn=mz_system,user=mz_system
+REASSIGN OWNED BY materialize TO PUBLIC;
+----
+db error: ERROR: role name "public" is reserved
+DETAIL: The role "public" and the prefixes "mz_" and "pg_" are reserved for system roles.
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system

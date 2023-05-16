@@ -101,6 +101,7 @@ pub mod antichain;
 pub mod chrono;
 pub mod explain;
 pub mod global_id;
+pub mod namespaces;
 pub mod role_id;
 pub mod stats;
 pub mod strconv;

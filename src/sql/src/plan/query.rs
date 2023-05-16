@@ -69,7 +69,7 @@ use mz_sql_parser::ast::{
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
-use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
+use crate::names::{Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -2094,7 +2094,10 @@ fn plan_scalar_table_funcs(
     let rows_from_qcx = qcx.derived_context(from_scope.clone(), qcx.relation_type(relation_expr));
 
     for (table_func, id) in table_funcs.iter() {
-        table_func_names.insert(id.clone(), table_func.name.0.last().unwrap().clone());
+        table_func_names.insert(
+            id.clone(),
+            table_func.name.full_item_name().item.clone().into(),
+        );
     }
     // If there's only a single table function, we can skip generating
     // ordinality columns.
@@ -2408,8 +2411,11 @@ fn plan_rows_from(
     // Per PostgreSQL, all scope items take the name of the first function
     // (unless aliased).
     // See: https://github.com/postgres/postgres/blob/639a86e36/src/backend/parser/parse_relation.c#L1701-L1705
-    let (expr, mut scope, num_cols) =
-        plan_rows_from_internal(qcx, functions, Some(&functions[0].name))?;
+    let (expr, mut scope, num_cols) = plan_rows_from_internal(
+        qcx,
+        functions,
+        Some(functions[0].name.full_item_name().clone()),
+    )?;
 
     // Columns tracks the set of columns we will keep in the projection.
     let mut columns = Vec::new();
@@ -2465,7 +2471,7 @@ fn plan_rows_from(
 fn plan_rows_from_internal<'a>(
     qcx: &QueryContext,
     functions: impl IntoIterator<Item = &'a TableFunction<Aug>>,
-    table_name: Option<&UnresolvedItemName>,
+    table_name: Option<FullItemName>,
 ) -> Result<(HirRelationExpr, Scope, Vec<usize>), PlanError> {
     let mut functions = functions.into_iter();
     let mut num_cols = Vec::new();
@@ -2474,7 +2480,7 @@ fn plan_rows_from_internal<'a>(
     // always the column to join against and is maintained to be the coalescence
     // of the row number column for all prior functions.
     let (mut left_expr, mut left_scope) =
-        plan_table_function_internal(qcx, functions.next().unwrap(), true, table_name)?;
+        plan_table_function_internal(qcx, functions.next().unwrap(), true, table_name.clone())?;
     num_cols.push(left_scope.len() - 1);
     // Create the coalesced ordinality column.
     left_expr = left_expr.map(vec![HirScalarExpr::column(left_scope.len() - 1)]);
@@ -2486,7 +2492,7 @@ fn plan_rows_from_internal<'a>(
         // The right hand side of a join must be planned in a new scope.
         let qcx = qcx.empty_derived_context();
         let (right_expr, mut right_scope) =
-            plan_table_function_internal(&qcx, function, true, table_name)?;
+            plan_table_function_internal(&qcx, function, true, table_name.clone())?;
         num_cols.push(right_scope.len() - 1);
         let left_col = left_scope.len() - 1;
         let right_col = left_scope.len() + right_scope.len() - 1;
@@ -2580,14 +2586,8 @@ fn plan_table_function_internal(
     qcx: &QueryContext,
     TableFunction { name, args }: &TableFunction<Aug>,
     with_ordinality: bool,
-    table_name: Option<&UnresolvedItemName>,
+    table_name: Option<FullItemName>,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
-    if *name == UnresolvedItemName::unqualified("values") {
-        // Produce a nice error message for the common typo
-        // `SELECT * FROM VALUES (1)`.
-        sql_bail!("VALUES expression in FROM clause must be surrounded by parentheses");
-    }
-
     let ecx = &ExprContext {
         qcx,
         name: "table function arguments",
@@ -2610,11 +2610,12 @@ fn plan_table_function_internal(
             plan_exprs(ecx, args)?
         }
     };
-    let resolved_name = normalize::unresolved_item_name(name.clone())?;
+
     let table_name = match table_name {
-        Some(table_name) => normalize::unresolved_item_name(table_name.clone())?.item,
-        None => resolved_name.item.clone(),
+        Some(table_name) => table_name.item,
+        None => name.full_item_name().item.clone(),
     };
+
     let scope_name = Some(PartialItemName {
         database: None,
         schema: None,
@@ -2623,13 +2624,7 @@ fn plan_table_function_internal(
 
     let (mut expr, mut scope) = match resolve_func(ecx, name, args)? {
         Func::Table(impls) => {
-            let tf = func::select_impl(
-                ecx,
-                FuncSpec::Func(&resolved_name),
-                impls,
-                scalar_args,
-                vec![],
-            )?;
+            let tf = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
             let scope = Scope::from_source(scope_name.clone(), tf.column_names);
             (tf.expr, scope)
         }
@@ -2769,11 +2764,30 @@ fn invent_column_name(
                 _ => None,
             },
             Expr::Function(func) => {
-                let name = normalize::unresolved_item_name(func.name.clone()).ok()?;
-                if name.schema.as_deref() == Some("mz_internal") {
+                let (schema, item) = match &func.name {
+                    ResolvedItemName::Item {
+                        qualifiers,
+                        full_name,
+                        ..
+                    } => (&qualifiers.schema_spec, full_name.item.clone()),
+                    _ => unreachable!(),
+                };
+
+                if schema
+                    == ecx
+                        .qcx
+                        .scx
+                        .catalog
+                        .resolve_schema(
+                            Some("materialize"),
+                            mz_repr::namespaces::MZ_INTERNAL_SCHEMA,
+                        )
+                        .expect("mz_internal schema must exist")
+                        .id()
+                {
                     None
                 } else {
-                    Some((name.item.into(), NameQuality::High))
+                    Some((item.into(), NameQuality::High))
                 }
             }
             Expr::HomogenizingFunction { function, .. } => Some((
@@ -3943,7 +3957,7 @@ fn plan_collate(
     collation: &UnresolvedItemName,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     if collation.0.len() == 2
-        && collation.0[0] == Ident::new("pg_catalog")
+        && collation.0[0] == Ident::new(mz_repr::namespaces::PG_CATALOG_SCHEMA)
         && collation.0[1] == Ident::new("default")
     {
         plan_expr(ecx, expr)
@@ -4203,8 +4217,6 @@ fn plan_aggregate(
         bail_unsupported!("aggregate window functions");
     }
 
-    let name = normalize::unresolved_item_name(name.clone())?;
-
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
     // generalized function selection framework. The rule is simple: the user
     // must type `count(*)`, but the function selection framework sees an empty
@@ -4219,7 +4231,10 @@ fn plan_aggregate(
             if args.is_empty() {
                 sql_bail!(
                     "{}(*) must be used to call a parameterless aggregate function",
-                    name
+                    ecx.qcx
+                        .scx
+                        .humanize_resolved_name(name)
+                        .expect("name actually resolved")
                 );
             }
             let args = plan_exprs(ecx, args)?;
@@ -4229,7 +4244,7 @@ fn plan_aggregate(
 
     let (order_by_exprs, col_orders) = plan_function_order_by(ecx, &order_by)?;
 
-    let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(&name), impls, args, col_orders)?;
+    let (mut expr, func) = func::select_impl(ecx, FuncSpec::Func(name), impls, args, col_orders)?;
     if let Some(filter) = &filter {
         // If a filter is present, as in
         //
@@ -4394,8 +4409,6 @@ fn plan_function<'a>(
         distinct,
     }: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, PlanError> {
-    let unresolved_name = normalize::unresolved_item_name(name.clone())?;
-
     let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(_) if ecx.allow_aggregates => {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
@@ -4408,27 +4421,21 @@ fn plan_function<'a>(
             sql_bail!(
                 "aggregate functions are not allowed in {} (function {})",
                 ecx.name,
-                unresolved_name
+                name
             );
         }
         Func::Table(_) => {
             sql_bail!(
                 "table functions are not allowed in {} (function {})",
                 ecx.name,
-                unresolved_name
+                name
             );
         }
         Func::Scalar(impls) => impls,
         Func::ScalarWindow(impls) => {
             let (window_spec, _, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
 
-            let func = func::select_impl(
-                ecx,
-                FuncSpec::Func(&unresolved_name),
-                impls,
-                scalar_args,
-                vec![],
-            )?;
+            let func = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
 
             let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
 
@@ -4445,13 +4452,8 @@ fn plan_function<'a>(
             let (window_spec, window_frame, scalar_args, partition) =
                 validate_window_function_plan(ecx, f)?;
 
-            let (expr, func) = func::select_impl(
-                ecx,
-                FuncSpec::Func(&unresolved_name),
-                impls,
-                scalar_args,
-                vec![],
-            )?;
+            let (expr, func) =
+                func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
 
             let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
 
@@ -4475,38 +4477,47 @@ fn plan_function<'a>(
     if *distinct {
         sql_bail!(
             "DISTINCT specified, but {} is not an aggregate function",
-            name
+            ecx.qcx
+                .scx
+                .humanize_resolved_name(name)
+                .expect("already resolved")
         );
     }
     if filter.is_some() {
         sql_bail!(
             "FILTER specified, but {} is not an aggregate function",
-            name
+            ecx.qcx
+                .scx
+                .humanize_resolved_name(name)
+                .expect("already resolved")
         );
     }
 
     let scalar_args = match &args {
         FunctionArgs::Star => {
-            sql_bail!("* argument is invalid with non-aggregate function {}", name)
+            sql_bail!(
+                "* argument is invalid with non-aggregate function {}",
+                ecx.qcx
+                    .scx
+                    .humanize_resolved_name(name)
+                    .expect("already resolved")
+            )
         }
         FunctionArgs::Args { args, order_by } => {
             if !order_by.is_empty() {
                 sql_bail!(
                     "ORDER BY specified, but {} is not an aggregate function",
-                    name
+                    ecx.qcx
+                        .scx
+                        .humanize_resolved_name(name)
+                        .expect("already resolved")
                 );
             }
             plan_exprs(ecx, args)?
         }
     };
 
-    func::select_impl(
-        ecx,
-        FuncSpec::Func(&unresolved_name),
-        impls,
-        scalar_args,
-        vec![],
-    )
+    func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])
 }
 
 /// Resolves the name to a set of function implementations.
@@ -4514,10 +4525,10 @@ fn plan_function<'a>(
 /// If the name does not specify a known built-in function, returns an error.
 pub fn resolve_func(
     ecx: &ExprContext,
-    name: &UnresolvedItemName,
+    name: &ResolvedItemName,
     args: &mz_sql_parser::ast::FunctionArgs<Aug>,
 ) -> Result<&'static Func, PlanError> {
-    if let Ok(i) = ecx.qcx.scx.resolve_function(name.clone()) {
+    if let Ok(i) = ecx.qcx.scx.get_item_by_resolved_name(name) {
         if let Ok(f) = i.func() {
             return Ok(f);
         }
@@ -4546,24 +4557,9 @@ pub fn resolve_func(
         })
         .collect();
 
-    // Suggest using the `jsonb_` version of `json_` functions if they exist.
-    let alternative_hint = match name.0.split_last() {
-        Some((i, q)) if i.as_str().starts_with("json_") => {
-            let mut jsonb_version = q.to_vec();
-            jsonb_version.push(Ident::new(i.as_str().replace("json_", "jsonb_")));
-            let jsonb_version = UnresolvedItemName(jsonb_version);
-            match resolve_func(ecx, &jsonb_version, args) {
-                Ok(_) => Some(format!("Try using {}", jsonb_version)),
-                Err(_) => None,
-            }
-        }
-        _ => None,
-    };
-
     Err(PlanError::UnknownFunction {
         name: name.to_string(),
         arg_types,
-        alternative_hint,
     })
 }
 
@@ -5103,7 +5099,7 @@ impl<'a> AggregateTableFuncVisitor<'a> {
 
 impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
     fn visit_function_mut(&mut self, func: &mut Function<Aug>) {
-        let item = match self.scx.resolve_function(func.name.clone()) {
+        let item = match self.scx.get_item_by_resolved_name(&func.name) {
             Ok(i) => i,
             // Catching missing functions later in planning improves error messages.
             Err(_) => return,
@@ -5160,7 +5156,7 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
                 // If we're in a SELECT list, replace table functions with a uuid identifier
                 // and save the table func so it can be planned elsewhere.
                 let mut table_func = None;
-                if let Ok(item) = self.scx.resolve_function(func.name.clone()) {
+                if let Ok(item) = self.scx.get_item_by_resolved_name(&func.name) {
                     if let Ok(Func::Table { .. }) = item.func() {
                         if let Some(context) = self.table_disallowed_context.last() {
                             self.err = Some(sql_err!(

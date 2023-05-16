@@ -543,6 +543,75 @@ const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
+mod upsert_rocksdb {
+    use super::*;
+    pub static UPSERT_ROCKSDB_COMPACTION_STYLE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_compaction_style"),
+        value: &*mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE_STR,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    });
+    pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
+        value: &mz_rocksdb::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_level_compaction_dynamic_level_bytes"),
+        value: &mz_rocksdb::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO: ServerVar<i32> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_universal_compaction_ratio"),
+        value: &mz_rocksdb::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_PARALLELISM: ServerVar<Option<i32>> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_parallelism"),
+        value: &mz_rocksdb::defaults::DEFAULT_PARALLELISM,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_compression_type"),
+        value: &*mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE_STR,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    });
+    pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: Lazy<ServerVar<String>> =
+        Lazy::new(|| ServerVar {
+            name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
+            value: &*mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE_STR,
+            description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+            internal: true,
+            safe: true,
+        });
+}
+
 /// Controls the connect_timeout setting when connecting to PG via replication.
 const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_connect_timeout"),
@@ -848,6 +917,15 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
     internal: true,
     safe: true,
+};
+
+pub const ALLOW_UNSTABLE_DEPENDENCIES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("allow_unstable_dependencies"),
+    value: &false,
+    description:
+        "Whether to allow catalog objects to depend on unstable items, e.g. those in the `mz_internal` schema (Materialize).",
+    internal: true,
+    safe: false,
 };
 
 /// Represents the input to a variable.
@@ -1590,6 +1668,13 @@ impl SystemVars {
             .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
             .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
             .with_var(&ENABLE_UPSERT_SOURCE_DISK)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
@@ -1621,7 +1706,8 @@ impl SystemVars {
             .with_var(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
-            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES);
+            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+            .with_var(&ALLOW_UNSTABLE_DEPENDENCIES);
         vars.refresh_internal_state();
         vars
     }
@@ -1890,6 +1976,34 @@ impl SystemVars {
         *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
     }
 
+    pub fn upsert_rocksdb_compaction_style(&self) -> &str {
+        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
+    }
+
+    pub fn upsert_rocksdb_optimize_compaction_memtable_budget(&self) -> usize {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
+    }
+
+    pub fn upsert_rocksdb_level_compaction_dynamic_level_bytes(&self) -> bool {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
+    }
+
+    pub fn upsert_rocksdb_universal_compaction_ratio(&self) -> i32 {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO)
+    }
+
+    pub fn upsert_rocksdb_parallelism(&self) -> Option<i32> {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
+    }
+
+    pub fn upsert_rocksdb_compression_type(&self) -> &str {
+        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
+    }
+
+    pub fn upsert_rocksdb_bottommost_compression_type(&self) -> &str {
+        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
+    }
+
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
@@ -2060,6 +2174,11 @@ impl SystemVars {
 
     pub fn keep_n_source_status_history_entries(&self) -> usize {
         *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+    }
+
+    /// Returns the `enable_rbac_checks` configuration parameter.
+    pub fn allow_unstable_dependencies(&self) -> bool {
+        *self.expect_value(&ALLOW_UNSTABLE_DEPENDENCIES)
     }
 }
 
@@ -2738,6 +2857,20 @@ impl Value for str {
     }
 }
 
+// The same as the above impl, but works in `SystemVar`s.
+impl Value for String {
+    const TYPE_NAME: &'static str = "string";
+
+    fn parse(input: VarInput) -> Result<String, ()> {
+        let s = extract_single_value(input)?;
+        Ok(s.to_owned())
+    }
+
+    fn format(&self) -> String {
+        self.to_owned()
+    }
+}
+
 impl Value for Vec<String> {
     const TYPE_NAME: &'static str = "string list";
 
@@ -2812,6 +2945,25 @@ impl Value for Option<mz_repr::Timestamp> {
         match s {
             "" => Ok(None),
             _ => <mz_repr::Timestamp as Value>::parse(VarInput::Flat(s)).map(Some),
+        }
+    }
+
+    fn format(&self) -> String {
+        match self {
+            Some(s) => s.format(),
+            None => "".into(),
+        }
+    }
+}
+
+impl Value for Option<i32> {
+    const TYPE_NAME: &'static str = "optional signed integer";
+
+    fn parse(input: VarInput) -> Result<Option<i32>, ()> {
+        let s = extract_single_value(input)?;
+        match s {
+            "" => Ok(None),
+            _ => <i32 as Value>::parse(VarInput::Flat(s)).map(Some),
         }
     }
 
@@ -3063,7 +3215,18 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+        || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
+}
+
+fn is_upsert_rocksdb_config_var(name: &str) -> bool {
+    name == upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.

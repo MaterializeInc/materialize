@@ -802,6 +802,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::GrantedRole
         | ExecuteResponse::Inserted(_)
         | ExecuteResponse::Raised
+        | ExecuteResponse::ReassignOwned
         | ExecuteResponse::RevokedPrivilege
         | ExecuteResponse::RevokedRole
         | ExecuteResponse::SetVariable { .. }

@@ -1,0 +1,41 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package mz_rocksdb.tuning;
+
+// The lowercase `b` is because prost lowercases it anyways
+// if its capitalized :(
+message ProtoRocksDbTuningParameters {
+  message ProtoCompactionStyle {
+      oneof kind {
+          google.protobuf.Empty level = 1;
+          google.protobuf.Empty universal = 2;
+      }
+  }
+  message ProtoCompressionType {
+      oneof kind {
+          google.protobuf.Empty zstd = 1;
+          google.protobuf.Empty snappy = 2;
+          google.protobuf.Empty lz4 = 3;
+          google.protobuf.Empty none = 4;
+      }
+  }
+
+    ProtoCompactionStyle compaction_style = 1;
+    uint64 optimize_compaction_memtable_budget = 2;
+    bool level_compaction_dynamic_level_bytes = 3;
+    int32 universal_compaction_target_ratio = 4;
+    optional int32 parallelism = 5;
+    ProtoCompressionType compression_type = 6;
+    ProtoCompressionType bottommost_compression_type = 7;
+}

@@ -144,6 +144,7 @@ pub enum Plan {
     RevokeRole(RevokeRolePlan),
     GrantPrivilege(GrantPrivilegePlan),
     RevokePrivilege(RevokePrivilegePlan),
+    ReassignOwned(ReassignOwnedPlan),
 }
 
 impl Plan {
@@ -205,6 +206,7 @@ impl Plan {
             StatementKind::Insert => vec![PlanKind::Insert],
             StatementKind::Prepare => vec![PlanKind::Prepare],
             StatementKind::Raise => vec![PlanKind::Raise],
+            StatementKind::ReassignOwned => vec![PlanKind::ReassignOwned],
             StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
             StatementKind::RevokePrivilege => vec![PlanKind::RevokePrivilege],
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
@@ -338,6 +340,7 @@ impl Plan {
             Plan::RevokeRole(_) => "revoke role",
             Plan::GrantPrivilege(_) => "grant privilege",
             Plan::RevokePrivilege(_) => "revoke privilege",
+            Plan::ReassignOwned(_) => "reassign owned",
         }
     }
 }
@@ -896,6 +899,16 @@ pub struct RevokePrivilegePlan {
     pub revokees: Vec<RoleId>,
     /// The role that will revoke the privileges.
     pub grantor: RoleId,
+}
+
+#[derive(Debug)]
+pub struct ReassignOwnedPlan {
+    /// The roles whose owned objects are being reassigned.
+    pub old_roles: Vec<RoleId>,
+    /// The new owner of the objects.
+    pub new_role: RoleId,
+    /// All object IDs to reassign.
+    pub reassign_ids: Vec<ObjectId>,
 }
 
 #[derive(Clone, Debug)]

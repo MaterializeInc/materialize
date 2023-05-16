@@ -30,6 +30,9 @@ use serde::Serialize;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::namespaces::{
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA,
+};
 use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
 use mz_sql::catalog::{
@@ -43,12 +46,6 @@ use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STAT
 use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
 use crate::rbac;
-
-pub const MZ_TEMP_SCHEMA: &str = "mz_temp";
-pub const MZ_CATALOG_SCHEMA: &str = "mz_catalog";
-pub const PG_CATALOG_SCHEMA: &str = "pg_catalog";
-pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
-pub const INFORMATION_SCHEMA: &str = "information_schema";
 
 pub static BUILTIN_PREFIXES: Lazy<Vec<&str>> = Lazy::new(|| vec!["mz_", "pg_"]);
 
@@ -3242,6 +3239,8 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 SELECT
                     details ->> 'logical_size' AS size,
                     details ->> 'replica_id' AS replica_id,
+                    details ->> 'replica_name' AS replica_name,
+                    details ->> 'cluster_name' AS cluster_name,
                     occurred_at
                 FROM mz_catalog.mz_audit_events
                 WHERE
@@ -3258,8 +3257,10 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 WHERE object_type = 'cluster-replica' AND event_type = 'drop'
             )
         SELECT
-            creates.replica_id,
+            creates.replica_id AS internal_replica_id,
             creates.size,
+            creates.cluster_name,
+            creates.replica_name,
             creates.occurred_at AS created_at,
             drops.occurred_at AS dropped_at,
             mz_internal.mz_error_if_null(

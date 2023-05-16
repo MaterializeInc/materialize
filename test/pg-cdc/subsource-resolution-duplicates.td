@@ -47,7 +47,7 @@ contains:multiple tables with name "t": "postgres"."other"."t", "postgres"."publ
   FOR SCHEMAS (other);
 
 > SHOW sources
- mz_source          postgres  4
+ mz_source          postgres  ${arg.default-storage-size}
  mz_source_progress subsource <null>
  t                  subsource <null>
 

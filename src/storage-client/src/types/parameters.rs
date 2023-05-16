@@ -24,7 +24,7 @@ include!(concat!(
 ///
 /// Parameters can be set (`Some`) or unset (`None`).
 /// Unset parameters should be interpreted to mean "use the previous value".
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct StorageParameters {
     /// Controls whether or not to use the new storage `persist_sink` implementation in storage
     /// ingestions.
@@ -33,6 +33,9 @@ pub struct StorageParameters {
     pub persist: PersistParameters,
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
     pub keep_n_source_status_history_entries: usize,
+    /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
+    /// `None` means the defaults.
+    pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBTuningParameters,
 }
 
 impl StorageParameters {
@@ -44,12 +47,14 @@ impl StorageParameters {
             persist,
             pg_replication_timeouts,
             keep_n_source_status_history_entries,
+            upsert_rocksdb_tuning_config,
         }: StorageParameters,
     ) {
         self.enable_multi_worker_storage_persist_sink = enable_multi_worker_storage_persist_sink;
         self.persist.update(persist);
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
+        self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
     }
 }
 
@@ -62,6 +67,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
             ),
+            upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
         }
     }
 
@@ -78,6 +84,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             keep_n_source_status_history_entries: usize::cast_from(
                 proto.keep_n_source_status_history_entries,
             ),
+            upsert_rocksdb_tuning_config: proto
+                .upsert_rocksdb_tuning_config
+                .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
         })
     }
 }

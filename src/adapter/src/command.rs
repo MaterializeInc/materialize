@@ -329,6 +329,8 @@ pub enum ExecuteResponse {
     Prepare,
     /// A user-requested warning was raised.
     Raised,
+    /// The requested objects were reassigned.
+    ReassignOwned,
     /// The requested privilege was revoked.
     RevokedPrivilege,
     /// The requested role was revoked.
@@ -410,6 +412,7 @@ impl ExecuteResponse {
             }
             Prepare => Some("PREPARE".into()),
             Raised => Some("RAISE".into()),
+            ReassignOwned => Some("REASSIGN OWNED".into()),
             RevokedPrivilege => Some("REVOKE".into()),
             RevokedRole => Some("REVOKE ROLE".into()),
             SendingRows { .. } => None,
@@ -477,6 +480,7 @@ impl ExecuteResponse {
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
+            PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],
             RevokePrivilege => vec![RevokedPrivilege],
             RevokeRole => vec![RevokedRole],
             PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],

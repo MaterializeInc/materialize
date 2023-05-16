@@ -470,7 +470,8 @@ impl Coordinator {
                     | Statement::Insert(_)
                     | Statement::RevokePrivilege(_)
                     | Statement::RevokeRole(_)
-                    | Statement::Update(_) => {
+                    | Statement::Update(_)
+                    | Statement::ReassignOwned(_) => {
                         return tx.send(
                             Err(AdapterError::OperationProhibitsTransaction(
                                 stmt.to_string(),

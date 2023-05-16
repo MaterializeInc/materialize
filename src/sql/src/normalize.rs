@@ -90,7 +90,8 @@ pub fn unresolved_schema_name(
 /// Qualified operators outside of the pg_catalog schema are rejected.
 pub fn op(op: &Op) -> Result<&str, PlanError> {
     if !op.namespace.is_empty()
-        && (op.namespace.len() != 1 || op.namespace[0].as_str() != "pg_catalog")
+        && (op.namespace.len() != 1
+            || op.namespace[0].as_str() != mz_repr::namespaces::PG_CATALOG_SCHEMA)
     {
         sql_bail!(
             "operator does not exist: {}.{}",
@@ -180,32 +181,21 @@ pub fn create_statement(
         )))
     };
 
-    fn normalize_function_name(
-        scx: &StatementContext,
-        name: &mut UnresolvedItemName,
-    ) -> Result<(), PlanError> {
-        let item = scx.resolve_function(name.clone())?;
-        *name = unresolve(scx.catalog.resolve_full_name(item.name()));
-        Ok(())
-    }
-
-    struct QueryNormalizer<'a> {
-        scx: &'a StatementContext<'a>,
+    struct QueryNormalizer {
         ctes: Vec<Ident>,
         err: Option<PlanError>,
     }
 
-    impl<'a> QueryNormalizer<'a> {
-        fn new(scx: &'a StatementContext<'a>) -> QueryNormalizer<'a> {
+    impl QueryNormalizer {
+        fn new() -> QueryNormalizer {
             QueryNormalizer {
-                scx,
                 ctes: vec![],
                 err: None,
             }
         }
     }
 
-    impl<'a, 'ast> VisitMut<'ast, Aug> for QueryNormalizer<'a> {
+    impl<'ast> VisitMut<'ast, Aug> for QueryNormalizer {
         fn visit_query_mut(&mut self, query: &'ast mut Query<Aug>) {
             let n = self.ctes.len();
             match &query.ctes {
@@ -225,11 +215,6 @@ pub fn create_statement(
         }
 
         fn visit_function_mut(&mut self, func: &'ast mut Function<Aug>) {
-            if let Err(e) = normalize_function_name(self.scx, &mut func.name) {
-                self.err = Some(e);
-                return;
-            }
-
             match &mut func.args {
                 FunctionArgs::Star => (),
                 FunctionArgs::Args { args, order_by } => {
@@ -247,11 +232,6 @@ pub fn create_statement(
         }
 
         fn visit_table_function_mut(&mut self, func: &'ast mut TableFunction<Aug>) {
-            if let Err(e) = normalize_function_name(self.scx, &mut func.name) {
-                self.err = Some(e);
-                return;
-            }
-
             match &mut func.args {
                 FunctionArgs::Star => (),
                 FunctionArgs::Args { args, order_by } => {
@@ -317,7 +297,7 @@ pub fn create_statement(
             with_options: _,
         }) => {
             *name = allocate_name(name)?;
-            let mut normalizer = QueryNormalizer::new(scx);
+            let mut normalizer = QueryNormalizer::new();
             for c in columns {
                 normalizer.visit_column_def_mut(c);
             }
@@ -339,7 +319,7 @@ pub fn create_statement(
             } else {
                 allocate_name(name)?
             };
-            let mut normalizer = QueryNormalizer::new(scx);
+            let mut normalizer = QueryNormalizer::new();
             for c in columns {
                 normalizer.visit_column_def_mut(c);
             }
@@ -378,7 +358,7 @@ pub fn create_statement(
                 allocate_name(name)?
             };
             {
-                let mut normalizer = QueryNormalizer::new(scx);
+                let mut normalizer = QueryNormalizer::new();
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
                     return Err(err);
@@ -396,7 +376,7 @@ pub fn create_statement(
         }) => {
             *name = allocate_name(name)?;
             {
-                let mut normalizer = QueryNormalizer::new(scx);
+                let mut normalizer = QueryNormalizer::new();
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
                     return Err(err);
@@ -413,7 +393,7 @@ pub fn create_statement(
             if_not_exists,
             ..
         }) => {
-            let mut normalizer = QueryNormalizer::new(scx);
+            let mut normalizer = QueryNormalizer::new();
             if let Some(key_parts) = key_parts {
                 for key_part in key_parts {
                     normalizer.visit_expr_mut(key_part);
@@ -427,7 +407,7 @@ pub fn create_statement(
 
         Statement::CreateType(CreateTypeStatement { name, as_type }) => {
             *name = allocate_name(name)?;
-            let mut normalizer = QueryNormalizer::new(scx);
+            let mut normalizer = QueryNormalizer::new();
             normalizer.visit_create_type_as_mut(as_type);
             if let Some(err) = normalizer.err {
                 return Err(err);

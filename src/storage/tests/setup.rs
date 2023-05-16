@@ -239,7 +239,9 @@ where
                     sink_metrics,
                     SYSTEM_TIME.clone(),
                     connection_context,
-                    mz_storage_client::types::instances::StorageInstanceContext::for_tests(),
+                    mz_storage::storage_state::StorageInstanceContext::for_tests(
+                        rocksdb::Env::new().unwrap(),
+                    ),
                     Arc::clone(&persist_clients),
                 )
             };

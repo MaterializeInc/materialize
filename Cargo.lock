@@ -3053,6 +3053,8 @@ dependencies = [
  "glob",
  "libc",
  "libz-sys",
+ "lz4-sys",
+ "zstd-sys",
 ]
 
 [[package]]
@@ -3122,6 +3124,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6e8aaa3f231bb4bd57b84b2d5dc3ae7f350265df8aa96492e0bc394a1571909"
 dependencies = [
  "hashbrown",
+]
+
+[[package]]
+name = "lz4-sys"
+version = "1.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57d27b317e207b10f69f5e75494119e391a96f48861ae870d1da6edac98ca900"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
@@ -3415,6 +3427,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-segment",
  "mz-sql",
@@ -3612,6 +3625,7 @@ dependencies = [
  "once_cell",
  "prometheus",
  "regex",
+ "rocksdb",
  "scopeguard",
  "serde",
  "smallvec",
@@ -4633,12 +4647,22 @@ dependencies = [
  "bincode",
  "itertools",
  "mz-ore",
+ "mz-proto",
+ "num_cpus",
+ "once_cell",
  "prometheus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
  "rocksdb",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
+ "tonic-build",
  "tracing",
  "workspace-hack",
 ]
@@ -4751,6 +4775,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-sql-parser",
  "mz-storage-client",
@@ -5017,6 +5042,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-service",
  "mz-ssh-util",
@@ -5034,6 +5060,7 @@ dependencies = [
  "regex",
  "scopeguard",
  "serde",
+ "serde_json",
  "thiserror",
  "timely",
  "tokio",

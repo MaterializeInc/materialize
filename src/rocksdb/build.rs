@@ -73,11 +73,21 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! The public API for both compute and storage.
+use std::env;
 
-#![warn(missing_docs)]
+fn main() {
+    env::set_var("PROTOC", protobuf_src::protoc());
 
-pub mod client;
+    let mut config = prost_build::Config::new();
+    config.btree_map(["."]);
 
-/// Identifier of a replica.
-pub type ReplicaId = u64;
+    tonic_build::configure()
+        // Enabling `emit_rerun_if_changed` will rerun the build script when
+        // anything in the include directory (..) changes. This causes quite a
+        // bit of spurious recompilation, so we disable it. The default behavior
+        // is to re-run if any file in the crate changes; that's still a bit too
+        // broad, but it's better.
+        .emit_rerun_if_changed(false)
+        .compile_with_config(config, &["rocksdb/src/tuning.proto"], &[".."])
+        .unwrap_or_else(|e| panic!("{e}"))
+}

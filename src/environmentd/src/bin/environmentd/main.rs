@@ -810,7 +810,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
-        scratch_directory: args.orchestrator_process_scratch_directory,
+        scratch_directory_enabled: args.orchestrator_process_scratch_directory.is_some(),
         persist_pubsub_url: args.persist_pubsub_url,
     };
 

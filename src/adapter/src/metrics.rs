@@ -141,6 +141,7 @@ where
         StatementKind::RevokeRole => "revoke_role",
         StatementKind::GrantPrivilege => "grant_privilege",
         StatementKind::RevokePrivilege => "revoke_privilege",
+        StatementKind::ReassignOwned => "reassign_owned",
     }
 }
 
