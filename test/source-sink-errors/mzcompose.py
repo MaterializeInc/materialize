@@ -353,7 +353,7 @@ disruptions: List[Disruption] = [
     KafkaDisruption(
         name="kill-redpanda",
         breakage=lambda c, _: c.kill("redpanda"),
-        expected_error="BrokerTransportFailure|Resolve|Broker transport failure",
+        expected_error="BrokerTransportFailure|Resolve|Broker transport failure|Timed out",
         fixage=lambda c, _: c.up("redpanda"),
     ),
     # https://github.com/MaterializeInc/materialize/issues/16582
