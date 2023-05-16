@@ -15,6 +15,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
@@ -24,6 +25,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::MutRecBlock;
 use mz_sql_parser::ast::UnresolvedObjectName;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
@@ -34,7 +36,7 @@ use crate::ast::{
     self, AstInfo, Cte, CteBlock, CteMutRec, Ident, Query, Raw, RawClusterName, RawDataType,
     RawItemName, Statement, UnresolvedItemName,
 };
-use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
+use crate::catalog::{CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
 use crate::plan::PlanError;
 
@@ -307,6 +309,10 @@ impl SchemaSpecifier {
             SchemaSpecifier::Id(id) => id.is_system(),
         }
     }
+
+    pub fn is_temporary(&self) -> bool {
+        matches!(self, SchemaSpecifier::Temporary)
+    }
 }
 
 impl fmt::Display for SchemaSpecifier {
@@ -389,6 +395,13 @@ impl ResolvedItemName {
             ResolvedItemName::Item { full_name, .. } => full_name.to_string(),
             ResolvedItemName::Cte { name, .. } => name.clone(),
             ResolvedItemName::Error => "error in name resolution".to_string(),
+        }
+    }
+
+    pub fn full_item_name(&self) -> &FullItemName {
+        match self {
+            ResolvedItemName::Item { full_name, .. } => full_name,
+            _ => panic!("cannot call object_full_name on non-object"),
         }
     }
 }
@@ -677,7 +690,9 @@ impl AstInfo for Aug {
 }
 
 /// The identifier for a schema.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum SchemaId {
     User(u64),
     System(u64),
@@ -725,7 +740,9 @@ impl FromStr for SchemaId {
 }
 
 /// The identifier for a database.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum DatabaseId {
     User(u64),
     System(u64),
@@ -821,6 +838,18 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
         }
     }
+
+    pub fn is_system(&self) -> bool {
+        match self {
+            ObjectId::Cluster(cluster_id) => cluster_id.is_system(),
+            // replica IDs aren't namespaced so we rely on the cluster ID.
+            ObjectId::ClusterReplica((cluster_id, _replica_id)) => cluster_id.is_system(),
+            ObjectId::Database(database_id) => database_id.is_system(),
+            ObjectId::Schema((_database_id, schema_id)) => schema_id.is_system(),
+            ObjectId::Role(role_id) => role_id.is_system(),
+            ObjectId::Item(global_id) => global_id.is_system(),
+        }
+    }
 }
 
 impl TryFrom<ResolvedObjectName> for ObjectId {
@@ -896,6 +925,18 @@ impl From<ItemQualifiers> for ObjectId {
 impl From<&ItemQualifiers> for ObjectId {
     fn from(qualifiers: &ItemQualifiers) -> Self {
         ObjectId::Schema((qualifiers.database_spec, qualifiers.schema_spec))
+    }
+}
+
+impl From<(ResolvedDatabaseSpecifier, SchemaSpecifier)> for ObjectId {
+    fn from(id: (ResolvedDatabaseSpecifier, SchemaSpecifier)) -> Self {
+        ObjectId::Schema(id)
+    }
+}
+
+impl From<&(ResolvedDatabaseSpecifier, SchemaSpecifier)> for ObjectId {
+    fn from(id: &(ResolvedDatabaseSpecifier, SchemaSpecifier)) -> Self {
+        ObjectId::Schema(*id)
     }
 }
 
@@ -1020,6 +1061,98 @@ impl<'a> NameResolver<'a> {
             }
         }
     }
+
+    fn fold_raw_object_name_name_internal(
+        &mut self,
+        name: RawItemName,
+        consider_function: bool,
+    ) -> ResolvedItemName {
+        match name {
+            RawItemName::Name(raw_name) => {
+                let raw_name = match normalize::unresolved_item_name(raw_name) {
+                    Ok(raw_name) => raw_name,
+                    Err(e) => {
+                        if self.status.is_ok() {
+                            self.status = Err(e);
+                        }
+                        return ResolvedItemName::Error;
+                    }
+                };
+
+                // Check if unqualified name refers to a CTE.
+                if raw_name.database.is_none() && raw_name.schema.is_none() {
+                    let norm_name = normalize::ident(Ident::new(&raw_name.item));
+                    if let Some(id) = self.ctes.get(&norm_name) {
+                        return ResolvedItemName::Cte {
+                            id: *id,
+                            name: norm_name,
+                        };
+                    }
+                }
+
+                let r = if consider_function {
+                    self.catalog.resolve_function(&raw_name)
+                } else {
+                    self.catalog.resolve_item(&raw_name)
+                };
+
+                match r {
+                    Ok(item) => {
+                        self.ids.insert(item.id());
+                        let print_id = !matches!(
+                            item.item_type(),
+                            CatalogItemType::Func | CatalogItemType::Type
+                        );
+                        ResolvedItemName::Item {
+                            id: item.id(),
+                            qualifiers: item.name().qualifiers.clone(),
+                            full_name: self.catalog.resolve_full_name(item.name()),
+                            print_id,
+                        }
+                    }
+                    Err(mut e) => {
+                        if self.status.is_ok() {
+                            match &mut e {
+                                CatalogError::UnknownFunction { name, alternative } => {
+                                    // Suggest using the `jsonb_` version of
+                                    // `json_` functions that do not exist.
+                                    let name: Vec<&str> = name.split('.').collect();
+                                    match name.split_last() {
+                                        Some((i, q)) if i.starts_with("json_") && q.len() < 2 => {
+                                            let mut jsonb_version = q
+                                                .iter()
+                                                .map(|q| Ident::new(*q))
+                                                .collect::<Vec<_>>();
+                                            jsonb_version
+                                                .push(Ident::new(i.replace("json_", "jsonb_")));
+                                            let jsonb_version = RawItemName::Name(
+                                                UnresolvedItemName(jsonb_version),
+                                            );
+                                            let _ = self.fold_raw_object_name_name_internal(
+                                                jsonb_version.clone(),
+                                                true,
+                                            );
+
+                                            if self.status.is_ok() {
+                                                *alternative = Some(jsonb_version.to_string());
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+
+                            self.status = Err(e.into());
+                        }
+                        ResolvedItemName::Error
+                    }
+                }
+            }
+            // We don't want to hit this code path, but immaterial if we do
+            name @ RawItemName::Id(..) => self.fold_item_name(name),
+        }
+    }
 }
 
 impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
@@ -1065,7 +1198,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 CteBlock::Simple(result_ctes)
             }
-            CteBlock::MutuallyRecursive(ctes) => {
+            CteBlock::MutuallyRecursive(MutRecBlock { options, ctes }) => {
                 let mut result_ctes = Vec::<CteMutRec<Aug>>::new();
 
                 let initial_id = self.ctes.len();
@@ -1094,7 +1227,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         query,
                     });
                 }
-                CteBlock::MutuallyRecursive(result_ctes)
+                CteBlock::MutuallyRecursive(MutRecBlock {
+                    options: options
+                        .into_iter()
+                        .map(|option| self.fold_mut_rec_block_option(option))
+                        .collect(),
+                    ctes: result_ctes,
+                })
             }
         };
 
@@ -1134,50 +1273,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         item_name: <Raw as AstInfo>::ItemName,
     ) -> <Aug as AstInfo>::ItemName {
         match item_name {
-            RawItemName::Name(raw_name) => {
-                let raw_name = match normalize::unresolved_item_name(raw_name) {
-                    Ok(raw_name) => raw_name,
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e);
-                        }
-                        return ResolvedItemName::Error;
-                    }
-                };
-
-                // Check if unqualified name refers to a CTE.
-                if raw_name.database.is_none() && raw_name.schema.is_none() {
-                    let norm_name = normalize::ident(Ident::new(&raw_name.item));
-                    if let Some(id) = self.ctes.get(&norm_name) {
-                        return ResolvedItemName::Cte {
-                            id: *id,
-                            name: norm_name,
-                        };
-                    }
-                }
-
-                match self.catalog.resolve_item(&raw_name) {
-                    Ok(item) => {
-                        self.ids.insert(item.id());
-                        let print_id = !matches!(
-                            item.item_type(),
-                            CatalogItemType::Func | CatalogItemType::Type
-                        );
-                        ResolvedItemName::Item {
-                            id: item.id(),
-                            qualifiers: item.name().qualifiers.clone(),
-                            full_name: self.catalog.resolve_full_name(item.name()),
-                            print_id,
-                        }
-                    }
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e.into());
-                        }
-                        ResolvedItemName::Error
-                    }
-                }
-            }
+            name @ RawItemName::Name(..) => self.fold_raw_object_name_name_internal(name, false),
             RawItemName::Id(id, raw_name) => {
                 let gid: GlobalId = match id.parse() {
                     Ok(id) => id,
@@ -1441,6 +1537,213 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             UnresolvedObjectName::Item(name) => {
                 ResolvedObjectName::Item(self.fold_item_name(RawItemName::Name(name)))
             }
+        }
+    }
+
+    fn fold_expr(&mut self, node: mz_sql_parser::ast::Expr<Raw>) -> mz_sql_parser::ast::Expr<Aug> {
+        use mz_sql_parser::ast::Expr::*;
+        match node {
+            mz_sql_parser::ast::Expr::Identifier(i) => {
+                Identifier(i.into_iter().map(|i| self.fold_ident(i)).collect())
+            }
+            mz_sql_parser::ast::Expr::QualifiedWildcard(i) => {
+                QualifiedWildcard(i.into_iter().map(|i| self.fold_ident(i)).collect())
+            }
+            mz_sql_parser::ast::Expr::FieldAccess { expr, field } => FieldAccess {
+                expr: Box::new(self.fold_expr(*expr)),
+                field: self.fold_ident(field),
+            },
+            mz_sql_parser::ast::Expr::WildcardAccess(expr) => {
+                WildcardAccess(Box::new(self.fold_expr(*expr)))
+            }
+            mz_sql_parser::ast::Expr::Parameter(p) => Parameter(p),
+            mz_sql_parser::ast::Expr::Not { expr } => Not {
+                expr: Box::new(self.fold_expr(*expr)),
+            },
+            mz_sql_parser::ast::Expr::And { left, right } => And {
+                left: Box::new(self.fold_expr(*left)),
+                right: Box::new(self.fold_expr(*right)),
+            },
+            mz_sql_parser::ast::Expr::Or { left, right } => Or {
+                left: Box::new(self.fold_expr(*left)),
+                right: Box::new(self.fold_expr(*right)),
+            },
+            mz_sql_parser::ast::Expr::IsExpr {
+                expr,
+                construct,
+                negated,
+            } => IsExpr {
+                expr: Box::new(self.fold_expr(*expr)),
+                construct: self.fold_is_expr_construct(construct),
+                negated,
+            },
+            mz_sql_parser::ast::Expr::InList {
+                expr,
+                list,
+                negated,
+            } => InList {
+                expr: Box::new(self.fold_expr(*expr)),
+                list: list.into_iter().map(|l| self.fold_expr(l)).collect(),
+                negated,
+            },
+            mz_sql_parser::ast::Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => InSubquery {
+                expr: Box::new(self.fold_expr(*expr)),
+                subquery: Box::new(self.fold_query(*subquery)),
+                negated,
+            },
+            mz_sql_parser::ast::Expr::Like {
+                expr,
+                pattern,
+                escape,
+                case_insensitive,
+                negated,
+            } => Like {
+                expr: Box::new(self.fold_expr(*expr)),
+                pattern: Box::new(self.fold_expr(*pattern)),
+                escape: escape.map(|expr| Box::new(self.fold_expr(*expr))),
+                case_insensitive,
+                negated,
+            },
+            mz_sql_parser::ast::Expr::Between {
+                expr,
+                negated,
+                low,
+                high,
+            } => Between {
+                expr: Box::new(self.fold_expr(*expr)),
+                negated,
+                low: Box::new(self.fold_expr(*low)),
+                high: Box::new(self.fold_expr(*high)),
+            },
+            mz_sql_parser::ast::Expr::Op { op, expr1, expr2 } => Op {
+                op: self.fold_op(op),
+                expr1: Box::new(self.fold_expr(*expr1)),
+                expr2: expr2.map(|expr2| Box::new(self.fold_expr(*expr2))),
+            },
+            mz_sql_parser::ast::Expr::Cast { expr, data_type } => Cast {
+                expr: Box::new(self.fold_expr(*expr)),
+                data_type: self.fold_data_type(data_type),
+            },
+            mz_sql_parser::ast::Expr::Collate { expr, collation } => Collate {
+                expr: Box::new(self.fold_expr(*expr)),
+                collation: self.fold_unresolved_item_name(collation),
+            },
+            mz_sql_parser::ast::Expr::HomogenizingFunction { function, exprs } => {
+                HomogenizingFunction {
+                    function: self.fold_homogenizing_function(function),
+                    exprs: exprs.into_iter().map(|expr| self.fold_expr(expr)).collect(),
+                }
+            }
+            mz_sql_parser::ast::Expr::NullIf { l_expr, r_expr } => NullIf {
+                l_expr: Box::new(self.fold_expr(*l_expr)),
+                r_expr: Box::new(self.fold_expr(*r_expr)),
+            },
+            mz_sql_parser::ast::Expr::Nested(expr) => Nested(Box::new(self.fold_expr(*expr))),
+            mz_sql_parser::ast::Expr::Row { exprs } => Row {
+                exprs: exprs.into_iter().map(|expr| self.fold_expr(expr)).collect(),
+            },
+            mz_sql_parser::ast::Expr::Value(value) => Value(self.fold_value(value)),
+            mz_sql_parser::ast::Expr::Function(mz_sql_parser::ast::Function {
+                name,
+                args,
+                filter,
+                over,
+                distinct,
+            }) => Function(mz_sql_parser::ast::Function {
+                name: match name {
+                    name @ RawItemName::Name(..) => {
+                        self.fold_raw_object_name_name_internal(name, true)
+                    }
+                    _ => self.fold_item_name(name),
+                },
+                args: self.fold_function_args(args),
+                filter: filter.map(|expr| Box::new(self.fold_expr(*expr))),
+                over: over.map(|over| self.fold_window_spec(over)),
+                distinct,
+            }),
+            mz_sql_parser::ast::Expr::Case {
+                operand,
+                conditions,
+                results,
+                else_result,
+            } => Case {
+                operand: operand.map(|expr| Box::new(self.fold_expr(*expr))),
+                conditions: conditions
+                    .into_iter()
+                    .map(|expr| self.fold_expr(expr))
+                    .collect(),
+                results: results
+                    .into_iter()
+                    .map(|expr| self.fold_expr(expr))
+                    .collect(),
+                else_result: else_result.map(|expr| Box::new(self.fold_expr(*expr))),
+            },
+            mz_sql_parser::ast::Expr::Exists(query) => Exists(Box::new(self.fold_query(*query))),
+            mz_sql_parser::ast::Expr::Subquery(subquery) => {
+                Subquery(Box::new(self.fold_query(*subquery)))
+            }
+            mz_sql_parser::ast::Expr::AnySubquery { left, op, right } => AnySubquery {
+                left: Box::new(self.fold_expr(*left)),
+                op: self.fold_op(op),
+                right: Box::new(self.fold_query(*right)),
+            },
+            mz_sql_parser::ast::Expr::AnyExpr { left, op, right } => AnyExpr {
+                left: Box::new(self.fold_expr(*left)),
+                op: self.fold_op(op),
+                right: Box::new(self.fold_expr(*right)),
+            },
+            mz_sql_parser::ast::Expr::AllSubquery { left, op, right } => AllSubquery {
+                left: Box::new(self.fold_expr(*left)),
+                op: self.fold_op(op),
+                right: Box::new(self.fold_query(*right)),
+            },
+            mz_sql_parser::ast::Expr::AllExpr { left, op, right } => AllExpr {
+                left: Box::new(self.fold_expr(*left)),
+                op: self.fold_op(op),
+                right: Box::new(self.fold_expr(*right)),
+            },
+            mz_sql_parser::ast::Expr::Array(exprs) => {
+                Array(exprs.into_iter().map(|expr| self.fold_expr(expr)).collect())
+            }
+            mz_sql_parser::ast::Expr::ArraySubquery(subquery) => {
+                ArraySubquery(Box::new(self.fold_query(*subquery)))
+            }
+            mz_sql_parser::ast::Expr::List(exprs) => {
+                List(exprs.into_iter().map(|expr| self.fold_expr(expr)).collect())
+            }
+            mz_sql_parser::ast::Expr::ListSubquery(subquery) => {
+                ListSubquery(Box::new(self.fold_query(*subquery)))
+            }
+            mz_sql_parser::ast::Expr::Subscript { expr, positions } => Subscript {
+                expr: Box::new(self.fold_expr(*expr)),
+                positions: positions
+                    .into_iter()
+                    .map(|p| self.fold_subscript_position(p))
+                    .collect(),
+            },
+        }
+    }
+
+    fn fold_table_function(
+        &mut self,
+        node: mz_sql_parser::ast::TableFunction<Raw>,
+    ) -> mz_sql_parser::ast::TableFunction<Aug> {
+        mz_sql_parser::ast::TableFunction {
+            name: match &node.name {
+                RawItemName::Name(name) => {
+                    if *name == UnresolvedItemName::unqualified("values") && self.status.is_ok() {
+                        self.status = Err(PlanError::FromValueRequiresParen);
+                    }
+
+                    self.fold_raw_object_name_name_internal(node.name, true)
+                }
+                RawItemName::Id(..) => self.fold_item_name(node.name),
+            },
+            args: self.fold_function_args(node.args),
         }
     }
 }

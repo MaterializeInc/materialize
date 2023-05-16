@@ -34,7 +34,7 @@ Field | Meaning
 ------|--------
 **name** | The name of the index.
 **on** | The name of the table, source, or view the index belongs to.
-**cluster** | The name of the [cluster](/overview/key-concepts/#clusters) containing the index.
+**cluster** | The name of the [cluster](/get-started/key-concepts/#clusters) containing the index.
 **key** | A text array describing the expressions in the index key.
 
 ## Examples

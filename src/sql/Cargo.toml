@@ -34,11 +34,14 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-rocksdb = { path = "../rocksdb" }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 paste = "1.0"
 protobuf-native = "0.2.1"
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.7.0"

@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import subprocess
 from textwrap import dedent
 
 import pytest
@@ -180,7 +181,12 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
 
     # wait for the cluster to be ready first before attempting to kill it
     wait(condition="condition=Ready", resource=f"{pod_name}")
-    mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+
+    try:
+        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+    except subprocess.CalledProcessError as e:
+        # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
+        assert e.returncode == 137
 
     mz.testdrive.run(
         input=dedent(

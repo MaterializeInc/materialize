@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -30,7 +31,7 @@ use mz_build_info::BuildInfo;
 use mz_controller::clusters::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
@@ -110,6 +111,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Panics if `id` does not specify a valid database.
     fn get_database(&self, id: &DatabaseId) -> &dyn CatalogDatabase;
 
+    /// Gets all databases.
+    fn get_databases(&self) -> Vec<&dyn CatalogDatabase>;
+
     /// Resolves a partially-specified schema name.
     ///
     /// If the schema exists in the catalog, it returns a reference to the
@@ -138,6 +142,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
     ) -> &dyn CatalogSchema;
+
+    /// Gets all schemas.
+    fn get_schemas(&self) -> Vec<&dyn CatalogSchema>;
 
     /// Returns true if `schema` is an internal system schema, false otherwise
     fn is_system_schema(&self, schema: &str) -> bool;
@@ -205,11 +212,17 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Panics if `id` does not specify a valid item.
     fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
 
+    /// Gets all items.
+    fn get_items(&self) -> Vec<&dyn CatalogItem>;
+
     /// Reports whether the specified type exists in the catalog.
     fn item_exists(&self, name: &QualifiedItemName) -> bool;
 
     /// Gets a cluster by ID.
     fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster;
+
+    /// Gets all clusters.
+    fn get_clusters(&self) -> Vec<&dyn CatalogCluster>;
 
     /// Gets a cluster replica by ID.
     fn get_cluster_replica(
@@ -217,6 +230,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
     ) -> &dyn CatalogClusterReplica;
+
+    /// Gets all cluster replicas.
+    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
 
     /// Finds a name like `name` that is not already in use.
     ///
@@ -280,6 +296,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
 
     /// Returns the name of `object_id`. For use only in error messages and notices.
     fn get_object_name(&self, object_id: &ObjectId) -> String;
+
+    /// Returns the minimal qualification required to unambiguously specify
+    /// `qualified_name`.
+    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName;
 }
 
 /// Configuration associated with a catalog.
@@ -320,9 +340,6 @@ impl CatalogConfig {
     }
 }
 
-/// Key is the role that granted the privilege, value is the privilege itself.
-pub type PrivilegeMap = BTreeMap<RoleId, Vec<MzAclItem>>;
-
 /// A database in a [`SessionCatalog`].
 pub trait CatalogDatabase {
     /// Returns a fully-specified name of the database.
@@ -336,7 +353,10 @@ pub trait CatalogDatabase {
 
     /// Returns the schemas of the database as a map from schema name to
     /// schema ID.
-    fn schemas(&self) -> &BTreeMap<String, SchemaId>;
+    fn schema_ids(&self) -> &BTreeMap<String, SchemaId>;
+
+    /// Returns the schemas of the database.
+    fn schemas(&self) -> Vec<&dyn CatalogSchema>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -361,7 +381,7 @@ pub trait CatalogSchema {
 
     /// Returns the items of the schema as a map from item name to
     /// item ID.
-    fn items(&self) -> &BTreeMap<String, GlobalId>;
+    fn item_ids(&self) -> &BTreeMap<String, GlobalId>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -373,7 +393,7 @@ pub trait CatalogSchema {
 // TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
 //  then switch this to a bitflag (https://docs.rs/bitflags/latest/bitflags/)
 /// Attributes belonging to a [`CatalogRole`].
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
@@ -513,7 +533,10 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
-    fn replicas(&self) -> &BTreeMap<String, ReplicaId>;
+    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId>;
+
+    /// Returns the replicas of the cluster.
+    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
 
     /// Returns the replica belonging to the cluster with replica ID `id`.
     fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica;
@@ -1018,7 +1041,12 @@ pub enum CatalogError {
     /// Unknown item.
     UnknownItem(String),
     /// Unknown function.
-    UnknownFunction(String),
+    UnknownFunction {
+        /// The identifier of the function we couldn't find
+        name: String,
+        /// A suggested alternative to the named function.
+        alternative: Option<String>,
+    },
     /// Unknown connection.
     UnknownConnection(String),
     /// Expected the catalog item to have the given type, but it did not.
@@ -1043,7 +1071,7 @@ impl fmt::Display for CatalogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
-            Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
+            Self::UnknownFunction { name, .. } => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
@@ -1070,6 +1098,21 @@ impl fmt::Display for CatalogError {
                 },
                 typ,
             ),
+        }
+    }
+}
+
+impl CatalogError {
+    /// Returns any applicable hints for [`CatalogError`].
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            CatalogError::UnknownFunction { alternative, .. } => {
+                match alternative {
+                    None => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
+                    Some(alt) => Some(format!("Try using {alt}")),
+                }
+            }
+            _ => None,
         }
     }
 }

@@ -57,9 +57,10 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mkdir -p coverage/
     chmod 777 coverage/
     # Not all tests contain all of these containers:
+    mzcompose cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
+    mzcompose cp sqllogictest:/usr/local/bin/clusterd coverage/ || true
     mzcompose cp materialized:/usr/local/bin/environmentd coverage/ || true
     mzcompose cp materialized:/usr/local/bin/clusterd coverage/ || true
-    mzcompose cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
     mzcompose cp testdrive:/usr/local/bin/testdrive coverage/ || true
 fi
 

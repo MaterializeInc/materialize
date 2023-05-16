@@ -107,6 +107,18 @@ pub struct PersistConfig {
     pub reader_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
+    /// Timeout per connection attempt to Persist PubSub service.
+    pub pubsub_connect_attempt_timeout: Duration,
+    /// Maximum backoff when retrying connection establishment to Persist PubSub service.
+    pub pubsub_connect_max_backoff: Duration,
+    /// Size of channel used to buffer send messages to PubSub service.
+    pub pubsub_client_sender_channel_size: usize,
+    /// Size of channel used to buffer received messages from PubSub service.
+    pub pubsub_client_receiver_channel_size: usize,
+    /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
+    pub pubsub_server_connection_channel_size: usize,
+    /// Size of channel used by the state cache to broadcast shard state references.
+    pub pubsub_state_cache_shard_ref_channel_size: usize,
 }
 
 impl PersistConfig {
@@ -143,6 +155,8 @@ impl PersistConfig {
                 stats_audit_percent: AtomicUsize::new(Self::DEFAULT_STATS_AUDIT_PERCENT),
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
+                pubsub_client_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_CLIENT_ENABLED),
+                pubsub_push_diff_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -151,6 +165,12 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
+            pubsub_connect_attempt_timeout: Duration::from_secs(5),
+            pubsub_connect_max_backoff: Duration::from_secs(60),
+            pubsub_client_sender_channel_size: 25,
+            pubsub_client_receiver_channel_size: 25,
+            pubsub_server_connection_channel_size: 25,
+            pubsub_state_cache_shard_ref_channel_size: 25,
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is
@@ -203,6 +223,10 @@ impl PersistConfig {
     pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = false;
     /// Default value for [`DynamicConfig::stats_filter_enabled`].
     pub const DEFAULT_STATS_FILTER_ENABLED: bool = false;
+    /// Default value for [`DynamicConfig::pubsub_client_enabled`].
+    pub const DEFAULT_PUBSUB_CLIENT_ENABLED: bool = false;
+    /// Default value for [`DynamicConfig::pubsub_push_diff_enabled`].
+    pub const DEFAULT_PUBSUB_PUSH_DIFF_ENABLED: bool = true;
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
@@ -290,6 +314,8 @@ pub struct DynamicConfig {
     stats_audit_percent: AtomicUsize,
     stats_collection_enabled: AtomicBool,
     stats_filter_enabled: AtomicBool,
+    pubsub_client_enabled: AtomicBool,
+    pubsub_push_diff_enabled: AtomicBool,
 
     // NB: These parameters are not atomically updated together in LD.
     // We put them under a single RwLock to reduce the cost of reads
@@ -472,6 +498,17 @@ impl DynamicConfig {
         self.stats_filter_enabled.load(Self::LOAD_ORDERING)
     }
 
+    /// Determines whether PubSub clients should connect to the PubSub server.
+    pub fn pubsub_client_enabled(&self) -> bool {
+        self.pubsub_client_enabled.load(Self::LOAD_ORDERING)
+    }
+
+    /// For connected clients, determines whether to push state diffs to the PubSub server.
+    /// For the server, determines whether to broadcast state diffs to subscribed clients.
+    pub fn pubsub_push_diff_enabled(&self) -> bool {
+        self.pubsub_push_diff_enabled.load(Self::LOAD_ORDERING)
+    }
+
     /// The maximum number of concurrent state fetches during usage computation.
     pub fn usage_state_fetch_concurrency_limit(&self) -> usize {
         self.usage_state_fetch_concurrency_limit
@@ -550,6 +587,10 @@ pub struct PersistParameters {
     pub stats_collection_enabled: Option<bool>,
     /// Configures [`DynamicConfig::stats_filter_enabled`].
     pub stats_filter_enabled: Option<bool>,
+    /// Configures [`DynamicConfig::pubsub_client_enabled`]
+    pub pubsub_client_enabled: Option<bool>,
+    /// Configures [`DynamicConfig::pubsub_push_diff_enabled`]
+    pub pubsub_push_diff_enabled: Option<bool>,
 }
 
 impl PersistParameters {
@@ -567,6 +608,8 @@ impl PersistParameters {
             stats_audit_percent: self_stats_audit_percent,
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
+            pubsub_client_enabled: self_pubsub_client_enabled,
+            pubsub_push_diff_enabled: self_pubsub_push_diff_enabled,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
@@ -578,6 +621,8 @@ impl PersistParameters {
             stats_audit_percent: other_stats_audit_percent,
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
+            pubsub_client_enabled: other_pubsub_client_enabled,
+            pubsub_push_diff_enabled: other_pubsub_push_diff_enabled,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
@@ -606,6 +651,12 @@ impl PersistParameters {
         if let Some(v) = other_stats_filter_enabled {
             *self_stats_filter_enabled = Some(v)
         }
+        if let Some(v) = other_pubsub_client_enabled {
+            *self_pubsub_client_enabled = Some(v)
+        }
+        if let Some(v) = other_pubsub_push_diff_enabled {
+            *self_pubsub_push_diff_enabled = Some(v)
+        }
     }
 
     /// Return whether all parameters are unset.
@@ -624,6 +675,8 @@ impl PersistParameters {
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
+            pubsub_client_enabled,
+            pubsub_push_diff_enabled,
         } = self;
         blob_target_size.is_none()
             && compaction_minimum_timeout.is_none()
@@ -634,6 +687,8 @@ impl PersistParameters {
             && stats_audit_percent.is_none()
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
+            && pubsub_client_enabled.is_none()
+            && pubsub_push_diff_enabled.is_none()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -653,6 +708,8 @@ impl PersistParameters {
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
+            pubsub_client_enabled,
+            pubsub_push_diff_enabled,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
@@ -704,6 +761,16 @@ impl PersistParameters {
                 .stats_filter_enabled
                 .store(*stats_filter_enabled, DynamicConfig::STORE_ORDERING);
         }
+        if let Some(pubsub_client_enabled) = pubsub_client_enabled {
+            cfg.dynamic
+                .pubsub_client_enabled
+                .store(*pubsub_client_enabled, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(pubsub_push_diff_enabled) = pubsub_push_diff_enabled {
+            cfg.dynamic
+                .pubsub_push_diff_enabled
+                .store(*pubsub_push_diff_enabled, DynamicConfig::STORE_ORDERING);
+        }
     }
 }
 
@@ -721,6 +788,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: self.stats_audit_percent.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
+            pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
+            pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
         }
     }
 
@@ -737,6 +806,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: proto.stats_audit_percent.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
+            pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
+            pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
         })
     }
 }

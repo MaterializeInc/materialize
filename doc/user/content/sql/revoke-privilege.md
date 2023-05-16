@@ -33,6 +33,7 @@ _role_name_   | The role name that is losing privileges. Use the `PUBLIC` pseudo
 **DELETE**    | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
 **CREATE**    | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
 **USAGE**     | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
+**ALL**       | All applicable privileges for the provided object type.
 
 ## Details
 
@@ -69,12 +70,17 @@ type for sources, views, and materialized views, or omit the object type.
 ## Examples
 
 ```sql
-REVOKE SELECT ON mv FROM joe;
+REVOKE SELECT ON mv FROM joe, mike;
 ```
 
 ```sql
-REVOKE USAGE, CREATE ON DATABASE materialize TO joe;
+REVOKE USAGE, CREATE ON DATABASE materialize FROM joe;
 ```
+
+```sql
+REVOKE ALL ON CLUSTER dev FROM joe;
+```
+
 
 ## Related pages
 

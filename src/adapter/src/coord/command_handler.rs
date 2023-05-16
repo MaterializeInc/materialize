@@ -482,12 +482,14 @@ impl Coordinator {
                     | Statement::CreateMaterializedView(_)
                     | Statement::Delete(_)
                     | Statement::DropObjects(_)
+                    | Statement::DropOwned(_)
                     | Statement::GrantPrivilege(_)
                     | Statement::GrantRole(_)
                     | Statement::Insert(_)
                     | Statement::RevokePrivilege(_)
                     | Statement::RevokeRole(_)
-                    | Statement::Update(_) => {
+                    | Statement::Update(_)
+                    | Statement::ReassignOwned(_) => {
                         return tx.send(
                             Err(AdapterError::OperationProhibitsTransaction(
                                 stmt.to_string(),

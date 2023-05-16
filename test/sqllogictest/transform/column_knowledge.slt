@@ -605,6 +605,41 @@ Source materialize.public.t1
 
 EOF
 
+# Give up when reaching ITERATION LIMIT
+# Same as the previous query, but with ITERATION LIMIT 1.
+query T multiline
+EXPLAIN WITH(arity, types)
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT 1)
+  c0(f1 integer, f2 integer) AS (
+    SELECT * FROM (
+      SELECT * FROM t1
+      UNION
+      SELECT * FROM c0
+    ) WHERE f1 = 3 AND f2 = 5
+  )
+SELECT f1, f2, f1 + f2 FROM c0;
+----
+Explained Query:
+  Return // { arity: 3, types: "(integer, integer, integer)" }
+    Map ((#0 + #1)) // { arity: 3, types: "(integer, integer, integer)" }
+      Get l0 // { arity: 2, types: "(integer, integer)" }
+  With Mutually Recursive [iteration_limit=1]
+    cte l0 =
+      Map (3, 5) // { arity: 2, types: "(integer, integer)" }
+        Distinct // { arity: 0, types: "()" }
+          Union // { arity: 0, types: "()" }
+            Project () // { arity: 0, types: "()" }
+              Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
+                Get materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
+            Project () // { arity: 0, types: "()" }
+              Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
+                Get l0 // { arity: 2, types: "(integer?, integer?)" }
+
+Source materialize.public.t1
+  filter=((#0 = 3) AND (#1 = 5))
+
+EOF
+
 # Single binding, NOT NULL knowledge
 query T multiline
 EXPLAIN WITH(arity, types)

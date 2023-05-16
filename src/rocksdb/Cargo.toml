@@ -7,18 +7,34 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+anyhow = "1.0.66"
 bincode = { version = "1.3.3" }
 itertools = { version = "0.10.5" }
-mz-ore = { path = "../ore", features = ["async", "metrics"] }
+once_cell = "1.16.0"
+mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
+mz-proto = { path = "../proto" }
+num_cpus = "1.14.0"
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}
 tokio = { version = "1.24.2", features = ["macros", "sync", "rt"] }
-serde = { version = "1.0.152" }
+serde = { version = "1.0.152", features = ["derive"] }
+serde_json = { version = "1.0.89" }
 thiserror = "1.0.37"
 tracing = "0.1.37"
-rocksdb = { version = "0.20.1", default-features = false, features = ["snappy"] }
+# These features use compression code that are licensed with:
+# https://github.com/google/snappy/blob/main/COPYING
+# https://github.com/lz4/lz4/blob/dev/LICENSE
+# https://github.com/facebook/zstd
+rocksdb = { version = "0.20.1", default-features = false, features = ["snappy", "zstd", "lz4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
+[build-dependencies]
+prost-build = "0.11.2"
+protobuf-src = "1.1.0"
+tonic-build = "0.8.2"
+
 [dev-dependencies]
-anyhow = "1.0.66"
 tempfile = "3.2.0"
 prometheus = { version = "0.13.3", default-features = false }
 

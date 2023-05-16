@@ -412,6 +412,7 @@ impl ErrorResponse {
             AdapterNotice::ObjectAlreadyExists { .. } => SqlState::DUPLICATE_OBJECT,
             AdapterNotice::DatabaseDoesNotExist { .. } => SqlState::WARNING,
             AdapterNotice::ClusterDoesNotExist { .. } => SqlState::WARNING,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => SqlState::WARNING,
             AdapterNotice::ExistingTransactionInProgress => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
                 SqlState::NO_ACTIVE_SQL_TRANSACTION
@@ -432,6 +433,7 @@ impl ErrorResponse {
             AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
             AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::WARNING,
             AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
+            AdapterNotice::CannotRevoke { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -571,6 +573,7 @@ impl Severity {
             AdapterNotice::ObjectAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::DatabaseDoesNotExist { .. } => Severity::Notice,
             AdapterNotice::ClusterDoesNotExist { .. } => Severity::Notice,
+            AdapterNotice::NoResolvableSearchPathSchema { .. } => Severity::Notice,
             AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
             AdapterNotice::UserRequested { severity } => match severity {
@@ -595,6 +598,7 @@ impl Severity {
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
             AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
             AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
+            AdapterNotice::CannotRevoke { .. } => Severity::Warning,
         }
     }
 }

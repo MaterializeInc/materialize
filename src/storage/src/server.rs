@@ -20,12 +20,11 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_storage_client::client::StorageClient;
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::instances::StorageInstanceContext;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::storage_state::Worker;
+use crate::storage_state::{StorageInstanceContext, Worker};
 use crate::DecodeMetrics;
 
 /// Configures a dataflow server.

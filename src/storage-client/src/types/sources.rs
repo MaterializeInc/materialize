@@ -53,7 +53,7 @@ use mz_timely_util::order::{Interval, Partitioned, RangeBound};
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::{DataflowError, ProtoDataflowError};
-use crate::types::instances::{StorageInstanceContext, StorageInstanceId};
+use crate::types::instances::StorageInstanceId;
 
 use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
@@ -1739,25 +1739,6 @@ impl SourceDesc<GenericSourceConnection> {
 
     pub fn envelope(&self) -> &SourceEnvelope {
         &self.envelope
-    }
-}
-
-impl<C> SourceDesc<C> {
-    /// Validate that this `SourceDesc` represents a source that can be correctly
-    /// scheduled by a cluster with the given `StorageInstanceContext`.
-    pub fn validate_against_context(
-        &self,
-        context: &StorageInstanceContext,
-    ) -> Result<(), anyhow::Error> {
-        if let SourceEnvelope::Upsert(upsert) = &self.envelope {
-            if upsert.disk && context.scratch_directory.is_none() {
-                bail!(
-                    "Attempting to render `ON DISK` source without a \
-                    configured instance directory. This is a bug."
-                );
-            }
-        }
-        Ok(())
     }
 }
 

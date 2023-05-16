@@ -19,7 +19,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_compute_client::types::dataflows::DataflowDesc;
 use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
+use tracing::warn;
 
+use crate::TransformArgs;
 use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 
 /// Optimizes the implementation of each dataflow.
@@ -37,11 +39,13 @@ pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
 ) -> Result<(), TransformError> {
+    let ctx = crate::typecheck::empty_context();
+
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
 
     // Logical optimization pass after view inlining
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer())?;
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_optimizer(&ctx))?;
 
     optimize_dataflow_filters(dataflow)?;
     // TODO: when the linear operator contract ensures that propagated
@@ -54,10 +58,14 @@ pub fn optimize_dataflow(
 
     // A smaller logical optimization pass after projections and filters are
     // pushed down across views.
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::logical_cleanup_pass())?;
+    optimize_dataflow_relations(
+        dataflow,
+        indexes,
+        &Optimizer::logical_cleanup_pass(&ctx, false),
+    )?;
 
     // Physical optimization pass
-    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer())?;
+    optimize_dataflow_relations(dataflow, indexes, &Optimizer::physical_optimizer(&ctx))?;
 
     optimize_dataflow_monotonic(dataflow)?;
 
@@ -192,7 +200,10 @@ fn optimize_dataflow_relations(
     // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-run all optimizations on the composite views.
-        optimizer.transform(object.plan.as_inner_mut(), indexes)?;
+        optimizer.transform(
+            object.plan.as_inner_mut(),
+            TransformArgs::with_id(indexes, &object.id),
+        )?;
     }
 
     mz_repr::explain::trace_plan(dataflow);

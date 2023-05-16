@@ -1008,7 +1008,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "chrono"
 version = "0.4.24"
-source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#895d3b867ff318b5866cad7684d26279a45bc114"
+source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#35b145bd0ca721b5926e36f047eec8e1060372c0"
 dependencies = [
  "iana-time-zone",
  "num-integer",
@@ -2894,7 +2894,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#dcda26dad12a871795a6958ef238536c27c67164"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk#5c36592edc75b620482a92e6991147aee7baf2d8"
 dependencies = [
  "built",
  "chrono",
@@ -3053,6 +3053,8 @@ dependencies = [
  "glob",
  "libc",
  "libz-sys",
+ "lz4-sys",
+ "zstd-sys",
 ]
 
 [[package]]
@@ -3122,6 +3124,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6e8aaa3f231bb4bd57b84b2d5dc3ae7f350265df8aa96492e0bc394a1571909"
 dependencies = [
  "hashbrown",
+]
+
+[[package]]
+name = "lz4-sys"
+version = "1.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57d27b317e207b10f69f5e75494119e391a96f48861ae870d1da6edac98ca900"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
@@ -3415,6 +3427,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-segment",
  "mz-sql",
@@ -3426,6 +3439,7 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "prometheus",
+ "proptest",
  "prost",
  "rand",
  "rdkafka",
@@ -3553,6 +3567,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-cloud-api"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-frontegg-auth",
+ "mz-frontegg-client",
+ "once_cell",
+ "reqwest",
+ "serde",
+ "thiserror",
+ "tokio",
+ "url",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-cloud-resources"
 version = "0.0.0"
 dependencies = [
@@ -3595,6 +3625,7 @@ dependencies = [
  "once_cell",
  "prometheus",
  "regex",
+ "rocksdb",
  "scopeguard",
  "serde",
  "smallvec",
@@ -3639,7 +3670,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.54.0-dev"
+version = "0.55.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3682,6 +3713,7 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "futures",
+ "itertools",
  "mz-build-info",
  "mz-cluster",
  "mz-cluster-client",
@@ -3788,7 +3820,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.54.0-dev"
+version = "0.55.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -3932,6 +3964,7 @@ dependencies = [
  "serde_regex",
  "sha1",
  "sha2",
+ "tracing",
  "uncased",
  "uuid",
  "workspace-hack",
@@ -4312,7 +4345,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.54.0-dev"
+version = "0.55.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4326,6 +4359,7 @@ dependencies = [
  "futures",
  "futures-task",
  "futures-util",
+ "h2",
  "humantime",
  "mz-build-info",
  "mz-http-util",
@@ -4348,8 +4382,12 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "timely",
  "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
  "tracing",
  "uuid",
  "workspace-hack",
@@ -4609,12 +4647,22 @@ dependencies = [
  "bincode",
  "itertools",
  "mz-ore",
+ "mz-proto",
+ "num_cpus",
+ "once_cell",
  "prometheus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
  "rocksdb",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
+ "tonic-build",
  "tracing",
  "workspace-hack",
 ]
@@ -4727,11 +4775,14 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-sql-parser",
  "mz-storage-client",
  "once_cell",
  "paste",
+ "proptest",
+ "proptest-derive",
  "prost",
  "protobuf-native",
  "rdkafka",
@@ -4847,6 +4898,7 @@ dependencies = [
  "once_cell",
  "postgres-openssl",
  "prometheus",
+ "prost",
  "prost-build",
  "protobuf-src",
  "rand",
@@ -4990,6 +5042,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-service",
  "mz-ssh-util",
@@ -5007,6 +5060,7 @@ dependencies = [
  "regex",
  "scopeguard",
  "serde",
+ "serde_json",
  "thiserror",
  "timely",
  "tokio",
@@ -6077,9 +6131,9 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.11.3"
+version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0b18e655c21ff5ac2084a5ad0611e827b3f92badf79f4910b5a5c58f4d87ff0"
+checksum = "0b82eaa1d779e9a4bc1c3217db8ffbeabaae1dca241bf70183242128d48681cd"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -6087,9 +6141,9 @@ dependencies = [
 
 [[package]]
 name = "prost-build"
-version = "0.11.2"
+version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d8b442418ea0822409d9e7d047cbf1e7e9e1760b172bf9982cf29d517c93511"
+checksum = "119533552c9a7ffacc21e099c24a0ac8bb19c2a2a3f363de84cd9b844feab270"
 dependencies = [
  "bytes",
  "heck",
@@ -6109,9 +6163,9 @@ dependencies = [
 
 [[package]]
 name = "prost-derive"
-version = "0.11.0"
+version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7345d5f0e08c0536d7ac7229952590239e77abf0a0100a1b1d890add6ea96364"
+checksum = "e5d2d8d10f3c6ded6da8b05b5fb3b8a5082514344d56c9f871412d29b4e075b4"
 dependencies = [
  "anyhow",
  "itertools",
@@ -6135,11 +6189,10 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
-version = "0.11.2"
+version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "747761bc3dc48f9a34553bf65605cf6cb6288ba219f3450b4275dbd81539551a"
+checksum = "213622a1460818959ac1181aaeb2dc9c7f63df720db7d788b3e24eacd1983e13"
 dependencies = [
- "bytes",
  "prost",
 ]
 
@@ -8488,6 +8541,7 @@ dependencies = [
  "hashbrown",
  "hyper",
  "indexmap",
+ "itertools",
  "k8s-openapi",
  "kube",
  "kube-client",

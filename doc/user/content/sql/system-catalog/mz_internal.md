@@ -135,13 +135,15 @@ extant cluster replicas.
 The `mz_cluster_replica_history` gives the times each replica was
 created and (if applicable) dropped.
 
-| Field              | Type                         | Meaning                                                                                                                                   |
-|--------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
-| `replica_id`       | [`text`]                     | The ID of a cluster replica.                                                                                                              |
-| `size`             | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
-| `created_at`       | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
-| `dropped_at`       | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
-| `credits_per_hour` | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credtis_per_hour`](#mz_cluster_replica_sizes). |
+| Field                 | Type                         | Meaning                                                                                                                                   |
+|-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `internal_replica_id` | [`text`]                     | An internal identifier of a cluster replica. Guaranteed to be unique, but not guaranteed to correspond to any user-facing replica ID.     |
+| `cluster_name`        | [`text`]                     | The name of the cluster associated with the replica.                                                                                      |
+| `replica_name`        | [`text`]                     | The name of the replica.                                                                                                                  |
+| `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
+| `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
+| `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
+| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credtis_per_hour`](#mz_cluster_replica_sizes). |
 
 ### `mz_sessions`
 
@@ -204,6 +206,8 @@ the system are restarted.
 | `updates_staged`       | [`bigint`]     | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
 | `updates_committed`    | [`bigint`]     | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
 | `bytes_received`       | [`bigint`]     | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
+| `envelope_state_bytes` | [`bigint`]     | The number of bytes stored in the source envelope state.                                                                       |
+| `envelope_state_count` | [`bigint`]     | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
 
 ### `mz_sink_statistics`
 
@@ -541,5 +545,5 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`uuid`]: /sql/types/uuid
 [`uint8`]: /sql/types/uint8
 [`timestamp with time zone`]: /sql/types/timestamp
-[arrangement]: /overview/arrangements/#arrangements
-[dataflow]: /overview/arrangements/#dataflows
+[arrangement]: /get-started/arrangements/#arrangements
+[dataflow]: /get-started/arrangements/#dataflows

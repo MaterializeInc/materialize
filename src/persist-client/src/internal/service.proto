@@ -1,0 +1,41 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "proto/src/proto.proto";
+
+package mz_persist_client.internal.service;
+
+message ProtoPushDiff {
+    string shard_id = 1;
+    uint64 seqno = 2;
+    bytes diff = 3;
+}
+
+message ProtoSubscribe {
+    string shard_id = 1;
+}
+
+message ProtoUnsubscribe {
+    string shard_id = 1;
+}
+
+message ProtoPubSubMessage {
+    mz_proto.ProtoDuration timestamp = 1;
+    oneof message {
+        ProtoPushDiff push_diff = 2;
+        ProtoSubscribe subscribe = 3;
+        ProtoUnsubscribe unsubscribe = 4;
+    }
+}
+
+service ProtoPersistPubSub {
+    rpc PubSub (stream ProtoPubSubMessage) returns (stream ProtoPubSubMessage);
+}

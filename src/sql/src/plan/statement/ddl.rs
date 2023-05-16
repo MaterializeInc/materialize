@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
+use std::iter;
 
 use itertools::Itertools;
 use prost::Message;
@@ -27,7 +28,7 @@ use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::mz_acl_item::AclMode;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
 use mz_repr::strconv;
@@ -38,9 +39,9 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    GrantPrivilegeStatement, GrantRoleStatement, Privilege, RevokePrivilegeStatement,
-    RevokeRoleStatement, SshConnectionOption, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    DropOwnedStatement, GrantPrivilegeStatement, GrantRoleStatement, Privilege,
+    PrivilegeSpecification, ReassignOwnedStatement, RevokePrivilegeStatement, RevokeRoleStatement,
+    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
 use mz_storage_client::types::connections::{
@@ -91,9 +92,9 @@ use crate::catalog::{
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
-    Aug, DatabaseId, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
-    RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, ResolvedObjectName, ResolvedRoleName, SchemaSpecifier,
+    Aug, DatabaseId, ObjectId, PartialItemName, QualifiedItemName, RawDatabaseSpecifier,
+    ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
+    ResolvedObjectName, ResolvedRoleName, SchemaSpecifier,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -111,10 +112,10 @@ use crate::plan::{
     CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, FullItemName, GrantPrivilegePlan, GrantRolePlan, HirScalarExpr, Index,
-    Ingestion, MaterializedView, Params, Plan, QueryContext, ReplicaConfig, RevokePrivilegePlan,
-    RevokeRolePlan, RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type,
-    View,
+    DropObjectsPlan, DropOwnedPlan, FullItemName, GrantPrivilegePlan, GrantRolePlan, HirScalarExpr,
+    Index, Ingestion, MaterializedView, Params, Plan, QueryContext, ReassignOwnedPlan,
+    ReplicaConfig, RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan, Secret, Sink, Source,
+    SourceSinkClusterConfig, Table, Type, View,
 };
 use crate::session::user::SYSTEM_USER;
 
@@ -1410,7 +1411,7 @@ fn source_sink_cluster_config(
         (None, None) => Ok(SourceSinkClusterConfig::Undefined),
         (Some(in_cluster), None) => {
             let cluster = scx.catalog.get_cluster(in_cluster.id);
-            if cluster.replicas().len() > 1 {
+            if cluster.replica_ids().len() > 1 {
                 sql_bail!("cannot create {ty} in cluster with more than one replica")
             }
             if !is_storage_cluster(scx, cluster) {
@@ -2858,7 +2859,7 @@ pub fn plan_create_cluster_replica(
     let cluster = scx.catalog.resolve_cluster(Some(&of_cluster.to_string()))?;
     if is_storage_cluster(scx, cluster)
         && cluster.bound_objects().len() > 0
-        && cluster.replicas().len() > 0
+        && cluster.replica_ids().len() > 0
     {
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
@@ -3485,15 +3486,7 @@ fn plan_drop_schema(
             }
             let schema = scx.get_schema(&database_spec, &schema_spec);
             if !cascade && schema.has_items() {
-                let full_schema_name = FullSchemaName {
-                    database: match schema.name().database {
-                        ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
-                        ResolvedDatabaseSpecifier::Id(id) => {
-                            RawDatabaseSpecifier::Name(scx.get_database(&id).name().to_string())
-                        }
-                    },
-                    schema: schema.name().schema.clone(),
-                };
+                let full_schema_name = scx.catalog.resolve_full_schema_name(schema.name());
                 sql_bail!(
                     "schema '{}' cannot be dropped without CASCADE while it contains objects",
                     full_schema_name
@@ -3695,6 +3688,183 @@ pub fn describe_alter_index_options(
     _: AlterIndexStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
+}
+
+pub fn describe_drop_owned(
+    _: &StatementContext,
+    _: DropOwnedStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_drop_owned(
+    scx: &StatementContext,
+    DropOwnedStatement {
+        role_names,
+        cascade,
+    }: DropOwnedStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let role_ids: BTreeSet<_> = role_names.into_iter().map(|role| role.id).collect();
+    let mut drop_ids = Vec::new();
+    let mut revokes = Vec::new();
+
+    fn update_revokes(
+        object_id: ObjectId,
+        privileges: &PrivilegeMap,
+        role_ids: &BTreeSet<RoleId>,
+        revokes: &mut Vec<(ObjectId, MzAclItem)>,
+    ) {
+        revokes.extend(iter::zip(
+            iter::repeat(object_id),
+            privileges
+                .all_values()
+                .filter(|privilege| role_ids.contains(&privilege.grantee))
+                .cloned(),
+        ));
+    }
+
+    // Replicas
+    for replica in scx.catalog.get_cluster_replicas() {
+        if role_ids.contains(&replica.owner_id()) {
+            drop_ids.push((replica.cluster_id(), replica.replica_id()).into());
+        }
+    }
+
+    // Clusters
+    for cluster in scx.catalog.get_clusters() {
+        if role_ids.contains(&cluster.owner_id()) {
+            if !cascade && !cluster.bound_objects().is_empty() {
+                sql_bail!(
+                    "cannot drop cluster {} without CASCADE while it contains active objects",
+                    cluster.name().quoted()
+                );
+            }
+            drop_ids.push(cluster.id().into());
+        }
+        update_revokes(
+            cluster.id().into(),
+            cluster.privileges(),
+            &role_ids,
+            &mut revokes,
+        );
+    }
+
+    // Items
+    for item in scx.catalog.get_items() {
+        if role_ids.contains(&item.owner_id()) {
+            if !cascade {
+                // When this item gets dropped it will also drop its subsources, so we need to
+                // check the users of those.
+                for sub_item in item
+                    .subsources()
+                    .iter()
+                    .map(|id| scx.catalog.get_item(id))
+                    .chain(iter::once(item))
+                {
+                    let non_owned_dependencies: Vec<_> = sub_item
+                        .used_by()
+                        .into_iter()
+                        .map(|global_id| scx.catalog.get_item(global_id))
+                        .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
+                        .filter(|item| !role_ids.contains(&item.owner_id()))
+                        .collect();
+                    if !non_owned_dependencies.is_empty() {
+                        let names: Vec<_> = non_owned_dependencies
+                            .into_iter()
+                            .map(|item| scx.catalog.resolve_full_name(item.name()))
+                            .map(|name| name.to_string().quoted().to_string())
+                            .collect();
+                        sql_bail!(
+                            "cannot drop {} without CASCADE: still depended upon by non-owned catalog items {}",
+                            scx.catalog.resolve_full_name(item.name()).to_string().quoted(),
+                            names.join(", ")
+                        );
+                    }
+                }
+            }
+            drop_ids.push(item.id().into());
+        }
+        update_revokes(item.id().into(), item.privileges(), &role_ids, &mut revokes);
+    }
+
+    // Schemas
+    for schema in scx.catalog.get_schemas() {
+        if !schema.id().is_temporary() {
+            if role_ids.contains(&schema.owner_id()) {
+                if !cascade {
+                    let non_owned_dependencies: Vec<_> = schema
+                        .item_ids()
+                        .values()
+                        .map(|global_id| scx.catalog.get_item(global_id))
+                        .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
+                        .filter(|item| !role_ids.contains(&item.owner_id()))
+                        .collect();
+                    if !non_owned_dependencies.is_empty() {
+                        let full_schema_name = scx.catalog.resolve_full_schema_name(schema.name());
+                        sql_bail!(
+                            "schema {} cannot be dropped without CASCADE while it contains non-owned objects",
+                            full_schema_name.to_string().quoted()
+                        );
+                    }
+                }
+                drop_ids.push((*schema.database(), *schema.id()).into())
+            }
+            update_revokes(
+                (*schema.database(), *schema.id()).into(),
+                schema.privileges(),
+                &role_ids,
+                &mut revokes,
+            );
+        }
+    }
+
+    // Databases
+    for database in scx.catalog.get_databases() {
+        if role_ids.contains(&database.owner_id()) {
+            if !cascade {
+                let non_owned_schemas: Vec<_> = database
+                    .schemas()
+                    .into_iter()
+                    .filter(|schema| !role_ids.contains(&schema.owner_id()))
+                    .collect();
+                if !non_owned_schemas.is_empty() {
+                    sql_bail!(
+                        "database {} cannot be dropped without CASCADE while it contains non-owned schemas",
+                        database.name().quoted(),
+                    );
+                }
+            }
+            drop_ids.push(database.id().into());
+        }
+        update_revokes(
+            database.id().into(),
+            database.privileges(),
+            &role_ids,
+            &mut revokes,
+        );
+    }
+
+    let drop_ids = scx.catalog.object_dependents(&drop_ids);
+
+    let system_ids: Vec<_> = drop_ids.iter().filter(|id| id.is_system()).collect();
+    if !system_ids.is_empty() {
+        let mut owners = system_ids
+            .into_iter()
+            .filter_map(|object_id| scx.catalog.get_owner_id(object_id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted());
+        sql_bail!(
+            "cannot drop objects owned by role {} because they are required by the database system",
+            owners.join(", "),
+        );
+    }
+
+    Ok(Plan::DropOwned(DropOwnedPlan {
+        role_ids: role_ids.into_iter().collect(),
+        drop_ids,
+        revokes,
+    }))
 }
 
 generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalInterval));
@@ -4383,17 +4553,11 @@ pub fn plan_grant_privilege(
         privileges,
         object_type,
         name,
-        role,
+        roles,
     }: GrantPrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let (acl_mode, object_id, grantee, grantor) =
-        plan_update_privilege(scx, privileges, object_type, name, role)?;
-    Ok(Plan::GrantPrivilege(GrantPrivilegePlan {
-        acl_mode,
-        object_id,
-        grantee,
-        grantor,
-    }))
+    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
+    Ok(Plan::GrantPrivilege(plan.into()))
 }
 
 pub fn describe_revoke_privilege(
@@ -4409,34 +4573,75 @@ pub fn plan_revoke_privilege(
         privileges,
         object_type,
         name,
-        role,
+        roles,
     }: RevokePrivilegeStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let (acl_mode, object_id, revokee, grantor) =
-        plan_update_privilege(scx, privileges, object_type, name, role)?;
-    Ok(Plan::RevokePrivilege(RevokePrivilegePlan {
-        acl_mode,
-        object_id,
-        revokee,
-        grantor,
-    }))
+    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
+    Ok(Plan::RevokePrivilege(plan.into()))
+}
+
+struct UpdatePrivilegePlan {
+    acl_mode: AclMode,
+    object_id: ObjectId,
+    grantees: Vec<RoleId>,
+    grantor: RoleId,
+}
+
+impl From<UpdatePrivilegePlan> for GrantPrivilegePlan {
+    fn from(
+        UpdatePrivilegePlan {
+            acl_mode,
+            object_id,
+            grantees,
+            grantor,
+        }: UpdatePrivilegePlan,
+    ) -> GrantPrivilegePlan {
+        GrantPrivilegePlan {
+            acl_mode,
+            object_id,
+            grantees,
+            grantor,
+        }
+    }
+}
+
+impl From<UpdatePrivilegePlan> for RevokePrivilegePlan {
+    fn from(
+        UpdatePrivilegePlan {
+            acl_mode,
+            object_id,
+            grantees,
+            grantor,
+        }: UpdatePrivilegePlan,
+    ) -> RevokePrivilegePlan {
+        RevokePrivilegePlan {
+            acl_mode,
+            object_id,
+            revokees: grantees,
+            grantor,
+        }
+    }
 }
 
 fn plan_update_privilege(
     scx: &StatementContext,
-    privileges: Vec<Privilege>,
+    privileges: PrivilegeSpecification,
     object_type: ObjectType,
     name: ResolvedObjectName,
-    role: ResolvedRoleName,
-) -> Result<(AclMode, ObjectId, RoleId, RoleId), PlanError> {
-    let mut acl_mode = AclMode::empty();
-    // PostgreSQL doesn't care about duplicate privileges, so we don't either.
-    for privilege in privileges {
-        acl_mode |= privilege_to_acl_mode(privilege);
-    }
+    roles: Vec<ResolvedRoleName>,
+) -> Result<UpdatePrivilegePlan, PlanError> {
     let object_id = name
         .try_into()
         .expect("name resolution should handle invalid objects");
+    let actual_object_type = scx.get_object_type(&object_id);
+    let acl_mode = match privileges {
+        PrivilegeSpecification::All => scx.catalog.all_object_privileges(actual_object_type),
+        PrivilegeSpecification::Privileges(privileges) => privileges
+            .into_iter()
+            .map(privilege_to_acl_mode)
+            // PostgreSQL doesn't care about duplicate privileges, so we don't either.
+            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode)),
+    };
     if let ObjectId::Item(id) = &object_id {
         let item = scx.get_item(id);
         let item_type: ObjectType = item.item_type().into();
@@ -4456,7 +4661,6 @@ fn plan_update_privilege(
         }
     }
 
-    let actual_object_type = scx.get_object_type(&object_id);
     let all_object_privileges = scx.catalog.all_object_privileges(actual_object_type);
     let invalid_acl_mode = acl_mode.difference(all_object_privileges);
     if !invalid_acl_mode.is_empty() {
@@ -4477,8 +4681,14 @@ fn plan_update_privilege(
         .catalog
         .get_owner_id(&object_id)
         .expect("cannot revoke privileges on objects without owners");
+    let grantees = roles.into_iter().map(|role| role.id).collect();
 
-    Ok((acl_mode, object_id, role.id, grantor))
+    Ok(UpdatePrivilegePlan {
+        acl_mode,
+        object_id,
+        grantees,
+        grantor,
+    })
 }
 
 fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
@@ -4510,6 +4720,77 @@ fn acl_mode_to_privileges(acl_mode: AclMode) -> Vec<Privilege> {
     privileges
 }
 
+pub fn describe_reassign_owned(
+    _: &StatementContext,
+    _: ReassignOwnedStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_reassign_owned(
+    scx: &StatementContext,
+    ReassignOwnedStatement {
+        old_roles,
+        new_role,
+    }: ReassignOwnedStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let old_roles: BTreeSet<_> = old_roles.into_iter().map(|role| role.id).collect();
+    let mut reassign_ids: Vec<ObjectId> = Vec::new();
+
+    // Replicas
+    for replica in scx.catalog.get_cluster_replicas() {
+        if old_roles.contains(&replica.owner_id()) {
+            reassign_ids.push((replica.cluster_id(), replica.replica_id()).into());
+        }
+    }
+    // Clusters
+    for cluster in scx.catalog.get_clusters() {
+        if old_roles.contains(&cluster.owner_id()) {
+            reassign_ids.push(cluster.id().into());
+        }
+    }
+    // Items
+    for item in scx.catalog.get_items() {
+        if old_roles.contains(&item.owner_id()) {
+            reassign_ids.push(item.id().into());
+        }
+    }
+    // Schemas
+    for schema in scx.catalog.get_schemas() {
+        if !schema.id().is_temporary() {
+            if old_roles.contains(&schema.owner_id()) {
+                reassign_ids.push((*schema.database(), *schema.id()).into())
+            }
+        }
+    }
+    // Databases
+    for database in scx.catalog.get_databases() {
+        if old_roles.contains(&database.owner_id()) {
+            reassign_ids.push(database.id().into());
+        }
+    }
+
+    let system_ids: Vec<_> = reassign_ids.iter().filter(|id| id.is_system()).collect();
+    if !system_ids.is_empty() {
+        let mut owners = system_ids
+            .into_iter()
+            .filter_map(|object_id| scx.catalog.get_owner_id(object_id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted());
+        sql_bail!(
+            "cannot reassign objects owned by role {} because they are required by the database system",
+            owners.join(", "),
+        );
+    }
+
+    Ok(Plan::ReassignOwned(ReassignOwnedPlan {
+        old_roles: old_roles.into_iter().collect(),
+        new_role: new_role.id,
+        reassign_ids,
+    }))
+}
+
 fn resolve_cluster<'a>(
     scx: &'a StatementContext,
     name: &'a Ident,
@@ -4530,7 +4811,7 @@ fn resolve_cluster_replica(
     if_exists: bool,
 ) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
     match scx.resolve_cluster(Some(&name.cluster)) {
-        Ok(cluster) => match cluster.replicas().get(name.replica.as_str()) {
+        Ok(cluster) => match cluster.replica_ids().get(name.replica.as_str()) {
             Some(replica_id) => Ok(Some((cluster.id(), *replica_id))),
             // TODO(benesch): generate a notice indicating that the
             // replica does not exist.

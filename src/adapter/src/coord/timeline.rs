@@ -39,6 +39,8 @@ use crate::coord::{timeline, Coordinator};
 use crate::util::ResultExt;
 use crate::AdapterError;
 
+use super::timestamp_selection::TimestampProvider;
+
 /// An enum describing the timeline context of a query.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum TimelineContext {
@@ -684,6 +686,8 @@ impl Coordinator {
             }
             let depends_on = optimized_expr.depends_on();
             if depends_on.is_empty() {
+                // If the definition contains a temporal function, the timeline must
+                // be timestamp dependent.
                 if *contains_temporal {
                     timelines.insert(id, TimelineContext::TimestampDependent);
                 } else {
@@ -893,7 +897,7 @@ impl Coordinator {
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
                 let id_bundle = self.ids_in_timeline(&timeline);
-                self.largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle))
+                Self::largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle))
             };
             oracle
                 .apply_write(now, |ts| self.catalog().persist_timestamp(&timeline, ts))

@@ -118,10 +118,18 @@ impl HirRelationExpr {
                     Ok(())
                 })?;
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                max_iter,
+                bindings,
+                body,
+            } => {
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| body.fmt_text(f, ctx))?;
-                writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
+                write!(f, "{}With Mutually Recursive", ctx.indent)?;
+                if let Some(max_iter) = max_iter {
+                    write!(f, "{}", max_iter)?;
+                }
+                writeln!(f)?;
                 ctx.indented(|ctx| {
                     for (_name, id, value, _type) in bindings.iter().rev() {
                         // TODO: print the name and not the id

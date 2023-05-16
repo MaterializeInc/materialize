@@ -90,6 +90,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::TimestampManipulation;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
@@ -203,8 +204,14 @@ where
                 blob_uri: "mem://".to_string(),
                 consensus_uri: "mem://".to_string(),
             };
-            let persist_cache =
-                mz_persist_client::cache::PersistClientCache::new(persistcfg, &metrics_registry);
+            let persist_cache = {
+                let _tokio_guard = tokio_runtime.enter();
+                mz_persist_client::cache::PersistClientCache::new(
+                    persistcfg,
+                    &metrics_registry,
+                    |_, _| PubSubClientConnection::noop(),
+                )
+            };
 
             // create a client for use with the `until` closure later.
             let persist_client = tokio_runtime
@@ -232,7 +239,9 @@ where
                     sink_metrics,
                     SYSTEM_TIME.clone(),
                     connection_context,
-                    mz_storage_client::types::instances::StorageInstanceContext::for_tests(),
+                    mz_storage::storage_state::StorageInstanceContext::for_tests(
+                        rocksdb::Env::new().unwrap(),
+                    ),
                     Arc::clone(&persist_clients),
                 )
             };

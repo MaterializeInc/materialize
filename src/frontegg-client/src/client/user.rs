@@ -15,55 +15,54 @@ use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
 use crate::error::Error;
-use crate::parse::Paginated;
+use crate::parse::{Empty, Paginated};
+
+use super::role::Role;
 
 const USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v3"];
 const CREATE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v2"];
+const REMOVE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v1"];
 
 /// Representation of all the mandatory fields for a user creation request.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(missing_docs)] // TODO: add docs to all fields
 pub struct CreateUserRequest {
+    /// Email for the user
     pub email: String,
+    /// Name for the user
     pub name: String,
+    /// Provider for the user.
+    /// E.g.: `local`
     pub provider: String,
-    pub role_ids: Vec<String>,
+    /// Roles the user will have in the organization.
+    pub role_ids: Vec<uuid::Uuid>,
+}
+
+/// Representation of the only required field to request a user removal.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveUserRequest {
+    /// The identifier of the user to remove. Equals to the `id` inside the [User] struct.
+    pub user_id: String,
 }
 
 /// A structure that represents a user in Frontegg.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(missing_docs)] // TODO: add docs to all fields
 pub struct User {
+    /// The ID of the user.
     pub id: String,
+    /// The name of the user.
     pub name: String,
+    /// The email for the user.
     pub email: String,
+    /// Unique identifier for the subject; Currently it is the user ID
     pub sub: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(missing_docs)] // TODO: add docs to all fields
-pub struct Role {
-    pub id: String,
-    pub vendor_id: String,
-    pub tenant_id: Option<String>,
-    pub key: String,
-    pub name: String,
-    pub description: String,
-    pub is_default: bool,
-    pub first_user_role: bool,
-    pub created_at: String,
-    pub updated_at: String,
-    pub permissions: Vec<String>,
-    pub level: i32,
 }
 
 /// Representation of a succesfully response from a user creation.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(missing_docs)] // TODO: add docs to all fields
 pub struct CreatedUser {
     /// The ID of the user.
     pub id: String,
@@ -71,8 +70,11 @@ pub struct CreatedUser {
     pub email: String,
     /// The name of the user.
     pub name: String,
+    /// The profile picture URL of the user.
     pub profile_picture_url: String,
+    /// Indicates if the user verified their email.
     pub verified: Option<bool>,
+    /// Metadata about the user; it is usually empty.
     pub metadata: Option<String>,
     /// The roles to which this user belongs.
     pub roles: Vec<Role>,
@@ -105,5 +107,18 @@ impl Client {
         let req = req.json(&new_user);
         let created_user = self.send_request(req).await?;
         Ok(created_user)
+    }
+
+    /// Removes a user from the authenticated organization.
+    pub async fn remove_user(&self, remove_user: RemoveUserRequest) -> Result<(), Error> {
+        let mut user_path = REMOVE_USERS_PATH.to_vec();
+        user_path.push(remove_user.user_id.as_str());
+
+        let req = self.build_request(Method::DELETE, user_path);
+
+        let req = req.json(&remove_user);
+        self.send_request::<Empty>(req).await?;
+
+        Ok(())
     }
 }

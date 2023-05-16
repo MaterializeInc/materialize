@@ -585,9 +585,9 @@ impl<T: AstInfo> Expr<T> {
         }
     }
 
-    pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
+    pub fn call(name: T::ItemName, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
-            name: UnresolvedItemName(name.into_iter().map(Into::into).collect()),
+            name,
             args: FunctionArgs::args(args),
             filter: None,
             over: None,
@@ -595,11 +595,11 @@ impl<T: AstInfo> Expr<T> {
         })
     }
 
-    pub fn call_nullary(name: Vec<&str>) -> Expr<T> {
+    pub fn call_nullary(name: T::ItemName) -> Expr<T> {
         Expr::call(name, vec![])
     }
 
-    pub fn call_unary(self, name: Vec<&str>) -> Expr<T> {
+    pub fn call_unary(self, name: T::ItemName) -> Expr<T> {
         Expr::call(name, vec![self])
     }
 
@@ -796,7 +796,7 @@ impl_display!(WindowFrameBound);
 /// A function call
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Function<T: AstInfo> {
-    pub name: UnresolvedItemName,
+    pub name: T::ItemName,
     pub args: FunctionArgs<T>,
     // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
     pub filter: Option<Box<Expr<T>>>,

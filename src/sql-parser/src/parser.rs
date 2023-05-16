@@ -308,6 +308,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(RAISE) => Ok(self.parse_raise()?),
                 Token::Keyword(GRANT) => Ok(self.parse_grant()?),
                 Token::Keyword(REVOKE) => Ok(self.parse_revoke()?),
+                Token::Keyword(REASSIGN) => Ok(self.parse_reassign_owned()?),
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -395,6 +396,11 @@ impl<'a> Parser<'a> {
             .next_token()
             .ok_or_else(|| self.error(self.peek_prev_pos(), "Unexpected EOF".to_string()))?;
         let expr = match tok {
+            Token::LBracket => {
+                self.prev_token();
+                let name = self.parse_raw_name()?;
+                self.parse_function(name)
+            }
             Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
@@ -600,7 +606,7 @@ impl<'a> Parser<'a> {
         Ok(parse(self)?.into_expr())
     }
 
-    fn parse_function(&mut self, name: UnresolvedItemName) -> Result<Expr<Raw>, ParserError> {
+    fn parse_function(&mut self, name: RawItemName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let distinct = matches!(
             self.parse_at_most_one_keyword(&[ALL, DISTINCT], &format!("function: {}", name))?,
@@ -788,7 +794,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedItemName::unqualified("extract"),
+            name: RawItemName::Name(UnresolvedItemName::unqualified("extract")),
             args: FunctionArgs::args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -851,7 +857,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedItemName::unqualified(name),
+            name: RawItemName::Name(UnresolvedItemName::unqualified(name)),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
@@ -869,7 +875,7 @@ impl<'a> Parser<'a> {
         let haystack = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedItemName::unqualified("position"),
+            name: RawItemName::Name(UnresolvedItemName::unqualified("position")),
             args: FunctionArgs::args(vec![needle, haystack]),
             filter: None,
             over: None,
@@ -1095,7 +1101,7 @@ impl<'a> Parser<'a> {
                 AT => {
                     self.expect_keywords(&[TIME, ZONE])?;
                     Ok(Expr::Function(Function {
-                        name: UnresolvedItemName(vec!["timezone".into()]),
+                        name: RawItemName::Name(UnresolvedItemName::unqualified("timezone")),
                         args: FunctionArgs::args(vec![self.parse_subexpr(precedence)?, expr]),
                         filter: None,
                         over: None,
@@ -1219,7 +1225,7 @@ impl<'a> Parser<'a> {
 
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: UnresolvedItemName::unqualified("substring"),
+            name: RawItemName::Name(UnresolvedItemName::unqualified("substring")),
             args: FunctionArgs::args(exprs),
             filter: None,
             over: None,
@@ -3246,6 +3252,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
+        if self.parse_keyword(OWNED) {
+            return self.parse_drop_owned();
+        }
+
         let object_type = self.expect_object_type()?;
         let if_exists = self.parse_if_exists()?;
         match object_type {
@@ -3349,6 +3359,19 @@ impl<'a> Parser<'a> {
             if_exists,
             names,
             cascade: false,
+        }))
+    }
+
+    fn parse_drop_owned(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(BY)?;
+        let role_names = self.parse_comma_separated(Parser::parse_identifier)?;
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
+        Ok(Statement::DropOwned(DropOwnedStatement {
+            role_names,
+            cascade,
         }))
     }
 
@@ -4545,7 +4568,7 @@ impl<'a> Parser<'a> {
                     Ok(Expr::QualifiedWildcard(id_parts))
                 } else if self.consume_token(&Token::LParen) {
                     self.prev_token();
-                    self.parse_function(UnresolvedItemName(id_parts))
+                    self.parse_function(RawItemName::Name(UnresolvedItemName(id_parts)))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }
@@ -4620,7 +4643,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a query expression, i.e. a `SELECT` statement optionally
-    /// preceeded with some `WITH` CTE declarations and optionally followed
+    /// preceded with some `WITH` CTE declarations and optionally followed
     /// by `ORDER BY`. Unlike some other parse_... methods, this one doesn't
     /// expect the initial keyword to be already consumed
     fn parse_query(&mut self) -> Result<Query<Raw>, ParserError> {
@@ -4628,9 +4651,18 @@ impl<'a> Parser<'a> {
             let cte_block = if parser.parse_keyword(WITH) {
                 if parser.parse_keyword(MUTUALLY) {
                     parser.expect_keyword(RECURSIVE)?;
-                    CteBlock::MutuallyRecursive(
-                        parser.parse_comma_separated(Parser::parse_cte_mut_rec)?,
-                    )
+                    let options = if parser.consume_token(&Token::LParen) {
+                        let options =
+                            parser.parse_comma_separated(Self::parse_mut_rec_block_option)?;
+                        parser.expect_token(&Token::RParen)?;
+                        options
+                    } else {
+                        vec![]
+                    };
+                    CteBlock::MutuallyRecursive(MutRecBlock {
+                        options,
+                        ctes: parser.parse_comma_separated(Parser::parse_cte_mut_rec)?,
+                    })
                 } else {
                     // TODO: optional RECURSIVE
                     CteBlock::Simple(parser.parse_comma_separated(Parser::parse_cte)?)
@@ -4642,6 +4674,15 @@ impl<'a> Parser<'a> {
             let body = parser.parse_query_body(SetPrecedence::Zero)?;
 
             parser.parse_query_tail(cte_block, body)
+        })
+    }
+
+    fn parse_mut_rec_block_option(&mut self) -> Result<MutRecBlockOption<Raw>, ParserError> {
+        self.expect_keywords(&[ITERATION, LIMIT])?;
+        let name = MutRecBlockOptionName::IterLimit;
+        Ok(MutRecBlockOption {
+            name,
+            value: self.parse_optional_option_value()?,
         })
     }
 
@@ -4988,14 +5029,18 @@ impl<'a> Parser<'a> {
                     variable = Ident::new("client_encoding");
                     normal = true;
                 }
-                Ok(SCHEMA) => {
-                    variable = Ident::new("search_path");
-                    normal = true;
-                }
                 _ => {}
             }
         }
-        if normal {
+        if variable.as_str().parse() == Ok(SCHEMA) {
+            variable = Ident::new("search_path");
+            let to = self.parse_set_variable_value()?;
+            Ok(Statement::SetVariable(SetVariableStatement {
+                local: modifier == Some(LOCAL),
+                variable,
+                to: SetVariableTo::Values(vec![to]),
+            }))
+        } else if normal {
             let to = self.parse_set_variable_to()?;
             Ok(Statement::SetVariable(SetVariableStatement {
                 local: modifier == Some(LOCAL),
@@ -5281,7 +5326,7 @@ impl<'a> Parser<'a> {
             } else if self.parse_keywords(&[ROWS, FROM]) {
                 return self.parse_rows_from();
             } else {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 self.expect_token(&Token::LParen)?;
                 let args = self.parse_optional_args(false)?;
                 let alias = self.parse_optional_table_alias()?;
@@ -5348,21 +5393,20 @@ impl<'a> Parser<'a> {
             Ok(self.parse_rows_from()?)
         } else {
             let name = self.parse_raw_name()?;
-            match name {
-                RawItemName::Name(name) if self.consume_token(&Token::LParen) => {
-                    let args = self.parse_optional_args(false)?;
-                    let alias = self.parse_optional_table_alias()?;
-                    let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
-                    Ok(TableFactor::Function {
-                        function: TableFunction { name, args },
-                        alias,
-                        with_ordinality,
-                    })
-                }
-                _ => Ok(TableFactor::Table {
+            if self.consume_token(&Token::LParen) {
+                let args = self.parse_optional_args(false)?;
+                let alias = self.parse_optional_table_alias()?;
+                let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
+                Ok(TableFactor::Function {
+                    function: TableFunction { name, args },
+                    alias,
+                    with_ordinality,
+                })
+            } else {
+                Ok(TableFactor::Table {
                     name,
                     alias: self.parse_optional_table_alias()?,
-                }),
+                })
             }
         }
     }
@@ -5381,7 +5425,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_table_function(&mut self) -> Result<TableFunction<Raw>, ParserError> {
-        let name = self.parse_item_name()?;
+        let name = self.parse_raw_name()?;
         self.expect_token(&Token::LParen)?;
         Ok(TableFunction {
             name,
@@ -5690,11 +5734,16 @@ impl<'a> Parser<'a> {
         };
         let as_of = self.parse_optional_as_of()?;
         let up_to = self.parse_optional_up_to()?;
-        let output = if self.parse_keywords(&[ENVELOPE, UPSERT]) {
+        let output = if self.parse_keywords(&[ENVELOPE]) {
+            let keyword = self.expect_one_of_keywords(&[UPSERT, DEBEZIUM])?;
             self.expect_token(&Token::LParen)?;
             self.expect_keyword(KEY)?;
             let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
-            let output = SubscribeOutput::EnvelopeUpsert { key_columns };
+            let output = match keyword {
+                UPSERT => SubscribeOutput::EnvelopeUpsert { key_columns },
+                DEBEZIUM => SubscribeOutput::EnvelopeDebezium { key_columns },
+                _ => unreachable!("no other keyword allowed"),
+            };
             self.expect_token(&Token::RParen)?;
             output
         } else if self.parse_keywords(&[WITHIN, TIMESTAMP, ORDER, BY]) {
@@ -5936,7 +5985,7 @@ impl<'a> Parser<'a> {
     /// Parse a `GRANT` statement, assuming that the `GRANT` token
     /// has already been consumed.
     fn parse_grant(&mut self) -> Result<Statement<Raw>, ParserError> {
-        match self.parse_privileges() {
+        match self.parse_privilege_specification() {
             Some(privileges) => {
                 self.expect_keyword(ON)?;
                 // If the object type is omitted, then it is assumed to be a table.
@@ -5970,19 +6019,18 @@ impl<'a> Parser<'a> {
                 }
                 let name = self.parse_object_name(object_type)?;
                 self.expect_keyword(TO)?;
-                let role = self.parse_identifier()?;
+                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::GrantPrivilege(GrantPrivilegeStatement {
                     privileges,
                     object_type,
                     name,
-                    role,
+                    roles,
                 }))
             }
             None => {
                 let role_name = self.parse_identifier()?;
                 self.expect_keyword(TO)?;
-                let _ = self.parse_keyword(GROUP);
-                let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
+                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::GrantRole(GrantRoleStatement {
                     role_name,
                     member_names,
@@ -5994,7 +6042,7 @@ impl<'a> Parser<'a> {
     /// Parse a `REVOKE` statement, assuming that the `REVOKE` token
     /// has already been consumed.
     fn parse_revoke(&mut self) -> Result<Statement<Raw>, ParserError> {
-        match self.parse_privileges() {
+        match self.parse_privilege_specification() {
             Some(privileges) => {
                 self.expect_keyword(ON)?;
                 // If the object type is omitted, then it is assumed to be a table.
@@ -6028,19 +6076,18 @@ impl<'a> Parser<'a> {
                 }
                 let name = self.parse_object_name(object_type)?;
                 self.expect_keyword(FROM)?;
-                let role = self.parse_identifier()?;
+                let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::RevokePrivilege(RevokePrivilegeStatement {
                     privileges,
                     object_type,
                     name,
-                    role,
+                    roles,
                 }))
             }
             None => {
                 let role_name = self.parse_identifier()?;
                 self.expect_keyword(FROM)?;
-                let _ = self.parse_keyword(GROUP);
-                let member_names = self.parse_comma_separated(Parser::parse_identifier)?;
+                let member_names = self.parse_comma_separated(Parser::expect_role_specification)?;
                 Ok(Statement::RevokeRole(RevokeRoleStatement {
                     role_name,
                     member_names,
@@ -6218,7 +6265,12 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse one or more privileges separated by a ','.
-    fn parse_privileges(&mut self) -> Option<Vec<Privilege>> {
+    fn parse_privilege_specification(&mut self) -> Option<PrivilegeSpecification> {
+        if self.parse_keyword(ALL) {
+            let _ = self.parse_keyword(PRIVILEGES);
+            return Some(PrivilegeSpecification::All);
+        }
+
         let mut privileges = Vec::new();
         while let Some(privilege) = self.parse_privilege() {
             privileges.push(privilege);
@@ -6230,8 +6282,27 @@ impl<'a> Parser<'a> {
         if privileges.is_empty() {
             None
         } else {
-            Some(privileges)
+            Some(PrivilegeSpecification::Privileges(privileges))
         }
+    }
+
+    /// Bail out if the current token is not a role specification, or consume and return it if it is.
+    fn expect_role_specification(&mut self) -> Result<Ident, ParserError> {
+        let _ = self.parse_keyword(GROUP);
+        self.parse_identifier()
+    }
+
+    /// Parse a `REASSIGN OWNED` statement, assuming that the `REASSIGN` token
+    /// has already been consumed.
+    fn parse_reassign_owned(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[OWNED, BY])?;
+        let old_roles = self.parse_comma_separated(Parser::parse_identifier)?;
+        self.expect_keyword(TO)?;
+        let new_role = self.parse_identifier()?;
+        Ok(Statement::ReassignOwned(ReassignOwnedStatement {
+            old_roles,
+            new_role,
+        }))
     }
 }
 

@@ -98,7 +98,7 @@ mod tests {
     use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, UsedIndexes};
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{optimize_dataflow_demand_inner, optimize_dataflow_filters_inner};
-    use mz_transform::{EmptyIndexOracle, Optimizer, Transform, TransformArgs};
+    use mz_transform::{Optimizer, Transform, TransformArgs};
     use proc_macro2::TokenTree;
 
     use super::explain::Explainable;
@@ -111,8 +111,9 @@ mod tests {
     const TEST: &str = "test";
 
     thread_local! {
-        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> =
-            Optimizer::logical_optimizer()
+        static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> = {
+            let ctx = mz_transform::typecheck::empty_context();
+            Optimizer::logical_optimizer(&ctx)
                 .transforms
                 .into_iter()
                 .chain(std::iter::once::<Box<dyn Transform>>(
@@ -121,9 +122,10 @@ mod tests {
                 .chain(std::iter::once::<Box<dyn Transform>>(
                     Box::new(mz_transform::normalize_lets::NormalizeLets::new(false))
                 ))
-                .chain(Optimizer::logical_cleanup_pass().transforms.into_iter())
-                .chain(Optimizer::physical_optimizer().transforms.into_iter())
-                .collect::<Vec<_>>();
+                .chain(Optimizer::logical_cleanup_pass(&ctx, false).transforms.into_iter())
+                .chain(Optimizer::physical_optimizer(&ctx).transforms.into_iter())
+                .collect::<Vec<_>>()
+            };
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -219,6 +221,7 @@ mod tests {
         }
     }
 
+    #[tracing::instrument(skip(cat, args, test_type))]
     fn run_single_view_testcase(
         s: &str,
         cat: &TestCatalog,
@@ -227,12 +230,7 @@ mod tests {
     ) -> Result<String, Error> {
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
-            get_transform(t)?.transform(
-                &mut rel,
-                TransformArgs {
-                    indexes: &EmptyIndexOracle,
-                },
-            )?;
+            get_transform(t)?.transform(&mut rel, TransformArgs::default())?;
         }
 
         let format_type = get_format_type(args);
@@ -240,12 +238,7 @@ mod tests {
         let out = match test_type {
             TestType::Opt => FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                 for transform in transforms.iter() {
-                    transform.transform(
-                        &mut rel,
-                        TransformArgs {
-                            indexes: &EmptyIndexOracle,
-                        },
-                    )?;
+                    transform.transform(&mut rel, TransformArgs::default())?;
                 }
                 Ok(convert_rel_to_string(&rel, cat, &format_type))
             })?,
@@ -263,12 +256,7 @@ mod tests {
                 FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                     for transform in transforms {
                         let prev = rel.clone();
-                        transform.transform(
-                            &mut rel,
-                            TransformArgs {
-                                indexes: &EmptyIndexOracle,
-                            },
-                        )?;
+                        transform.transform(&mut rel, TransformArgs::default())?;
 
                         if rel != prev {
                             if no_change.len() > 0 {
@@ -411,7 +399,7 @@ mod tests {
         }
         let mut out = String::new();
         if test_type == TestType::Opt {
-            let optimizer = Optimizer::logical_optimizer();
+            let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| (id, optimizer.optimize(rel).unwrap().into_inner()))
@@ -431,8 +419,9 @@ mod tests {
             _ => {}
         };
         if test_type == TestType::Opt {
-            let log_optimizer = Optimizer::logical_cleanup_pass();
-            let phys_optimizer = Optimizer::physical_optimizer();
+            let ctx = mz_transform::typecheck::empty_context();
+            let log_optimizer = Optimizer::logical_cleanup_pass(&ctx, true);
+            let phys_optimizer = Optimizer::physical_optimizer(&ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
@@ -520,6 +509,8 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn run() {
+        mz_ore::test::init_logging();
+
         datadriven::walk("tests/testdata", |f| {
             let mut catalog = TestCatalog::default();
             f.run(move |s| -> String {

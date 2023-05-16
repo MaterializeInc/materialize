@@ -64,7 +64,7 @@ SERVICES = [
         entrypoint_extra=[
             "--var=replicas=1",
             f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         ],
     ),
 ]
@@ -113,13 +113,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--max-version-gap",
-        type=int,
-        default=1,
-        help="Maximum number of versions to skip",
-    )
-
-    parser.add_argument(
         "--num-scenarios",
         type=int,
         default=50,
@@ -154,7 +147,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for id, upgrade_scenario in enumerate(
         get_upgrade_scenarios(
             versions=versions,
-            max_version_gap=args.max_version_gap,
             num_scenarios=args.num_scenarios,
         )
     ):
@@ -220,7 +212,7 @@ def random_simple_paths(
 
 
 def get_upgrade_scenarios(
-    versions: List[MzVersion], max_version_gap: int, num_scenarios: int
+    versions: List[MzVersion], num_scenarios: int
 ) -> List[List[Node]]:
     g = nx.DiGraph()
 
@@ -260,11 +252,9 @@ def get_upgrade_scenarios(
     for i in range(len(versions_end)):
         g.add_edge(versions_begin[i], versions_end[i])
 
-    # Allow upgrades from X-N to X for N >= 1 ... max_version_gap
-    for skipped_count in range(1, max_version_gap + 1):
-        if len(versions_begin) >= skipped_count:
-            for v in range(len(versions_begin) - skipped_count):
-                g.add_edge(versions_end[v], versions_begin[v + skipped_count])
+    # Allow upgrades from X to X+1
+    for v in range(len(versions_begin) - 1):
+        g.add_edge(versions_end[v], versions_begin[v + 1])
 
     # Allow multiple Check phases to run within the same version
     for i in range(0, len(checks_phases) - 2):

@@ -23,9 +23,7 @@ use std::hash::Hash;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{
-    AstInfo, Expr, FunctionArgs, Ident, ShowStatement, UnresolvedItemName, WithOptionValue,
-};
+use crate::ast::{AstInfo, Expr, FunctionArgs, Ident, ShowStatement, WithOptionValue};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -314,7 +312,13 @@ impl<T: AstInfo> AstDisplay for Distinct<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CteBlock<T: AstInfo> {
     Simple(Vec<Cte<T>>),
-    MutuallyRecursive(Vec<CteMutRec<T>>),
+    MutuallyRecursive(MutRecBlock<T>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MutRecBlock<T: AstInfo> {
+    pub options: Vec<MutRecBlockOption<T>>,
+    pub ctes: Vec<CteMutRec<T>>,
 }
 
 impl<T: AstInfo> CteBlock<T> {
@@ -326,7 +330,7 @@ impl<T: AstInfo> CteBlock<T> {
     pub fn is_empty(&self) -> bool {
         match self {
             CteBlock::Simple(list) => list.is_empty(),
-            CteBlock::MutuallyRecursive(list) => list.is_empty(),
+            CteBlock::MutuallyRecursive(list) => list.ctes.is_empty(),
         }
     }
     /// Iterates through the identifiers used in bindings.
@@ -338,8 +342,8 @@ impl<T: AstInfo> CteBlock<T> {
                     names.push(&cte.alias.name);
                 }
             }
-            CteBlock::MutuallyRecursive(list) => {
-                for cte in list.iter() {
+            CteBlock::MutuallyRecursive(MutRecBlock { options: _, ctes }) => {
+                for cte in ctes.iter() {
                     names.push(&cte.name);
                 }
             }
@@ -356,9 +360,14 @@ impl<T: AstInfo> AstDisplay for CteBlock<T> {
                     f.write_str("WITH ");
                     f.write_node(&display::comma_separated(list));
                 }
-                CteBlock::MutuallyRecursive(list) => {
+                CteBlock::MutuallyRecursive(MutRecBlock { options, ctes }) => {
                     f.write_str("WITH MUTUALLY RECURSIVE ");
-                    f.write_node(&display::comma_separated(list));
+                    if !options.is_empty() {
+                        f.write_str("(");
+                        f.write_node(&display::comma_separated(options));
+                        f.write_str(") ");
+                    }
+                    f.write_node(&display::comma_separated(ctes));
                 }
             }
             f.write_str(" ");
@@ -425,6 +434,36 @@ impl<T: AstInfo> AstDisplay for CteMutRecColumnDef<T> {
     }
 }
 impl_display_t!(CteMutRecColumnDef);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MutRecBlockOptionName {
+    IterLimit,
+}
+
+impl AstDisplay for MutRecBlockOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            MutRecBlockOptionName::IterLimit => "ITERATION LIMIT",
+        })
+    }
+}
+impl_display!(MutRecBlockOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MutRecBlockOption<T: AstInfo> {
+    pub name: MutRecBlockOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for MutRecBlockOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
 
 /// One item of the comma-separated list following `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -584,7 +623,7 @@ impl_display_t!(TableFactor);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TableFunction<T: AstInfo> {
-    pub name: UnresolvedItemName,
+    pub name: T::ItemName,
     pub args: FunctionArgs<T>,
 }
 impl<T: AstInfo> AstDisplay for TableFunction<T> {

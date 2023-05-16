@@ -190,7 +190,8 @@ mod test {
             deserialize(&mut input_stream, "Vec<MirScalarExpr>", &mut ctx)?;
 
         let arena = RowArena::new();
-        let mut interpreter = ColumnSpecs::new(RelationType::new(types), &arena);
+        let relation = RelationType::new(types);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
 
         let specs: Vec<_> = values
             .into_iter()

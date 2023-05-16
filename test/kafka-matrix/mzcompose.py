@@ -41,7 +41,7 @@ SERVICES = [
 
 
 TD_CMD = [
-    f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}",
+    f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
     *[f"testdrive/{td}" for td in ["kafka-sinks.td", "kafka-upsert-sources.td"]],
 ]
 

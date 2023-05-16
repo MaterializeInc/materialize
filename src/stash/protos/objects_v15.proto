@@ -146,7 +146,9 @@ message ServerConfigurationValue {
 }
 
 message AuditLogKey {
-
+    oneof event {
+        AuditLogEventV1 v1 = 1;
+    }
 }
 
 // ---- Common Types
@@ -248,10 +250,16 @@ message ReplicaConfig {
         Duration interval = 2;
     }
 
+    message MergeEffort {
+        uint32 effort = 1;
+    }
+
     oneof location {
         UnmanagedLocation unmanaged = 1;
         ManagedLocation managed = 2;
     }
+    Logging logging = 3;
+    MergeEffort idle_arrangement_merge_effort = 4;
 }
 
 message RoleId {
@@ -290,7 +298,7 @@ message MzAclItem {
 }
 
 
-message AuditLogEvent {
+message AuditLogEventV1 {
     enum EventType {
         EVENT_TYPE_UNKNOWN = 0;
         EVENT_TYPE_CREATE = 1;
@@ -413,10 +421,14 @@ message AuditLogEvent {
         string database_name = 3;
     }
 
+    message User {
+        string value = 1;
+    }
+
     uint64 id = 1;
     EventType event_type = 2;
     ObjectType object_type = 3;
-    string user = 4;
+    User user = 4;
     EpochMillis occurred_at = 5;
     oneof details {
         CreateClusterReplicaV1 create_cluster_replica_v1 = 6;

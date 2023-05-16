@@ -71,6 +71,7 @@ use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
@@ -880,6 +881,7 @@ impl RunnerInner {
         let persist_clients = PersistClientCache::new(
             PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
             &metrics_registry,
+            |_, _| PubSubClientConnection::noop(),
         );
         let persist_clients = Arc::new(persist_clients);
         let postgres_factory = StashFactory::new(&metrics_registry);
@@ -901,7 +903,8 @@ impl RunnerInner {
                 now: SYSTEM_TIME.clone(),
                 postgres_factory: postgres_factory.clone(),
                 metrics_registry: metrics_registry.clone(),
-                scratch_directory: None,
+                scratch_directory_enabled: false,
+                persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
             },
             secrets_controller,
             cloud_resource_controller: None,
@@ -921,7 +924,7 @@ impl RunnerInner {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            bootstrap_system_parameters: Default::default(),
+            system_parameter_defaults: Default::default(),
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,

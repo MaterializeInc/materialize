@@ -306,6 +306,8 @@ pub enum ExecuteResponse {
     DiscardedAll,
     /// The requested object was dropped.
     DroppedObject(ObjectType),
+    /// The requested objects were dropped.
+    DroppedOwned,
     /// The provided query was empty.
     EmptyQuery,
     /// Fetch results from a cursor.
@@ -327,6 +329,8 @@ pub enum ExecuteResponse {
     Prepare,
     /// A user-requested warning was raised.
     Raised,
+    /// The requested objects were reassigned.
+    ReassignOwned,
     /// The requested privilege was revoked.
     RevokedPrivilege,
     /// The requested role was revoked.
@@ -391,6 +395,7 @@ impl ExecuteResponse {
             DiscardedTemp => Some("DISCARD TEMP".into()),
             DiscardedAll => Some("DISCARD ALL".into()),
             DroppedObject(o) => Some(format!("DROP {o}")),
+            DroppedOwned => Some("DROP OWNED".into()),
             EmptyQuery => None,
             Fetch { .. } => None,
             GrantedPrivilege => Some("GRANT".into()),
@@ -407,6 +412,7 @@ impl ExecuteResponse {
             }
             Prepare => Some("PREPARE".into()),
             Raised => Some("RAISE".into()),
+            ReassignOwned => Some("REASSIGN OWNED".into()),
             RevokedPrivilege => Some("REVOKE".into()),
             RevokedRole => Some("REVOKE ROLE".into()),
             SendingRows { .. } => None,
@@ -461,6 +467,7 @@ impl ExecuteResponse {
             DiscardTemp => vec![DiscardedTemp],
             DiscardAll => vec![DiscardedAll],
             DropObjects => vec![DroppedObject],
+            DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             Explain | Peek | ShowAllVariables | ShowCreate | ShowVariable => {
                 vec![CopyTo, SendingRows]
@@ -473,6 +480,7 @@ impl ExecuteResponse {
             Insert => vec![Inserted, SendingRows],
             PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
             PlanKind::Raise => vec![ExecuteResponseKind::Raised],
+            PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],
             RevokePrivilege => vec![RevokedPrivilege],
             RevokeRole => vec![RevokedRole],
             PlanKind::SetVariable | ResetVariable => vec![ExecuteResponseKind::SetVariable],

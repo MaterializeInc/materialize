@@ -229,6 +229,8 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
 const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
+// Schema can be used an alias for a search path with a single element.
+pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
 static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
@@ -539,6 +541,75 @@ const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+/// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
+mod upsert_rocksdb {
+    use super::*;
+    pub static UPSERT_ROCKSDB_COMPACTION_STYLE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_compaction_style"),
+        value: &*mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE_STR,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    });
+    pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
+        value: &mz_rocksdb::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_level_compaction_dynamic_level_bytes"),
+        value: &mz_rocksdb::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO: ServerVar<i32> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_universal_compaction_ratio"),
+        value: &mz_rocksdb::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_PARALLELISM: ServerVar<Option<i32>> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_parallelism"),
+        value: &mz_rocksdb::defaults::DEFAULT_PARALLELISM,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_compression_type"),
+        value: &*mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE_STR,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    });
+    pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: Lazy<ServerVar<String>> =
+        Lazy::new(|| ServerVar {
+            name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
+            value: &*mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE_STR,
+            description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+            internal: true,
+            safe: true,
+        });
+}
+
 /// Controls the connect_timeout setting when connecting to PG via replication.
 const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_replication_connect_timeout"),
@@ -660,6 +731,24 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
     value: &PersistConfig::DEFAULT_STATS_FILTER_ENABLED,
     description: "Whether to use recorded statistics about the data stored in persist \
                   to filter at read time, see persist_stats_collection_enabled (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
+const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_pubsub_client_enabled"),
+    value: &PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED,
+    description: "Whether to connect to the Persist PubSub service.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_push_diff_enabled`].
+const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_pubsub_push_diff_enabled"),
+    value: &PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
+    description: "Whether to push state diffs to Persist PubSub.",
     internal: true,
     safe: true,
 };
@@ -795,6 +884,14 @@ pub const ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     safe: true,
 };
 
+pub const ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_envelope_debezium_in_subscribe"),
+    value: &false,
+    description: "Feature flag indicating whether `ENVELOPE DEBEZIUM` can be used in `SUBSCRIBE` queries (Materialize).",
+    internal: false,
+    safe: true,
+};
+
 pub const ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_within_timestamp_order_by_in_subscribe"),
     value: &false,
@@ -809,6 +906,24 @@ pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     description: "The maximum number of concurrent connections (Materialize).",
     internal: false,
     safe: true,
+};
+
+/// Controls [`mz_storage_client::types::parameters::StorageParameters::keep_n_source_status_history_entries`].
+const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("keep_n_source_status_history_entries"),
+    value: &5,
+    description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
+    internal: true,
+    safe: true,
+};
+
+pub const ALLOW_UNSTABLE_DEPENDENCIES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("allow_unstable_dependencies"),
+    value: &false,
+    description:
+        "Whether to allow catalog objects to depend on unstable items, e.g. those in the `mz_internal` schema (Materialize).",
+    internal: true,
+    safe: false,
 };
 
 /// Represents the input to a variable.
@@ -1527,6 +1642,13 @@ impl Default for SystemVars {
             .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
             .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
             .with_var(&ENABLE_UPSERT_SOURCE_DISK)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
@@ -1539,6 +1661,8 @@ impl Default for SystemVars {
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
+            .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
+            .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
             .with_var(&METRICS_RETENTION)
             .with_var(&MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_WITH_MUTUALLY_RECURSIVE)
@@ -1553,8 +1677,11 @@ impl Default for SystemVars {
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
+            .with_var(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
+            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+            .with_var(&ALLOW_UNSTABLE_DEPENDENCIES)
     }
 }
 
@@ -1587,6 +1714,14 @@ impl SystemVars {
         var.value_any()
             .downcast_ref()
             .expect("provided var type should matched stored var")
+    }
+
+    /// Reset all the values to their defaults (preserving
+    /// defaults from `VarMut::set_default).
+    pub fn reset_all(&mut self) {
+        for (_, var) in &mut self.vars {
+            var.reset();
+        }
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1664,6 +1799,16 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))
+    }
+
+    /// Set the default for this variable. This is the value this
+    /// variable will be be `reset` to. If no default is set, the static default in the
+    /// variable definition is used instead.
+    pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
+        self.vars
+            .get_mut(UncasedStr::new(name))
+            .ok_or_else(|| VarError::UnknownParameter(name.into()))
+            .and_then(|v| v.set_default(input))
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -1784,6 +1929,34 @@ impl SystemVars {
         *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
     }
 
+    pub fn upsert_rocksdb_compaction_style(&self) -> &str {
+        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
+    }
+
+    pub fn upsert_rocksdb_optimize_compaction_memtable_budget(&self) -> usize {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
+    }
+
+    pub fn upsert_rocksdb_level_compaction_dynamic_level_bytes(&self) -> bool {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
+    }
+
+    pub fn upsert_rocksdb_universal_compaction_ratio(&self) -> i32 {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO)
+    }
+
+    pub fn upsert_rocksdb_parallelism(&self) -> Option<i32> {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
+    }
+
+    pub fn upsert_rocksdb_compression_type(&self) -> &str {
+        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
+    }
+
+    pub fn upsert_rocksdb_bottommost_compression_type(&self) -> &str {
+        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
+    }
+
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
@@ -1869,6 +2042,16 @@ impl SystemVars {
         *self.expect_value(&PERSIST_STATS_FILTER_ENABLED)
     }
 
+    /// Returns the `persist_pubsub_client_enabled` configuration parameter.
+    pub fn persist_pubsub_client_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_PUBSUB_CLIENT_ENABLED)
+    }
+
+    /// Returns the `persist_pubsub_push_diff_enabled` configuration parameter.
+    pub fn persist_pubsub_push_diff_enabled(&self) -> bool {
+        *self.expect_value(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
+    }
+
     /// Returns the `metrics_retention` configuration parameter.
     pub fn metrics_retention(&self) -> Duration {
         *self.expect_value(&METRICS_RETENTION)
@@ -1927,6 +2110,11 @@ impl SystemVars {
         *self.expect_value(&ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)
     }
 
+    /// Returns the `enable_envelope_debezium_in_subscribe` configuration parameter.
+    pub fn enable_envelope_debezium_in_subscribe(&self) -> bool {
+        *self.expect_value(&ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)
+    }
+
     /// Returns the `enable_within_timestamp_order_by` configuration parameter.
     pub fn enable_within_timestamp_order_by(&self) -> bool {
         *self.expect_value(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
@@ -1935,6 +2123,15 @@ impl SystemVars {
     /// Returns the `max_connections` configuration parameter.
     pub fn max_connections(&self) -> u32 {
         *self.expect_value(&MAX_CONNECTIONS)
+    }
+
+    pub fn keep_n_source_status_history_entries(&self) -> usize {
+        *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+    }
+
+    /// Returns the `enable_rbac_checks` configuration parameter.
+    pub fn allow_unstable_dependencies(&self) -> bool {
+        *self.expect_value(&ALLOW_UNSTABLE_DEPENDENCIES)
     }
 }
 
@@ -1998,6 +2195,10 @@ pub trait VarMut: Var + Send + Sync {
 
     /// Reset the stored value to the default.
     fn reset(&mut self) -> bool;
+
+    /// Set the default for this variable. This is the value this
+    /// variable will be be `reset` to.
+    fn set_default(&mut self, input: VarInput) -> Result<(), VarError>;
 }
 
 /// A `ServerVar` is the default value for a configuration parameter.
@@ -2051,6 +2252,7 @@ where
     V::Owned: fmt::Debug,
 {
     persisted_value: Option<V::Owned>,
+    dynamic_default: Option<V::Owned>,
     parent: &'static ServerVar<V>,
 }
 
@@ -2063,6 +2265,7 @@ where
     fn clone(&self) -> Self {
         SystemVar {
             persisted_value: self.persisted_value.clone(),
+            dynamic_default: self.dynamic_default.clone(),
             parent: self.parent,
         }
     }
@@ -2076,6 +2279,7 @@ where
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
             persisted_value: None,
+            dynamic_default: None,
             parent,
         }
     }
@@ -2088,7 +2292,12 @@ where
         self.persisted_value
             .as_ref()
             .map(|v| v.borrow())
-            .unwrap_or(self.parent.value)
+            .unwrap_or_else(|| {
+                self.dynamic_default
+                    .as_ref()
+                    .map(|v| v.borrow())
+                    .unwrap_or(self.parent.value)
+            })
     }
 }
 
@@ -2167,6 +2376,16 @@ where
             true
         } else {
             false
+        }
+    }
+
+    fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
+        match V::parse(input) {
+            Ok(v) => {
+                self.dynamic_default = Some(v);
+                Ok(())
+            }
+            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
         }
     }
 }
@@ -2591,6 +2810,20 @@ impl Value for str {
     }
 }
 
+// The same as the above impl, but works in `SystemVar`s.
+impl Value for String {
+    const TYPE_NAME: &'static str = "string";
+
+    fn parse(input: VarInput) -> Result<String, ()> {
+        let s = extract_single_value(input)?;
+        Ok(s.to_owned())
+    }
+
+    fn format(&self) -> String {
+        self.to_owned()
+    }
+}
+
 impl Value for Vec<String> {
     const TYPE_NAME: &'static str = "string list";
 
@@ -2665,6 +2898,25 @@ impl Value for Option<mz_repr::Timestamp> {
         match s {
             "" => Ok(None),
             _ => <mz_repr::Timestamp as Value>::parse(VarInput::Flat(s)).map(Some),
+        }
+    }
+
+    fn format(&self) -> String {
+        match self {
+            Some(s) => s.format(),
+            None => "".into(),
+        }
+    }
+}
+
+impl Value for Option<i32> {
+    const TYPE_NAME: &'static str = "optional signed integer";
+
+    fn parse(input: VarInput) -> Result<Option<i32>, ()> {
+        let s = extract_single_value(input)?;
+        match s {
+            "" => Ok(None),
+            _ => <i32 as Value>::parse(VarInput::Flat(s)).map(Some),
         }
     }
 
@@ -2916,7 +3168,18 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+        || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
+}
+
+fn is_upsert_rocksdb_config_var(name: &str) -> bool {
+    name == upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.
@@ -2932,4 +3195,6 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
+        || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
+        || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
 }

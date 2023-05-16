@@ -172,6 +172,8 @@ drop_index ::=
     'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_materialized_view ::=
   'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
+drop_owned ::=
+  'DROP' 'OWNED' 'BY' role_name ( ',' role_name )* ('RESTRICT' | 'CASCADE')?
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
 drop_secret ::=
@@ -214,9 +216,9 @@ format_spec ::=
   'TEXT' |
   'BYTES'
 grant_privilege ::=
-  'GRANT' privilege (',' privilege)* ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'TO' 'GROUP'? role_name
+  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'TO' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 grant_role ::=
-  'GRANT' role_name 'TO' 'GROUP'? member_name ( ',' member_name )*
+  'GRANT' role_name 'TO' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
 key_strat ::=
   'KEY STRATEGY' strat
 val_strat ::=
@@ -263,7 +265,7 @@ func_justify_interval ::=
   'justify_interval' '(' interval ')'
 join_expr ::=
     select_pred ('CROSS' | 'NATURAL' join_type?) 'JOIN' table_ref select_post
-	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post
+	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ('AS' join_using_alias)? ')' | 'ON' expression ) select_post
 join_type ::=
     ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
 jsonb_agg ::=
@@ -285,12 +287,14 @@ prepare ::=
   'PREPARE' name 'AS' statement
 privilege ::=
   ('SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'CREATE' | 'USAGE')
+reassign_owned ::=
+  'REASSIGN' 'OWNED' 'BY' old_role (',' old_role)* 'TO' new_role
 reset_session_variable ::=
   'RESET' variable_name
 revoke_privilege ::=
-  'REVOKE' privilege (',' privilege)* ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'FROM' 'GROUP'? role_name
+  'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) ON ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name 'FROM' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 revoke_role ::=
-  'REVOKE' role_name 'FROM' 'GROUP'? member_name ( ',' member_name )*
+  'REVOKE' role_name 'FROM' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
 rollback ::=
   'ROLLBACK'
 select_stmt ::=
@@ -374,6 +378,7 @@ subscribe_stmt ::=
     ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
     ( 'UP' 'TO' timestamp_expression )?
     ('ENVELOPE' 'UPSERT' '(' 'KEY' '(' col_ref ( ',' col_ref )* ')' ')' )?
+    ('ENVELOPE' 'DEBEZIUM' '(' 'KEY' '(' col_ref ( ',' col_ref )* ')' ')' )?
     ('WITHIN' 'TIMESTAMP' 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )*)?
 table_ref ::=
   (

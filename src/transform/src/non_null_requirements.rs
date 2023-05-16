@@ -115,7 +115,12 @@ impl NonNullRequirements {
                     self.action(value, columns, gets)?;
                     Ok(())
                 }
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    body,
+                    max_iters: _,
+                } => {
                     // Determine the recursive IDs in this LetRec binding.
                     let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
 

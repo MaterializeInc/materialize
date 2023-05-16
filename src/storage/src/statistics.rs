@@ -32,6 +32,8 @@ pub(crate) struct SourceStatisticsMetricsDefinitions {
     pub(crate) updates_staged: IntCounterVec,
     pub(crate) updates_committed: IntCounterVec,
     pub(crate) bytes_received: IntCounterVec,
+    pub(crate) envelope_state_bytes: UIntGaugeVec,
+    pub(crate) envelope_state_count: UIntGaugeVec,
 }
 
 impl SourceStatisticsMetricsDefinitions {
@@ -62,6 +64,16 @@ impl SourceStatisticsMetricsDefinitions {
                 help: "The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
             )),
+            envelope_state_bytes: registry.register(metric!(
+                name: "mz_source_envelope_state_bytes",
+                help: "The number of bytes of the source envelope state kept. This will be specific to the envelope in use.",
+                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+            )),
+            envelope_state_count: registry.register(metric!(
+                name: "mz_source_envelope_state_count",
+                help: "The number of records in the source envelope state. This will be specific to the envelope in use",
+                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+            )),
         }
     }
 }
@@ -74,6 +86,8 @@ pub struct SourceStatisticsMetrics {
     pub(crate) updates_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) updates_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -120,7 +134,7 @@ impl SourceStatisticsMetrics {
                     id.to_string(),
                     worker_id.to_string(),
                     parent_source_id.to_string(),
-                    shard,
+                    shard.clone(),
                 ]),
             bytes_received: metrics
                 .source_statistics
@@ -129,6 +143,24 @@ impl SourceStatisticsMetrics {
                     id.to_string(),
                     worker_id.to_string(),
                     parent_source_id.to_string(),
+                ]),
+            envelope_state_bytes: metrics
+                .source_statistics
+                .envelope_state_bytes
+                .get_delete_on_drop_gauge(vec![
+                    id.to_string(),
+                    worker_id.to_string(),
+                    parent_source_id.to_string(),
+                    shard.clone(),
+                ]),
+            envelope_state_count: metrics
+                .source_statistics
+                .envelope_state_count
+                .get_delete_on_drop_gauge(vec![
+                    id.to_string(),
+                    worker_id.to_string(),
+                    parent_source_id.to_string(),
+                    shard,
                 ]),
         }
     }
@@ -267,6 +299,8 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
                     updates_staged: 0,
                     updates_committed: 0,
                     bytes_received: 0,
+                    envelope_state_bytes: 0,
+                    envelope_state_count: 0,
                 },
                 SourceStatisticsMetrics::new(id, worker_id, metrics, parent_source_id, shard_id),
             ))),
@@ -318,6 +352,76 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
         let mut cur = self.stats.borrow_mut();
         cur.1.bytes_received = cur.1.bytes_received + value;
         cur.2.bytes_received.inc_by(value);
+    }
+
+    /// Update the `envelope_state_bytes` stat.
+    /// A positive value will add and a negative value will subtract.
+    pub fn update_envelope_state_bytes_by(&self, value: i64) {
+        let mut cur = self.stats.borrow_mut();
+        if let Some(updated) = cur.1.envelope_state_bytes.checked_add_signed(value) {
+            cur.1.envelope_state_bytes = updated;
+            cur.2.envelope_state_bytes.set(updated);
+        } else {
+            let envelope_state_bytes = cur.1.envelope_state_bytes;
+            tracing::warn!(
+                "Unexpected u64 overflow while updating envelope_state_bytes value {} with {}",
+                envelope_state_bytes,
+                value
+            );
+            cur.1.envelope_state_bytes = 0;
+            cur.2.envelope_state_bytes.set(0);
+        }
+    }
+
+    /// Set the `envelope_state_bytes` to the given value
+    pub fn set_envelope_state_bytes(&self, value: i64) {
+        let mut cur = self.stats.borrow_mut();
+        let value = if value < 0 {
+            tracing::warn!(
+                "Unexpected negative value for envelope_state_bytes {}",
+                value
+            );
+            0
+        } else {
+            value.unsigned_abs()
+        };
+        cur.1.envelope_state_bytes = value;
+        cur.2.envelope_state_bytes.set(value);
+    }
+
+    /// Update the `envelope_state_count` stat.
+    /// A positive value will add and a negative value will subtract.
+    pub fn update_envelope_state_count_by(&self, value: i64) {
+        let mut cur = self.stats.borrow_mut();
+        if let Some(updated) = cur.1.envelope_state_count.checked_add_signed(value) {
+            cur.1.envelope_state_count = updated;
+            cur.2.envelope_state_count.set(updated);
+        } else {
+            let envelope_state_count = cur.1.envelope_state_count;
+            tracing::warn!(
+                "Unexpected u64 overflow while updating envelope_state_count value {} with {}",
+                envelope_state_count,
+                value
+            );
+            cur.1.envelope_state_count = 0;
+            cur.2.envelope_state_count.set(0);
+        }
+    }
+
+    /// Set the `envelope_state_count` to the given value
+    pub fn set_envelope_state_count(&self, value: i64) {
+        let mut cur = self.stats.borrow_mut();
+        let value = if value < 0 {
+            tracing::warn!(
+                "Unexpected negative value for envelope_state_count {}",
+                value
+            );
+            0
+        } else {
+            value.unsigned_abs()
+        };
+        cur.1.envelope_state_count = value;
+        cur.2.envelope_state_count.set(value);
     }
 }
 

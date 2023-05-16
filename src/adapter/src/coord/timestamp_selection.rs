@@ -13,18 +13,20 @@ use std::fmt;
 
 use chrono::NaiveDateTime;
 use differential_dataflow::lattice::Lattice;
-use mz_sql::session::vars::IsolationLevel;
 use serde::{Deserialize, Serialize};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{event, Level};
 
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::{RowArena, ScalarType, Timestamp, TimestampManipulation};
+use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
+use mz_sql::session::vars::IsolationLevel;
 use mz_storage_client::types::sources::Timeline;
 
+use crate::catalog::{Catalog, CatalogState};
 use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
@@ -104,7 +106,105 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     }
 }
 
-impl Coordinator {
+impl TimestampProvider for Coordinator {
+    fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
+        let timestamp_oracle = self.get_timestamp_oracle(timeline);
+        Some(timestamp_oracle.read_ts())
+    }
+
+    /// Reports a collection's current read frontier.
+    fn compute_read_frontier<'a>(
+        &'a self,
+        instance: ComputeInstanceId,
+        id: GlobalId,
+    ) -> AntichainRef<'a, Timestamp> {
+        self.controller
+            .compute
+            .collection(instance, id)
+            .expect("id does not exist")
+            .read_frontier()
+    }
+
+    /// Reports a collection's current read capability.
+    fn compute_read_capability<'a>(
+        &'a self,
+        instance: ComputeInstanceId,
+        id: GlobalId,
+    ) -> &'a Antichain<Timestamp> {
+        self.controller
+            .compute
+            .collection(instance, id)
+            .expect("id does not exist")
+            .read_capability()
+    }
+
+    /// Reports a collection's current write frontier.
+    fn compute_write_frontier<'a>(
+        &'a self,
+        instance: ComputeInstanceId,
+        id: GlobalId,
+    ) -> AntichainRef<'a, Timestamp> {
+        self.controller
+            .compute
+            .collection(instance, id)
+            .expect("id does not exist")
+            .write_frontier()
+    }
+
+    /// Accumulation of read capabilities for the collection.
+    fn storage_read_capabilities<'a>(&'a self, id: GlobalId) -> AntichainRef<'a, Timestamp> {
+        self.controller
+            .storage
+            .collection(id)
+            .expect("id does not exist")
+            .read_capabilities
+            .frontier()
+    }
+
+    /// The implicit capability associated with collection creation.
+    fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp> {
+        &self
+            .controller
+            .storage
+            .collection(id)
+            .expect("id does not exist")
+            .implied_capability
+    }
+
+    /// Reported write frontier.
+    fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp> {
+        &self
+            .controller
+            .storage
+            .collection(id)
+            .expect("id does not exist")
+            .write_frontier
+    }
+}
+
+pub trait TimestampProvider {
+    fn compute_read_frontier<'a>(
+        &'a self,
+        instance: ComputeInstanceId,
+        id: GlobalId,
+    ) -> AntichainRef<'a, Timestamp>;
+    fn compute_read_capability<'a>(
+        &'a self,
+        instance: ComputeInstanceId,
+        id: GlobalId,
+    ) -> &'a Antichain<Timestamp>;
+    fn compute_write_frontier<'a>(
+        &'a self,
+        instance: ComputeInstanceId,
+        id: GlobalId,
+    ) -> AntichainRef<'a, Timestamp>;
+
+    fn storage_read_capabilities<'a>(&'a self, id: GlobalId) -> AntichainRef<'a, Timestamp>;
+    fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
+    fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
+
+    fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp>;
+
     /// Determines the timestamp for a query.
     ///
     /// Timestamp determination may fail due to the restricted validity of
@@ -112,8 +212,9 @@ impl Coordinator {
     /// after `since` and sure to be available not after `upper`.
     ///
     /// The timeline that `id_bundle` belongs to is also returned, if one exists.
-    pub(crate) fn determine_timestamp(
+    fn determine_timestamp_for(
         &self,
+        catalog: &CatalogState,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
@@ -134,16 +235,12 @@ impl Coordinator {
         // a larger timestamp and block, perhaps the user should intervene).
 
         let since = self.least_valid_read(id_bundle);
-
-        // Initialize candidate to the minimum correct time.
-        let mut candidate = Timestamp::minimum();
-
-        if let Some(timestamp) = when.advance_to_timestamp() {
-            let ts = self.evaluate_when(timestamp, session)?;
-            candidate.join_assign(&ts);
-        }
+        let upper = self.least_valid_write(id_bundle);
+        let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
         let isolation_level = session.vars().transaction_isolation();
+        let in_immediate_multi_statement_txn = when == &QueryWhen::Immediately
+            && session.transaction().is_in_multi_statement_transaction();
         let timeline = match &timeline_context {
             TimelineContext::TimelineDependent(timeline) => Some(timeline.clone()),
             // We default to the `Timeline::EpochMilliseconds` timeline if one doesn't exist.
@@ -151,87 +248,227 @@ impl Coordinator {
             TimelineContext::TimestampIndependent => None,
         };
 
-        let upper = self.least_valid_write(id_bundle);
-        let largest_not_in_advance_of_upper = self.largest_not_in_advance_of_upper(&upper);
-        let mut oracle_read_ts = None;
-
-        if when.advance_to_since() {
-            candidate.advance_by(since.borrow());
-        }
-
         // In order to use a timestamp oracle, we must be in the context of some timeline. In that
         // context we would use the timestamp oracle in the following scenarios:
         // - The isolation level is Strict Serializable and the `when` allows us to use the
         //   the timestamp oracle (ex: queries with no AS OF).
         // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
-        if let Some(timeline) = &timeline {
-            if when.must_advance_to_timeline_ts()
-                || (when.can_advance_to_timeline_ts()
-                    && isolation_level == &IsolationLevel::StrictSerializable)
+        let oracle_read_ts = match &timeline {
+            Some(timeline)
+                if when.must_advance_to_timeline_ts()
+                    || (when.can_advance_to_timeline_ts()
+                        && isolation_level == &IsolationLevel::StrictSerializable) =>
             {
-                let timestamp_oracle = self.get_timestamp_oracle(timeline);
-                oracle_read_ts = Some(timestamp_oracle.read_ts());
-                candidate.join_assign(&oracle_read_ts.expect("known to be `Some`"));
+                self.oracle_read_ts(timeline)
+            }
+            _ => None,
+        };
+
+        // For transactions that do not use `AS OF`, get the timestamp context of the
+        // in-progress transaction if one exists.
+        //
+        // If one does not exist, it implies that the query is the first in a multi-statment transaction
+        // or the only one in a single-statement transaction (i.e. a `TransactionStatus::Started` txn).
+        // In either case, we determine a timestamp for the query.
+        //
+        // If the query does use `AS OF`, we disregard the timestamp context of the
+        // in-progress transaction as its explicitly provided by the client.
+        let det = match session.get_transaction_timestamp_context() {
+            Some(timestamp_context @ TimestampContext::TimelineTimestamp(_, _))
+                if in_immediate_multi_statement_txn =>
+            {
+                TimestampDetermination {
+                    timestamp_context,
+                    since,
+                    upper,
+                    largest_not_in_advance_of_upper,
+                    oracle_read_ts: None,
+                }
+            }
+            _ => {
+                // Initialize candidate to the minimum correct time.
+                let mut candidate = Timestamp::minimum();
+
+                if let Some(timestamp) = when.advance_to_timestamp() {
+                    let ts = Coordinator::evaluate_when(catalog, timestamp, session)?;
+                    candidate.join_assign(&ts);
+                }
+
+                if when.advance_to_since() {
+                    candidate.advance_by(since.borrow());
+                }
+
+                // If we've acquired a read timestamp from the timestamp oracle, use it
+                // as the new lower bound for the candidate
+                if let Some(timestamp) = &oracle_read_ts {
+                    candidate.join_assign(timestamp);
+                }
+
+                // We advance to the upper in the following scenarios:
+                // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
+                //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
+                //   reading source data that is being written to in the future.
+                // - The isolation level is Strict Serializable but there is no timelines and the `when`
+                //   allows us to advance to upper.
+                // - The `when` requires us to advance to the upper (ex: read-then-write queries).
+                if when.must_advance_to_upper()
+                    || (when.can_advance_to_upper()
+                        && (isolation_level == &IsolationLevel::Serializable || timeline.is_none()))
+                {
+                    candidate.join_assign(&largest_not_in_advance_of_upper);
+                }
+
+                if let Some(real_time_recency_ts) = real_time_recency_ts {
+                    assert!(
+                        session.vars().real_time_recency()
+                            && isolation_level == &IsolationLevel::StrictSerializable,
+                        "real time recency timestamp should only be supplied when real time recency \
+                            is enabled and the isolation level is strict serializable"
+                    );
+                    candidate.join_assign(&real_time_recency_ts);
+                }
+
+                // If the timestamp is greater or equal to some element in `since` we are
+                // assured that the answer will be correct.
+                //
+                // It's ok for this timestamp to be larger than the current timestamp of
+                // the timestamp oracle. For Strict Serializable queries, the Coord will
+                // linearize the query by holding back the result until the timestamp
+                // oracle catches up.
+                let timestamp = if since.less_equal(&candidate) {
+                    event!(
+                        Level::DEBUG,
+                        conn_id = format!("{}", session.conn_id()),
+                        since = format!("{since:?}"),
+                        largest_not_in_advance_of_upper =
+                            format!("{largest_not_in_advance_of_upper}"),
+                        timestamp = format!("{candidate}")
+                    );
+                    candidate
+                } else {
+                    coord_bail!(self.generate_timestamp_not_valid_error_msg(
+                        id_bundle,
+                        compute_instance,
+                        candidate
+                    ));
+                };
+
+                let timestamp_context =
+                    TimestampContext::from_timeline_context(timestamp, timeline, timeline_context);
+
+                TimestampDetermination {
+                    timestamp_context,
+                    since,
+                    upper,
+                    largest_not_in_advance_of_upper,
+                    oracle_read_ts,
+                }
+            }
+        };
+        Ok(det)
+    }
+
+    /// The smallest common valid read frontier among the specified collections.
+    fn least_valid_read(&self, id_bundle: &CollectionIdBundle) -> Antichain<mz_repr::Timestamp> {
+        let mut since = Antichain::from_elem(Timestamp::minimum());
+        {
+            for id in id_bundle.storage_ids.iter() {
+                since.join_assign(self.storage_implied_capability(*id))
             }
         }
-
-        // We advance to the upper in the following scenarios:
-        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
-        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
-        //   reading source data that is being written to in the future.
-        // - The isolation level is Strict Serializable but there is no timelines and the `when`
-        //   allows us to advance to upper.
-        // - The `when` requires us to advance to the upper (ex: read-then-write queries).
-        if when.must_advance_to_upper()
-            || (when.can_advance_to_upper()
-                && (isolation_level == &IsolationLevel::Serializable || timeline.is_none()))
         {
-            candidate.join_assign(&largest_not_in_advance_of_upper);
+            for (instance, compute_ids) in &id_bundle.compute_ids {
+                for id in compute_ids.iter() {
+                    since.join_assign(self.compute_read_capability(*instance, *id))
+                }
+            }
         }
+        since
+    }
 
-        if let Some(real_time_recency_ts) = real_time_recency_ts {
-            assert!(
-                session.vars().real_time_recency()
-                    && isolation_level == &IsolationLevel::StrictSerializable,
-                "real time recency timestamp should only be supplied when real time recency \
-                    is enabled and the isolation level is strict serializable"
-            );
-            candidate.join_assign(&real_time_recency_ts);
+    /// The smallest common valid write frontier among the specified collections.
+    ///
+    /// Times that are not greater or equal to this frontier are complete for all collections
+    /// identified as arguments.
+    fn least_valid_write(&self, id_bundle: &CollectionIdBundle) -> Antichain<mz_repr::Timestamp> {
+        let mut since = Antichain::new();
+        {
+            for id in id_bundle.storage_ids.iter() {
+                since.extend(self.storage_write_frontier(*id).iter().cloned());
+            }
         }
+        {
+            for (instance, compute_ids) in &id_bundle.compute_ids {
+                for id in compute_ids.iter() {
+                    since.extend(self.compute_write_frontier(*instance, *id).iter().cloned());
+                }
+            }
+        }
+        since
+    }
 
-        // If the timestamp is greater or equal to some element in `since` we are
-        // assured that the answer will be correct.
-        //
-        // It's ok for this timestamp to be larger than the current timestamp of
-        // the timestamp oracle. For Strict Serializable queries, the Coord will
-        // linearize the query by holding back the result until the timestamp
-        // oracle catches up.
-        let timestamp = if since.less_equal(&candidate) {
-            event!(
-                Level::DEBUG,
-                conn_id = format!("{}", session.conn_id()),
-                since = format!("{since:?}"),
-                largest_not_in_advance_of_upper = format!("{largest_not_in_advance_of_upper}"),
-                timestamp = format!("{candidate}")
-            );
-            candidate
-        } else {
-            coord_bail!(self.generate_timestamp_not_valid_error_msg(
-                id_bundle,
-                compute_instance,
-                candidate
-            ));
-        };
+    fn generate_timestamp_not_valid_error_msg(
+        &self,
+        id_bundle: &CollectionIdBundle,
+        compute_instance: ComputeInstanceId,
+        candidate: mz_repr::Timestamp,
+    ) -> String {
+        let invalid_indexes =
+            if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
+                compute_ids
+                    .iter()
+                    .filter_map(|id| {
+                        let since = self.compute_read_frontier(compute_instance, *id).to_owned();
+                        if since.less_equal(&candidate) {
+                            None
+                        } else {
+                            Some(since)
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
+            let since = self.storage_read_capabilities(*id).to_owned();
+            if since.less_equal(&candidate) {
+                None
+            } else {
+                Some(since)
+            }
+        });
+        let invalid = invalid_indexes
+            .into_iter()
+            .chain(invalid_sources)
+            .collect::<Vec<_>>();
+        format!(
+            "Timestamp ({}) is not valid for all inputs: {:?}",
+            candidate, invalid,
+        )
+    }
+}
 
-        let timestamp_context =
-            TimestampContext::from_timeline_context(timestamp, timeline, timeline_context);
-        let det = TimestampDetermination {
-            timestamp_context,
-            since,
-            upper,
-            largest_not_in_advance_of_upper,
-            oracle_read_ts,
-        };
+impl Coordinator {
+    /// Determines the timestamp for a query.
+    pub(crate) fn determine_timestamp(
+        &self,
+        session: &Session,
+        id_bundle: &CollectionIdBundle,
+        when: &QueryWhen,
+        compute_instance: ComputeInstanceId,
+        timeline_context: TimelineContext,
+        real_time_recency_ts: Option<mz_repr::Timestamp>,
+    ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
+        let det = self.determine_timestamp_for(
+            self.catalog().state(),
+            session,
+            id_bundle,
+            when,
+            compute_instance,
+            timeline_context,
+            real_time_recency_ts,
+        )?;
+        let isolation_level = session.vars().transaction_isolation();
         self.metrics
             .determine_timestamp
             .with_label_values(&[
@@ -246,81 +483,11 @@ impl Coordinator {
         Ok(det)
     }
 
-    /// The smallest common valid read frontier among the specified collections.
-    pub(crate) fn least_valid_read(
-        &self,
-        id_bundle: &CollectionIdBundle,
-    ) -> Antichain<mz_repr::Timestamp> {
-        let mut since = Antichain::from_elem(Timestamp::minimum());
-        {
-            let storage = &self.controller.storage;
-            for id in id_bundle.storage_ids.iter() {
-                since.join_assign(
-                    &storage
-                        .collection(*id)
-                        .expect("id does not exist")
-                        .implied_capability,
-                )
-            }
-        }
-        {
-            for (instance, compute_ids) in &id_bundle.compute_ids {
-                for id in compute_ids.iter() {
-                    let collection = self
-                        .controller
-                        .compute
-                        .collection(*instance, *id)
-                        .expect("id does not exist");
-                    since.join_assign(collection.read_capability())
-                }
-            }
-        }
-        since
-    }
-
-    /// The smallest common valid write frontier among the specified collections.
-    ///
-    /// Times that are not greater or equal to this frontier are complete for all collections
-    /// identified as arguments.
-    pub(crate) fn least_valid_write(
-        &self,
-        id_bundle: &CollectionIdBundle,
-    ) -> Antichain<mz_repr::Timestamp> {
-        let mut since = Antichain::new();
-        {
-            for id in id_bundle.storage_ids.iter() {
-                since.extend(
-                    self.controller
-                        .storage
-                        .collection(*id)
-                        .expect("id does not exist")
-                        .write_frontier
-                        .iter()
-                        .cloned(),
-                );
-            }
-        }
-        {
-            for (instance, compute_ids) in &id_bundle.compute_ids {
-                for id in compute_ids.iter() {
-                    let collection = self
-                        .controller
-                        .compute
-                        .collection(*instance, *id)
-                        .expect("id does not exist");
-                    since.extend(collection.write_frontier().iter().cloned());
-                }
-            }
-        }
-        since
-    }
-
     /// The largest element not in advance of any object in the collection.
     ///
     /// Times that are not greater to this frontier are complete for all collections
     /// identified as arguments.
     pub(crate) fn largest_not_in_advance_of_upper(
-        &self,
         upper: &Antichain<mz_repr::Timestamp>,
     ) -> mz_repr::Timestamp {
         // We peek at the largest element not in advance of `upper`, which
@@ -339,16 +506,12 @@ impl Coordinator {
     }
 
     pub(crate) fn evaluate_when(
-        &self,
+        catalog: &CatalogState,
         mut timestamp: MirScalarExpr,
         session: &Session,
     ) -> Result<mz_repr::Timestamp, AdapterError> {
         let temp_storage = RowArena::new();
-        prep_scalar_expr(
-            self.catalog().state(),
-            &mut timestamp,
-            ExprPrepStyle::AsOfUpTo,
-        )?;
+        prep_scalar_expr(catalog, &mut timestamp, ExprPrepStyle::AsOfUpTo)?;
         let evaled = timestamp.eval(&[], &temp_storage)?;
         if evaled.is_null() {
             coord_bail!("can't use {} as a mz_timestamp for AS OF or UP TO", evaled);
@@ -370,64 +533,9 @@ impl Coordinator {
             ScalarType::Timestamp => evaled.unwrap_timestamp().timestamp_millis().try_into()?,
             _ => coord_bail!(
                 "can't use {} as a mz_timestamp for AS OF or UP TO",
-                self.catalog()
-                    .for_session(session)
-                    .humanize_column_type(&ty)
+                Catalog::for_session_state(catalog, session).humanize_column_type(&ty)
             ),
         })
-    }
-
-    fn generate_timestamp_not_valid_error_msg(
-        &self,
-        id_bundle: &CollectionIdBundle,
-        compute_instance: ComputeInstanceId,
-        candidate: mz_repr::Timestamp,
-    ) -> String {
-        let invalid_indexes =
-            if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-                compute_ids
-                    .iter()
-                    .filter_map(|id| {
-                        let since = self
-                            .controller
-                            .compute
-                            .collection(compute_instance, *id)
-                            .expect("id does not exist")
-                            .read_frontier()
-                            .to_owned();
-                        if since.less_equal(&candidate) {
-                            None
-                        } else {
-                            Some(since)
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-        let invalid_sources = id_bundle.storage_ids.iter().filter_map(|id| {
-            let since = self
-                .controller
-                .storage
-                .collection(*id)
-                .expect("id does not exist")
-                .read_capabilities
-                .frontier()
-                .to_owned();
-            if since.less_equal(&candidate) {
-                None
-            } else {
-                Some(since)
-            }
-        });
-        let invalid = invalid_indexes
-            .into_iter()
-            .chain(invalid_sources)
-            .collect::<Vec<_>>();
-        format!(
-            "Timestamp ({}) is not valid for all inputs: {:?}",
-            candidate, invalid,
-        )
     }
 }
 

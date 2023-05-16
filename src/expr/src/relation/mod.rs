@@ -12,7 +12,7 @@
 use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 
 use bytesize::ByteSize;
 use itertools::Itertools;
@@ -135,6 +135,12 @@ pub enum MirRelationExpr {
         ids: Vec<LocalId>,
         /// The collections to be bound to each `id`.
         values: Vec<MirRelationExpr>,
+        /// Maximum number of iterations, after which we should artificially force a fixpoint.
+        /// (We don't error when reaching the limit, just return the current state as final result.)
+        /// The per-`LetRec` limit that the user specified is initially copied to each binding to
+        /// accommodate slicing and merging of `LetRec`s in MIR transforms (`NormalizeLets`).
+        #[mzreflect(ignore)]
+        max_iters: Vec<Option<NonZeroU64>>,
         /// The result of the `Let`, evaluated with `id` bound to `value`.
         body: Box<MirRelationExpr>,
     },
@@ -420,34 +426,10 @@ impl MirRelationExpr {
             }
             Filter { predicates, .. } => {
                 let mut result = input_types.next().unwrap().clone();
-                // Augment non-nullability of columns, by observing either
-                // 1. Predicates that explicitly test for null values, and
-                // 2. Columns that if null would make a predicate be null.
-                let mut nonnull_required_columns = BTreeSet::new();
-                for predicate in predicates {
-                    // Add any columns that being null would force the predicate to be null.
-                    // Should that happen, the row would be discarded.
-                    predicate.non_null_requirements(&mut nonnull_required_columns);
-                    // Test for explicit checks that a column is non-null.
-                    if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not(scalar_func::Not),
-                        expr,
-                    } = predicate
-                    {
-                        if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull(scalar_func::IsNull),
-                            expr,
-                        } = &**expr
-                        {
-                            if let MirScalarExpr::Column(c) = &**expr {
-                                result[*c].nullable = false;
-                            }
-                        }
-                    }
-                }
+
                 // Set as nonnull any columns where null values would cause
                 // any predicate to evaluate to null.
-                for column in nonnull_required_columns.into_iter() {
+                for column in non_nullable_columns(predicates) {
                     result[column].nullable = false;
                 }
                 result
@@ -1588,11 +1570,44 @@ impl MirRelationExpr {
                     f(expr)?;
                 }
             }
-            Join { equivalences, .. } => {
+            Join {
+                equivalences,
+                implementation,
+                ..
+            } => {
                 for equivalence in equivalences {
                     for expr in equivalence {
                         f(expr)?;
                     }
+                }
+                match implementation {
+                    JoinImplementation::Differential((_, start_key, _), order) => {
+                        for start_key in start_key {
+                            for k in start_key {
+                                f(k)?;
+                            }
+                        }
+                        for (_, lookup_key, _) in order {
+                            for k in lookup_key {
+                                f(k)?;
+                            }
+                        }
+                    }
+                    JoinImplementation::DeltaQuery(paths) => {
+                        for path in paths {
+                            for (_, lookup_key, _) in path {
+                                for k in lookup_key {
+                                    f(k)?;
+                                }
+                            }
+                        }
+                    }
+                    JoinImplementation::IndexedFilter(_, index_key, _) => {
+                        for k in index_key {
+                            f(k)?;
+                        }
+                    }
+                    JoinImplementation::Unimplemented => {} // No scalar exprs
                 }
             }
             ArrangeBy { keys, .. } => {
@@ -1837,7 +1852,13 @@ impl MirRelationExpr {
         let mut deadlist = BTreeSet::new();
         let mut worklist = vec![self];
         while let Some(expr) = worklist.pop() {
-            if let MirRelationExpr::LetRec { ids, values, body } = expr {
+            if let MirRelationExpr::LetRec {
+                ids,
+                values,
+                max_iters: _,
+                body,
+            } = expr
+            {
                 let ids_values = values
                     .drain(..)
                     .zip(ids)
@@ -1870,6 +1891,56 @@ impl MirRelationExpr {
             }
         }
     }
+}
+/// Augment non-nullability of columns, by observing either
+/// 1. Predicates that explicitly test for null values, and
+/// 2. Columns that if null would make a predicate be null.
+pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
+    let mut nonnull_required_columns = BTreeSet::new();
+    for predicate in predicates {
+        // Add any columns that being null would force the predicate to be null.
+        // Should that happen, the row would be discarded.
+        predicate.non_null_requirements(&mut nonnull_required_columns);
+
+        /*
+        Test for explicit checks that a column is non-null.
+
+        This analysis is ad hoc, and will miss things:
+
+        materialize=> create table a(x int, y int);
+        CREATE TABLE
+        materialize=> explain with(types) select x from a where (y=x and y is not null) or x is not null;
+        Optimized Plan
+        --------------------------------------------------------------------------------------------------------
+        Explained Query:                                                                                      +
+        Project (#0) // { types: "(integer?)" }                                                             +
+        Filter ((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))) // { types: "(integer?, integer?)" }+
+        Get materialize.public.a // { types: "(integer?, integer?)" }                                   +
+                                                                                  +
+        Source materialize.public.a                                                                           +
+        filter=(((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))))                                     +
+
+        (1 row)
+        */
+
+        if let MirScalarExpr::CallUnary {
+            func: UnaryFunc::Not(scalar_func::Not),
+            expr,
+        } = predicate
+        {
+            if let MirScalarExpr::CallUnary {
+                func: UnaryFunc::IsNull(scalar_func::IsNull),
+                expr,
+            } = &**expr
+            {
+                if let MirScalarExpr::Column(c) = &**expr {
+                    nonnull_required_columns.insert(*c);
+                }
+            }
+        }
+    }
+
+    nonnull_required_columns
 }
 
 impl CollectionPlan for MirRelationExpr {

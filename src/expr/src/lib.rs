@@ -109,9 +109,9 @@ pub use relation::func::{AggregateFunc, LagLeadType, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
-    compare_columns, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
-    MirRelationExpr, ProtoAggregateExpr, RowSetFinishing, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, RECURSION_LIMIT,
+    compare_columns, non_nullable_columns, AggregateExpr, CollectionPlan, ColumnOrder,
+    JoinImplementation, MirRelationExpr, ProtoAggregateExpr, RowSetFinishing, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, RECURSION_LIMIT,
 };
 pub use relation::{
     JoinInputCharacteristics, ProtoAggregateFunc, ProtoColumnOrder, ProtoRowSetFinishing,

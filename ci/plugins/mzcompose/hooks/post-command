@@ -17,6 +17,9 @@ run() {
     bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
+# Run before potential "run down" in coverage
+docker ps --all --quiet | xargs --no-run-if-empty docker inspect > docker-inspect.log
+
 export_cov() {
     bin/ci-builder run stable rust-cov export \
       --ignore-filename-regex=.cargo/ \
@@ -28,7 +31,7 @@ export_cov() {
       > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
 }
 
-if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE:-}" ];  then
     ci_unimportant_heading "Generate coverage information"
     run --mz-quiet down --volumes
 
@@ -67,7 +70,7 @@ netstat -panelot > netstat-panelot.log
 ps aux > ps-aux.log
 docker ps -a --no-trunc > docker-ps-a.log
 
-artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log sar.log)
+artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log docker-inspect.log sar.log)
 for artifact in "${artifacts[@]}"; do
     buildkite-agent artifact upload "$artifact"
 done

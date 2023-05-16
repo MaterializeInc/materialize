@@ -1413,11 +1413,13 @@ where
             | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedObject(_)
+            | ExecuteResponse::DroppedOwned
             | ExecuteResponse::GrantedPrivilege
             | ExecuteResponse::GrantedRole
             | ExecuteResponse::Inserted(..)
             | ExecuteResponse::Prepare
             | ExecuteResponse::Raised
+            | ExecuteResponse::ReassignOwned
             | ExecuteResponse::RevokedPrivilege
             | ExecuteResponse::RevokedRole
             | ExecuteResponse::StartedTransaction { .. }

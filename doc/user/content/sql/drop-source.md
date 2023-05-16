@@ -78,3 +78,4 @@ DROP SOURCE IF EXISTS my_source;
 - [`CREATE SOURCE`](../create-source)
 - [`SHOW SOURCES`](../show-sources)
 - [`SHOW CREATE SOURCE`](../show-create-source)
+- [DROP OWNED](../drop-owned)

@@ -11,6 +11,7 @@ syntax = "proto3";
 
 import "proto/src/proto.proto";
 import "persist-client/src/cfg.proto";
+import "rocksdb/src/tuning.proto";
 
 package mz_storage_client.types.parameters;
 
@@ -18,6 +19,8 @@ message ProtoStorageParameters {
     mz_persist_client.cfg.ProtoPersistParameters persist = 1;
     bool enable_multi_worker_storage_persist_sink = 2;
     ProtoPgReplicationTimeouts pg_replication_timeouts = 3;
+    uint64 keep_n_source_status_history_entries = 4;
+    mz_rocksdb.tuning.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
 }
 
 message ProtoPgReplicationTimeouts {

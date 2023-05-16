@@ -11,7 +11,7 @@ menu:
 
 ## Conceptual framework
 
-Where [clusters](/overview/key-concepts#clusters) represent the logical set of
+Where [clusters](/get-started/key-concepts#clusters) represent the logical set of
 dataflows you want to maintain, cluster replicas are their physical
 counterparts. Cluster replicas are where Materialize actually creates and
 maintains dataflows.

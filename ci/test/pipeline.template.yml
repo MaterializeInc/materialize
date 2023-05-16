@@ -144,6 +144,8 @@ steps:
       - "**/testdata/**"
     env:
       AWS_DEFAULT_REGION: "us-east-2"
+      # cargo-test's coverage is handled separately by cargo-llvm-cov
+      BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -647,6 +649,19 @@ steps:
       branch: "$BUILDKITE_BRANCH"
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
+    coverage: skip
+
+  - id: release-qualification
+    label: Release qualification
+    depends_on: devel-docker-tags
+    trigger: release-qualification
+    async: true
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
+    if: build.tag != "" && build.branch =~ /^v/
     coverage: skip
 
   - wait: ~

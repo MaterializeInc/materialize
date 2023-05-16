@@ -34,6 +34,18 @@ SELECT sum(n) FROM t;
 ----
 5050
 
+## Same as above, but with ITERATION LIMIT
+query I
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT 100)
+    t (n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM t
+    )
+SELECT sum(n) FROM t;
+----
+5050
+
 ## Test a straightforward mutually recursive query.
 query I
 WITH MUTUALLY RECURSIVE
@@ -393,3 +405,158 @@ SELECT i FROM cnt;
 501
 502
 503
+
+## Tests for ITERATION LIMIT
+## (See plans in `normalize_lets.slt`)
+
+query I
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+----
+1
+2
+3
+
+query I
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT = 3)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+----
+1
+2
+3
+
+query II
+(WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT -10, i FROM cnt)
+UNION
+(WITH MUTUALLY RECURSIVE (ITERATION LIMIT 5)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT -20, i FROM cnt)
+----
+-20  1
+-20  2
+-20  3
+-20  4
+-20  5
+-10  1
+-10  2
+-10  3
+
+query I
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT 100)
+    t0 (n int) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n+1 FROM t0
+    ),
+    t1 (n int) AS (
+        VALUES (-1)
+        UNION ALL
+        SELECT n+1 FROM t1
+    )
+SELECT (SELECT sum(n) FROM t0) - (SELECT sum(n) FROM t1);
+----
+200
+
+query I
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT 6)
+  cnt (i int) AS (
+    (WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3)
+       cnt (i int) AS (
+         SELECT 1 AS i
+         UNION
+         SELECT i+1 FROM cnt)
+       SELECT i FROM cnt
+    )
+    UNION
+    SELECT i+100 FROM cnt)
+SELECT i FROM cnt;
+----
+1
+2
+3
+301
+302
+303
+101
+102
+103
+401
+402
+403
+201
+202
+203
+501
+502
+503
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER);
+
+statement ok
+CREATE MATERIALIZED VIEW v1 AS WITH MUTUALLY RECURSIVE (ITERATION LIMIT 2) cnt (f1 INTEGER) AS (SELECT f1 FROM t1 UNION ALL SELECT f1+1 AS f1 FROM cnt) SELECT * FROM cnt;
+
+statement ok
+INSERT INTO t1 VALUES (1);
+
+query I
+SELECT * FROM v1;
+----
+1
+2
+
+statement ok
+UPDATE t1 SET f1 = 2;
+
+query I
+SELECT * FROM v1;
+----
+2
+3
+
+statement error db error: ERROR: invalid ITERATION LIMIT: must provide an unsigned integer value
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: Expected ITERATION, found right parenthesis
+WITH MUTUALLY RECURSIVE ()
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: invalid ITERATION LIMIT: cannot use value as number
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT aaaaaaa)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: invalid ITERATION LIMIT: invalid unsigned numeric value: invalid digit found in string
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT -3)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+statement error db error: ERROR: ITERATION LIMIT specified more than once
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3, ITERATION LIMIT 5)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+
+# It's important that we error out for ITERATION LIMIT 0, because we are NOT handling this case in some optimizer transforms.
+statement error db error: ERROR: ITERATION LIMIT has to be greater than 0
+WITH MUTUALLY RECURSIVE (ITERATION LIMIT 0)
+  cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
+SELECT * FROM cnt;

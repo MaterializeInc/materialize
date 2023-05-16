@@ -59,6 +59,7 @@ prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.7.0" }
+rocksdb = { version = "0.20.1", default-features = false, features = ["snappy"] }
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
 sha2 = "0.10.6"
@@ -84,7 +85,6 @@ axum = { version = "0.6.7" }
 clap = { version = "3.2.24", features = ["derive", "env"] }
 datadriven = { version = "0.6.0", features = ["async"] }
 humantime = "2.1.0"
-rocksdb = { version = "0.20.1", default-features = false, features = ["snappy"] }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.10.5"
@@ -94,5 +94,4 @@ tokio = { version = "1.24.2", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
-normal = ["inotify", "workspace-hack"]
-development = ["rocksdb"]
+normal = ["inotify", "workspace-hack", "rocksdb"]

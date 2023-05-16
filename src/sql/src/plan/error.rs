@@ -29,7 +29,7 @@ use mz_repr::strconv;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{ObjectType, Privilege, UnresolvedItemName};
+use mz_sql_parser::ast::{MutRecBlockOptionName, ObjectType, Privilege, UnresolvedItemName};
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
@@ -90,6 +90,7 @@ pub enum PlanError {
     StrconvParse(strconv::ParseError),
     Catalog(CatalogError),
     UpsertSinkWithoutKey,
+    InvalidIterationLimit,
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidId(GlobalId),
@@ -143,7 +144,6 @@ pub enum PlanError {
     UnknownFunction {
         name: String,
         arg_types: Vec<String>,
-        alternative_hint: Option<String>,
     },
     IndistinctFunction {
         name: String,
@@ -179,7 +179,9 @@ pub enum PlanError {
         schemas: Vec<String>,
     },
     InvalidKeysInSubscribeEnvelopeUpsert,
+    InvalidKeysInSubscribeEnvelopeDebezium,
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
+    FromValueRequiresParen,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -250,12 +252,7 @@ impl PlanError {
                 None
             }
             Self::InvalidOptionValue { err, .. } => err.hint(),
-            Self::UnknownFunction { alternative_hint, ..} => {
-                match alternative_hint {
-                    Some(_) => alternative_hint.clone(),
-                    None => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
-                }
-            }
+            Self::UnknownFunction { ..} => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
             Self::IndistinctFunction {..} => {
                 Some("Could not choose a best candidate function. You might need to add explicit type casts.".into())
             }
@@ -275,9 +272,13 @@ impl PlanError {
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
                 Some("All keys must be columns on the underlying relation.".into())
             }
+            Self::InvalidKeysInSubscribeEnvelopeDebezium => {
+                Some("All keys must be columns on the underlying relation.".into())
+            }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 Some("All order bys must be output columns.".into())
             }
+            Self::Catalog(e) => e.hint(),
             _ => None,
         }
     }
@@ -374,6 +375,7 @@ impl fmt::Display for PlanError {
             Self::StrconvParse(e) => write!(f, "{}", e),
             Self::Catalog(e) => write!(f, "{}", e),
             Self::UpsertSinkWithoutKey => write!(f, "upsert sinks must specify a key"),
+            Self::InvalidIterationLimit => write!(f, "{} has to be greater than 0", MutRecBlockOptionName::IterLimit),
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
@@ -462,9 +464,15 @@ impl fmt::Display for PlanError {
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
                 write!(f, "invalid keys in SUBSCRIBE ENVELOPE UPSERT (KEY (..))")
             }
+            Self::InvalidKeysInSubscribeEnvelopeDebezium => {
+                write!(f, "invalid keys in SUBSCRIBE ENVELOPE DEBEZIUM (KEY (..))")
+            }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 write!(f, "invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY")
             }
+            Self::FromValueRequiresParen => f.write_str(
+                "VALUES expression in FROM clause must be surrounded by parentheses"
+            ),
         }
     }
 }

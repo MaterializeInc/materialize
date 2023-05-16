@@ -16,13 +16,14 @@
 use uuid::Uuid;
 
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
-    TableFactor, TableFunction, TableWithJoins, UnresolvedItemName, Value,
+    TableFactor, TableFunction, TableWithJoins, Value,
 };
 
-use crate::names::{Aug, PartialItemName, ResolvedDataType};
+use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
@@ -34,7 +35,7 @@ where
     node.visit_mut(&mut func_rewriter);
     func_rewriter.status?;
 
-    let mut desugarer = Desugarer::new();
+    let mut desugarer = Desugarer::new(scx);
     node.visit_mut(&mut desugarer);
     desugarer.status
 }
@@ -91,7 +92,7 @@ impl<'a> FuncRewriter<'a> {
     fn int32_data_type(&self) -> ResolvedDataType {
         self.resolve_known_valid_data_type(&PartialItemName {
             database: None,
-            schema: Some("pg_catalog".into()),
+            schema: Some(PG_CATALOG_SCHEMA.into()),
             item: "int4".into(),
         })
     }
@@ -108,7 +109,8 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_agg(
-        name: UnresolvedItemName,
+        &self,
+        name: ResolvedItemName,
         expr: Expr<Aug>,
         order_by: Vec<OrderByExpr<Aug>>,
         filter: Option<Box<Expr<Aug>>>,
@@ -126,17 +128,28 @@ impl<'a> FuncRewriter<'a> {
         })
     }
 
-    fn plan_avg(expr: Expr<Aug>, filter: Option<Box<Expr<Aug>>>, distinct: bool) -> Expr<Aug> {
-        let sum = Self::plan_agg(
-            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
-            expr.clone(),
-            vec![],
-            filter.clone(),
-            distinct,
-        )
-        .call_unary(vec!["mz_internal", "mz_avg_promotion"]);
-        let count = Self::plan_agg(
-            UnresolvedItemName::qualified(&["pg_catalog", "count"]),
+    fn plan_avg(
+        &self,
+        expr: Expr<Aug>,
+        filter: Option<Box<Expr<Aug>>>,
+        distinct: bool,
+    ) -> Expr<Aug> {
+        let sum = self
+            .plan_agg(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
+                expr.clone(),
+                vec![],
+                filter.clone(),
+                distinct,
+            )
+            .call_unary(
+                self.scx
+                    .dangerous_resolve_name(vec![MZ_INTERNAL_SCHEMA, "mz_avg_promotion"]),
+            );
+        let count = self.plan_agg(
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "count"]),
             expr,
             vec![],
             filter,
@@ -146,6 +159,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_variance(
+        &self,
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
@@ -165,25 +179,31 @@ impl<'a> FuncRewriter<'a> {
         //
         //     (sum(x²) - sum(x)² / count(x)) / count(x)
         //
-        let expr = expr.call_unary(vec!["mz_internal", "mz_avg_promotion"]);
+        let expr = expr.call_unary(
+            self.scx
+                .dangerous_resolve_name(vec![MZ_INTERNAL_SCHEMA, "mz_avg_promotion"]),
+        );
         let expr_squared = expr.clone().multiply(expr.clone());
-        let sum_squares = Self::plan_agg(
-            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
+        let sum_squares = self.plan_agg(
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
             expr_squared,
             vec![],
             filter.clone(),
             distinct,
         );
-        let sum = Self::plan_agg(
-            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
+        let sum = self.plan_agg(
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
             expr.clone(),
             vec![],
             filter.clone(),
             distinct,
         );
         let sum_squared = sum.clone().multiply(sum);
-        let count = Self::plan_agg(
-            UnresolvedItemName::qualified(&["pg_catalog", "count"]),
+        let count = self.plan_agg(
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "count"]),
             expr,
             vec![],
             filter,
@@ -200,12 +220,17 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_stddev(
+        &self,
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
         sample: bool,
     ) -> Expr<Aug> {
-        Self::plan_variance(expr, filter, distinct, sample).call_unary(vec!["sqrt"])
+        self.plan_variance(expr, filter, distinct, sample)
+            .call_unary(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sqrt"]),
+            )
     }
 
     fn plan_bool_and(
@@ -225,8 +250,9 @@ impl<'a> FuncRewriter<'a> {
         // to `bool`. We intentionally do not write `NOT x::bool`, because that
         // would perform an explicit cast, and to match PostgreSQL we must
         // perform only an implicit cast.
-        let sum = Self::plan_agg(
-            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
+        let sum = self.plan_agg(
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
             expr.negate().cast(self.int32_data_type()),
             vec![],
             filter,
@@ -241,7 +267,7 @@ impl<'a> FuncRewriter<'a> {
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
     ) -> Expr<Aug> {
-        // The code below converts `bool_or(x)` into:
+        // The code below converts `bool_or(x)`z into:
         //
         //     sum((x OR false)::int4) > 0
         //
@@ -252,8 +278,9 @@ impl<'a> FuncRewriter<'a> {
         // changing its logical value. It is tempting to use `x::bool` instead,
         // but that performs an explicit cast, and to match PostgreSQL we must
         // perform only an implicit cast.
-        let sum = Self::plan_agg(
-            UnresolvedItemName::qualified(&["pg_catalog", "sum"]),
+        let sum = self.plan_agg(
+            self.scx
+                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
             expr.or(Expr::Value(Value::Boolean(false)))
                 .cast(self.int32_data_type()),
             vec![],
@@ -272,43 +299,56 @@ impl<'a> FuncRewriter<'a> {
                 distinct,
                 over: None,
             }) => {
-                let name = normalize::unresolved_item_name(name.clone()).ok()?;
-                if let Some(database) = &name.database {
-                    // If a database name is provided, we need only verify that
-                    // the database exists, as presently functions can only
-                    // exist in ambient schemas.
-                    if let Err(e) = self.scx.catalog.resolve_database(database) {
-                        self.status = Err(e.into());
+                let name = match name {
+                    ResolvedItemName::Item {
+                        qualifiers,
+                        full_name,
+                        ..
+                    } => {
+                        if &qualifiers.schema_spec
+                            != self
+                                .scx
+                                .catalog
+                                .resolve_schema(None, PG_CATALOG_SCHEMA)
+                                .expect("pg_catalog schema exists")
+                                .id()
+                        {
+                            return None;
+                        }
+                        full_name.item.clone()
                     }
-                }
-                if name.schema.is_some() && name.schema.as_deref() != Some("pg_catalog") {
-                    return None;
-                }
+                    _ => unreachable!(),
+                };
+
                 let filter = filter.clone();
                 let distinct = *distinct;
                 let expr = if args.len() == 1 {
                     let arg = args[0].clone();
-                    match name.item.as_str() {
-                        "avg" => Self::plan_avg(arg, filter, distinct),
-                        "variance" | "var_samp" => Self::plan_variance(arg, filter, distinct, true),
-                        "var_pop" => Self::plan_variance(arg, filter, distinct, false),
-                        "stddev" | "stddev_samp" => Self::plan_stddev(arg, filter, distinct, true),
-                        "stddev_pop" => Self::plan_stddev(arg, filter, distinct, false),
+                    match name.as_str() {
+                        "avg" => self.plan_avg(arg, filter, distinct),
+                        "variance" | "var_samp" => self.plan_variance(arg, filter, distinct, true),
+                        "var_pop" => self.plan_variance(arg, filter, distinct, false),
+                        "stddev" | "stddev_samp" => self.plan_stddev(arg, filter, distinct, true),
+                        "stddev_pop" => self.plan_stddev(arg, filter, distinct, false),
                         "bool_and" => self.plan_bool_and(arg, filter, distinct),
                         "bool_or" => self.plan_bool_or(arg, filter, distinct),
                         _ => return None,
                     }
                 } else if args.len() == 2 {
                     let (lhs, rhs) = (args[0].clone(), args[1].clone());
-                    match name.item.as_str() {
+                    match name.as_str() {
                         "mod" => lhs.modulo(rhs),
-                        "pow" => Expr::call(vec!["pg_catalog", "power"], vec![lhs, rhs]),
+                        "pow" => Expr::call(
+                            self.scx
+                                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "power"]),
+                            vec![lhs, rhs],
+                        ),
                         _ => return None,
                     }
                 } else {
                     return None;
                 };
-                Some((Ident::new(name.item), expr))
+                Some((Ident::new(name), expr))
             }
             // Rewrites special keywords that SQL considers to be function calls
             // to actual function calls. For example, `SELECT current_timestamp`
@@ -325,7 +365,10 @@ impl<'a> FuncRewriter<'a> {
                 match fn_ident {
                     None => None,
                     Some(fn_ident) => {
-                        let expr = Expr::call_nullary(vec![fn_ident]);
+                        let expr = Expr::call_nullary(
+                            self.scx
+                                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, fn_ident]),
+                        );
                         Some((Ident::new(ident), expr))
                     }
                 }
@@ -362,24 +405,25 @@ impl<'ast> VisitMut<'ast, Aug> for FuncRewriter<'_> {
 ///
 /// For example, `<expr> NOT IN (<subquery>)` is rewritten to `expr <> ALL
 /// (<subquery>)`.
-struct Desugarer {
+struct Desugarer<'a> {
+    scx: &'a StatementContext<'a>,
     status: Result<(), PlanError>,
     recursion_guard: RecursionGuard,
 }
 
-impl CheckedRecursion for Desugarer {
+impl<'a> CheckedRecursion for Desugarer<'a> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
     }
 }
 
-impl<'ast> VisitMut<'ast, Aug> for Desugarer {
+impl<'a, 'ast> VisitMut<'ast, Aug> for Desugarer<'a> {
     fn visit_expr_mut(&mut self, expr: &'ast mut Expr<Aug>) {
         self.visit_internal(Self::visit_expr_mut_internal, expr);
     }
 }
 
-impl Desugarer {
+impl<'a> Desugarer<'a> {
     fn visit_internal<F, X>(&mut self, f: F, x: X)
     where
         F: Fn(&mut Self, X) -> Result<(), PlanError>,
@@ -394,8 +438,9 @@ impl Desugarer {
         }
     }
 
-    fn new() -> Desugarer {
+    fn new(scx: &'a StatementContext) -> Desugarer<'a> {
         Desugarer {
+            scx,
             status: Ok(()),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
@@ -459,10 +504,9 @@ impl Desugarer {
                     .from(TableWithJoins {
                         relation: TableFactor::Function {
                             function: TableFunction {
-                                name: UnresolvedItemName(vec![
-                                    Ident::new("mz_catalog"),
-                                    Ident::new("unnest"),
-                                ]),
+                                name: self
+                                    .scx
+                                    .dangerous_resolve_name(vec![MZ_CATALOG_SCHEMA, "unnest"]),
                                 args: FunctionArgs::args(vec![right.take()]),
                             },
                             alias: Some(TableAlias {
@@ -542,11 +586,11 @@ impl Desugarer {
                                     .collect(),
                             },
                         )
-                        .call_unary(match expr {
-                            Expr::AnySubquery { .. } => vec!["mz_internal", "mz_any"],
-                            Expr::AllSubquery { .. } => vec!["mz_internal", "mz_all"],
+                        .call_unary(self.scx.dangerous_resolve_name(match expr {
+                            Expr::AnySubquery { .. } => vec![MZ_INTERNAL_SCHEMA, "mz_any"],
+                            Expr::AllSubquery { .. } => vec![MZ_INTERNAL_SCHEMA, "mz_all"],
                             _ => unreachable!(),
-                        }),
+                        })),
                     alias: None,
                 });
 

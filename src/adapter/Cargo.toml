@@ -39,6 +39,7 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-rocksdb = { path = "../rocksdb" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }
 mz-sql = { path = "../sql" }
@@ -74,6 +75,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 [dev-dependencies]
 criterion = { version = "0.4.0", features = ["async_tokio"] }
 datadriven = "0.6.0"
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 
 [[bench]]
 name = "catalog"

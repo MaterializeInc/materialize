@@ -65,7 +65,8 @@ class Materialized(Service):
         restart: Optional[str] = None,
         use_default_volumes: bool = True,
         ports: Optional[List[str]] = None,
-        bootstrap_system_parameters: Optional[List[str]] = None,
+        system_parameter_defaults: Optional[List[str]] = None,
+        additional_system_parameter_defaults: Optional[List[str]] = None,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -93,16 +94,19 @@ class Materialized(Service):
             *environment_extra,
         ]
 
-        if bootstrap_system_parameters is None:
-            bootstrap_system_parameters = [
+        if system_parameter_defaults is None:
+            system_parameter_defaults = [
                 "persist_sink_minimum_batch_updates=128",
                 "enable_multi_worker_storage_persist_sink=true",
                 "storage_persist_sink_minimum_batch_updates=100",
             ]
 
-        if len(bootstrap_system_parameters) > 0:
+        if additional_system_parameter_defaults is not None:
+            system_parameter_defaults += additional_system_parameter_defaults
+
+        if len(system_parameter_defaults) > 0:
             environment += [
-                "MZ_BOOTSTRAP_SYSTEM_PARAMETER=" + ";".join(bootstrap_system_parameters)
+                "MZ_SYSTEM_PARAMETER_DEFAULT=" + ";".join(system_parameter_defaults)
             ]
 
         command = []
@@ -124,7 +128,8 @@ class Materialized(Service):
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
 
-        self.default_storage_size = default_size
+        self.default_storage_size = "1" if default_size == 1 else f"{default_size}-1"
+
         self.default_replica_size = (
             "1" if default_size == 1 else f"{default_size}-{default_size}"
         )
@@ -473,7 +478,7 @@ class MySql(Service):
 
 
 class Cockroach(Service):
-    DEFAULT_COCKROACH_TAG = "v22.2.3"
+    DEFAULT_COCKROACH_TAG = "v23.1.1"
 
     def __init__(
         self,
@@ -484,6 +489,7 @@ class Cockroach(Service):
         setup_materialize: bool = True,
         in_memory: bool = False,
         healthcheck: Optional[ServiceHealthcheck] = None,
+        restart: str = "no",
     ):
         volumes = []
 
@@ -522,6 +528,7 @@ class Cockroach(Service):
                 "volumes": volumes,
                 "init": True,
                 "healthcheck": healthcheck,
+                "restart": restart,
             },
         )
 
