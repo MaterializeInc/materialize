@@ -487,7 +487,7 @@ impl SessionClient {
     where
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
     {
-        return self.send_with_cancel(f, futures::future::pending()).await;
+        self.send_with_cancel(f, futures::future::pending()).await
     }
 
     async fn send_with_cancel<T, F>(
