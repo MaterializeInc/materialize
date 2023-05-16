@@ -29,7 +29,7 @@ Then you will apply those privileges to the `dev` role and alter or drop
 privileges as needed.
 
 1. Create a `qa_role` in your Materialize account.
- 
+
    ```sql
    CREATE ROLE qa WITH CREATEDB;
    ```
@@ -37,7 +37,7 @@ privileges as needed.
    This role has permission to create a new database in the Materialize account.
 
 2. Create a `qa_db`.
- 
+
    ```sql
    CREATE DATABASE qa_db
    ```
@@ -76,11 +76,11 @@ permissions as the `qa_role`.
    qa_db|{u1=UC/u1,u9=UC/u1}
    (1 row)
    ```
- 
+
    Both `dev_role` and `qa_role` have usage and create access to the `qa_db`. In
    the next section, you will edit role attributes for these roles and drop
    privileges.
- 
+
 ## Revoke privileges and alter role attributes
 
 Your `dev_role` and `qa_role` have the same role attributes. You can alter or
@@ -92,39 +92,39 @@ inherited from another role.
    ```sql
    ALTER ROLE dev WITH CREATEROLE;
    ```
- 
+
    The `qa_role` will not have the `CREATEROLE` attribute enabled because the
    attribute was enabled _after_ the role grant.
- 
+
 2. Compare the attributes of the `qa_role` and `dev_role`.
 
    ```sql
    SELECT * FROM mz_roles;
    ```
- 
+
    Your output should contain the role names and the updated attributes:
- 
+
    ```sql
    id|oid|name|inherit|create_role|create_db|create_cluster
    u9|22444|qa_role|t|f|f|f
    u8|20016|dev_role|t|t|f|f
    ```
- 
+
 3. Let's say you decide `dev_role` no longer needs `CREATE` privileges on the
    `qa_db` object. You can revoke that privilege for the role.
- 
+
    ```sql
    REVOKE CREATE ON DATABASE qa_db FROM dev_role;
    ```
- 
+
    Your output should contain the new privileges for `dev_role`:
- 
+
    ```sql
    name|privileges
    qa_db|{u1=UC/u1,u8=U/u1,u9=UC/u1}
    (1 row)
    ```
- 
+
 ## Next steps
 
 You just altered privileges and attributes on your Materialize roles! Remember
