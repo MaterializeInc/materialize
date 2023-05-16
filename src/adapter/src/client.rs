@@ -131,7 +131,10 @@ impl Client {
         session_client
             .declare(EMPTY_PORTAL.into(), stmt, vec![])
             .await?;
-        match session_client.execute(EMPTY_PORTAL.into(), futures::future::pending()).await? {
+        match session_client
+            .execute(EMPTY_PORTAL.into(), futures::future::pending())
+            .await?
+        {
             ExecuteResponse::SendingRows { future, span: _ } => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
@@ -341,13 +344,20 @@ impl SessionClient {
 
     /// Executes a previously-bound portal.
     #[tracing::instrument(level = "debug", skip(self, cancel_future))]
-    pub async fn execute(&mut self, portal_name: String, cancel_future: impl Future<Output = std::io::Error> + Send) -> Result<ExecuteResponse, AdapterError> {
-        self.send_with_cancel(|tx, session| Command::Execute {
-            portal_name,
-            session,
-            tx,
-            span: tracing::Span::current(),
-        }, cancel_future)
+    pub async fn execute(
+        &mut self,
+        portal_name: String,
+        cancel_future: impl Future<Output = std::io::Error> + Send,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        self.send_with_cancel(
+            |tx, session| Command::Execute {
+                portal_name,
+                session,
+                tx,
+                span: tracing::Span::current(),
+            },
+            cancel_future,
+        )
         .await
     }
 
@@ -480,7 +490,11 @@ impl SessionClient {
         return self.send_with_cancel(f, futures::future::pending()).await;
     }
 
-    async fn send_with_cancel<T, F>(&mut self, f: F, cancel_future: impl Future<Output = std::io::Error> + Send) -> Result<T, AdapterError>
+    async fn send_with_cancel<T, F>(
+        &mut self,
+        f: F,
+        cancel_future: impl Future<Output = std::io::Error> + Send,
+    ) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
     {
@@ -491,29 +505,27 @@ impl SessionClient {
         let (tx, mut rx) = oneshot::channel();
         let conn_id = session.conn_id();
         let secret_key = session.secret_key();
-        self
-            .inner_mut()
-            .inner.send({
-                let cmd = f(tx, session);
-                // Measure the success and error rate of certain commands:
-                // - declare reports success of SQL statement planning
-                // - execute reports success of dataflow execution
-                match cmd {
-                    Command::Declare { .. } => typ = Some("declare"),
-                    Command::Execute { .. } => typ = Some("execute"),
-                    Command::Startup { .. }
-                    | Command::Describe { .. }
-                    | Command::VerifyPreparedStatement { .. }
-                    | Command::Commit { .. }
-                    | Command::CancelRequest { .. }
-                    | Command::DumpCatalog { .. }
-                    | Command::CopyRows { .. }
-                    | Command::GetSystemVars { .. }
-                    | Command::SetSystemVars { .. }
-                    | Command::Terminate { .. } => {}
-                };
-                cmd
-            });
+        self.inner_mut().inner.send({
+            let cmd = f(tx, session);
+            // Measure the success and error rate of certain commands:
+            // - declare reports success of SQL statement planning
+            // - execute reports success of dataflow execution
+            match cmd {
+                Command::Declare { .. } => typ = Some("declare"),
+                Command::Execute { .. } => typ = Some("execute"),
+                Command::Startup { .. }
+                | Command::Describe { .. }
+                | Command::VerifyPreparedStatement { .. }
+                | Command::Commit { .. }
+                | Command::CancelRequest { .. }
+                | Command::DumpCatalog { .. }
+                | Command::CopyRows { .. }
+                | Command::GetSystemVars { .. }
+                | Command::SetSystemVars { .. }
+                | Command::Terminate { .. } => {}
+            };
+            cmd
+        });
 
         let mut cancel_future = pin::pin!(cancel_future);
         let mut cancelled = false;
