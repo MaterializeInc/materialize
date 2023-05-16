@@ -12,6 +12,7 @@ use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use const_format::concatcp;
@@ -22,6 +23,7 @@ use uncased::UncasedStr;
 
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
+use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
@@ -1604,25 +1606,49 @@ impl SessionVars {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct ConnectionCounter {
+    pub current: u64,
+    pub limit: u64,
+}
+
+impl ConnectionCounter {
+    pub fn new(limit: u64) -> Self {
+        ConnectionCounter { current: 0, limit }
+    }
+}
+
 /// On disk variables.
 ///
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {
     vars: BTreeMap<&'static UncasedStr, Box<dyn VarMut>>,
+    active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 impl Clone for SystemVars {
     fn clone(&self) -> Self {
         SystemVars {
             vars: self.vars.iter().map(|(k, v)| (*k, v.clone_var())).collect(),
+            active_connection_count: Arc::clone(&self.active_connection_count),
         }
     }
 }
 
 impl Default for SystemVars {
     fn default() -> Self {
-        SystemVars::empty()
+        Self::new(Arc::new(Mutex::new(ConnectionCounter::new(0))))
+    }
+}
+
+impl SystemVars {
+    pub fn new(active_connection_count: Arc<Mutex<ConnectionCounter>>) -> Self {
+        let vars = SystemVars {
+            vars: Default::default(),
+            active_connection_count,
+        };
+        let mut vars = vars
             .with_var(&CONFIG_HAS_SYNCED_ONCE)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
@@ -1681,15 +1707,9 @@ impl Default for SystemVars {
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
-            .with_var(&ALLOW_UNSTABLE_DEPENDENCIES)
-    }
-}
-
-impl SystemVars {
-    fn empty() -> Self {
-        SystemVars {
-            vars: Default::default(),
-        }
+            .with_var(&ALLOW_UNSTABLE_DEPENDENCIES);
+        vars.refresh_internal_state();
+        vars
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1795,20 +1815,26 @@ impl SystemVars {
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, VarError> {
-        self.vars
+        let result = self
+            .vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .and_then(|v| v.set(input))
+            .and_then(|v| v.set(input))?;
+        self.propagate_var_change(name);
+        Ok(result)
     }
 
     /// Set the default for this variable. This is the value this
     /// variable will be be `reset` to. If no default is set, the static default in the
     /// variable definition is used instead.
     pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
-        self.vars
+        let result = self
+            .vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .and_then(|v| v.set_default(input))
+            .and_then(|v| v.set_default(input))?;
+        self.propagate_var_change(name);
+        Ok(result)
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -1825,10 +1851,31 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn reset(&mut self, name: &str) -> Result<bool, VarError> {
-        self.vars
+        let result = self
+            .vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .map(|v| v.reset())
+            .map(|v| v.reset())?;
+        self.propagate_var_change(name);
+        Ok(result)
+    }
+
+    /// Propagate a change to the parameter named `name` to our state.
+    fn propagate_var_change(&mut self, name: &str) {
+        if name == MAX_CONNECTIONS.name {
+            self.active_connection_count
+                .lock()
+                .expect("lock poisoned")
+                .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
+        }
+    }
+
+    /// Make sure that the internal state matches the SystemVars. Generally
+    /// only needed when initializing, `set`, `set_default`, and `reset`
+    /// are responsible for keeping the internal state in sync with
+    /// the affected SystemVars.
+    fn refresh_internal_state(&mut self) {
+        self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.

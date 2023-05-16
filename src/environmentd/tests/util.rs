@@ -457,20 +457,20 @@ impl Server {
         config
     }
 
-    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
         T::Stream: Send,
         <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
     {
-        Ok(self.pg_config().connect(tls)?)
+        self.pg_config().connect(tls)
     }
 
     pub async fn connect_async<T>(
         &self,
         tls: T,
-    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), anyhow::Error>
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,

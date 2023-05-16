@@ -24,6 +24,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::ConnectionCounter;
 
 use crate::catalog::storage;
 use crate::config::SystemParameterFrontend;
@@ -74,6 +75,8 @@ pub struct Config<'a> {
     /// TODO(migration): delete in version v.51 (released in v0.49 + 1
     /// additional release)
     pub connection_context: Option<mz_storage_client::types::connections::ConnectionContext>,
+    /// Global connection limit and count
+    pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
