@@ -33,13 +33,12 @@ use mz_sql::names::{
     DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
-use mz_sql_parser::ast::Statement;
 use mz_stash::{AppendBatch, Id, Stash, StashError, TableTransaction, TypedCollection};
 use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-    MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE,
+    MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE,
 };
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::{is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping};
@@ -192,7 +191,7 @@ async fn migrate(
             txn.databases.insert(
                 DatabaseKey {
                     id: MATERIALIZE_DATABASE_ID,
-                    ns: None,
+                    ns: Some(DatabaseNamespace::User),
                 },
                 DatabaseValue {
                     name: "materialize".into(),
@@ -269,11 +268,11 @@ async fn migrate(
             txn.schemas.insert(
                 SchemaKey {
                     id: PUBLIC_SCHEMA_ID,
-                    ns: None,
+                    ns: Some(SchemaNamespace::User),
                 },
                 SchemaValue {
                     database_id: Some(MATERIALIZE_DATABASE_ID),
-                    database_ns: None,
+                    database_ns: Some(DatabaseNamespace::User),
                     name: "public".into(),
                     owner_id: MZ_SYSTEM_ROLE_ID,
                     privileges: Some(vec![
@@ -523,309 +522,10 @@ async fn migrate(
         |_, _, _| Ok(()),
         |_, _, _| Ok(()),
         |_, _, _| Ok(()),
-        // Namespacing database ids and schema ids by User or System. Currently
-        // everything exists in the "User" schema.
-        //
-        // Introduced in v0.51.0
-        //
-        // TODO(parkertimmerman): Once we support more complex migrations, we
-        // should make DatabaseKey and SchemaKey more idomatic enums.
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            // Migrate all of our DatabaseKeys.
-            txn.databases.migrate(|key, value| {
-                match key.ns {
-                    // Set all keys without a namespace to the User namespace.
-                    None => {
-                        let new_key = DatabaseKey {
-                            id: key.id,
-                            ns: Some(DatabaseNamespace::User),
-                        };
-
-                        Some((new_key, value.clone()))
-                    }
-                    // If a namespace is already set, there is nothing to do.
-                    Some(_) => None,
-                }
-            })?;
-
-            // Migrate all of our SchemaKeys and SchemaValues
-            txn.schemas.migrate(|key, value| {
-                let new_key = match key.ns {
-                    // Set all keys without a namespace to the User namespace.
-                    None => {
-                        let new_key = SchemaKey {
-                            id: key.id,
-                            ns: Some(SchemaNamespace::User),
-                        };
-                        Some(new_key)
-                    }
-                    // If a namespace is already set, there is nothing to do.
-                    Some(_) => None,
-                };
-                let new_value = match value.database_ns {
-                    // Set all values without a database namespace to the User namespace.
-                    None => {
-                        let new_value = SchemaValue {
-                            database_id: value.database_id,
-                            database_ns: Some(DatabaseNamespace::User),
-                            name: value.name.clone(),
-                            owner_id: value.owner_id,
-                            privileges: value.privileges.clone(),
-                        };
-                        Some(new_value)
-                    }
-                    // If a namespace is already set, there is nothing to do.
-                    Some(_) => None,
-                };
-
-                match (new_key, new_value) {
-                    (Some(n_k), None) => Some((n_k, value.clone())),
-                    (None, Some(n_v)) => Some((key.clone(), n_v)),
-                    (Some(n_k), Some(n_v)) => Some((n_k, n_v)),
-                    (None, None) => None,
-                }
-            })?;
-
-            // Migrate all of our existing items, to set the Schema Namespace
-            txn.items.update(|_key, value| {
-                match value.schema_ns {
-                    // Set all schema namespaces to User.
-                    None => {
-                        let mut new_value = value.clone();
-                        let prev = new_value.schema_ns.replace(SchemaNamespace::User);
-                        assert!(prev.is_none(), "Logic changed, should be None");
-
-                        Some(new_value)
-                    }
-                    // If a schema namespace is already set, there is nothing to do.
-                    Some(_) => None,
-                }
-            })?;
-
-            Ok(())
-        },
-        // Object privileges were added to object definitions.
-        //
-        // Introduced in v0.51.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.54.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            txn.databases.update(|database_key, database_value| {
-                let mut database_value = database_value.clone();
-                if database_value.privileges.is_none() {
-                    if database_key.id == MATERIALIZE_DATABASE_ID {
-                        database_value.privileges = Some(vec![MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE,
-                        }]);
-                    } else {
-                        database_value.privileges = Some(Vec::new());
-                    }
-                    database_value
-                        .privileges
-                        .as_mut()
-                        .expect("populated above")
-                        .push(rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Database,
-                            database_value.owner_id.clone(),
-                        ));
-                }
-                Some(database_value)
-            })?;
-
-            txn.schemas.update(|schema_key, schema_value| {
-                let mut schema_value = schema_value.clone();
-                if schema_value.privileges.is_none() {
-                    if [
-                        MZ_CATALOG_SCHEMA_ID,
-                        PG_CATALOG_SCHEMA_ID,
-                        MZ_INTERNAL_SCHEMA_ID,
-                        INFORMATION_SCHEMA_ID,
-                    ]
-                    .into_iter()
-                    .any(|schema_id| schema_id == schema_key.id)
-                    {
-                        schema_value.privileges = Some(vec![rbac::default_catalog_privilege(
-                            mz_sql_parser::ast::ObjectType::Schema,
-                        )]);
-                    } else if schema_key.id == PUBLIC_SCHEMA_ID {
-                        schema_value.privileges = Some(vec![MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE,
-                        }]);
-                    } else {
-                        schema_value.privileges = Some(Vec::new());
-                    }
-                    schema_value
-                        .privileges
-                        .as_mut()
-                        .expect("populated above")
-                        .push(rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Schema,
-                            schema_value.owner_id.clone(),
-                        ));
-                }
-                Some(schema_value)
-            })?;
-
-            txn.items.update(|_item_key, item_value| {
-                let mut item_value = item_value.clone();
-                let create_sql = match &item_value.definition {
-                    SerializedCatalogItem::V1 { create_sql } => create_sql,
-                };
-                let stmt = mz_sql::parse::parse(create_sql)
-                    .expect("invalid create sql persisted")
-                    .into_element();
-                let object_type = match stmt {
-                    Statement::CreateConnection(_) => mz_sql_parser::ast::ObjectType::Connection,
-                    Statement::CreateSource(_) => mz_sql_parser::ast::ObjectType::Source,
-                    Statement::CreateSubsource(_) => mz_sql_parser::ast::ObjectType::Source,
-                    Statement::CreateSink(_) => mz_sql_parser::ast::ObjectType::Sink,
-                    Statement::CreateView(_) => mz_sql_parser::ast::ObjectType::View,
-                    Statement::CreateMaterializedView(_) => {
-                        mz_sql_parser::ast::ObjectType::MaterializedView
-                    }
-                    Statement::CreateTable(_) => mz_sql_parser::ast::ObjectType::Table,
-                    Statement::CreateIndex(_) => mz_sql_parser::ast::ObjectType::Index,
-                    Statement::CreateType(_) => mz_sql_parser::ast::ObjectType::Type,
-                    Statement::CreateSecret(_) => mz_sql_parser::ast::ObjectType::Secret,
-                    _ => panic!("invalid create SQL for item: {create_sql}"),
-                };
-                if item_value.privileges.is_none() {
-                    if [
-                        MZ_CATALOG_SCHEMA_ID,
-                        PG_CATALOG_SCHEMA_ID,
-                        MZ_INTERNAL_SCHEMA_ID,
-                        INFORMATION_SCHEMA_ID,
-                    ]
-                    .into_iter()
-                    .any(|schema_id| schema_id == item_value.schema_id)
-                    {
-                        item_value.privileges =
-                            Some(vec![rbac::default_catalog_privilege(object_type)]);
-                    } else if object_type == mz_sql_parser::ast::ObjectType::Type {
-                        // All types default to PUBLIC usage privileges.
-                        item_value.privileges = Some(vec![MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: item_value.owner_id.clone(),
-                            acl_mode: AclMode::USAGE,
-                        }]);
-                    } else {
-                        item_value.privileges = Some(Vec::new());
-                    }
-                    item_value
-                        .privileges
-                        .as_mut()
-                        .expect("populated above")
-                        .push(rbac::owner_privilege(
-                            object_type,
-                            item_value.owner_id.clone(),
-                        ))
-                }
-                Some(item_value)
-            })?;
-
-            txn.clusters.update(|cluster_key, cluster_value| {
-                let mut cluster_value = cluster_value.clone();
-                if cluster_value.privileges.is_none() {
-                    if cluster_key.id == DEFAULT_USER_CLUSTER_ID {
-                        cluster_value.privileges = Some(vec![MzAclItem {
-                            grantee: RoleId::Public,
-                            grantor: MZ_SYSTEM_ROLE_ID,
-                            acl_mode: AclMode::USAGE.union(AclMode::CREATE),
-                        }]);
-                    } else if cluster_value.name == MZ_INTROSPECTION_CLUSTER.name {
-                        cluster_value.privileges = Some(vec![
-                            MzAclItem {
-                                grantee: RoleId::Public,
-                                grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::USAGE,
-                            },
-                            MzAclItem {
-                                grantee: MZ_INTROSPECTION_ROLE_ID,
-                                grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::USAGE,
-                            },
-                        ]);
-                    } else {
-                        cluster_value.privileges = Some(Vec::new());
-                    }
-                    cluster_value
-                        .privileges
-                        .as_mut()
-                        .expect("populated above")
-                        .push(rbac::owner_privilege(
-                            mz_sql_parser::ast::ObjectType::Cluster,
-                            cluster_value.owner_id.clone(),
-                        ));
-                }
-                Some(cluster_value)
-            })?;
-            Ok(())
-        },
-        // Modify the grantor of all role membership to be mz_system.
-        // See plan_grant_role for more details.
-        //
-        // Introduced in v0.52.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.55.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            // This might create a bunch of invalid audit-log updates, but it isn't possible to
-            // modify old audit events. It's also probably unlikely that anyone has been using
-            // role membership.
-            txn.roles.update(|_role_key, role_value| {
-                let mut role_value = role_value.clone();
-                for grantor in role_value
-                    .role
-                    .membership
-                    .as_mut()
-                    .expect("role membership not migrated")
-                    .map
-                    .values_mut()
-                {
-                    *grantor = MZ_SYSTEM_ROLE_ID;
-                }
-                Some(role_value)
-            })?;
-            Ok(())
-        },
-        // Update system schemas so they have system IDs.
-        //
-        // Introduced in v0.52.0
-        //
-        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.55.0
-        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
-            let system_schema_names: BTreeSet<_> = [
-                MZ_CATALOG_SCHEMA_ID,
-                PG_CATALOG_SCHEMA_ID,
-                MZ_INTERNAL_SCHEMA_ID,
-                INFORMATION_SCHEMA_ID,
-            ]
-            .into_iter()
-            .collect();
-            txn.schemas.migrate(|schema_key, schema_value| {
-                if system_schema_names.contains(&schema_key.id) {
-                    if let SchemaNamespace::User = &schema_key
-                        .ns
-                        .as_ref()
-                        .expect("schema namespace not migrated")
-                    {
-                        let new_key = SchemaKey {
-                            id: schema_key.id,
-                            ns: Some(SchemaNamespace::System),
-                        };
-                        Some((new_key, schema_value.clone()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })?;
-            Ok(())
-        },
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
+        |_, _, _| Ok(()),
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
