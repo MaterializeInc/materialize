@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from enum import Enum
 from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -16,6 +17,12 @@ from materialize.output_consistency.operation.operation_args_validator import (
 from materialize.output_consistency.operation.operation_param import OperationParam
 
 EXPRESSION_PLACEHOLDER = "$"
+
+
+class OperationRelevance(Enum):
+    HIGH = 1
+    NORMAL = 2
+    LOW = 3
 
 
 class DbOperationOrFunction:
@@ -28,6 +35,7 @@ class DbOperationOrFunction:
         args_validators: Optional[set[OperationArgsValidator]] = None,
         commutative: bool = False,
         aggregation: bool = False,
+        relevance: OperationRelevance = OperationRelevance.NORMAL,
     ):
         if args_validators is None:
             args_validators = set()
@@ -39,6 +47,7 @@ class DbOperationOrFunction:
         self.args_validators: set[OperationArgsValidator] = args_validators
         self.commutative = commutative
         self.aggregation = aggregation
+        self.relevance = relevance
 
     def to_pattern(self, args_count: int) -> str:
         raise RuntimeError("Not implemented")
