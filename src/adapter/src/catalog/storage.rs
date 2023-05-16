@@ -541,16 +541,13 @@ async fn migrate(
                 if &cluster_value.name == MZ_SYSTEM_CLUSTER.name
                     && !cluster_value
                         .privileges
-                        .as_ref()
-                        .expect("cluster privileges not migrated")
-                        .contains(&mz_introspection_privilege)
+                        .map(|privilege| privilege.contains(&mz_introspection_privilege))
+                        .unwrap_or(false)
                 {
                     let mut cluster_value = cluster_value.clone();
-                    cluster_value
-                        .privileges
-                        .as_mut()
-                        .expect("cluster privilege not migrated")
-                        .push(mz_introspection_privilege);
+                    let mut privileges = cluster_value.privileges.take().unwrap_or_default();
+                    privileges.push(mz_introspection_privilege);
+                    cluster_value.privileges = Some(privileges);
                     Some(cluster_value)
                 } else {
                     None
