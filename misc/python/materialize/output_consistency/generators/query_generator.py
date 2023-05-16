@@ -7,10 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.expressions.expression import Expression
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.query.query_template import QueryTemplate
 
 

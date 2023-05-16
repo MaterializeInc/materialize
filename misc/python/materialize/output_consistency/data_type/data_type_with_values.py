@@ -8,29 +8,29 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.data_type.data_type import DataType
-from materialize.output_consistency.data_values.data_value import RawValue
-from materialize.output_consistency.data_values.value_characteristics import (
-    ValueCharacteristics,
+from materialize.output_consistency.data_value.data_value import DataValue
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
 )
 
 
 class DataTypeWithValues:
     def __init__(self, data_type: DataType):
         self.data_type = data_type
-        self.raw_values: list[RawValue] = []
+        self.raw_values: list[DataValue] = []
 
     def add_raw_value(
         self,
         value: str,
         column_name: str,
-        characteristics: set[ValueCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ) -> None:
         self.raw_values.append(
-            RawValue(value, self.data_type, column_name, characteristics)
+            DataValue(value, self.data_type, column_name, characteristics)
         )
 
     def add_characteristic_to_all_values(
-        self, characteristic: ValueCharacteristics
+        self, characteristic: ExpressionCharacteristics
     ) -> None:
         for raw_value in self.raw_values:
             raw_value.characteristics.add(characteristic)

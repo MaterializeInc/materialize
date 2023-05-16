@@ -10,7 +10,7 @@
 from enum import Enum
 
 
-class ValueCharacteristics(Enum):
+class ExpressionCharacteristics(Enum):
     NULL = 0
     # not (NULL or ZERO)
     NON_EMPTY = 1

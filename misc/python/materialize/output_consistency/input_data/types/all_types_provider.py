@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.data_type.data_type import DataType
-from materialize.output_consistency.data_type.number_data_type_provider import (
+from materialize.output_consistency.input_data.types.number_types_provider import (
     NUMERIC_DATA_TYPES,
 )
 

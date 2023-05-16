@@ -7,23 +7,26 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.data_values.data_value import RawValue
-from materialize.output_consistency.data_values.data_value_provider import (
-    DATA_TYPES_WITH_VALUES,
+from materialize.output_consistency.data_value.data_value import DataValue
+from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_with_args import (
+    ExpressionWithArgs,
 )
-from materialize.output_consistency.expressions.expression import Expression
-from materialize.output_consistency.expressions.expression_with_args import (
-    ExpressionWithNArgs,
+from materialize.output_consistency.input_data.operations.all_operations_provider import (
+    ALL_OPERATION_TYPES,
+)
+from materialize.output_consistency.input_data.values.all_values_provider import (
+    DATA_TYPES_WITH_VALUES,
 )
 from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
     KnownOutputInconsistenciesFilter,
 )
-from materialize.output_consistency.operations.operation import DbOperationOrFunction
-from materialize.output_consistency.operations.operation_provider import OPERATION_TYPES
+from materialize.output_consistency.operation.operation import DbOperationOrFunction
 
 
 class ExpressionGenerator:
@@ -43,7 +46,7 @@ class ExpressionGenerator:
             if len(type_with_values.raw_values) == 0:
                 continue
 
-            for operation in OPERATION_TYPES:
+            for operation in ALL_OPERATION_TYPES:
                 if operation.aggregation:
                     # currently not supported
                     continue
@@ -69,7 +72,7 @@ class ExpressionGenerator:
                         # exclude for now, handle separately later
                         continue
 
-                    expression = ExpressionWithNArgs(
+                    expression = ExpressionWithArgs(
                         operation, args=combination, is_expect_error=expected_db_error
                     )
 
@@ -86,8 +89,8 @@ class ExpressionGenerator:
 
     def generate_combinations(
         self,
-        values: list[RawValue],
-        offset_value: RawValue,
+        values: list[DataValue],
+        offset_value: DataValue,
         length: int,
         with_self: bool = True,
         with_earlier: bool = True,

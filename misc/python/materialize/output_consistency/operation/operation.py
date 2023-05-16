@@ -6,13 +6,14 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.operations.operation_args_validator import (
+from materialize.output_consistency.operation.operation_args_validator import (
     OperationArgsValidator,
 )
-from materialize.output_consistency.operations.operation_param import OperationParam
+from materialize.output_consistency.operation.operation_param import OperationParam
 
 EXPRESSION_PLACEHOLDER = "$"
 

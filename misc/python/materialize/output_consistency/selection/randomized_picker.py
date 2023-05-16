@@ -12,7 +12,7 @@ import random
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.expressions.expression import Expression
+from materialize.output_consistency.expression.expression import Expression
 
 
 class RandomizedPicker:

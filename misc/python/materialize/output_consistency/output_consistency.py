@@ -21,13 +21,13 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 )
 from materialize.output_consistency.execution.sql_executor import create_sql_executor
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
-from materialize.output_consistency.expressions.expression_generator import (
+from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
+from materialize.output_consistency.generators.query_generator import QueryGenerator
 from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
     KnownOutputInconsistenciesFilter,
 )
-from materialize.output_consistency.query.query_generator import QueryGenerator
 from materialize.output_consistency.runner.test_runner import ConsistencyTestRunner
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 

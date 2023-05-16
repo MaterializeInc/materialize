@@ -7,57 +7,29 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.data_values.value_characteristics import (
-    ValueCharacteristics,
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
 )
-from materialize.output_consistency.operations.operation import (
+from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperation,
     DbOperationOrFunction,
 )
-from materialize.output_consistency.operations.operation_args_validator import (
+from materialize.output_consistency.operation.operation_args_validator import (
     MaxMinusNegMaxArgsValidator,
     ValueGrowsArgsValidator,
 )
-from materialize.output_consistency.operations.operation_param import (
+from materialize.output_consistency.operation.operation_param import (
     NumericOperationParam,
 )
 
-OPERATION_TYPES: list[DbOperationOrFunction] = []
-
-# ===== BEGIN GENERIC =====
-
-OPERATION_TYPES.append(
-    DbFunction(
-        "GREATEST",
-        [
-            NumericOperationParam(),
-            NumericOperationParam(optional=True),
-            NumericOperationParam(optional=True),
-        ],
-        DataTypeCategory.DYNAMIC,
-        commutative=True,
-    )
-)
-OPERATION_TYPES.append(
-    DbFunction(
-        "LEAST",
-        [
-            NumericOperationParam(),
-            NumericOperationParam(optional=True),
-            NumericOperationParam(optional=True),
-        ],
-        DataTypeCategory.DYNAMIC,
-        commutative=True,
-    )
-)
-
-# ===== END GENERIC =====
+NUMERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 # ===== BEGIN NUMBER OPERATORS =====
 
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ + $",
         [NumericOperationParam(), NumericOperationParam()],
@@ -66,7 +38,7 @@ OPERATION_TYPES.append(
         commutative=True,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ - $",
         [NumericOperationParam(), NumericOperationParam()],
@@ -74,7 +46,7 @@ OPERATION_TYPES.append(
         {MaxMinusNegMaxArgsValidator()},
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ * $",
         [NumericOperationParam(), NumericOperationParam()],
@@ -83,36 +55,36 @@ OPERATION_TYPES.append(
         commutative=True,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ / $",
         [
             NumericOperationParam(),
-            NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+            NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ % $",
         [
             NumericOperationParam(),
-            NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+            NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
         ],
         DataTypeCategory.NUMERIC,
     )
 )
 # Bitwise AND
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ & $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -120,15 +92,15 @@ OPERATION_TYPES.append(
     )
 )
 # Bitwise OR
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ | $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -136,15 +108,15 @@ OPERATION_TYPES.append(
     )
 )
 # Bitwise XOR
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ # $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
         ],
         DataTypeCategory.NUMERIC,
@@ -152,29 +124,29 @@ OPERATION_TYPES.append(
     )
 )
 # Bitwise NOT
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "~$",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             )
         ],
         DataTypeCategory.NUMERIC,
     )
 )
 # Bitwise left shift
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ << $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED,
-                    ValueCharacteristics.LARGER_THAN_INT4_TYPED,
+                    ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED,
+                    ExpressionCharacteristics.LARGER_THAN_INT4_TYPED,
                 }
             ),
         ],
@@ -182,17 +154,17 @@ OPERATION_TYPES.append(
     )
 )
 # Bitwise right shift
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbOperation(
         "$ >> $",
         [
             NumericOperationParam(
-                incompatibilities={ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED}
+                incompatibilities={ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED}
             ),
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED,
-                    ValueCharacteristics.LARGER_THAN_INT4_TYPED,
+                    ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED,
+                    ExpressionCharacteristics.LARGER_THAN_INT4_TYPED,
                 }
             ),
         ],
@@ -202,36 +174,16 @@ OPERATION_TYPES.append(
 
 # ===== END NUMBER OPERATORS =====
 
-# ===== BEGIN AGGREGATES =====
+# ===== BEGIN NUMBER FUNCTIONS =====
 
-OPERATION_TYPES.append(
-    DbFunction(
-        "SUM", [NumericOperationParam()], DataTypeCategory.NUMERIC, aggregation=True
-    ),
-)
-OPERATION_TYPES.append(
-    DbFunction(
-        "MIN", [NumericOperationParam()], DataTypeCategory.NUMERIC, aggregation=True
-    )
-)
-OPERATION_TYPES.append(
-    DbFunction(
-        "MAX", [NumericOperationParam()], DataTypeCategory.NUMERIC, aggregation=True
-    )
-)
-
-# ===== END AGGREGATES =====
-
-# ===== BEGIN NUMBERS =====
-
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "ABS",
         [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "CBRT",
         [NumericOperationParam()],
@@ -239,14 +191,14 @@ OPERATION_TYPES.append(
     )
 )
 # CEIL == CEILING
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "CEIL",
         [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "EXP",
         [NumericOperationParam()],
@@ -254,88 +206,90 @@ OPERATION_TYPES.append(
         {ValueGrowsArgsValidator()},
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "FLOOR",
         [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "LN",
         [
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.NEGATIVE,
-                    ValueCharacteristics.ZERO,
+                    ExpressionCharacteristics.NEGATIVE,
+                    ExpressionCharacteristics.ZERO,
                 }
             )
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "LOG10",
         [
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.NEGATIVE,
-                    ValueCharacteristics.ZERO,
+                    ExpressionCharacteristics.NEGATIVE,
+                    ExpressionCharacteristics.ZERO,
                 }
             )
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "LOG",
         [
             # first param is the base
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.NEGATIVE,
-                    ValueCharacteristics.ZERO,
-                    ValueCharacteristics.ONE,
-                    ValueCharacteristics.FLOAT_TYPED,
+                    ExpressionCharacteristics.NEGATIVE,
+                    ExpressionCharacteristics.ZERO,
+                    ExpressionCharacteristics.ONE,
+                    ExpressionCharacteristics.FLOAT_TYPED,
                 }
             ),
             # not marked as optional because if not present the operation is equal to LOG10, which is separate
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.NEGATIVE,
-                    ValueCharacteristics.ZERO,
-                    ValueCharacteristics.FLOAT_TYPED,
+                    ExpressionCharacteristics.NEGATIVE,
+                    ExpressionCharacteristics.ZERO,
+                    ExpressionCharacteristics.FLOAT_TYPED,
                 }
             ),
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "MOD",
         [
             NumericOperationParam(),
-            NumericOperationParam(incompatibilities={ValueCharacteristics.ZERO}),
+            NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
         ],
         DataTypeCategory.NUMERIC,
     )
 )
 # POW == POWER
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "POW",
         [
             NumericOperationParam(),
-            NumericOperationParam(incompatibilities={ValueCharacteristics.MAX_VALUE}),
+            NumericOperationParam(
+                incompatibilities={ExpressionCharacteristics.MAX_VALUE}
+            ),
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "ROUND",
         [
@@ -344,23 +298,23 @@ OPERATION_TYPES.append(
             NumericOperationParam(
                 optional=True,
                 incompatibilities={
-                    ValueCharacteristics.DECIMAL_OR_FLOAT_TYPED,
-                    ValueCharacteristics.LARGER_THAN_INT4_TYPED,
-                    ValueCharacteristics.LARGE_VALUE,
+                    ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED,
+                    ExpressionCharacteristics.LARGER_THAN_INT4_TYPED,
+                    ExpressionCharacteristics.LARGE_VALUE,
                 },
             ),
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "SQRT",
-        [NumericOperationParam(incompatibilities={ValueCharacteristics.NEGATIVE})],
+        [NumericOperationParam(incompatibilities={ExpressionCharacteristics.NEGATIVE})],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "TRUNC",
         [NumericOperationParam()],
@@ -368,10 +322,10 @@ OPERATION_TYPES.append(
     )
 )
 
-# ===== END NUMBERS =====
+# ===== END NUMBER FUNCTIONS =====
 
 # ===== BEGIN TRIGONOMETRIC =====
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "COS",
         [NumericOperationParam()],
@@ -379,20 +333,20 @@ OPERATION_TYPES.append(
     )
 )
 # only for numbers [-1, +1]
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "ACOS",
         [
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.LARGE_VALUE,
+                    ExpressionCharacteristics.LARGE_VALUE,
                 }
             )
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "COSH",
         [NumericOperationParam()],
@@ -401,44 +355,47 @@ OPERATION_TYPES.append(
     )
 )
 # only for numbers [1,)
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "ACOSH",
         [
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.ZERO,
-                    ValueCharacteristics.NEGATIVE,
+                    ExpressionCharacteristics.ZERO,
+                    ExpressionCharacteristics.NEGATIVE,
                 },
                 incompatibility_combinations=[
-                    {ValueCharacteristics.DECIMAL, ValueCharacteristics.TINY_VALUE}
+                    {
+                        ExpressionCharacteristics.DECIMAL,
+                        ExpressionCharacteristics.TINY_VALUE,
+                    }
                 ],
             )
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction("COT", [NumericOperationParam()], DataTypeCategory.NUMERIC)
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction("SIN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
 )
 # only for numbers [-1, +1]
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "ASIN",
         [
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.LARGE_VALUE,
+                    ExpressionCharacteristics.LARGE_VALUE,
                 }
             )
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "SINH",
         [NumericOperationParam()],
@@ -446,24 +403,24 @@ OPERATION_TYPES.append(
         {ValueGrowsArgsValidator()},
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "ASINH",
         [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction("TAN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "ATAN",
         [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "TANH",
         [NumericOperationParam()],
@@ -471,27 +428,27 @@ OPERATION_TYPES.append(
     )
 )
 # only for numbers [-1, +1]
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "ATANH",
         [
             NumericOperationParam(
                 incompatibilities={
-                    ValueCharacteristics.LARGE_VALUE,
+                    ExpressionCharacteristics.LARGE_VALUE,
                 }
             )
         ],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "RADIANS",
         [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
     )
 )
-OPERATION_TYPES.append(
+NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "DEGREES",
         [NumericOperationParam()],

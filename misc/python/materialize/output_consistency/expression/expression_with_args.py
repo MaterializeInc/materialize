@@ -6,15 +6,16 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.expressions.expression import Expression
-from materialize.output_consistency.operations.operation import (
+from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.operation.operation import (
     EXPRESSION_PLACEHOLDER,
     DbOperationOrFunction,
 )
 
 
-class ExpressionWithNArgs(Expression):
+class ExpressionWithArgs(Expression):
     def __init__(
         self,
         operation: DbOperationOrFunction,

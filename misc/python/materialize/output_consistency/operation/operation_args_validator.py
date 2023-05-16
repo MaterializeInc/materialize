@@ -9,10 +9,10 @@
 
 from typing import Callable, Optional
 
-from materialize.output_consistency.data_values.value_characteristics import (
-    ValueCharacteristics,
+from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
 )
-from materialize.output_consistency.expressions.expression import Expression
 
 
 class OperationArgsValidator:
@@ -25,7 +25,7 @@ class ValueGrowsArgsValidator(OperationArgsValidator):
     # error if one MAX_VALUE and a further NON_EMPTY value
     def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
         index_of_max_value = index_of_characteristic(
-            args, ValueCharacteristics.MAX_VALUE
+            args, ExpressionCharacteristics.MAX_VALUE
         )
 
         if index_of_max_value == -1:
@@ -33,7 +33,7 @@ class ValueGrowsArgsValidator(OperationArgsValidator):
 
         index_of_further_inc_value = index_of_characteristic(
             args,
-            ValueCharacteristics.NON_EMPTY,
+            ExpressionCharacteristics.NON_EMPTY,
             skip_argument_indices={index_of_max_value},
         )
 
@@ -48,18 +48,19 @@ class MaxMinusNegMaxArgsValidator(OperationArgsValidator):
             return False
 
         return has_all_characteristics(
-            args[0], {ValueCharacteristics.MAX_VALUE}
+            args[0], {ExpressionCharacteristics.MAX_VALUE}
         ) and has_all_characteristics(
-            args[1], {ValueCharacteristics.MAX_VALUE, ValueCharacteristics.NEGATIVE}
+            args[1],
+            {ExpressionCharacteristics.MAX_VALUE, ExpressionCharacteristics.NEGATIVE},
         )
 
 
 def index_of_characteristic(
     args: list[Expression],
-    characteristic: ValueCharacteristics,
+    characteristic: ExpressionCharacteristics,
     skip_argument_indices: Optional[set[int]] = None,
     skip_argument_fn: Callable[
-        [set[ValueCharacteristics], int], bool
+        [set[ExpressionCharacteristics], int], bool
     ] = lambda chars, index: False,
 ) -> int:
     if skip_argument_indices is None:
@@ -80,7 +81,7 @@ def index_of_characteristic(
 
 def has_all_characteristics(
     arg: Expression,
-    characteristics: set[ValueCharacteristics],
+    characteristics: set[ExpressionCharacteristics],
 ) -> bool:
     overlap = arg.characteristics & characteristics
     return len(overlap) == len(characteristics)

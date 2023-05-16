@@ -6,11 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
-)
-from materialize.output_consistency.data_values.data_value_provider import (
-    DATA_TYPES_WITH_VALUES,
 )
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -20,10 +18,13 @@ from materialize.output_consistency.execution.query_execution_manager import (
 )
 from materialize.output_consistency.execution.sql_executor import SqlExecutor
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
-from materialize.output_consistency.expressions.expression_generator import (
+from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
-from materialize.output_consistency.query.query_generator import QueryGenerator
+from materialize.output_consistency.generators.query_generator import QueryGenerator
+from materialize.output_consistency.input_data.values.all_values_provider import (
+    DATA_TYPES_WITH_VALUES,
+)
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 

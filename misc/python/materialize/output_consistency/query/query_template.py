@@ -11,7 +11,7 @@ from typing import Optional
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
-from materialize.output_consistency.expressions.expression import Expression
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 
 

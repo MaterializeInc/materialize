@@ -10,10 +10,10 @@
 from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.data_values.value_characteristics import (
-    ValueCharacteristics,
+from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
 )
-from materialize.output_consistency.expressions.expression import Expression
 
 
 class OperationParam:
@@ -21,8 +21,10 @@ class OperationParam:
         self,
         type_category: DataTypeCategory,
         optional: bool = False,
-        incompatibilities: Optional[set[ValueCharacteristics]] = None,
-        incompatibility_combinations: Optional[list[set[ValueCharacteristics]]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
+        incompatibility_combinations: Optional[
+            list[set[ExpressionCharacteristics]]
+        ] = None,
     ):
         self.type_category = type_category
         self.optional = optional
@@ -53,13 +55,15 @@ class NumericOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[set[ValueCharacteristics]] = None,
-        incompatibility_combinations: Optional[list[set[ValueCharacteristics]]] = None,
+        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
+        incompatibility_combinations: Optional[
+            list[set[ExpressionCharacteristics]]
+        ] = None,
     ):
         if incompatibilities is None:
             incompatibilities = set()
 
-        incompatibilities.add(ValueCharacteristics.OVERSIZE)
+        incompatibilities.add(ExpressionCharacteristics.OVERSIZE)
 
         super().__init__(
             DataTypeCategory.NUMERIC,

@@ -6,15 +6,16 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.data_values.value_characteristics import (
-    ValueCharacteristics,
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
 )
 
 
 class Expression:
     def __init__(
-        self, characteristics: set[ValueCharacteristics], is_expect_error: bool
+        self, characteristics: set[ExpressionCharacteristics], is_expect_error: bool
     ):
         self.is_expect_error = is_expect_error
         self.characteristics = characteristics

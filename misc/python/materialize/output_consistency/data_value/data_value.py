@@ -7,22 +7,21 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.data_values.value_characteristics import (
-    ValueCharacteristics,
+from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
 )
-from materialize.output_consistency.expressions.expression import Expression
 
 
-class RawValue(Expression):
+class DataValue(Expression):
     def __init__(
         self,
         value: str,
         data_type: DataType,
         value_identifier: str,
-        characteristics: set[ValueCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ):
         super().__init__(characteristics, False)
         self.value = value

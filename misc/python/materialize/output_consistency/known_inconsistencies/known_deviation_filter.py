@@ -6,11 +6,12 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from materialize.output_consistency.expressions.expression_with_args import (
-    ExpressionWithNArgs,
+
+from materialize.output_consistency.expression.expression_with_args import (
+    ExpressionWithArgs,
 )
 
 
 class KnownOutputInconsistenciesFilter:
-    def matches(self, expression: ExpressionWithNArgs) -> bool:
+    def matches(self, expression: ExpressionWithArgs) -> bool:
         return False

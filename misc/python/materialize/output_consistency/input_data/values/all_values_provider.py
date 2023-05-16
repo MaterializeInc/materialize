@@ -6,10 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from materialize.output_consistency.data_values.data_type_with_values import (
+
+from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
-from materialize.output_consistency.data_values.number_data_value_provider import (
+from materialize.output_consistency.input_data.values.number_values_provider import (
     VALUES_PER_NUMERIC_DATA_TYPE,
 )
 
