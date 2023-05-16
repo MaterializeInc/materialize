@@ -3485,10 +3485,14 @@ pub static MZ_INTROSPECTION_ROLE: Lazy<BuiltinRole> = Lazy::new(|| BuiltinRole {
 
 pub static MZ_SYSTEM_CLUSTER: Lazy<BuiltinCluster> = Lazy::new(|| BuiltinCluster {
     name: &*SYSTEM_USER.name,
-    privileges: vec![rbac::owner_privilege(
-        ObjectType::Cluster,
-        MZ_SYSTEM_ROLE_ID,
-    )],
+    privileges: vec![
+        MzAclItem {
+            grantee: MZ_INTROSPECTION_ROLE_ID,
+            grantor: MZ_SYSTEM_ROLE_ID,
+            acl_mode: AclMode::USAGE,
+        },
+        rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
+    ],
 });
 
 pub static MZ_SYSTEM_CLUSTER_REPLICA: Lazy<BuiltinClusterReplica> =
