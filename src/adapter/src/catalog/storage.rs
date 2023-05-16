@@ -38,7 +38,7 @@ use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::builtin::{
     BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-    MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE,
+    MZ_INTROSPECTION_ROLE, MZ_SYSTEM_CLUSTER, MZ_SYSTEM_ROLE,
 };
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::{is_reserved_name, RoleMembership, SerializedRole, SystemObjectMapping};
@@ -526,6 +526,38 @@ async fn migrate(
         |_, _, _| Ok(()),
         |_, _, _| Ok(()),
         |_, _, _| Ok(()),
+        // Add USAGE privileges on the mz_system cluster for the mz_introspection user.
+        //
+        // Introduced in v0.55.0
+        //
+        // TODO(jkosh44) Can be cleared (patched to be empty) in v0.58.0
+        |txn: &mut Transaction<'_>, _now, _bootstrap_args| {
+            txn.clusters.update(|_cluster_key, cluster_value| {
+                let mz_introspection_privilege = MzAclItem {
+                    grantee: MZ_INTROSPECTION_ROLE_ID,
+                    grantor: MZ_SYSTEM_ROLE_ID,
+                    acl_mode: AclMode::USAGE,
+                };
+                if &cluster_value.name == MZ_SYSTEM_CLUSTER.name
+                    && !cluster_value
+                        .privileges
+                        .as_ref()
+                        .expect("cluster privileges not migrated")
+                        .contains(&mz_introspection_privilege)
+                {
+                    let mut cluster_value = cluster_value.clone();
+                    cluster_value
+                        .privileges
+                        .as_mut()
+                        .expect("cluster privilege not migrated")
+                        .push(mz_introspection_privilege);
+                    Some(cluster_value)
+                } else {
+                    None
+                }
+            })?;
+            Ok(())
+        },
         // Add new migrations above.
         //
         // Migrations should be preceded with a comment of the following form:
