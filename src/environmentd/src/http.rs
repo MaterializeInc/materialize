@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -34,7 +34,7 @@ use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_ore::str::StrExt;
-use mz_sql::session::vars::VarInput;
+use mz_sql::session::vars::{VarInput, ConnectionCounter};
 use openssl::ssl::{Ssl, SslContext};
 use serde::Deserialize;
 use thiserror::Error;
@@ -72,6 +72,7 @@ pub struct HttpConfig {
     pub frontegg: Option<FronteggAuthentication>,
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +91,7 @@ pub enum TlsMode {
 pub struct WsState {
     frontegg: Arc<Option<FronteggAuthentication>>,
     adapter_client: mz_adapter::Client,
+    active_connection_count: SharedConnectionCounter,
 }
 
 #[derive(Debug)]
@@ -105,6 +107,7 @@ impl HttpServer {
             frontegg,
             adapter_client,
             allowed_origin,
+            active_connection_count,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_mode = tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable);
@@ -122,6 +125,7 @@ impl HttpServer {
                 async move { http_auth(req, next, tls_mode, &base_frontegg).await }
             }))
             .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(Arc::clone(&active_connection_count)))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -140,6 +144,7 @@ impl HttpServer {
             .with_state(WsState {
                 frontegg,
                 adapter_client,
+                active_connection_count,
             });
         let router = Router::new().merge(base_router).merge(ws_router);
         HttpServer { tls, router }
@@ -182,6 +187,7 @@ pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
     pub tracing_handle: TracingHandle,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 pub struct InternalHttpServer {
@@ -194,6 +200,7 @@ impl InternalHttpServer {
             metrics_registry,
             tracing_handle,
             adapter_client_rx,
+            active_connection_count,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
         let router = base_router(BaseRouterConfig { profiling: true })
@@ -242,7 +249,9 @@ impl InternalHttpServer {
             )
             .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
             .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
-            .layer(Extension(adapter_client_rx.shared()));
+            .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(active_connection_count));
+
         InternalHttpServer { router }
     }
 }
@@ -262,6 +271,8 @@ impl Server for InternalHttpServer {
 
 type Delayed<T> = Shared<oneshot::Receiver<T>>;
 
+type SharedConnectionCounter = Arc<Mutex<ConnectionCounter>>;
+
 #[derive(Clone)]
 enum ConnProtocol {
     Http,
@@ -271,17 +282,54 @@ enum ConnProtocol {
 #[derive(Clone, Debug)]
 struct AuthedUser(User);
 
-pub struct AuthedClient(pub SessionClient);
+pub struct AuthedClient {
+    pub client: SessionClient,
+    pub drop_connection: Option<DropConnection>,
+}
+
+pub struct DropConnection {
+    pub active_connection_count: SharedConnectionCounter,
+}
+
+impl Drop for DropConnection {
+    fn drop(&mut self) {
+        let mut connections = self.active_connection_count.lock().expect("lock poisoned");
+        assert_ne!(connections.current, 0);
+        connections.current -= 1;
+    }
+}
 
 impl AuthedClient {
-    async fn new(adapter_client: &Client, user: AuthedUser) -> Result<Self, AdapterError> {
+    async fn new(adapter_client: &Client, user: AuthedUser, active_connection_count: SharedConnectionCounter) -> Result<Self, AdapterError> {
         let AuthedUser(user) = user;
+        let drop_connection = if !user.is_internal() && !user.is_external_admin() {
+            let connections = {
+                let mut connections = active_connection_count.lock().expect("lock poisoned");
+                connections.current += 1;
+                *connections
+            };
+            let guard = DropConnection{active_connection_count};
+            if connections.current > connections.limit {
+                return Err(AdapterError::ResourceExhaustion {
+                    limit_name: "max_connections".into(),
+                    resource_type: "connection".into(),
+                    desired: connections.current.to_string(),
+                    limit: connections.limit.to_string(),
+                    current: (connections.current - 1).to_string(),
+                });
+            }
+            Some(guard)
+        } else {
+            None
+        };
         let adapter_client = adapter_client.new_conn()?;
         let session = adapter_client.new_session(user);
         let (adapter_client, _) = adapter_client.startup(session).await?;
-        Ok(AuthedClient(adapter_client))
+        Ok(AuthedClient{ client: adapter_client, drop_connection })
     }
 }
+
+
 
 #[async_trait]
 impl<S> FromRequestParts<S> for AuthedClient
@@ -315,12 +363,13 @@ where
                 "adapter client missing".into(),
             )
         })?;
-        let mut client = AuthedClient::new(&adapter_client, user.clone())
+        let active_connection_count = req.extensions.get::<SharedConnectionCounter>().unwrap();
+        let mut client = AuthedClient::new(&adapter_client, user.clone(), Arc::clone(active_connection_count))
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         // Apply options that were provided in query params.
-        let session = client.0.session();
+        let session = client.client.session();
         let maybe_options = if params.options.is_empty() {
             // It's possible 'options' simply wasn't provided, we don't want that to
             // count as a failure to deserialize
@@ -440,6 +489,7 @@ async fn init_ws(
     WsState {
         frontegg,
         adapter_client,
+        active_connection_count,
     }: &WsState,
     ws: &mut WebSocket,
 ) -> Result<AuthedClient, anyhow::Error> {
@@ -486,10 +536,11 @@ async fn init_ws(
         anyhow::bail!("unexpected")
     };
     let user = auth(frontegg, creds).await?;
-    let mut client = AuthedClient::new(adapter_client, user).await?;
+
+    let mut client = AuthedClient::new(adapter_client, user, Arc::clone(active_connection_count)).await?;
 
     // Assign any options we got from our WebSocket startup.
-    let session = client.0.session();
+    let session = client.client.session();
     for (key, val) in options {
         const LOCAL: bool = false;
         if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {

@@ -104,14 +104,14 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
     let _ = ws
         .send(Message::Text(
             serde_json::to_string(&WebSocketResponse::ReadyForQuery(
-                client.0.session().transaction_code().into(),
+                client.client.session().transaction_code().into(),
             ))
             .expect("must serialize"),
         ))
         .await;
 
     // Send any notices that might have been generated on startup.
-    let notices = client.0.session().drain_notices();
+    let notices = client.client.session().drain_notices();
     if let Err(err) = forward_notices(&mut ws, notices).await {
         tracing::error!("failed to forward notices to WebSocket, {err:?}");
         return;
@@ -160,12 +160,12 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
             }
 
             // Then forward along any notices we generated.
-            let notices = client.0.session().drain_notices();
+            let notices = client.client.session().drain_notices();
             forward_notices(&mut ws, notices).await?;
 
             // Finally, respond that we're ready for the next query.
             let ready =
-                WebSocketResponse::ReadyForQuery(client.0.session().transaction_code().into());
+                WebSocketResponse::ReadyForQuery(client.client.session().transaction_code().into());
             send_ws_response(&mut ws, ready).await?;
 
             Ok::<_, anyhow::Error>(())
@@ -581,7 +581,7 @@ async fn execute_request<S: ResultSender>(
     request: SqlRequest,
     sender: &mut S,
 ) -> Result<(), anyhow::Error> {
-    let client = &mut client.0;
+    let client = &mut client.client;
 
     // This API prohibits executing statements with responses whose
     // semantics are at odds with an HTTP response.

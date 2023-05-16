@@ -108,11 +108,8 @@ impl Server {
         let internal = self.internal;
         let metrics = self.metrics.clone();
         let active_connection_count = Arc::clone(&self.active_connection_count);
-        let active_connection_count2 = Arc::clone(&self.active_connection_count);
         async move {
-            let mut incremented_connection_count = false;
             let result = (|| {
-                let incremented_connection_count = &mut incremented_connection_count;
                 async move {
                     let mut adapter_client = adapter_client?;
                     let conn_id = adapter_client.conn_id();
@@ -141,7 +138,6 @@ impl Server {
                                     params,
                                     frontegg: frontegg.as_ref(),
                                     internal,
-                                    incremented_connection_count,
                                     active_connection_count,
                                 })
                                 .await?;
@@ -188,11 +184,6 @@ impl Server {
                 }
             })()
             .await;
-            if incremented_connection_count {
-                let mut connections = active_connection_count2.lock().expect("poisoned lock");
-                assert_ne!(0, connections.current);
-                connections.current -= 1;
-            }
             let status = match result {
                 Ok(()) => "success",
                 Err(_) => "error",

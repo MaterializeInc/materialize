@@ -85,9 +85,6 @@ pub struct RunParams<'a, A> {
     /// Whether this is an internal server that permits access to restricted
     /// system resources.
     pub internal: bool,
-    /// During handling the query, did we increment the connection count. Used
-    /// during connection teardown to determine if we need to decrement the count.
-    pub incremented_connection_count: &'a mut bool,
     /// Global connection limit and count
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
@@ -101,7 +98,7 @@ pub struct RunParams<'a, A> {
 /// error to the client. It only returns `Err` if an unexpected I/O error occurs
 /// while communicating with the client, e.g., if the connection is severed in
 /// the middle of a request.
-#[tracing::instrument(level = "debug", skip_all)]
+//#[tracing::instrument(level = "debug", skip_all)]
 pub async fn run<'a, A>(
     RunParams {
         tls_mode,
@@ -111,7 +108,6 @@ pub async fn run<'a, A>(
         mut params,
         frontegg,
         internal,
-        incremented_connection_count,
         active_connection_count,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
@@ -252,29 +248,32 @@ where
         .vars_mut()
         .end_transaction(EndTransactionAction::Commit);
 
-    if !session.user().is_internal() && !session.user().is_external_admin() {
-        let result = {
+    let _guard = if !session.user().is_internal() && !session.user().is_external_admin() {
+        let connections = {
             let mut connections = active_connection_count.lock().expect("lock poisoned");
-            if connections.current >= connections.limit {
-                Err(AdapterError::ResourceExhaustion {
+            connections.current += 1;
+            *connections
+        };
+        let guard = scopeguard::guard(active_connection_count, |active_connection_count| {
+            let mut connections = active_connection_count.lock().expect("lock poisoned");
+            assert_ne!(0, connections.current);
+            connections.current -= 1;
+        });
+        if connections.current > connections.limit {
+            return conn
+                .send(ErrorResponse::from_adapter_error(Severity::Fatal, AdapterError::ResourceExhaustion {
                     limit_name: "max_connections".into(),
                     resource_type: "connection".into(),
-                    desired: (connections.current + 1).to_string(),
+                    desired: connections.current.to_string(),
                     limit: connections.limit.to_string(),
-                    current: connections.current.to_string(),
-                })
-            } else {
-                connections.current += 1;
-                *incremented_connection_count = true;
-                Ok(())
-            }
-        };
-        if let Err(e) = result {
-            return conn
-                .send(ErrorResponse::from_adapter_error(Severity::Fatal, e))
+                    current: (connections.current - 1).to_string(),
+                }))
                 .await;
         }
-    }
+        Some(guard)
+    } else {
+        None
+    };
 
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in session.vars().notify_set() {

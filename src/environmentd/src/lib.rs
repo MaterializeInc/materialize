@@ -267,6 +267,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     };
 
+    let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0)));
+
     // Initialize network listeners.
     //
     // We do this as early as possible during initialization so that the OS will
@@ -290,6 +292,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             metrics_registry: config.metrics_registry.clone(),
             tracing_handle: config.tracing_handle,
             adapter_client_rx: internal_http_adapter_client_rx,
+            active_connection_count: Arc::clone(&active_connection_count),
         });
         server::serve(internal_http_conns, internal_http_server)
     });
@@ -364,8 +367,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     } else {
         None
     };
-
-    let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0)));
 
     // Initialize adapter.
     let segment_client = config.segment_api_key.map(mz_segment::Client::new);
@@ -444,6 +445,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             frontegg: config.frontegg.clone(),
             adapter_client: adapter_client.clone(),
             allowed_origin: config.cors_allowed_origin,
+            active_connection_count: Arc::clone(&active_connection_count),
         });
         server::serve(http_conns, http_server)
     });
