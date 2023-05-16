@@ -49,25 +49,3 @@ class OperationParam:
                 return False
 
         return True
-
-
-class NumericOperationParam(OperationParam):
-    def __init__(
-        self,
-        optional: bool = False,
-        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
-        incompatibility_combinations: Optional[
-            list[set[ExpressionCharacteristics]]
-        ] = None,
-    ):
-        if incompatibilities is None:
-            incompatibilities = set()
-
-        incompatibilities.add(ExpressionCharacteristics.OVERSIZE)
-
-        super().__init__(
-            DataTypeCategory.NUMERIC,
-            optional,
-            incompatibilities,
-            incompatibility_combinations,
-        )

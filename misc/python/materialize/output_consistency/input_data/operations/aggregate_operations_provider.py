@@ -9,12 +9,12 @@
 
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.input_data.params.number_operation_param import (
+    NumericOperationParam,
+)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperationOrFunction,
-)
-from materialize.output_consistency.operation.operation_param import (
-    NumericOperationParam,
 )
 
 AGGREGATE_OPERATION_TYPES: list[DbOperationOrFunction] = []

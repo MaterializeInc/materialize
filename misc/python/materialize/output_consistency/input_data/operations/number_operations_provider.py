@@ -12,6 +12,9 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.input_data.params.number_operation_param import (
+    NumericOperationParam,
+)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperation,
@@ -20,9 +23,6 @@ from materialize.output_consistency.operation.operation import (
 from materialize.output_consistency.operation.operation_args_validator import (
     MaxMinusNegMaxArgsValidator,
     ValueGrowsArgsValidator,
-)
-from materialize.output_consistency.operation.operation_param import (
-    NumericOperationParam,
 )
 
 NUMERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
