@@ -16,7 +16,7 @@ roles and removing users or roles when they are no longer needed.
 In this guide, you'll use `psql` to manage users in Materialize, so be sure you
 have `psql` installed locally.
 
-If you have not completed the [New User guide](/rbac-newrole.md), you'll need to
+If you have not completed the [New User guide](/manage/user-management/rbac-newrole.md), you'll need to
 create an example environment with a new user, new role, cluster, database,
 schema, and table.
 
