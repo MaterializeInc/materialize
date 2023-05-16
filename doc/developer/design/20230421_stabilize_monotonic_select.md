@@ -14,7 +14,7 @@ With PR MaterializeInc/materialize#18546, it became possible to enable a feature
 # Motivation
 [motivation]: #motivation
 
-Interactive queries that cannot exploit a pre-existing index or materialized view are by default executed in Materialize with the same plans that would be produced for incremental view maintenance, wherein a temporary dataflow is set up to service a one-shot `SELECT` query. As a consequence, these plans employ potentially expensive operators, e.g., for top-k and `MIN`/`MAX` aggregations, which allocate significant state due to the construction of arrangement/reduction hierarchies.
+Complex interactive queries that are not directly reading a pre-existing index or materialized view are processed in Materialize with the same plans that would be produced for incremental view maintenance of the complex SQL statement, but with the difference that the corresponding dataflow to service a one-shot `SELECT` query is only temporary. As a consequence, these plans employ potentially expensive operators, e.g., for top-k and `MIN`/`MAX` aggregations, which allocate significant state due to the construction of arrangement/reduction hierarchies.
 
 One-shot `SELECT` queries could be accelerated by use of monotonic operators, exploiting the observation that single-time dataflows operate on logically monotonic input. The latter can be performed safely by selectively adding consolidation to monotonic plan variants, when necessary, to coerce logical into physical monotonicity. In many cases, the resulting queries can require less memory to process as well as execute in much less query processing time.
 
