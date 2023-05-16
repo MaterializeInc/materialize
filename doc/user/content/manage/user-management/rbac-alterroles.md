@@ -64,7 +64,7 @@ permissions as the `qa` role.
 2. Review the privileges of the `qa` and `dev` roles.
 
    ```sql
+   
    ```
    
 ## Revoke privileges and alter role attributes
-

@@ -74,7 +74,6 @@ to this table.
     create_db      | f
     create_cluster | f
     ```
-    
     Your `id` and `oid` values will look different.
 
     The `inherit`, `create_role`, `create_db`, and `create_cluster` are the

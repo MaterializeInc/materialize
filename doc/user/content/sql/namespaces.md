@@ -47,7 +47,7 @@ For example, to create a materialized view in a specific cluster, your SQL
 statement would be:
 
 ```sql
-CREATE MATERIALIZED VIEW mv IN CLUSTER cluster1 AS ... 
+CREATE MATERIALIZED VIEW mv IN CLUSTER cluster1 AS ...
 ```
 
 Replicas are referenced as `<cluster-name>.<replica-name>`.
