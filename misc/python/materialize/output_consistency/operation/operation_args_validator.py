@@ -19,69 +19,34 @@ class OperationArgsValidator:
     def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
         raise RuntimeError("Not implemented")
 
+    def has_all_characteristics(
+        self,
+        arg: Expression,
+        characteristics: set[ExpressionCharacteristics],
+    ) -> bool:
+        overlap = arg.characteristics & characteristics
+        return len(overlap) == len(characteristics)
 
-class ValueGrowsArgsValidator(OperationArgsValidator):
+    def index_of_characteristic(
+        self,
+        args: list[Expression],
+        characteristic: ExpressionCharacteristics,
+        skip_argument_indices: Optional[set[int]] = None,
+        skip_argument_fn: Callable[
+            [set[ExpressionCharacteristics], int], bool
+        ] = lambda chars, index: False,
+    ) -> int:
+        if skip_argument_indices is None:
+            skip_argument_indices = set()
 
-    # error if one MAX_VALUE and a further NON_EMPTY value
-    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
-        index_of_max_value = index_of_characteristic(
-            args, ExpressionCharacteristics.MAX_VALUE
-        )
+        for index, arg in enumerate(args):
+            if index in skip_argument_indices:
+                continue
 
-        if index_of_max_value == -1:
-            return False
+            if skip_argument_fn(arg.characteristics, index):
+                continue
 
-        index_of_further_inc_value = index_of_characteristic(
-            args,
-            ExpressionCharacteristics.NON_EMPTY,
-            skip_argument_indices={index_of_max_value},
-        )
+            if characteristic in arg.characteristics:
+                return index
 
-        return index_of_further_inc_value >= 0
-
-
-class MaxMinusNegMaxArgsValidator(OperationArgsValidator):
-
-    # error if {MAX_VALUE} and {MAX_VALUE, NEGATIVE}
-    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
-        if len(args) != 2:
-            return False
-
-        return has_all_characteristics(
-            args[0], {ExpressionCharacteristics.MAX_VALUE}
-        ) and has_all_characteristics(
-            args[1],
-            {ExpressionCharacteristics.MAX_VALUE, ExpressionCharacteristics.NEGATIVE},
-        )
-
-
-def index_of_characteristic(
-    args: list[Expression],
-    characteristic: ExpressionCharacteristics,
-    skip_argument_indices: Optional[set[int]] = None,
-    skip_argument_fn: Callable[
-        [set[ExpressionCharacteristics], int], bool
-    ] = lambda chars, index: False,
-) -> int:
-    if skip_argument_indices is None:
-        skip_argument_indices = set()
-
-    for index, arg in enumerate(args):
-        if index in skip_argument_indices:
-            continue
-
-        if skip_argument_fn(arg.characteristics, index):
-            continue
-
-        if characteristic in arg.characteristics:
-            return index
-
-    return -1
-
-
-def has_all_characteristics(
-    arg: Expression,
-    characteristics: set[ExpressionCharacteristics],
-) -> bool:
-    overlap = arg.characteristics & characteristics
-    return len(overlap) == len(characteristics)
+        return -1
