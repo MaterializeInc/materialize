@@ -28,7 +28,7 @@ export_cov() {
       > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
 }
 
-if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -n "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE:-}" ];  then
+if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE:-}" ];  then
     ci_unimportant_heading "Generate coverage information"
     run --mz-quiet down --volumes
 
