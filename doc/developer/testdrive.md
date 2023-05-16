@@ -874,5 +874,14 @@ $ skip-if
 SELECT mz_version_num() < 2601;
 ```
 
+## Run an action/query conditionally on version
+
+```
+(>=5500)> SELECT 1;
+1
+```
+
+The `(>=5500)` prefix allows running the action or query only when we are connected to a Materialize instance with a compatible version. The supported comparison operators are `>`, `>=`, `=`, `<=` and `<`. The version number is the same as returned from [`mz_version_num()`](https://materialize.com/docs/sql/functions/#system-information-func) and has the same format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version. So in the example we are only running the `SELECT 1` query if the Materialize instance is of version `v0.55.0` or higher. For lower versions no query is run and no comparison of results is performed subsequently.
+
 [confluent-arm]: https://github.com/confluentinc/common-docker/issues/117#issuecomment-948789717
 [aws-creds]: https://github.com/MaterializeInc/i2/blob/main/doc/aws-access.md
