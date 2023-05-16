@@ -531,46 +531,57 @@ where
         // to self-coordinate how commands and internal commands are ordered.
         //
         // TODO(guswynn): cluster-unification: consolidate this with compute.
-        match command {
+        let _ = match command {
             StorageCommand::CreateTimely { .. } => {
                 // Similarly, we don't reset state here like compute, because,
                 // until we are required to manage multiple replicas, we can handle
                 // keeping track of state across restarts of storage server(s).
+                Ok(())
             }
-            StorageCommand::RunIngestions(ingestions) => {
-                for ingestion in ingestions {
-                    // TODO: Propagate ingestion.update` into the update.
-                    for export_id in ingestion.description.subsource_ids() {
-                        let mut frontier = MutableAntichain::new();
-                        // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
-                        // merging the types that compute and storage use.
-                        #[allow(clippy::as_conversions)]
-                        frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                        let part_frontiers =
-                            vec![Some(Antichain::from_elem(T::minimum())); self.parts];
-                        let previous = self.uppers.insert(export_id, (frontier, part_frontiers));
-                        assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export_id, command);
-                    }
-                }
-            }
-            StorageCommand::CreateSinks(exports) => {
-                for export in exports {
-                    let mut frontier = MutableAntichain::new();
-                    // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
-                    // merging the types that compute and storage use.
-                    #[allow(clippy::as_conversions)]
-                    frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                    let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
-                    let previous = self.uppers.insert(export.id, (frontier, part_frontiers));
-                    assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", export.id, command);
-                }
-            }
+            StorageCommand::RunIngestions(ingestions) => ingestions
+                .iter()
+                .try_for_each(|i| self.insert_new_uppers(i.description.subsource_ids(), i.update)),
+            StorageCommand::CreateSinks(exports) => exports
+                .iter()
+                .try_for_each(|e| self.insert_new_uppers([e.id], false)),
             StorageCommand::InitializationComplete
             | StorageCommand::UpdateConfiguration(_)
             | StorageCommand::AllowCompaction(_) => {
                 // Other commands have no known impact on frontier tracking.
+                Ok(())
             }
         }
+        .map_err(|id| panic!("Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", id, command));
+    }
+
+    /// Shared implementation for commands that install uppers with controllable behavior with
+    /// encountering existing uppers.
+    ///
+    /// If any ID was previously tracked in `self` and `skip_existing` is `false`, we return the ID
+    /// as an error.
+    fn insert_new_uppers<I: IntoIterator<Item = GlobalId>>(
+        &mut self,
+        ids: I,
+        skip_existing: bool,
+    ) -> Result<(), GlobalId> {
+        for id in ids {
+            if self.uppers.contains_key(&id) && skip_existing {
+                continue;
+            }
+
+            let mut frontier = MutableAntichain::new();
+            // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
+            // merging the types that compute and storage use.
+            #[allow(clippy::as_conversions)]
+            frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
+            let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
+            let previous = self.uppers.insert(id, (frontier, part_frontiers));
+            if previous.is_some() {
+                return Err(id);
+            }
+        }
+
+        Ok(())
     }
 }
 
