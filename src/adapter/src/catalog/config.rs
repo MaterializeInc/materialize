@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytesize::ByteSize;
-use mz_sql::session::vars::ConnectionCounter;
 use serde::Deserialize;
 
 use mz_build_info::BuildInfo;
@@ -25,6 +24,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::ConnectionCounter;
 
 use crate::catalog::storage;
 use crate::config::SystemParameterFrontend;

@@ -19,8 +19,6 @@ use std::sync::Mutex;
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
-use mz_adapter::AdapterError;
-use mz_sql::session::vars::ConnectionCounter;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -30,7 +28,7 @@ use tracing::{debug, warn, Instrument};
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
 };
-use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
+use mz_adapter::{AdapterNotice, AdapterError, ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::{Authentication as FronteggAuthentication, Claims};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -42,7 +40,8 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
-use mz_sql::session::vars::VarInput;
+use mz_sql::session::vars::{VarInput, ConnectionCounter};
+
 
 use crate::codec::FramedConn;
 use crate::message::{

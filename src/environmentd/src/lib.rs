@@ -89,7 +89,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use rand::seq::SliceRandom;
 use tokio::sync::oneshot;
@@ -110,6 +109,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::types::connections::ConnectionContext;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};

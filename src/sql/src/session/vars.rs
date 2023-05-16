@@ -12,14 +12,13 @@ use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use const_format::concatcp;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use std::sync::Mutex;
 use uncased::UncasedStr;
 
 use mz_build_info::BuildInfo;
@@ -1623,7 +1622,7 @@ impl SystemVars {
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES);
-        vars.refresh_state();
+        vars.refresh_internal_state();
         vars
     }
 
@@ -1735,10 +1734,7 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))?;
-
-        if name == MAX_CONNECTIONS.name {
-            self.refresh_state();
-        }
+        self.propagate_var_change(name);
         Ok(result)
     }
 
@@ -1751,10 +1747,7 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
-
-        if name == MAX_CONNECTIONS.name {
-            self.refresh_state();
-        }
+        self.propagate_var_change(name);
         Ok(result)
     }
 
@@ -1777,20 +1770,26 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .map(|v| v.reset())?;
-
-        if name == MAX_CONNECTIONS.name {
-            self.refresh_state();
-        }
+        self.propagate_var_change(name);
         Ok(result)
     }
 
-    /// Refresh the internal state (currently just active_connection_count) when any of
-    /// the system vars that may affect them changes. Today only when MAX_CONNECTIONS changes.
-    fn refresh_state(&mut self) {
-        self.active_connection_count
+    /// Propagate a change to the parameter named `name` to our state.
+    fn propagate_var_change(&mut self, name: &str) {
+        if name == MAX_CONNECTIONS.name {
+            self.active_connection_count
             .lock()
             .expect("lock poisoned")
             .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
+        }
+    }
+
+    /// Make sure that the internal state matches the SystemVars. Generally
+    /// only needed when initializing, `set`, `set_default`, and `reset`
+    /// are responsible for keeping the internal state in sync with
+    /// the affected SystemVars.
+    fn refresh_internal_state(&mut self) {
+        self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.

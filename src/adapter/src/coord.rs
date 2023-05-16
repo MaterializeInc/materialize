@@ -78,7 +78,6 @@ use derivative::Derivative;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_sql::session::vars::ConnectionCounter;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
@@ -110,6 +109,7 @@ use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statemen
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
 use mz_sql::plan::{CopyFormat, Params, QueryWhen};
+use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };

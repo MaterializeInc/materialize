@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
@@ -22,6 +21,7 @@ use tracing::trace;
 
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::netio::AsyncReady;
+use mz_sql::session::vars::ConnectionCounter;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::message::FrontendStartupMessage;
