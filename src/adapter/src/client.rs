@@ -30,7 +30,10 @@ use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::session::user::{User, INTROSPECTION_USER};
 
-use crate::command::{Canceled, Command, ExecuteResponse, Response, StartupResponse};
+use crate::command::{
+    Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse, Response,
+    StartupResponse,
+};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
@@ -409,7 +412,7 @@ impl SessionClient {
     }
 
     /// Dumps the catalog to a JSON string.
-    pub async fn dump_catalog(&mut self) -> Result<String, AdapterError> {
+    pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
         self.send(|tx, session| Command::DumpCatalog { session, tx })
             .await
     }
@@ -436,7 +439,7 @@ impl SessionClient {
     }
 
     /// Gets the current value of all system variables.
-    pub async fn get_system_vars(&mut self) -> Result<BTreeMap<String, String>, AdapterError> {
+    pub async fn get_system_vars(&mut self) -> Result<GetVariablesResponse, AdapterError> {
         self.send(|tx, session| Command::GetSystemVars { session, tx })
             .await
     }

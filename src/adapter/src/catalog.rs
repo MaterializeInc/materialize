@@ -103,6 +103,7 @@ pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Con
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
+use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
@@ -6719,8 +6720,8 @@ impl Catalog {
     /// There are no guarantees about the format of the serialized state, except
     /// that the serialized state for two identical catalogs will compare
     /// identically.
-    pub fn dump(&self) -> String {
-        self.state.dump()
+    pub fn dump(&self) -> CatalogDump {
+        CatalogDump::new(self.state.dump())
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
