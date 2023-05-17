@@ -136,8 +136,8 @@ class QueryExecutionManager:
             self.executor.commit()
 
     def rollback_tx(self, start_new_tx: bool) -> None:
-        if not self.config.use_autocommit:
-            self.executor.rollback()
+        # do this also when in autocommit mode
+        self.executor.rollback()
 
         if start_new_tx:
             self.begin_tx(commit_previous_tx=False)
