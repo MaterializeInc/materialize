@@ -7,24 +7,17 @@ menu:
     weight: 16
 ---
 
-In the previous guide, you created a new role and assigned privileges for
+In the [previous guide](/manage/user-management/rbac-newrole), you created a new role and assigned privileges for
 specific objects. This guide walks you through updating your previously created
 roles and removing users or roles when they are no longer needed.
 
 ## Before you begin
 
-In this guide, you'll use `psql` to manage users in Materialize, so be sure you
-have `psql` installed locally.
+Make sure you have already created a new user and a role.
 
-If you have not completed the New User guide, you'll need to
-create an example environment with a new user, new role, cluster, database,
-schema, and table.
+## Step 1. Create a second role
 
-## Create a second role
-
-If you completed the previous new user guide and did not destroy your
-environment, your `dev_role` still exists in your `mz_roles` table. For this
-tutorial, you will create a new role with different privileges to other objects.
+For this tutorial, you will create a new role with different privileges to other objects.
 Then you will apply those privileges to the `dev` role and alter or drop
 privileges as needed.
 
@@ -45,9 +38,10 @@ privileges as needed.
 3. Apply `USAGE` and `CREATE` privileges to the `qa_role` role for the new database:
 
    ```sql
+   GRANT USAGE, CREATE ON DATABASE qa_db TO qa_role;
    ```
 
-## Add inherited privileges to a role
+## Step 2. Add inherited privileges to a role
 
 Your `dev_role` also needs access to `qa_db`. You can apply these
 privileges individually or you can choose to grant the `dev_role` the same
@@ -81,7 +75,7 @@ permissions as the `qa_role`.
    the next section, you will edit role attributes for these roles and drop
    privileges.
 
-## Revoke privileges and alter role attributes
+## Step 3. Revoke privileges and alter role attributes
 
 Your `dev_role` and `qa_role` have the same role attributes. You can alter or
 revoke certain attributes and privileges for each role, even if they are

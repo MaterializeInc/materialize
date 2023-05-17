@@ -7,21 +7,21 @@ menu:
     weight: 10
 ---
 
-This document introduces role-based access management (RBAC) in Materialize. RBAC allows you to apply more
-granular privileges to your Materialize objects and clusters. Organizations
+This page introduces role-based access management (RBAC) in Materialize. RBAC
+allows you to apply granular privileges to your Materialize objects and clusters. Organizations
 using RBAC can manage user roles and privileges to ensure there is not
 unauthorized or improper access to sensitive objects.
 
 In Materialize, RBAC allows organization administrators to:
 
-* determine which users have read or write permissions for specific objects
+* Determine which users have read or write permissions for specific objects
 
-* control how users interact with clusters by giving them different levels of access to
+* Control how users interact with clusters by giving them different levels of access to
 resources
 
-* prevent accident operations from unauthorized users
+* Prevent accident operations from unauthorized users
 
-* isolate access to user-facing data from internal organization data
+* Isolate access to user-facing data from internal organization data
 
 Materialize object access is also dependant on cluster privileges.
 Users who need access to an object like a schema or a database must also have
@@ -34,7 +34,6 @@ the objects within Materialize.
 
 ## Authentication vs. authorization
 
-First, we need to make a distinction between authentication and authorization.
 Authentication dictates who can log in to a system while authorization
 determines what a user can access within a system.
 
@@ -83,30 +82,32 @@ objects that role needs to access.
 
 Materialize supports the following privileges:
 
-| Privilege | Description                                                              | Abbreviation  |
-|-----------|--------------------------------------------------------------------------|---------------|
-| `SELECT`  | Allows reading rows from an object.                                      | `r`("read")   |
-| `INSERT`  | Allows inserting into an object.                                         | `a`("append") |
-| `UPDATE`  | Allows updating an object (requires `SELECT`).      | `w`("write")  |
-| `DELETE`  | Allows deleting from an object (requires `SELECT`). | `d`           |
-| `CREATE`  | Allows creating a new object within another object.                      | `C`           |
-| `USAGE`   | Allows using an object or looking up members of an object.               | `U`           |
+| Privilege   | Description                                                  | `psql`   |
+| :---------: | :----------------------------------------------------------: | :------: |
+| `SELECT`    | Allows selecting rows from an object.                        | `r`      |
+| `INSERT`    | Allows inserting into an object.                             | `a`      |
+| `UPDATE`    | Allows updating an object (requires `SELECT`).               | `w`      |
+| `DELETE`    | Allows deleting from an object (requires `SELECT`).          | `d`      |
+| `CREATE`    | Allows creating a new object within another object.          | `U`      |
+| `USAGE`     | Allows using an object or looking up members of an object.   | `C`      |
+
+Note that `psql` returns an abbreviation of the privilege name.
 
 Objects in Materialize have different levels of privileges available to them.
 Materialize supports the following object type privileges:
 
-| Object Type          | All Privileges |
-|----------------------|----------------|
-| `DATABASE`           | `U` `C`             |
-| `SCHEMA`             | `U` `C`             |
-| `TABLE`              | `a` `r` `w` `d`           |
-| `VIEW`               | `r`              |
-| `MATERIALIZED  VIEW` | `r`              |
-| `TYPE`               | `U`              |
-| `SOURCE`             | `r`              |
-| `CONNECTION`         | `U`              |
-| `SECRET`             | `U`              |
-| `CLUSTER`            | `U` `C`          |
+|     Object Type      |             Privileges              |
+|:--------------------:|:-----------------------------------:|
+|      `DATABASE`      |          `USAGE` `CREATE`           |
+|       `SCHEMA`       |          `USAGE` `CREATE`           |
+|       `TABLE`        | `INSERT` `SELECT` `UPDATE` `DELETE` |
+|        `VIEW`        |              `SELECT`               |
+| `MATERIALIZED  VIEW` |              `SELECT`               |
+|        `TYPE`        |               `USAGE`               |
+|       `SOURCE`       |              `SELECT`               |
+|     `CONNECTION`     |               `USAGE`               |
+|       `SECRET`       |               `USAGE`               |
+|      `CLUSTER`       |          `USAGE` `CREATE`           |
 
 
 ### Inheritance

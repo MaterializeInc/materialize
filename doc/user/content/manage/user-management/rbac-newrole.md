@@ -17,13 +17,11 @@ the end of this tutorial you will:
 
 ## Before you begin
 
-In this guide, you'll use `psql` to manage users in Materialize, so be sure you
-have `psql` installed locally.
+* Make sure you have `psql` installed locally.
 
-If you have not signed up for a free trial, [sign up now](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+* Make sure you have a [Materialize account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
-
-## Invite a new user
+## Step 1. Invite a new user
 
 First, [login to the Materialize console](https://console.materialize.com/) and navigate to Account > Account
 Settings > Users.
@@ -33,17 +31,17 @@ Click **Invite User** and fill in the user information.
 The **Organization Admin** and **Organization Member** roles refer to `SUPERUSER`
 privileges
 
-## Create a new role
+## Step 2. Connect to Materialize
 
 Materialize stores role names, IDs, and object IDs in the `mz_roles` catalog
 table. You need to connect to your Materialize instance with `psql` to add roles
 to this table.
 
-1. In the [Materialize UI](https://console.materialize.com/), enable the region where you want to run Materialize.
-
-. On the **Connect** screen, create a new app password and then copy the `psql` command.
+1. In the [Materialize UI](https://console.materialize.com/), go to the **Connect** screen, create a new app password and then copy the `psql` command.
 
     The app password will be displayed only once, so be sure to copy the password somewhere safe. If you forget your password, you can create a new one.
+
+## Step 3. Create a new role
 
 1. Open a new terminal window, run the `psql` command, and enter your app password.
 
@@ -78,21 +76,20 @@ to this table.
 
     The `inherit`, `create_role`, `create_db`, and `create_cluster` are the
     role attributes assigned to a role when it is created. These attributes
-    determine the system level permissions of a role and do not impact object
-    level privileges.
+    determine the system-level permissions of a role and do not impact object-level privileges.
 
-    `INHERIT` is set to true by default and allows roles to inherit the
+   * `INHERIT` is set to true by default and allows roles to inherit the
     privileges of roles it is a member of.
 
-    `CREATEROLE` allows the role to create, change, or delete other roles or
+   * `CREATEROLE` allows the role to create, change, or delete other roles or
     assign role membership.
 
-    `CREATEDB` allows the role to create new databases.
+   * `CREATEDB` allows the role to create new databases.
 
-    `CREATECLUSTER` allows the role to create Materialize clusters. This
+   * `CREATECLUSTER` allows the role to create Materialize clusters. This
     attribute is unique to the Materialize concept of clusters.
 
-## Create example objects
+## Step 4. Create example objects
 
 Your `dev_role` has the default system-level permissions and needs object
 specific privileges. RBAC allows you to apply granular privileges to objects in the SQL hierarchy. Let's create some example objects in the system and determine what
@@ -130,7 +127,7 @@ You just created a set of objects. Your schema object belongs to
 the database. You can access the cluster from any database. The next
 step is to grant privileges to your role based on the role needs.
 
-## Grant privileges to a role
+## Step 5. Grant privileges to a role
 
 In this example, let's say your `dev_role` needs the following permissions:
 
@@ -172,7 +169,7 @@ In this example, let's say your `dev_role` needs the following permissions:
    To have access to the objects within a cluster, you must also have the same
    level of access to the cluster itself.
 
-## Assign a role to a user
+## Step 6. Assign a role to a user
 
 The `dev_role` now has the acceptable privileges it needs. Let's apply this role
 to a user in your Materialize organization.

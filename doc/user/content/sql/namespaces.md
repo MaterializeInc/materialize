@@ -9,6 +9,13 @@ menu:
     weight: 126
 ---
 
+Namespaces are a logical way to organize Materialize objects. In
+organizations with multiple objects, they help avoid naming conflicts and make
+it easier to manage objects. Namespaces allow you to refer to objects by a fully
+qualified name like `namespace.object_name`.
+
+## Namespace hierarchy
+
 Materialize follows SQL standard's namespace hierarchy for most objects. The
 Materialize structure is:
 
