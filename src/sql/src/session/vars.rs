@@ -512,18 +512,6 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
-/// Controls whether or not to use the new storage `persist_sink` implementation in storage
-/// ingestions.
-const ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_multi_worker_storage_persist_sink"),
-    value: &false,
-    description: "Whether or not to use the new multi-worker storage `persist_sink` \
-                  implementation in storage ingestions. Is applied only \
-                  when a cluster or dataflow is restarted.",
-    internal: true,
-    safe: true,
-};
-
 /// The default for the `DISK` option in `UPSERT` sources.
 const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("upsert_source_disk_default"),
@@ -700,7 +688,8 @@ const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::PersistConfig::storage_sink_minimum_batch_updates`].
 const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("storage_persist_sink_minimum_batch_updates"),
-    value: &PersistConfig::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
+    // Reasonable default based on our experience in production.
+    value: &1024,
     description: "In the storage persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
@@ -1665,7 +1654,6 @@ impl SystemVars {
             .with_var(&MAX_ROLES)
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
-            .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
             .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
             .with_var(&ENABLE_UPSERT_SOURCE_DISK)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
@@ -1959,11 +1947,6 @@ impl SystemVars {
             .into_iter()
             .map(|s| s.as_str().into())
             .collect()
-    }
-
-    /// Returns the `enable_multi_worker_storage_persist_sink` configuration parameter.
-    pub fn enable_multi_worker_storage_persist_sink(&self) -> bool {
-        *self.expect_value(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
     }
 
     /// Returns the `upsert_source_disk_default` configuration parameter.
@@ -3209,8 +3192,7 @@ pub fn is_compute_config_var(name: &str) -> bool {
 
 /// Returns whether the named variable is a storage configuration parameter.
 pub fn is_storage_config_var(name: &str) -> bool {
-    name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name()
-        || name == PG_REPLICATION_CONNECT_TIMEOUT.name()
+    name == PG_REPLICATION_CONNECT_TIMEOUT.name()
         || name == PG_REPLICATION_KEEPALIVES_IDLE.name()
         || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()

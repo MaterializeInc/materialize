@@ -1130,8 +1130,6 @@ impl StorageState {
                 if worker_index == 0 {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration(
                         DataflowParameters {
-                            enable_multi_worker_storage_persist_sink: params
-                                .enable_multi_worker_storage_persist_sink,
                             pg_replication_timeouts: params.pg_replication_timeouts,
                             upsert_rocksdb_tuning_config: params.upsert_rocksdb_tuning_config,
                         },
