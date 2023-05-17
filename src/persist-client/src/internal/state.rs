@@ -1136,26 +1136,18 @@ where
         self.collections.trace.upper()
     }
 
-    pub fn batch_part_count(&self) -> usize {
-        self.collections.trace.num_batch_parts()
-    }
-
-    pub fn hollow_batch_count(&self) -> usize {
-        self.collections.trace.num_hollow_batches()
-    }
-
     pub fn spine_batch_count(&self) -> usize {
         self.collections.trace.num_spine_batches()
-    }
-
-    pub fn num_updates(&self) -> usize {
-        self.collections.trace.num_updates()
     }
 
     pub fn size_metrics(&self) -> StateSizeMetrics {
         let mut ret = StateSizeMetrics::default();
         self.map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
+                ret.hollow_batch_count += 1;
+                ret.batch_part_count += x.parts.len();
+                ret.num_updates += x.len;
+
                 let mut batch_size = 0;
                 for x in x.parts.iter() {
                     batch_size += x.encoded_size_bytes;
@@ -1344,6 +1336,9 @@ where
 
 #[derive(Debug, Default)]
 pub struct StateSizeMetrics {
+    pub hollow_batch_count: usize,
+    pub batch_part_count: usize,
+    pub num_updates: usize,
     pub largest_batch_bytes: usize,
     pub state_batches_bytes: usize,
     pub state_rollups_bytes: usize,

@@ -142,23 +142,17 @@ impl<T> Trace<T> {
         ret
     }
 
+    #[cfg(test)]
     pub fn num_hollow_batches(&self) -> usize {
         let mut ret = 0;
         self.map_batches(|_| ret += 1);
         ret
     }
 
+    #[cfg(test)]
     pub fn num_updates(&self) -> usize {
         let mut ret = 0;
         self.map_batches(|b| ret += b.len);
-        ret
-    }
-
-    pub fn num_batch_parts(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|b| {
-            ret += b.parts.len();
-        });
         ret
     }
 }
