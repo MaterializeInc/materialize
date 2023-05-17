@@ -15,7 +15,7 @@
 
 //! Driver for the `mz profile` command.
 
-use mz::command::profile::{ConfigArg, ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs};
+use mz::command::profile::{ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs};
 use mz::context::Context;
 use mz::error::Error;
 

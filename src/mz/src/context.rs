@@ -20,9 +20,11 @@
 //! valid authentication profile and active region.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config_file::ConfigFile;
 use crate::error::Error;
+use crate::sql_client::{Client as SqlClient, ClientConfig as SqlClientConfig};
 use crate::ui::{OutputFormat, OutputFormatter};
 use mz_cloud_api::client::environment::Environment;
 use mz_cloud_api::client::region::Region;
@@ -74,24 +76,6 @@ impl Context {
         })
     }
 
-    fn build_admin_client(
-        &self,
-        endpoint: Option<&str>,
-        app_password: &str,
-    ) -> Result<AdminClient, Error> {
-        let mut admin_client_builder = AdminClientBuilder::default();
-
-        if let Some(admin_endpoint) = endpoint {
-            admin_client_builder = admin_client_builder.endpoint(admin_endpoint.parse()?);
-        }
-
-        let admin_client = admin_client_builder.build(AdminClientConfig {
-            app_password: app_password.parse()?,
-        });
-
-        Ok(admin_client)
-    }
-
     /// Converts this context into a [`ProfileContext`].
     ///
     /// If a profile is not specified, the default profile is activated.
@@ -100,9 +84,11 @@ impl Context {
         let config_file = self.config_file.clone();
         let profile = config_file.load_profile(&profile_name)?;
 
-        // TODO:
-        // Only one client should do the work. Remove repeated code;
-        // Build cloud client
+        // Build clients
+        let admin_client: Arc<AdminClient> = Arc::new(AdminClientBuilder::default().build(AdminClientConfig {
+            app_password: profile.app_password().parse()?,
+        }));
+
         let mut cloud_client_builder = CloudClientBuilder::default();
 
         if let Some(cloud_endpoint) = profile.cloud_endpoint() {
@@ -110,20 +96,21 @@ impl Context {
         }
 
         let cloud_client = cloud_client_builder.build(CloudClientConfig {
-            auth_client: self
-                .build_admin_client(profile.admin_endpoint(), profile.app_password())?,
+            auth_client: admin_client.clone(),
         });
 
-        let admin_client = self.build_admin_client(
-            profile.admin_endpoint().clone(),
-            profile.app_password().clone(),
-        )?;
+        // The sql client is created here to avoid having to handle the config around. E.g. reading config from config_file
+        // this happens because profile is 'a static, and adding it to the profile context would make also the context 'a, etc.
+        let sql_client = SqlClient::new(SqlClientConfig {
+            app_password: profile.app_password().parse()?,
+        });
 
         Ok(ProfileContext {
             context: self,
             profile_name,
             admin_client,
             cloud_client,
+            sql_client,
         })
     }
 
@@ -142,8 +129,9 @@ impl Context {
 pub struct ProfileContext {
     context: Context,
     profile_name: String,
-    admin_client: AdminClient,
+    admin_client: Arc::<AdminClient>,
     cloud_client: CloudClient,
+    sql_client: SqlClient,
 }
 
 impl ProfileContext {
@@ -202,6 +190,11 @@ impl RegionContext {
         &self.context.cloud_client
     }
 
+    /// Returns a SQL client connected to region associated with this context.
+    pub fn sql_client(&self) -> &SqlClient {
+        &self.context.sql_client
+    }
+
     pub async fn get_region(&self) -> Result<Region, Error> {
         let client = &self.context.cloud_client;
         let cloud_providers = client.list_cloud_providers().await?;
@@ -220,26 +213,6 @@ impl RegionContext {
         let environment = client.get_environment(region).await?;
 
         Ok(environment)
-    }
-
-    /// Returns a SQL client connected to region associated with this context.
-    pub fn sql_client(&self) {
-        // let error = Command::new("psql")
-        //     .args(self.psql_args())
-        //     .env("PGPASSWORD", self..get_profile_param(crate::command::profile::ConfigArg::AppPassword))
-        //     .env("PGAPPNAME", PG_APPLICATION_NAME)
-        //     .exec();
-
-        // Err(error).context("failed to spawn psql")
-    }
-
-    /// Returns the `psql` arguments required to connect to the region
-    /// associated with this context.
-    pub fn psql_args(&self) -> Vec<String> {
-        // TODO: Environment should be retrieved when activate is ran.
-
-        // vec![self.get_environment(self.get_region().await)]
-        vec![]
     }
 
     /// Returns the configuration file loaded by this context.

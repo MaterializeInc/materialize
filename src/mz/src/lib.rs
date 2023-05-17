@@ -26,4 +26,5 @@ pub mod config_file;
 pub mod context;
 pub mod error;
 mod server;
+mod sql_client;
 pub mod ui;

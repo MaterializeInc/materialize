@@ -25,9 +25,9 @@ use mz_ore::str::StrExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
-use toml_edit::{Document};
+use toml_edit::Document;
 
-use crate::{error::Error};
+use crate::error::Error;
 
 static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
     btreemap! {
@@ -111,9 +111,12 @@ impl ConfigFile {
         let mut editable = self.editable.clone();
         let profiles = editable["profiles"].as_table_mut().unwrap();
 
-        profiles[&name]["admin_endpoint"] = toml_edit::value(profile.admin_endpoint.unwrap_or(String::new()));
-        profiles[&name]["app_password"] = toml_edit::value(profile.app_password.unwrap_or(String::new()));
-        profiles[&name]["cloud_endpoint"] = toml_edit::value(profile.cloud_endpoint.unwrap_or(String::new()));
+        profiles[&name]["admin_endpoint"] =
+            toml_edit::value(profile.admin_endpoint.unwrap_or(String::new()));
+        profiles[&name]["app_password"] =
+            toml_edit::value(profile.app_password.unwrap_or(String::new()));
+        profiles[&name]["cloud_endpoint"] =
+            toml_edit::value(profile.cloud_endpoint.unwrap_or(String::new()));
         profiles[&name]["region"] = toml_edit::value(profile.region.unwrap_or(String::new()));
         profiles[&name]["vault"] = toml_edit::value(profile.vault.unwrap_or(String::new()));
 
@@ -168,11 +171,7 @@ impl ConfigFile {
     }
 
     /// Sets the value of a profile's configuration parameter.
-    pub async fn set_profile_param(
-        &self,
-        name: &str,
-        value: Option<&str>,
-    ) -> Result<(), Error> {
+    pub async fn set_profile_param(&self, name: &str, value: Option<&str>) -> Result<(), Error> {
         let mut editable = self.editable.clone();
 
         // Update the value
@@ -252,6 +251,10 @@ pub struct Profile<'a> {
 }
 
 impl Profile<'_> {
+    pub fn name(&self) -> &str {
+        self.name
+    }
+
     pub fn app_password(&self) -> &str {
         (PROFILE_PARAMS["app-password"].get)(self.parsed).unwrap()
     }

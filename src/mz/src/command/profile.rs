@@ -187,9 +187,7 @@ pub async fn config_set(
     cx: &mut ProfileContext,
     ConfigSetArgs { name, value }: ConfigSetArgs<'_>,
 ) -> Result<(), Error> {
-    cx.config_file()
-        .set_profile_param(name, Some(value))
-        .await
+    cx.config_file().set_profile_param(name, Some(value)).await
 }
 
 pub struct ConfigRemoveArgs<'a> {

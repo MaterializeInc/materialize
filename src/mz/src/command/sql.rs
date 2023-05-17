@@ -17,6 +17,8 @@
 //!
 //! Consult the user-facing documentation for details.
 
+use std::os::unix::process::CommandExt;
+
 use crate::{context::RegionContext, error::Error};
 
 pub struct RunArgs {
@@ -24,5 +26,13 @@ pub struct RunArgs {
 }
 
 pub async fn run(cx: &mut RegionContext, RunArgs { psql_args }: RunArgs) -> Result<(), Error> {
-    todo!();
+    let sql_client = cx.sql_client();
+    let claims = cx.admin_client().claims();
+    let region = cx.get_region().await?;
+    let enviornment = cx.get_environment(region).await?;
+    let email = claims.await?.email;
+
+    let _error = sql_client.shell(enviornment, email).args(psql_args).exec();
+
+    Ok(())
 }
