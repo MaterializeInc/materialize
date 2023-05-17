@@ -3554,7 +3554,7 @@ impl Coordinator {
                                 }(rows)
                             }
                             PeekResponseUnary::Canceled => {
-                                Err(AdapterError::Unstructured(anyhow!("execution canceled")))
+                                Err(AdapterError::Canceled)
                             }
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))
