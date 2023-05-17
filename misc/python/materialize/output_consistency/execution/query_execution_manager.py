@@ -132,10 +132,12 @@ class QueryExecutionManager:
         self.executor.begin_tx("SERIALIZABLE")
 
     def commit_tx(self) -> None:
-        self.executor.commit()
+        if not self.config.use_autocommit:
+            self.executor.commit()
 
     def rollback_tx(self, start_new_tx: bool) -> None:
-        self.executor.rollback()
+        if not self.config.use_autocommit:
+            self.executor.rollback()
 
         if start_new_tx:
             self.begin_tx(commit_previous_tx=False)

@@ -12,6 +12,7 @@ class ConsistencyTestConfiguration:
     def __init__(
         self,
         queries_per_tx: int = 20,
+        use_autocommit: bool = True,
         max_cols_per_query: int = 8,
         random_seed: int = 0,
         split_and_retry_on_db_error: bool = True,
@@ -21,6 +22,7 @@ class ConsistencyTestConfiguration:
         verbose_output: bool = False,
     ):
         self.queries_per_tx = queries_per_tx
+        self.use_autocommit = use_autocommit
         self.max_cols_per_query = max_cols_per_query
         self.random_seed = random_seed
         self.split_and_retry_on_db_error = split_and_retry_on_db_error

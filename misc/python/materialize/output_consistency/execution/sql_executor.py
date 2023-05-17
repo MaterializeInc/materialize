@@ -45,8 +45,9 @@ class SqlExecutor:
 
 
 class PgWireDatabaseSqlExecutor(SqlExecutor):
-    def __init__(self, cursor: Cursor):
+    def __init__(self, cursor: Cursor, use_autocommit: bool):
         self.cursor = cursor
+        self.cursor.connection.autocommit = use_autocommit
 
     def ddl(self, sql: str) -> None:
         try:
@@ -116,4 +117,4 @@ def create_sql_executor(
     if config.dry_run:
         return DryRunSqlExecutor()
     else:
-        return PgWireDatabaseSqlExecutor(cursor)
+        return PgWireDatabaseSqlExecutor(cursor, config.use_autocommit)
