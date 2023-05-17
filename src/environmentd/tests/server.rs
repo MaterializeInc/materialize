@@ -466,21 +466,22 @@ fn test_closing_connection_cancels_dataflows(query: String) {
             // affected by it.
             "--no-psqlrc",
             &format!(
-            "postgres://{}:{}/materialize",
-            Ipv4Addr::LOCALHOST,
-            server.inner.sql_local_addr().port()
-            )])
+                "postgres://{}:{}/materialize",
+                Ipv4Addr::LOCALHOST,
+                server.inner.sql_local_addr().port()
+            ),
+        ])
         .stdin(Stdio::piped());
     tracing::info!("spawning: {cmd:#?}");
     let mut child = cmd.spawn().expect("failed to spawn psql");
-        let mut stdin = child.stdin.take().expect("failed to open stdin");
-        thread::spawn(move || {
-            use std::io::Write;
-            stdin
-                .write_all("SET STATEMENT_TIMEOUT = \"120s\";".as_bytes())
-                .unwrap();
-            stdin.write_all(query.as_bytes()).unwrap();
-        });
+    let mut stdin = child.stdin.take().expect("failed to open stdin");
+    thread::spawn(move || {
+        use std::io::Write;
+        stdin
+            .write_all("SET STATEMENT_TIMEOUT = \"120s\";".as_bytes())
+            .unwrap();
+        stdin.write_all(query.as_bytes()).unwrap();
+    });
 
     let spawned_psql = Instant::now();
 
