@@ -139,6 +139,8 @@ pub enum AdapterError {
     ///
     /// Note this differs slightly from PG's implementation/semantics.
     StatementTimeout,
+    /// The user canceled the query
+    Canceled,
     /// An idle session in a transaction has timed out.
     IdleInTransactionSessionTimeout,
     /// An error occurred in a SQL catalog operation.
@@ -423,6 +425,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")
+            }
+            AdapterError::Canceled => {
+                write!(f, "canceling statement due to user request")
             }
             AdapterError::IdleInTransactionSessionTimeout => {
                 write!(

@@ -77,8 +77,10 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::net::Ipv4Addr;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{iter, thread};
 
 use anyhow::bail;
@@ -366,10 +368,7 @@ fn test_cancel_long_running_query() {
         .expect("simple query succeeds after cancellation");
 }
 
-// Test that dataflow uninstalls cancelled peeks.
-#[test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-fn test_cancel_dataflow_removal() {
+fn test_cancellation_cancels_dataflows(query: &str) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
 
@@ -412,7 +411,7 @@ fn test_cancel_dataflow_removal() {
         cancel_token.cancel_query(postgres::NoTls).unwrap();
     });
 
-    match client1.simple_query("SELECT * FROM t AS OF 9223372036854775807") {
+    match client1.simple_query(query) {
         Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {}
         Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {:?}", e),
         Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
@@ -435,6 +434,127 @@ fn test_cancel_dataflow_removal() {
             }
         })
         .unwrap();
+}
+
+// Test that dataflow uninstalls cancelled peeks.
+#[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_dataflow_removal() {
+    test_cancellation_cancels_dataflows("SELECT * FROM t AS OF 9223372036854775807");
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_long_select() {
+    test_cancellation_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_cancel_insert_select() {
+    test_cancellation_cancels_dataflows("INSERT INTO t WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;");
+}
+
+fn test_closing_connection_cancels_dataflows(query: String) {
+    let config = util::Config::default().unsafe_mode();
+    let server = util::start_server(config).unwrap();
+
+    let mut cmd = Command::new("psql");
+    let cmd = cmd
+        .args([
+            // Ignore .psqlrc so that local execution of testdrive isn't
+            // affected by it.
+            "--no-psqlrc",
+            &format!(
+                "postgres://{}:{}/materialize",
+                Ipv4Addr::LOCALHOST,
+                server.inner.sql_local_addr().port()
+            ),
+        ])
+        .stdin(Stdio::piped());
+    tracing::info!("spawning: {cmd:#?}");
+    let mut child = cmd.spawn().expect("failed to spawn psql");
+    let mut stdin = child.stdin.take().expect("failed to open stdin");
+    thread::spawn(move || {
+        use std::io::Write;
+        stdin
+            .write_all("SET STATEMENT_TIMEOUT = \"120s\";".as_bytes())
+            .unwrap();
+        stdin.write_all(query.as_bytes()).unwrap();
+    });
+
+    let spawned_psql = Instant::now();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Wait until we see the expected dataflow.
+    Retry::default()
+        .retry(|_state| {
+            if spawned_psql.elapsed() > Duration::from_secs(30) {
+                panic!("waited too long for psql to send the query");
+            }
+            let count: i64 = client
+                .query_one(
+                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                    &[],
+                )
+                .map_err(|_| ())
+                .unwrap()
+                .get(0);
+            if count == 0 {
+                Err(())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+
+    let started = Instant::now();
+    if let Some(wait_status) = child.try_wait().expect("wait shouldn't error") {
+        panic!("child should still be running, it exitted with {wait_status}");
+    }
+    child.kill().expect("killing psql child");
+
+    // Expect the dataflows to shut down.
+    Retry::default()
+        .retry(|_state| {
+            if started.elapsed() > Duration::from_secs(30) {
+                // this has to be less than statement timeout
+                panic!("waited too long for dataflow cancellation");
+            }
+            let count: i64 = client
+                .query_one(
+                    "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
+                    &[],
+                )
+                .map_err(|_| ())
+                .unwrap()
+                .get(0);
+            if count == 0 {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .unwrap();
+    info!(
+        "Took {:#?} until dataflows were cancelled",
+        started.elapsed()
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_closing_connection_for_long_select() {
+    mz_ore::test::init_logging();
+    test_closing_connection_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+fn test_closing_connection_for_insert_select() {
+    mz_ore::test::init_logging();
+    test_closing_connection_cancels_dataflows("CREATE TABLE t1 (a int); INSERT INTO t1 WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
 #[test]

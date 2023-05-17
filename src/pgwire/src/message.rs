@@ -348,6 +348,7 @@ impl ErrorResponse {
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
+            AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
                 SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT
             }

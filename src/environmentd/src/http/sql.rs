@@ -760,7 +760,10 @@ async fn execute_stmt<S: ResultSender>(
         .map(|portal| portal.desc.clone())
         .expect("unnamed portal should be present");
 
-    let res = match client.execute(EMPTY_PORTAL.into()).await {
+    let res = match client
+        .execute(EMPTY_PORTAL.into(), futures::future::pending())
+        .await
+    {
         Ok(res) => res,
         Err(e) => {
             return Ok(SqlResult::err(client, e).into());
