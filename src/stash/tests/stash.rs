@@ -314,7 +314,7 @@ async fn test_stash_postgres() {
         assert_eq!(rows, BTreeMap::from([(S2 { a: 1, b: Some(3) }, 2)]));
     }
 
-    // Test large update batches.
+    // Test batches with a large serialized size.
     {
         static S: TypedCollection<i64, String> = TypedCollection::new("s");
         let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
@@ -333,6 +333,16 @@ async fn test_stash_postgres() {
             .await
             .unwrap();
         assert_eq!(S.iter(&mut stash).await.unwrap().len(), 2);
+    }
+    // Test batches with a large number of individual updates.
+    {
+        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
+        let col = stash.collection::<i64, i64>("c1").await.unwrap();
+        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        for i in 0..500_000 {
+            col.append_to_batch(&mut batch, &i, &(i + 1), 1);
+        }
+        stash.append(vec![batch]).await.unwrap();
     }
     // Test readonly.
     {
