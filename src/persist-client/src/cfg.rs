@@ -140,6 +140,7 @@ impl PersistConfig {
                 consensus_connection_pool_ttl: Duration::from_secs(300),
                 consensus_connection_pool_ttl_stagger: Duration::from_secs(6),
                 consensus_connect_timeout: RwLock::new(Self::DEFAULT_CRDB_CONNECT_TIMEOUT),
+                consensus_tcp_user_timeout: RwLock::new(Self::DEFAULT_CRDB_TCP_USER_TIMEOUT),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(usize::cast_from(
                     30 * Self::NEED_ROLLUP_THRESHOLD,
@@ -217,6 +218,8 @@ impl PersistConfig {
     pub const DEFAULT_COMPACTION_MINIMUM_TIMEOUT: Duration = Duration::from_secs(90);
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].
     pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    /// Default value for [`DynamicConfig::consensus_tcp_user_timeout`].
+    pub const DEFAULT_CRDB_TCP_USER_TIMEOUT: Duration = Duration::from_secs(15);
     /// Default value for [`DynamicConfig::stats_audit_percent`].
     pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 0;
     /// Default value for [`DynamicConfig::stats_collection_enabled`].
@@ -276,6 +279,14 @@ impl ConsensusKnobs for PersistConfig {
             .read()
             .expect("lock poisoned")
     }
+
+    fn tcp_user_timeout(&self) -> Duration {
+        *self
+            .dynamic
+            .consensus_tcp_user_timeout
+            .read()
+            .expect("lock poisoned")
+    }
 }
 
 /// Persist configurations that can be dynamically updated.
@@ -309,6 +320,7 @@ pub struct DynamicConfig {
     state_versions_recent_live_diffs_limit: AtomicUsize,
     usage_state_fetch_concurrency_limit: AtomicUsize,
     consensus_connect_timeout: RwLock<Duration>,
+    consensus_tcp_user_timeout: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
     storage_sink_minimum_batch_updates: AtomicUsize,
     stats_audit_percent: AtomicUsize,
@@ -457,6 +469,16 @@ impl DynamicConfig {
             .expect("lock poisoned")
     }
 
+    /// The TCP user timeout for a Consensus Postgres/CRDB connection. Specifies the amount
+    /// of time that transmitted data may remain unacknowledged before the TCP connection is
+    /// forcibly closed.
+    pub fn consensus_tcp_user_timeout(&self) -> Duration {
+        *self
+            .consensus_tcp_user_timeout
+            .read()
+            .expect("lock poisoned")
+    }
+
     /// The maximum number of concurrent blob deletes during garbage collection.
     pub fn gc_blob_delete_concurrency_limit(&self) -> usize {
         self.gc_blob_delete_concurrency_limit
@@ -575,6 +597,8 @@ pub struct PersistParameters {
     pub compaction_minimum_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::consensus_connect_timeout`].
     pub consensus_connect_timeout: Option<Duration>,
+    /// Configures [`DynamicConfig::consensus_tcp_user_timeout`].
+    pub consensus_tcp_user_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::next_listen_batch_retry_params`].
     pub next_listen_batch_retryer: Option<RetryParameters>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
@@ -602,6 +626,7 @@ impl PersistParameters {
             blob_target_size: self_blob_target_size,
             compaction_minimum_timeout: self_compaction_minimum_timeout,
             consensus_connect_timeout: self_consensus_connect_timeout,
+            consensus_tcp_user_timeout: self_consensus_tcp_user_timeout,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
@@ -615,6 +640,7 @@ impl PersistParameters {
             blob_target_size: other_blob_target_size,
             compaction_minimum_timeout: other_compaction_minimum_timeout,
             consensus_connect_timeout: other_consensus_connect_timeout,
+            consensus_tcp_user_timeout: other_consensus_tcp_user_timeout,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
@@ -632,6 +658,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_consensus_connect_timeout {
             *self_consensus_connect_timeout = Some(v);
+        }
+        if let Some(v) = other_consensus_tcp_user_timeout {
+            *self_consensus_tcp_user_timeout = Some(v);
         }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
@@ -669,6 +698,7 @@ impl PersistParameters {
             blob_target_size,
             compaction_minimum_timeout,
             consensus_connect_timeout,
+            consensus_tcp_user_timeout,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -681,6 +711,7 @@ impl PersistParameters {
         blob_target_size.is_none()
             && compaction_minimum_timeout.is_none()
             && consensus_connect_timeout.is_none()
+            && consensus_tcp_user_timeout.is_none()
             && sink_minimum_batch_updates.is_none()
             && storage_sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
@@ -702,6 +733,7 @@ impl PersistParameters {
             blob_target_size,
             compaction_minimum_timeout,
             consensus_connect_timeout,
+            consensus_tcp_user_timeout,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
@@ -726,6 +758,14 @@ impl PersistParameters {
                 .write()
                 .expect("lock poisoned");
             *timeout = *consensus_connect_timeout;
+        }
+        if let Some(consensus_tcp_user_timeout) = consensus_tcp_user_timeout {
+            let mut timeout = cfg
+                .dynamic
+                .consensus_tcp_user_timeout
+                .write()
+                .expect("lock poisoned");
+            *timeout = *consensus_tcp_user_timeout;
         }
         if let Some(sink_minimum_batch_updates) = sink_minimum_batch_updates {
             cfg.dynamic
@@ -780,6 +820,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             blob_target_size: self.blob_target_size.into_proto(),
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
             consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
+            consensus_tcp_user_timeout: self.consensus_tcp_user_timeout.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
             storage_sink_minimum_batch_updates: self
                 .storage_sink_minimum_batch_updates
@@ -798,6 +839,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             blob_target_size: proto.blob_target_size.into_rust()?,
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
             consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
+            consensus_tcp_user_timeout: proto.consensus_tcp_user_timeout.into_rust()?,
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
             storage_sink_minimum_batch_updates: proto
                 .storage_sink_minimum_batch_updates
