@@ -108,7 +108,9 @@ async fn basic() -> Result<(), anyhow::Error> {
         .await?;
 
     assert_eq!(
-        ret.into_iter().map(|v| v.value).collect::<Vec<_>>(),
+        ret.into_iter()
+            .map(|v| v.map(|v| v.value))
+            .collect::<Vec<_>>(),
         vec![None]
     );
 
@@ -126,7 +128,9 @@ async fn basic() -> Result<(), anyhow::Error> {
         .await?;
 
     assert_eq!(
-        ret.into_iter().map(|v| v.value).collect::<Vec<_>>(),
+        ret.into_iter()
+            .map(|v| v.map(|v| v.value))
+            .collect::<Vec<_>>(),
         vec![Some("onev".to_string()), None]
     );
 
@@ -144,7 +148,9 @@ async fn basic() -> Result<(), anyhow::Error> {
         .await?;
 
     assert_eq!(
-        ret.into_iter().map(|v| v.value).collect::<Vec<_>>(),
+        ret.into_iter()
+            .map(|v| v.map(|v| v.value))
+            .collect::<Vec<_>>(),
         vec![Some("onev".to_string()), Some("twov2".to_string())]
     );
 

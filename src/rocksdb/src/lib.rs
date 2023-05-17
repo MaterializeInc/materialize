@@ -195,10 +195,10 @@ pub struct MultiGetResult {
 #[derive(Debug, Default, Clone)]
 pub struct GetResult<V> {
     /// The previous value, if there was one.
-    pub value: Option<V>,
+    pub value: V,
     /// The size of `value` as persisted, if there was one.
     /// Useful for users keeping track of statistics.
-    pub size: Option<u64>,
+    pub size: u64,
 }
 
 /// The result type for `multi_put`.
@@ -216,14 +216,14 @@ enum Command<K, V> {
     MultiGet {
         batch: Vec<K>,
         // Scratch vector to return results in.
-        results_scratch: Vec<GetResult<V>>,
+        results_scratch: Vec<Option<GetResult<V>>>,
         response_sender: oneshot::Sender<
             Result<
                 (
                     MultiGetResult,
                     // The batch scratch vector being given back.
                     Vec<K>,
-                    Vec<GetResult<V>>,
+                    Vec<Option<GetResult<V>>>,
                 ),
                 Error,
             >,
@@ -249,7 +249,7 @@ pub struct RocksDBInstance<K, V> {
 
     // Scratch vector to return results from the RocksDB thread
     // during `MultiGet`.
-    multi_get_results_scratch: Vec<GetResult<V>>,
+    multi_get_results_scratch: Vec<Option<GetResult<V>>>,
 
     // Scratch vector to send updates to the RocksDB thread
     // during `MultiPut`.
@@ -323,7 +323,7 @@ where
     ) -> Result<MultiGetResult, Error>
     where
         G: IntoIterator<Item = K>,
-        R: IntoIterator<Item = &'r mut GetResult<V>>,
+        R: IntoIterator<Item = &'r mut Option<GetResult<V>>>,
     {
         let mut multi_get_vec = std::mem::take(&mut self.multi_get_scratch);
         let mut results_vec = std::mem::take(&mut self.multi_get_results_scratch);
@@ -480,13 +480,14 @@ fn rocksdb_core_loop<K, V, M>(
                         };
 
                         for previous_value in gets {
-                            let (previous_value, size) = match previous_value {
+                            let get_result = match previous_value {
                                 Some(previous_value) => {
                                     match enc_opts.deserialize(&previous_value) {
-                                        Ok(value) => (
-                                            Some(value),
-                                            Some(u64::cast_from(previous_value.len())),
-                                        ),
+                                        Ok(value) => Some(GetResult {
+                                            value,
+
+                                            size: u64::cast_from(previous_value.len()),
+                                        }),
                                         Err(e) => {
                                             let _ =
                                                 response_sender.send(Err(Error::DecodeError(e)));
@@ -494,12 +495,9 @@ fn rocksdb_core_loop<K, V, M>(
                                         }
                                     }
                                 }
-                                None => (None, None),
+                                None => None,
                             };
-                            results_scratch.push(GetResult {
-                                value: previous_value,
-                                size,
-                            });
+                            results_scratch.push(get_result)
                         }
 
                         let _ = response_sender.send(Ok((result, batch, results_scratch)));
