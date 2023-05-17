@@ -572,7 +572,7 @@ fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args) {
-        eprintln!("environmentd: {}", err.display_with_causes());
+        eprintln!("environmentd: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
 }

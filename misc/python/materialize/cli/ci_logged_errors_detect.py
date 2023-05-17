@@ -43,6 +43,8 @@ ERROR_RE = re.compile(
     | expected\ .*,\ got\ .*
     | expected\ .*,\ but\ found\ none
     | unsupported\ SQL\ type\ in\ testdrive:
+    | environmentd:\ fatal: # startup failure
+    | clusterd:\ fatal: # startup failure
     )
     # Emitted by tests employing explicit mz_panic()
     (?!.*forced\ panic)
