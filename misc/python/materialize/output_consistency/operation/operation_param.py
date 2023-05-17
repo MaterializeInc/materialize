@@ -35,7 +35,8 @@ class OperationParam:
         self.incompatibility_combinations = incompatibility_combinations
 
         if incompatibilities is not None:
-            self.incompatibility_combinations.extend([incompatibilities])
+            for incompatibility in incompatibilities:
+                self.incompatibility_combinations.append({incompatibility})
 
     def supports_arg(self, arg: Expression) -> bool:
         for incompatibility_combination in self.incompatibility_combinations:
