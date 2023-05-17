@@ -81,7 +81,7 @@ A symbolic cost is a polynomial over the features of the input relations. For ex
 
 | Dimension          | Input features                                               | Outputs                         | Output type |
 | ------------------ | ------------------------------------------------------------ | ------------------------------- | ----------- |
-| Hyydration time    | Source cardinality                                           | Time estimate                   |             |
+| Hydration time     | Source cardinality                                           | Time estimate                   |             |
 | Latency per update | Source cardinality, expected per-update delta on each source | Time estimate (per source)      |             |
 | Storage            | Source cardinality, existing indices, cardinality of groups  | Arrangements and size estimates |             |
 | Scalability        | Distribution of keys (e.g., cardinality of distinct keys)    | Data parallelism estimate       |             |
