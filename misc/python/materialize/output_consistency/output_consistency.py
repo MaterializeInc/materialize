@@ -89,6 +89,9 @@ def _run_output_consistency_tests_internal(
     config.execute_setup = execute_setup
     config.verbose_output = verbose_output
 
+    if config.verbose_output:
+        print_config(config)
+
     evaluation_strategies = [
         DataFlowRenderingEvaluation(),
         ConstantFoldingEvaluation(),
@@ -122,6 +125,12 @@ def _run_output_consistency_tests_internal(
     print(f"Test summary: {test_summary}")
 
     return test_summary
+
+
+def print_config(config: ConsistencyTestConfiguration) -> None:
+    config_properties = vars(config)
+    print("Configuration is:")
+    print("\n".join(f"  {item[0]} = {item[1]}" for item in config_properties.items()))
 
 
 def main() -> int:
