@@ -12,6 +12,9 @@ use std::collections::BTreeMap;
 use super::InternalStashError;
 use crate::{StashError, Transaction, TypedCollection};
 
+pub mod json_to_proto;
+pub mod legacy_types;
+
 pub enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.
     Delete(K1),

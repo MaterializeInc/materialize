@@ -324,7 +324,7 @@ pub async fn initialize(
         proto::audit_log_event_v1::Details::SchemaV2(proto::audit_log_event_v1::SchemaV2 {
             id: PUBLIC_SCHEMA_ID.to_string(),
             name: "public".to_string(),
-            database_name: "materialize".to_string(),
+            database_name: Some("materialize".to_string().into()),
         }),
     ));
 
@@ -405,13 +405,13 @@ pub async fn initialize(
         .await?;
     audit_events.push((
         proto::audit_log_event_v1::EventType::Create,
-        proto::audit_log_event_v1::ObjectType::Clusterreplica,
+        proto::audit_log_event_v1::ObjectType::ClusterReplica,
         proto::audit_log_event_v1::Details::CreateClusterReplicaV1(
             proto::audit_log_event_v1::CreateClusterReplicaV1 {
                 cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
                 cluser_name: "default".to_string(),
                 replica_name: "default".to_string(),
-                replica_id: DEFAULT_REPLICA_ID.to_string(),
+                replica_id: Some(DEFAULT_REPLICA_ID.to_string().into()),
                 logical_size: options.default_cluster_replica_size,
             },
         ),
