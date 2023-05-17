@@ -98,6 +98,12 @@ class Materialized(Service):
         if system_parameter_defaults is None:
             system_parameter_defaults = [
                 "persist_sink_minimum_batch_updates=128",
+                "enable_multi_worker_storage_persist_sink=true",
+                "storage_persist_sink_minimum_batch_updates=100",
+                "persist_pubsub_push_diff_enabled=true",
+                "persist_pubsub_client_enabled=true",
+                "persist_stats_filter_enabled=true",
+                "persist_stats_collection_enabled=true",
             ]
 
         if additional_system_parameter_defaults is not None:
