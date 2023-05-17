@@ -73,6 +73,25 @@ class DbOperationOrFunction:
     def __str__(self) -> str:
         raise RuntimeError("Not implemented")
 
+    def is_expected_to_cause_db_error(self, args: list[Expression]) -> bool:
+        """checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max
+        data_type)
+        """
+
+        self.validate_args_count_in_range(len(args))
+
+        for validator in self.args_validators:
+            if validator.is_expected_to_cause_error(args):
+                return True
+
+        for arg_index, arg in enumerate(args):
+            param = self.params[arg_index]
+
+            if not param.supports_arg(arg):
+                return True
+
+        return False
+
 
 class DbOperation(DbOperationOrFunction):
     def __init__(

@@ -88,7 +88,7 @@ class ExpressionGenerator:
         except NoSuitableExpressionFound:
             return None
 
-        is_expect_error = self.is_expected_to_cause_db_error(operation, args)
+        is_expect_error = operation.is_expected_to_cause_db_error(args)
         expression = ExpressionWithArgs(operation, args, is_expect_error)
 
         if self.known_inconsistencies_filter.matches(expression):
@@ -130,7 +130,7 @@ class ExpressionGenerator:
         if (
             self.config.avoid_expressions_expecting_db_error
             and try_number <= 5
-            and self.is_expected_to_cause_db_error(operation, args)
+            and operation.is_expected_to_cause_db_error(args)
         ):
             return self.generate_args_for_operation(
                 operation, try_number=try_number + 1
@@ -171,27 +171,6 @@ class ExpressionGenerator:
             )
 
         return self.types_with_values_by_category[category]
-
-    def is_expected_to_cause_db_error(
-        self, operation: DbOperationOrFunction, args: list[Expression]
-    ) -> bool:
-        """checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max
-        data_type)
-        """
-
-        operation.validate_args_count_in_range(len(args))
-
-        for validator in operation.args_validators:
-            if validator.is_expected_to_cause_error(args):
-                return True
-
-        for arg_index, arg in enumerate(args):
-            param = operation.params[arg_index]
-
-            if not param.supports_arg(arg):
-                return True
-
-        return False
 
 
 class NoSuitableExpressionFound(Exception):
