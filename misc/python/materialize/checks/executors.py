@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.mzcompose import Composition
-from materialize.util import MzVersion, released_materialize_versions
+from materialize.util import MzVersion
 
 
 class Executor:
@@ -75,7 +75,7 @@ class CloudtestExecutor(Executor):
     def __init__(self, application: MaterializeApplication) -> None:
         self.application = application
         self.seed = random.getrandbits(32)
-        self.current_mz_version = released_materialize_versions()[0]
+        self.current_mz_version = MzVersion.parse_cargo()
 
     def cloudtest_application(self) -> MaterializeApplication:
         return self.application

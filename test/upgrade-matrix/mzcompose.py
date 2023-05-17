@@ -46,10 +46,8 @@ from materialize.mzcompose.services import (
     Redpanda,
 )
 from materialize.mzcompose.services import Testdrive as TestdriveService
-from materialize.util import MzVersion, released_materialize_versions
-
-# All released Materialize versions, in order from most to least recent.
-all_versions = released_materialize_versions()
+from materialize.util import MzVersion
+from materialize.version_list import VersionsFromDocs
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -138,7 +136,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     executor = MzcomposeExecutor(composition=c)
 
-    versions = list(reversed([v for v in all_versions if v >= args.min_version]))
+    versions = list(
+        [v for v in VersionsFromDocs().minor_versions() if v >= args.min_version]
+    )
     print(
         "--- Testing upgrade scenarios involving the following versions: "
         + " ".join([str(v) for v in versions])
