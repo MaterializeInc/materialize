@@ -44,6 +44,7 @@ def run_output_consistency_tests(
         args.verbose,
         args.runtime_in_sec,
         args.max_iterations,
+        args.avoid_expressions_expecting_db_error,
     )
 
 
@@ -71,6 +72,12 @@ def parse_output_consistency_input_args(
     )
     parser.add_argument("--runtime-in-sec", default=600, type=int)
     parser.add_argument("--max-iterations", default=100000, type=int)
+    parser.add_argument(
+        "--avoid-expressions-expecting-db-error",
+        default=False,
+        type=bool,
+        action=argparse.BooleanOptionalAction,
+    )
 
     return parser.parse_args()
 
@@ -84,6 +91,7 @@ def _run_output_consistency_tests_internal(
     verbose_output: bool,
     runtime_in_sec: int,
     max_iterations: int,
+    avoid_expressions_expecting_db_error: bool,
 ) -> ConsistencyTestSummary:
     config = ConsistencyTestConfiguration()
     config.random_seed = random_seed
@@ -93,6 +101,7 @@ def _run_output_consistency_tests_internal(
     config.verbose_output = verbose_output
     config.max_runtime_in_sec = runtime_in_sec
     config.max_iterations = max_iterations
+    config.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
 
     if config.verbose_output:
         print_config(config)

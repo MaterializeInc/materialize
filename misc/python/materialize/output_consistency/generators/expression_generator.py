@@ -92,7 +92,7 @@ class ExpressionGenerator:
         expression = ExpressionWithArgs(operation, args, is_expect_error)
 
         if self.known_inconsistencies_filter.matches(expression):
-            if try_number < 5:
+            if try_number <= 5:
                 if self.config.verbose_output:
                     logger.add_global_warning(
                         f"Skipping expression with known inconsistency: {expression}"
@@ -111,8 +111,7 @@ class ExpressionGenerator:
         return expression
 
     def generate_args_for_operation(
-        self,
-        operation: DbOperationOrFunction,
+        self, operation: DbOperationOrFunction, try_number: int = 1
     ) -> list[Expression]:
         number_of_args = self.randomized_picker.random_number(
             operation.min_param_count, operation.max_param_count
@@ -127,6 +126,15 @@ class ExpressionGenerator:
             param = operation.params[arg_index]
             arg = self.generate_arg_for_operation_param(param)
             args.append(arg)
+
+        if (
+            self.config.avoid_expressions_expecting_db_error
+            and try_number <= 5
+            and self.is_expected_to_cause_db_error(operation, args)
+        ):
+            return self.generate_args_for_operation(
+                operation, try_number=try_number + 1
+            )
 
         return args
 
