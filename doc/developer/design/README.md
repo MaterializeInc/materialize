@@ -146,8 +146,10 @@ Instead, invest in evergreen content. Add comments in the code itself (module
 comments can be particularly valuable) and reference documentation in
 [doc/developer/reference](/doc/developer/reference/README.md). For larger
 components, consider putting together an architecture presentation (see, for
-example, the `persist` lectures); slides and a talk track can be a more
-efficient means of communicating some types of technical content.
+example, the [`persist` lectures
+(internal)](https://www.notion.so/materialize/6f83baae1f5348eb87334a53daa63066));
+slides and a talk track can be a more efficient means of communicating some
+types of technical content.
 
 ## How should you push back on aspects of a design document?
 
