@@ -14,6 +14,7 @@ use std::rc::Weak;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 
@@ -223,6 +224,10 @@ where
 
     /// Consolidates the collection if `must_consolidate` is `true` and leaves it
     /// untouched otherwise.
+    ///
+    /// This function performs the consolidation in two stages. Firstly, per-worker
+    /// consolidation is achieved with a pipelined arrangement. Secondly, a final
+    /// consolidation pass is performed with data exchange among workers.
     fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
     where
         D1: differential_dataflow::ExchangeData + Hashable,
@@ -530,7 +535,10 @@ where
         Tr::Batch: Batch,
     {
         if must_consolidate {
-            self.consolidate_named::<Tr>(name)
+            let preaggregated = self
+                .arrange_core::<_, Tr>(Pipeline, "Per-worker Pre-Consolidate")
+                .as_collection(|k, _| k.clone());
+            preaggregated.consolidate_named::<Tr>(name)
         } else {
             self
         }
