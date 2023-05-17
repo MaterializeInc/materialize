@@ -214,7 +214,7 @@ use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 mod debezium;
-mod multi_worker_persist_sink;
+mod persist_sink;
 pub mod sinks;
 pub mod sources;
 mod upsert;
@@ -276,7 +276,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 tracing::info!(
                     "timely-{worker_id} rendering {export_id} with multi-worker persist_sink",
                 );
-                let token = crate::render::multi_worker_persist_sink::render(
+                let token = crate::render::persist_sink::render(
                     into_time_scope,
                     export_id,
                     export.storage_metadata.clone(),
