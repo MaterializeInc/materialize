@@ -105,6 +105,7 @@ class Materialized(Service):
                 "persist_pubsub_client_enabled=true",
                 "persist_stats_filter_enabled=true",
                 "persist_stats_collection_enabled=true",
+                "persist_stats_audit_percent=100",
             ]
 
         if additional_system_parameter_defaults is not None:
