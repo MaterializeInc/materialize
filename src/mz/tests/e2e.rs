@@ -97,15 +97,8 @@ fn test_version() {
         .stdout(format!("mz {}\n", expected_version));
 
     // Test steps:
-    // --help
-    // --version
     // --login
-    // --profiles
     // --regions (list, create, get)
-    // --sql
-    // --secrets
-    // --user
-    // --app_password (list empty, create, list)
     // --regions (delete)
 }
 
@@ -115,22 +108,170 @@ fn test_e2e() {
     let expected_version = mz::BUILD_INFO.version;
     assert!(!expected_version.is_empty());
 
+    // Regions
     cmd()
-        .arg("login")
-        .arg("-i")
-        .write_stdin("joaquin@materialize.com")
-        .write_stdin("password")
+        .arg("region")
+        .arg("list")
         .assert()
-        .success()
-        .stdout(format!("mz {}\n", expected_version));
+        .success();
 
-    // Test steps:
-    // --login
-    // --profiles
-    // --regions (list, create, get)
-    // --sql
-    // --secrets
-    // --user
-    // --app_password (list empty, create, list)
-    // --regions (delete)
+    cmd()
+        .arg("region")
+        .arg("show")
+        .assert()
+        .success();
+
+    // TODO:
+    // cmd()
+    //     .arg("region")
+    //     .arg("enable")
+    //     .assert()
+    //     .success();
+
+    // Config
+    cmd()
+        .arg("config")
+        .arg("list")
+        .assert()
+        .success();
+
+    cmd()
+        .arg("config")
+        .arg("set")
+        .arg("profile")
+        .arg("default")
+        .assert()
+        .success();
+
+    cmd()
+        .arg("config")
+        .arg("get")
+        .arg("profile")
+        .assert()
+        .success();
+
+    cmd()
+        .arg("config")
+        .arg("remove")
+        .arg("profile")
+        .assert()
+        .success();
+
+    // Profiles
+    cmd()
+        .arg("profile")
+        .arg("config")
+        .arg("list")
+        .assert()
+        .success();
+
+    cmd()
+        .arg("profile")
+        .arg("config")
+        .arg("set")
+        .arg("vault")
+        .arg("true")
+        .assert()
+        .success();
+
+    cmd()
+        .arg("profile")
+        .arg("config")
+        .arg("get")
+        .arg("vault")
+        .assert()
+        .success();
+
+    cmd()
+        .arg("profile")
+        .arg("config")
+        .arg("remove")
+        .arg("vault")
+        .assert()
+        .success();
+
+    // TODO:
+    // cmd()
+    //     .arg("profile")
+    //     .arg("init")
+    //     .args("interactive/input")
+    //     .assert()
+    //     .success();
+
+    cmd()
+        .arg("profile")
+        .arg("list")
+        .assert()
+        .success();
+
+    // cmd()
+    //     .arg("profile")
+    //     .arg("remove")
+    //     .assert()
+    //     .success();
+
+    // App Passwords
+    cmd()
+        .arg("app-password")
+        .arg("list")
+        .assert()
+        .success();
+
+    // Since we don't want to introduce thousands of passwords per month.
+    // TODO: We should have a remove password
+    // cmd()
+    //     .arg("app-password")
+    //     .arg("create")
+    //     .arg("psw")
+    //     .assert()
+    //     .success();
+
+    // TODO: Add more interactions with Materialize
+    cmd()
+        .arg("sql")
+        .assert()
+        .success();
+
+    // Secrets
+    cmd()
+        .arg("secret")
+        .arg("create")
+        .arg("mz_test")
+        .write_stdin("decode('c2VjcmV0Cg==', 'base64')")
+        .assert()
+        .success();
+
+    // Force
+        cmd()
+        .arg("secret")
+        .arg("create")
+        .arg("mz_test")
+        .arg("force")
+        .write_stdin("decode('c2VjcmV0Cg==', 'base64')")
+        .assert()
+        .success();
+
+    // Users:
+    // TODO: Check if the user exists first.
+    cmd()
+        .arg("user")
+        .arg("create")
+        .arg("test+mz@materialize.com")
+        .arg("MZ Test")
+        .assert()
+        .success();
+
+    cmd()
+        .arg("user")
+        .arg("list")
+        .args(vec!["--format", "json"])
+        .assert()
+        .success();
+
+    cmd()
+        .arg("user")
+        .arg("remove")
+        .arg("test+mz@materialize.com")
+        .assert()
+        .success();
 }
