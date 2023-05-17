@@ -228,4 +228,11 @@ allow-git = [
     # Waiting on https://github.com/awslabs/smithy-rs/pull/2525 to make it into a
     # release.
     "https://github.com/parker-timmerman/smithy-rs.git",
+
+    # Waiting on https://github.com/tokio-rs/prost/pull/833 to make it into a
+    # release.
+    "https://github.com/MaterializeInc/prost",
+
+    # Waiting on https://github.com/hyperium/tonic/pull/1398
+    "https://github.com/umanwizard/tonic",
 ]
