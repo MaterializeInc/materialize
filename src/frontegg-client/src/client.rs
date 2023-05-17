@@ -21,13 +21,15 @@
 
 use std::time::{Duration, SystemTime};
 
+use jsonwebtoken::jwk::JwkSet;
 use reqwest::{Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
 
-use mz_frontegg_auth::AppPassword;
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use mz_frontegg_auth::{AppPassword, Claims};
 
 use crate::config::{ClientBuilder, ClientConfig};
 use crate::error::{ApiError, Error};
@@ -204,5 +206,30 @@ impl Client {
             refresh_token: res.refresh_token,
         });
         Ok(res.access_token)
+    }
+
+    /// Returns the JSON Web Key Set (JWKS) from the well known endpoint: `/.well-known/jwks.json`
+    async fn get_jwks(&self) -> Result<JwkSet, Error> {
+        let well_known = vec![".well-known", "jwks.json"];
+        let req = self.build_request(Method::GET, well_known);
+        let jwks: JwkSet = self.send_request(req).await?;
+        Ok(jwks)
+    }
+
+    /// Verifies the JWT signature using a JWK from the well-known endpoint and
+    /// returns the user claims.
+    pub async fn claims(&self) -> Result<Claims, Error> {
+        let jwks = self.get_jwks().await?;
+        let jwk = jwks.keys.first().expect("Error validating signature JWK.");
+        let token = self.auth().await?;
+
+        let token_data = decode::<Claims>(
+            &token,
+            &DecodingKey::from_jwk(&jwk).unwrap(),
+            &Validation::new(Algorithm::RS256),
+        )
+        .unwrap();
+
+        Ok(token_data.claims)
     }
 }
