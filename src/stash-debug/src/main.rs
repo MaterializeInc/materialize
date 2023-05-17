@@ -148,7 +148,7 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("stash: {}", err.display_with_causes());
+        eprintln!("stash: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
 }

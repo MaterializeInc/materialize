@@ -166,7 +166,7 @@ fn main() {
     };
 
     if let Err(err) = res {
-        eprintln!("error: {}", err.display_with_causes());
+        eprintln!("persistcli: fatal: {}", err.display_with_causes());
         std::process::exit(1);
     }
 }
