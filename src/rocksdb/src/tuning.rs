@@ -144,8 +144,8 @@ impl RocksDBTuningParameters {
         level_compaction_dynamic_level_bytes: bool,
         universal_compaction_target_ratio: i32,
         parallelism: Option<i32>,
-        compression_type: &str,
-        bottommost_compression_type: &str,
+        compression_type: CompressionType,
+        bottommost_compression_type: CompressionType,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             compaction_style,
@@ -171,8 +171,8 @@ impl RocksDBTuningParameters {
                 }
                 None => None,
             },
-            compression_type: compression_type.parse()?,
-            bottommost_compression_type: bottommost_compression_type.parse()?,
+            compression_type,
+            bottommost_compression_type,
         })
     }
 
@@ -286,15 +286,28 @@ impl FromStr for CompressionType {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "zstd" => Ok(Self::Zstd),
-            "snappy" => Ok(Self::Snappy),
-            "lz4" => Ok(Self::Lz4),
-            "None" => Ok(Self::None),
-            other => Err(anyhow::anyhow!(
-                "{} is not a supported compression type",
-                other
-            )),
+        let s = UncasedStr::new(s);
+        if s == "zstd" {
+            Ok(Self::Zstd)
+        } else if s == "snappy" {
+            Ok(Self::Snappy)
+        } else if s == "lz4" {
+            Ok(Self::Lz4)
+        } else if s == "none" {
+            Ok(Self::None)
+        } else {
+            Err(anyhow::anyhow!("{} is not a supported compression type", s))
+        }
+    }
+}
+
+impl std::fmt::Display for CompressionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            CompressionType::Zstd => write!(f, "zstd"),
+            CompressionType::Snappy => write!(f, "snappy"),
+            CompressionType::Lz4 => write!(f, "lz4"),
+            CompressionType::None => write!(f, "none"),
         }
     }
 }
@@ -413,7 +426,6 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
 /// for `RocksDBTuningParameters`.
 pub mod defaults {
     use super::*;
-    use once_cell::sync::Lazy;
 
     pub const DEFAULT_COMPACTION_STYLE: CompactionStyle = CompactionStyle::Level;
 
@@ -428,10 +440,8 @@ pub mod defaults {
     pub const DEFAULT_PARALLELISM: Option<i32> = None;
 
     pub const DEFAULT_COMPRESSION_TYPE: CompressionType = CompressionType::Lz4;
-    pub static DEFAULT_COMPRESSION_TYPE_STR: Lazy<String> = Lazy::new(|| "lz4".to_string());
+
     pub const DEFAULT_BOTTOMMOST_COMPRESSION_TYPE: CompressionType = CompressionType::Zstd;
-    pub static DEFAULT_BOTTOMMOST_COMPRESSION_TYPE_STR: Lazy<String> =
-        Lazy::new(|| "zstd".to_string());
 }
 
 #[cfg(test)]
@@ -443,13 +453,13 @@ mod tests {
     #[test]
     fn defaults_equality() {
         let r = RocksDBTuningParameters::from_parameters(
-            &*defaults::DEFAULT_COMPACTION_STYLE_STR,
+            defaults::DEFAULT_COMPACTION_STYLE,
             defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
             defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
             defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
             defaults::DEFAULT_PARALLELISM,
-            &*defaults::DEFAULT_COMPRESSION_TYPE_STR,
-            &*defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE_STR,
+            defaults::DEFAULT_COMPRESSION_TYPE,
+            defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
         )
         .unwrap();
 
