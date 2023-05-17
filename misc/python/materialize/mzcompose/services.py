@@ -66,8 +66,8 @@ class Materialized(Service):
         restart: Optional[str] = None,
         use_default_volumes: bool = True,
         ports: Optional[List[str]] = None,
-        system_parameter_defaults: Optional[List[str]] = None,
-        additional_system_parameter_defaults: Optional[List[str]] = None,
+        system_parameter_defaults: Optional[Dict[str, str]] = None,
+        additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -91,27 +91,32 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
-            "BOOTSTRAP_ROLE=materialize",
+            "MZ_BOOTSTRAP_ROLE=materialize",
             *environment_extra,
         ]
 
         if system_parameter_defaults is None:
-            system_parameter_defaults = [
-                "persist_sink_minimum_batch_updates=128",
-                "enable_multi_worker_storage_persist_sink=true",
-                "storage_persist_sink_minimum_batch_updates=100",
-                "persist_pubsub_push_diff_enabled=true",
-                "persist_pubsub_client_enabled=true",
-                "persist_stats_filter_enabled=true",
-                "persist_stats_collection_enabled=true",
-            ]
+            system_parameter_defaults = {
+                "persist_sink_minimum_batch_updates": "128",
+                "enable_multi_worker_storage_persist_sink": "true",
+                "storage_persist_sink_minimum_batch_updates": "100",
+                "persist_pubsub_push_diff_enabled": "true",
+                "persist_pubsub_client_enabled": "true",
+                "persist_stats_filter_enabled": "true",
+                "persist_stats_collection_enabled": "true",
+                "enable_ld_rbac_checks": "true",
+                "enable_rbac_checks": "true",
+            }
 
         if additional_system_parameter_defaults is not None:
-            system_parameter_defaults += additional_system_parameter_defaults
+            system_parameter_defaults.update(additional_system_parameter_defaults)
 
         if len(system_parameter_defaults) > 0:
             environment += [
-                "MZ_SYSTEM_PARAMETER_DEFAULT=" + ";".join(system_parameter_defaults)
+                "MZ_SYSTEM_PARAMETER_DEFAULT="
+                + ";".join(
+                    f"{key}={value}" for key, value in system_parameter_defaults.items()
+                )
             ]
 
         command = []
@@ -311,7 +316,7 @@ class Kafka(Service):
             "KAFKA_REPLICA_FETCH_MAX_BYTES=15728640",
             "KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=100",
         ],
-        extra_environment: List[str] = [],
+        environment_extra: List[str] = [],
         depends_on_extra: List[str] = [],
         volumes: List[str] = [],
         listener_type: str = "PLAINTEXT",
@@ -320,7 +325,7 @@ class Kafka(Service):
             *environment,
             f"KAFKA_ADVERTISED_LISTENERS={listener_type}://{name}:{port}",
             f"KAFKA_BROKER_ID={broker_id}",
-            *extra_environment,
+            *environment_extra,
         ]
         config: ServiceConfig = {
             "image": f"{image}:{tag}",

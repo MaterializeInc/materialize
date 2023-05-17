@@ -39,8 +39,11 @@ class Generator:
     @classmethod
     def header(cls) -> None:
         print(f"\n#\n# {cls}\n#\n")
-        print("> DROP SCHEMA IF EXISTS public CASCADE;")
-        print(f"> CREATE SCHEMA public /* {cls} */;")
+        print(
+            "$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize"
+        )
+        print("DROP SCHEMA IF EXISTS public CASCADE;")
+        print(f"CREATE SCHEMA public /* {cls} */;")
         print(
             "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}"
         )

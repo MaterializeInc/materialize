@@ -1038,8 +1038,12 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
 
-    c.sql("DROP CLUSTER default CASCADE")
-    c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
+    c.sql("DROP CLUSTER default CASCADE", user="mz_system", port=6877)
+    c.sql(
+        "CREATE CLUSTER default REPLICAS (default (SIZE '1'))",
+        user="mz_system",
+        port=6877,
+    )
 
 
 def workflow_test_resource_limits(c: Composition) -> None:
@@ -1132,7 +1136,10 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-        > CREATE DEFAULT INDEX ON mz_views;
+        $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+        SET CLUSTER TO DEFAULT;
+        CREATE DEFAULT INDEX ON mz_views;
+
         > SELECT id FROM mz_indexes WHERE id like 'u%';
         u1
     """

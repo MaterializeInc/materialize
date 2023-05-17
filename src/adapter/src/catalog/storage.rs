@@ -466,7 +466,7 @@ async fn migrate(
                             .push(MzAclItem {
                                 grantee: role_id,
                                 grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::CREATE,
+                                acl_mode: AclMode::all(),
                             });
                         Some(value)
                     } else {
@@ -483,7 +483,7 @@ async fn migrate(
                             .push(MzAclItem {
                                 grantee: role_id,
                                 grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::CREATE,
+                                acl_mode: AclMode::all(),
                             });
                         Some(value)
                     } else {
@@ -500,7 +500,7 @@ async fn migrate(
                             .push(MzAclItem {
                                 grantee: role_id,
                                 grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::CREATE,
+                                acl_mode: AclMode::all(),
                             });
                         Some(value)
                     } else {

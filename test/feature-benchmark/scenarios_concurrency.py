@@ -134,8 +134,8 @@ class ParallelDataflows(Concurrency):
 
         return Td(
             f"""
-
-> DROP SCHEMA public CASCADE;
+$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+DROP SCHEMA public CASCADE;
 
 > CREATE SCHEMA public;
 
