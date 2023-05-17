@@ -30,6 +30,7 @@ ERROR_RE = re.compile(
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
+    | fatal runtime error: # stack overflow
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
     # From src/testdrive/src/action/sql.rs
