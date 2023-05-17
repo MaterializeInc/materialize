@@ -463,7 +463,7 @@ fn test_closing_connection_cancels_dataflows(query: String) {
     let cmd = cmd
         .arg(format!(
             "postgres://{}:{}/materialize",
-            Ipv4Addr::LOCALHOST.to_string(),
+            Ipv4Addr::LOCALHOST,
             server.inner.sql_local_addr().port()
         ))
         .stdin(Stdio::piped());
