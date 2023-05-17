@@ -461,29 +461,37 @@ fn test_closing_connection_cancels_dataflows(query: String) {
 
     let mut cmd = Command::new("psql");
     let cmd = cmd
-        .arg(format!(
+        .args([
+            // Ignore .psqlrc so that local execution of testdrive isn't
+            // affected by it.
+            "--no-psqlrc",
+            &format!(
             "postgres://{}:{}/materialize",
             Ipv4Addr::LOCALHOST,
             server.inner.sql_local_addr().port()
-        ))
+            )])
         .stdin(Stdio::piped());
     tracing::info!("spawning: {cmd:#?}");
     let mut child = cmd.spawn().expect("failed to spawn psql");
+        let mut stdin = child.stdin.take().expect("failed to open stdin");
+        thread::spawn(move || {
+            use std::io::Write;
+            stdin
+                .write_all("SET STATEMENT_TIMEOUT = \"120s\";".as_bytes())
+                .unwrap();
+            stdin.write_all(query.as_bytes()).unwrap();
+        });
 
-    let mut stdin = child.stdin.take().expect("failed to open stdin");
-    thread::spawn(move || {
-        use std::io::Write;
-        stdin
-            .write_all("SET STATEMENT_TIMEOUT = \"120s\";".as_bytes())
-            .unwrap();
-        stdin.write_all(query.as_bytes()).unwrap();
-    });
+    let spawned_psql = Instant::now();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Wait until we see the expected dataflow.
     Retry::default()
         .retry(|_state| {
+            if spawned_psql.elapsed() > Duration::from_secs(30) {
+                panic!("waited too long for psql to send the query");
+            }
             let count: i64 = client
                 .query_one(
                     "SELECT count(*) FROM mz_internal.mz_dataflow_operators",
