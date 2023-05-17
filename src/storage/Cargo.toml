@@ -59,7 +59,7 @@ prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.7.0" }
-rocksdb = { version = "0.20.1", default-features = false, features = ["snappy"] }
+rocksdb = { version = "0.21.0", default-features = false, features = ["snappy"] }
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
 sha2 = "0.10.6"
