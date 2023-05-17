@@ -22,6 +22,8 @@ class ValidationErrorType(Enum):
 
 
 class ValidationMessage:
+    """Either a `ValidationRemark`, `ValidationWarning`, or `ValidationError`"""
+
     def __init__(
         self,
         message: str,

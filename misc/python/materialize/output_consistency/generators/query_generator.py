@@ -16,6 +16,8 @@ from materialize.output_consistency.query.query_template import QueryTemplate
 
 
 class QueryGenerator:
+    """Generates query templates based on expressions"""
+
     def __init__(self, config: ConsistencyTestConfiguration):
         self.config = config
         self.current_expressions: list[Expression] = []

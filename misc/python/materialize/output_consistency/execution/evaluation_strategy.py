@@ -12,6 +12,8 @@ from materialize.output_consistency.data_type.data_type_with_values import (
 
 
 class EvaluationStrategy:
+    """Strategy how to execute a `QueryTemplate`"""
+
     def __init__(self, key: str, name: str):
         self.key = key
         self.db_object_name = key

@@ -36,6 +36,8 @@ from materialize.output_consistency.selection.randomized_picker import Randomize
 
 
 class ExpressionGenerator:
+    """Generates expressions based on a random selection of operations"""
+
     def __init__(
         self,
         config: ConsistencyTestConfiguration,

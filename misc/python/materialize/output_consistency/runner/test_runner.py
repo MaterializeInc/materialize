@@ -31,6 +31,8 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 
 
 class ConsistencyTestRunner:
+    """Orchestrates the test execution"""
+
     def __init__(
         self,
         config: ConsistencyTestConfiguration,

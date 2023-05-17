@@ -14,6 +14,8 @@ from materialize.output_consistency.expression.expression_characteristics import
 
 
 class Expression:
+    """An expression is either a `DataValue` or a `ExpressionWithArgs`"""
+
     def __init__(
         self, characteristics: set[ExpressionCharacteristics], is_expect_error: bool
     ):

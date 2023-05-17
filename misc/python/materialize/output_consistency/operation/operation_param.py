@@ -17,6 +17,8 @@ from materialize.output_consistency.expression.expression_characteristics import
 
 
 class OperationParam:
+    """Parameter of a database operation or database function"""
+
     def __init__(
         self,
         type_category: DataTypeCategory,

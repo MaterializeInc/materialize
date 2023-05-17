@@ -16,6 +16,8 @@ from materialize.output_consistency.operation.operation import (
 
 
 class ExpressionWithArgs(Expression):
+    """An expression representing a usage of a database operation or function"""
+
     def __init__(
         self,
         operation: DbOperationOrFunction,

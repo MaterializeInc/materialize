@@ -13,5 +13,7 @@ from materialize.output_consistency.expression.expression_with_args import (
 
 
 class KnownOutputInconsistenciesFilter:
+    """Allows specifying and excluding expressions with known output inconsistencies"""
+
     def matches(self, expression: ExpressionWithArgs) -> bool:
         return False

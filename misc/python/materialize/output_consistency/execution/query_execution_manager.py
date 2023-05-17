@@ -39,6 +39,8 @@ from materialize.output_consistency.validation.validation_outcome import (
 
 
 class QueryExecutionManager:
+    """Requests the execution of queries and handles transactions"""
+
     def __init__(
         self,
         evaluation_strategies: list[EvaluationStrategy],

@@ -15,6 +15,8 @@ from materialize.output_consistency.expression.expression_characteristics import
 
 
 class DataTypeWithValues:
+    """Data type and its specified values"""
+
     def __init__(self, data_type: DataType):
         self.data_type = data_type
         self.raw_values: list[DataValue] = []

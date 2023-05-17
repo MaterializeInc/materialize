@@ -11,10 +11,12 @@ from enum import Enum
 
 
 class DataTypeCategory(Enum):
-    # only allowed for input parameters
+    """Data type category for the input parameters and return type of operation / function"""
+
     ANY = 1
-    # only allowed for expression output, must be resolved from the first arg
+    """Suitable for all type (e.g., `NULLIF`). Allowed as input parameters but not as return type"""
     DYNAMIC = 2
+    """Dynamic type, only allowed as return type. The actual type will be resolved based on the first input arg"""
     NUMERIC = 3
     BOOLEAN = 4
     TEXT = 5

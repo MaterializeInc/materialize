@@ -16,6 +16,8 @@ from materialize.output_consistency.expression.expression_characteristics import
 
 
 class DataValue(Expression):
+    """A simple value (in contrast to an `ExpressionWithArgs`)"""
+
     def __init__(
         self,
         value: str,

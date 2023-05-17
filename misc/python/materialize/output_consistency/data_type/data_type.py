@@ -11,6 +11,8 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 
 
 class DataType:
+    """Defines a SQL data type"""
+
     def __init__(self, identifier: str, type_name: str, category: DataTypeCategory):
         self.identifier = identifier
         self.type_name = type_name

@@ -18,6 +18,8 @@ from materialize.output_consistency.validation.validation_message import (
 
 
 class ValidationOutcome:
+    """Outcome of a result comparison"""
+
     def __init__(self) -> None:
         self.success_reason: Optional[str] = None
         self.errors: list[ValidationError] = []

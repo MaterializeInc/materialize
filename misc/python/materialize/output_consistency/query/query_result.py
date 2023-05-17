@@ -17,6 +17,8 @@ from materialize.output_consistency.query.query_template import QueryTemplate
 
 
 class QueryExecution:
+    """An executed query with the outcomes of the different evaluation strategies"""
+
     def __init__(self, query: QueryTemplate, query_id: str):
         self.generic_sql = query.to_sql(DummyEvaluation(), QueryOutputFormat.MULTI_LINE)
         self.query_id = query_id
@@ -27,6 +29,8 @@ class QueryExecution:
 
 
 class QueryOutcome:
+    """Outcome (result or failure) of a query execution with an evaluation strategy"""
+
     def __init__(
         self,
         strategy: EvaluationStrategy,
@@ -41,6 +45,8 @@ class QueryOutcome:
 
 
 class QueryResult(QueryOutcome):
+    """Result of a successful query with data"""
+
     def __init__(
         self,
         strategy: EvaluationStrategy,
@@ -56,6 +62,8 @@ class QueryResult(QueryOutcome):
 
 
 class QueryFailure(QueryOutcome):
+    """Error of a failed query with its error message"""
+
     def __init__(
         self,
         strategy: EvaluationStrategy,

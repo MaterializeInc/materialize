@@ -25,6 +25,8 @@ class SqlExecutionError(Exception):
 
 
 class SqlExecutor:
+    """Base class of `PgWireDatabaseSqlExecutor` and `DryRunSqlExecutor`"""
+
     def __str__(self) -> str:
         return self.__class__.__name__
 

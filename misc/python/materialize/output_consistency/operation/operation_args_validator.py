@@ -16,6 +16,8 @@ from materialize.output_consistency.expression.expression_characteristics import
 
 
 class OperationArgsValidator:
+    """Validator that performs heuristic checks to determine if a database error is to be expected"""
+
     def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
         raise RuntimeError("Not implemented")
 

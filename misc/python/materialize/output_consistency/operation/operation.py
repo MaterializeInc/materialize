@@ -30,6 +30,8 @@ class OperationRelevance(Enum):
 
 
 class DbOperationOrFunction:
+    """Base class of `DbOperation` and `DbFunction`"""
+
     def __init__(
         self,
         params: list[OperationParam],
@@ -94,6 +96,8 @@ class DbOperationOrFunction:
 
 
 class DbOperation(DbOperationOrFunction):
+    """A database operation (e.g., `a + b`)"""
+
     def __init__(
         self,
         pattern: str,
@@ -126,6 +130,8 @@ class DbOperation(DbOperationOrFunction):
 
 
 class DbFunction(DbOperationOrFunction):
+    """A database function (e.g., `SUM(x)`)"""
+
     def __init__(
         self,
         function_name: str,

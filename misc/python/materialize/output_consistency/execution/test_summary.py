@@ -19,6 +19,8 @@ class ConsistencyTestLogger:
 
 
 class ConsistencyTestSummary(ConsistencyTestLogger):
+    """Summary of the test execution"""
+
     def __init__(
         self,
         dry_run: bool = False,

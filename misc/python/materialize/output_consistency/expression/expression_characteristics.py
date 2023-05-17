@@ -11,6 +11,8 @@ from enum import Enum
 
 
 class ExpressionCharacteristics(Enum):
+    """Characteristics describing an `Expression`"""
+
     NULL = 0
     # not (NULL or ZERO)
     NON_EMPTY = 1

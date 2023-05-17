@@ -35,6 +35,8 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 def run_output_consistency_tests(
     connection: Connection, args: argparse.Namespace
 ) -> ConsistencyTestSummary:
+    """Entry point for output consistency tests"""
+
     return _run_output_consistency_tests_internal(
         connection,
         args.seed,
