@@ -24,12 +24,18 @@ pub struct PosCommand {
     pub command: Command,
 }
 
+// min and max versions, both inclusive
+#[derive(Debug, Clone)]
+pub struct VersionConstraint {
+    pub min: i32,
+    pub max: i32,
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
-    Builtin(BuiltinCommand),
-    Sql(SqlCommand),
-    FailSql(FailSqlCommand),
-    VersionCheck(i32, i32), // min and max versions, both inclusive
+    Builtin(BuiltinCommand, Option<VersionConstraint>),
+    Sql(SqlCommand, Option<VersionConstraint>),
+    FailSql(FailSqlCommand, Option<VersionConstraint>),
 }
 
 #[derive(Debug, Clone)]
@@ -86,19 +92,26 @@ pub(crate) fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, Pos
     while let Some((pos, line)) = line_reader.peek() {
         let pos = *pos;
         let command = match line.chars().next() {
-            Some('$') => Command::Builtin(parse_builtin(line_reader)?),
-            Some('>') => Command::Sql(parse_sql(line_reader)?),
-            Some('?') => Command::Sql(parse_explain_sql(line_reader)?),
-            Some('!') => Command::FailSql(parse_fail_sql(line_reader)?),
+            Some('$') => {
+                let version = parse_version_constraint(line_reader)?;
+                Command::Builtin(parse_builtin(line_reader)?, version)
+            }
+            Some('>') => {
+                let version = parse_version_constraint(line_reader)?;
+                Command::Sql(parse_sql(line_reader)?, version)
+            }
+            Some('?') => {
+                let version = parse_version_constraint(line_reader)?;
+                Command::Sql(parse_explain_sql(line_reader)?, version)
+            }
+            Some('!') => {
+                let version = parse_version_constraint(line_reader)?;
+                Command::FailSql(parse_fail_sql(line_reader)?, version)
+            }
             Some('#') => {
                 // Comment line.
                 line_reader.next();
                 continue;
-            }
-            Some('(') => {
-                let (cmd, remainder) = parse_version_check(line_reader)?;
-                line_reader.push(&remainder);
-                cmd
             }
             Some(x) => {
                 return Err(PosError {
@@ -174,47 +187,79 @@ pub fn validate_ident(name: &str) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn parse_version_check(line_reader: &mut LineReader) -> Result<(Command, String), PosError> {
+fn parse_version_constraint(
+    line_reader: &mut LineReader,
+) -> Result<Option<VersionConstraint>, PosError> {
     let (pos, line) = line_reader.next().unwrap();
-    let closed_brace_pos = match line.find(')') {
+    if line[1..2].to_string() != "[" {
+        line_reader.push(&line);
+        return Ok(None);
+    }
+    let closed_brace_pos = match line.find(']') {
         Some(x) => x,
         None => {
             return Err(PosError {
-                source: anyhow!("version-check: found no closing brace"),
+                source: anyhow!("version-constraint: found no closing brace"),
                 pos: Some(pos),
             });
         }
     };
+    if line[2..9].to_string() != "version" {
+        return Err(PosError {
+            source: anyhow!(
+                "version-constraint: invalid property {}",
+                line[2..closed_brace_pos].to_string()
+            ),
+            pos: Some(pos),
+        });
+    }
     let remainder = line[closed_brace_pos + 1..].to_string();
+    line_reader.push(&remainder);
     const MIN_VERSION: i32 = 0;
     const MAX_VERSION: i32 = 9999999;
-    let version_pos = if line.as_bytes()[2].is_ascii_digit() {
-        2
+    let version_pos = if line.as_bytes()[10].is_ascii_digit() {
+        10
     } else {
-        3
+        11
     };
     let version = match line[version_pos..closed_brace_pos].parse::<i32>() {
         Ok(x) => x,
         Err(_) => {
             return Err(PosError {
                 source: anyhow!(
-                    "version-check: invalid version number {}",
+                    "version-constraint: invalid version number {}",
                     line[version_pos..closed_brace_pos].to_string()
                 ),
                 pos: Some(pos),
             });
         }
     };
-    match &line[1..version_pos] {
-        "=" => Ok((Command::VersionCheck(version, version), remainder)),
-        "<=" => Ok((Command::VersionCheck(MIN_VERSION, version), remainder)),
-        "<" => Ok((Command::VersionCheck(MIN_VERSION, version - 1), remainder)),
-        ">=" => Ok((Command::VersionCheck(version, MAX_VERSION), remainder)),
-        ">" => Ok((Command::VersionCheck(version + 1, MAX_VERSION), remainder)),
+
+    match &line[9..version_pos] {
+        "=" => Ok(Some(VersionConstraint {
+            min: version,
+            max: version,
+        })),
+        "<=" => Ok(Some(VersionConstraint {
+            min: MIN_VERSION,
+            max: version,
+        })),
+        "<" => Ok(Some(VersionConstraint {
+            min: MIN_VERSION,
+            max: version - 1,
+        })),
+        ">=" => Ok(Some(VersionConstraint {
+            min: version,
+            max: MAX_VERSION,
+        })),
+        ">" => Ok(Some(VersionConstraint {
+            min: version + 1,
+            max: MAX_VERSION,
+        })),
         _ => Err(PosError {
             source: anyhow!(
-                "version-check: unknown comparison operator {}",
-                line[1..version_pos].to_string()
+                "version-constraint: unknown comparison operator {}",
+                line[9..version_pos].to_string()
             ),
             pos: Some(pos),
         }),
@@ -419,7 +464,7 @@ fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
                 // Comment line. Skip.
                 let _ = line_reader.next();
             }
-            Some('$') | Some('>') | Some('!') | Some('?') | Some('(') => return None,
+            Some('$') | Some('>') | Some('!') | Some('?') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
@@ -518,7 +563,7 @@ impl<'a> Iterator for LineReader<'a> {
 }
 
 fn is_sigil(c: Option<char>) -> bool {
-    matches!(c, Some('$') | Some('>') | Some('!') | Some('?') | Some('('))
+    matches!(c, Some('$') | Some('>') | Some('!') | Some('?'))
 }
 
 struct BuiltinReader<'a> {

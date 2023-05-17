@@ -18,7 +18,7 @@ class Owners(Check):
     def _create_objects(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
-            (>=5200)$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
             GRANT CREATE ON DATABASE materialize TO {role}
             GRANT CREATE ON SCHEMA materialize.public TO {role}
             GRANT CREATE ON CLUSTER default TO {role}

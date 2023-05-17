@@ -66,7 +66,7 @@ $ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=Im
 > SELECT importee1::text, importee2::text FROM import
 importee1  importee2
 ------------------------------
-\(f)        "(\"(1234,5678)\")"
+(f)        "(\"(1234,5678)\")"
 
 
 # Then, test again with the Confluent Schema Registry. Publishing Protobuf
@@ -113,7 +113,7 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
 > SELECT importee1::text, importee2::text FROM import_csr
 importee1  importee2
 -------------------------------
-\(f)        "(\"(1234,5678)\")"
+(f)        "(\"(1234,5678)\")"
 
 # Test that non-zero message IDs in the Confluent wire format are rejected.
 $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=Importer confluent-wire-format=true schema-message-id=123

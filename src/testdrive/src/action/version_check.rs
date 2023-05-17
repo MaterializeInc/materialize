@@ -10,13 +10,13 @@
 use anyhow::{bail, Context};
 use tokio_postgres::types::Type;
 
-use crate::action::{ControlFlow, State};
+use crate::action::State;
 
 pub async fn run_version_check(
     min_version: i32,
     max_version: i32,
     state: &mut State,
-) -> Result<ControlFlow, anyhow::Error> {
+) -> Result<bool, anyhow::Error> {
     let query = "SELECT mz_version_num()";
     let stmt = state
         .pgclient
@@ -35,6 +35,5 @@ pub async fn run_version_check(
         .await
         .context("executing version-check query failed")?
         .get(0);
-    state.skip_next_command = actual_version < min_version || actual_version > max_version;
-    Ok(ControlFlow::Continue)
+    Ok(actual_version < min_version || actual_version > max_version)
 }

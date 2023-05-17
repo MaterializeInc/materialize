@@ -175,8 +175,8 @@ $ kafka-ingest format=avro topic=avro-data schema=${reader-schema} timestamp=1
   FROM avro_data
 f0 f11 f12 f13 f2 f51 f52
 ---
-\(7777,bar) \x00\x01\x02\x03 <null> <null> Diamonds <null> 1234
-\(9999,) <null> <null> 3456 Jokers \x00\x01\x02\x03\x04\x05\x06\x07\x08\t <null>
+(7777,bar) \x00\x01\x02\x03 <null> <null> Diamonds <null> 1234
+(9999,) <null> <null> 3456 Jokers \x00\x01\x02\x03\x04\x05\x06\x07\x08\t <null>
 
 # Testdrive prepares statements before they are executed.
 # Because maps are a non-standard Postgres type, we can't SELECT them directly.

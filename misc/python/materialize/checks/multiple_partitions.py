@@ -101,7 +101,7 @@ class MultiplePartitions(Check):
             dedent(
                 """
                 > SELECT partition FROM multiple_partitions_source_progress;
-                \\(3,)
+                (3,)
                 [0,0]
                 [1,1]
                 [2,2]

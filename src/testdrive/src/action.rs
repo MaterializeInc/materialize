@@ -38,7 +38,9 @@ use regex::{Captures, Regex};
 use url::Url;
 
 use crate::error::PosError;
-use crate::parser::{validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput};
+use crate::parser::{
+    validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput, VersionConstraint,
+};
 use crate::util;
 use crate::util::postgres::postgres_client;
 
@@ -153,7 +155,6 @@ pub struct State {
     regex: Option<Regex>,
     regex_replacement: String,
     postgres_factory: StashFactory,
-    skip_next_command: bool,
 
     // === Materialize state. ===
     materialize_catalog_postgres_stash: Option<String>,
@@ -472,16 +473,26 @@ pub(crate) trait Run {
 #[async_trait]
 impl Run for PosCommand {
     async fn run(self, state: &mut State) -> Result<ControlFlow, PosError> {
-        if state.skip_next_command {
-            state.skip_next_command = false;
-            return Ok(ControlFlow::Continue);
+        macro_rules! handle_version {
+            ($version_constraint:expr) => {
+                match $version_constraint {
+                    Some(VersionConstraint { min, max }) => {
+                        match version_check::run_version_check(min, max, state).await {
+                            Ok(true) => return Ok(ControlFlow::Continue),
+                            Ok(false) => {}
+                            Err(err) => return Err(PosError::new(err, self.pos)),
+                        }
+                    }
+                    None => {}
+                }
+            };
         }
 
         let wrap_err = |e| PosError::new(e, self.pos);
         //         Substitute variables at startup except for the command-specific ones
         // Those will be substituted at runtime
         let ignore_prefix = match &self.command {
-            Command::Builtin(builtin) => Some(builtin.name.clone()),
+            Command::Builtin(builtin, _) => Some(builtin.name.clone()),
             _ => None,
         };
         let subst = |msg: &str, vars: &BTreeMap<String, String>| {
@@ -492,7 +503,8 @@ impl Run for PosCommand {
         };
 
         let r = match self.command {
-            Command::Builtin(mut builtin) => {
+            Command::Builtin(mut builtin, version_constraint) => {
+                handle_version!(version_constraint);
                 for val in builtin.args.values_mut() {
                     *val = subst(val, &state.cmd_vars)?;
                 }
@@ -547,7 +559,8 @@ impl Run for PosCommand {
                     }
                 }
             }
-            Command::Sql(mut sql) => {
+            Command::Sql(mut sql, version_constraint) => {
+                handle_version!(version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 if let SqlOutput::Full { expected_rows, .. } = &mut sql.expected_output {
                     for row in expected_rows {
@@ -558,7 +571,8 @@ impl Run for PosCommand {
                 }
                 sql::run_sql(sql, state).await
             }
-            Command::FailSql(mut sql) => {
+            Command::FailSql(mut sql, version_constraint) => {
+                handle_version!(version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 sql.expected_error = match &sql.expected_error {
                     SqlExpectedError::Contains(s) => {
@@ -573,9 +587,6 @@ impl Run for PosCommand {
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
                 sql::run_fail_sql(sql, state).await
-            }
-            Command::VersionCheck(min_version, max_version) => {
-                version_check::run_version_check(min_version, max_version, state).await
             }
         };
 
@@ -788,7 +799,6 @@ pub async fn create_state(
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),
-        skip_next_command: false,
 
         // === Materialize state. ===
         materialize_catalog_postgres_stash,

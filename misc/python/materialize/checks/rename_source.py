@@ -72,7 +72,7 @@ class RenameSource(Check):
                 # When upgrading from old version without roles the source is
                 # owned by default_role, thus we have to change the owner
                 # before dropping it:
-                (>=4700)$ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
                 ALTER SOURCE rename_source2 OWNER TO materialize;
 
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}

@@ -44,7 +44,7 @@ class DropIndex(Check):
                 # When upgrading from old version without roles the indexes are
                 # owned by default_role, thus we have to change the owner
                 # before dropping them:
-                (>=4700)$ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
                 ALTER INDEX drop_index_table_primary_idx OWNER TO materialize;
                 ALTER INDEX drop_index_index2 OWNER TO materialize;
 

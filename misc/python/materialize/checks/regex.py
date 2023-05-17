@@ -46,11 +46,11 @@ class RegexpExtract(Check):
             dedent(
                 """
             > SELECT c1::string FROM regexp_extract_view1;
-            \\(,,,xyz,x,yz)
-            \\(abc,a,bc,,,)
+            (,,,xyz,x,yz)
+            (abc,a,bc,,,)
             > SELECT c1::string FROM regexp_extract_view2;
-            \\(,,,xyz,x,yz)
-            \\(abc,a,bc,,,)
+            (,,,xyz,x,yz)
+            (abc,a,bc,,,)
             """
             )
         )

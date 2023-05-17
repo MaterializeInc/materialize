@@ -12,6 +12,7 @@ from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.util import MzVersion
 
 
 class PgCdc(Check):
@@ -72,7 +73,7 @@ class PgCdc(Check):
                 INSERT INTO postgres_source_table SELECT 'C', i, REPEAT('C', 1024 - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
                 # Wait until Pg snapshot is complete in order to avoid #18940
-                (>=4601)> SELECT COUNT(*) > 0 FROM postgres_source_tableA
+                >[version>=4601] SELECT COUNT(*) > 0 FROM postgres_source_tableA
                 true
                 """,
                 """
@@ -115,9 +116,9 @@ class PgCdc(Check):
                 INSERT INTO postgres_source_table SELECT 'H', i, REPEAT('X', 1024 - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
                 # Wait until Pg snapshot is complete in order to avoid #18940
-                (>=4601)> SELECT COUNT(*) > 0 FROM postgres_source_tableB
+                >[version>=4601] SELECT COUNT(*) > 0 FROM postgres_source_tableB
                 true
-                (>=4601)> SELECT COUNT(*) > 0 FROM postgres_source_tableC
+                >[version>=4601] SELECT COUNT(*) > 0 FROM postgres_source_tableC
                 true
                 """,
             ]
@@ -161,18 +162,26 @@ class PgCdc(Check):
                 F 400 97350
                 G 300 97350
                 H 200 97350
-                # Confirm that the primary key information has been propagated from Pg
-                (>=5000)> SELECT key FROM (SHOW INDEXES ON postgres_source_tableA);
-                {f1,f2}
-
-                (>=5000)? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA;
-                Explained Query (fast path):
-                  Project (#0, #1)
-                    ReadExistingIndex materialize.public.postgres_source_tablea_primary_idx
-
-                Used Indexes:
-                  - materialize.public.postgres_source_tablea_primary_idx
                 """
+            )
+            + (
+                dedent(
+                    """
+                    # Confirm that the primary key information has been propagated from Pg
+                    > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA);
+                    {f1,f2}
+
+                    ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA;
+                    Explained Query (fast path):
+                      Project (#0, #1)
+                        ReadExistingIndex materialize.public.postgres_source_tablea_primary_idx
+
+                    Used Indexes:
+                      - materialize.public.postgres_source_tablea_primary_idx
+                    """
+                )
+                if self.base_version >= MzVersion.parse("0.50.0-dev")
+                else ""
             )
         )
 

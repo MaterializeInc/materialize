@@ -79,7 +79,7 @@ class CheckDatabaseDrop(Check):
                 # When upgrading from old version without roles the database is
                 # owned by default_role, thus we have to change the owner
                 # before dropping it:
-                (>=4700)$ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
                 ALTER DATABASE to_be_dropped OWNER TO materialize;
 
                 > DROP DATABASE to_be_dropped CASCADE;

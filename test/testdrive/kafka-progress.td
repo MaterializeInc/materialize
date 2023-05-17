@@ -26,7 +26,7 @@ one
 # Ensure that we can select from automatically generated remap collection
 > SELECT partition::text, "offset" FROM data_progress
 [0,0] 1
-\(0,) 0
+(0,) 0
 
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
@@ -40,4 +40,4 @@ $ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|t
 
 > SELECT partition::text, "offset" FROM exposed_progress_data
 [0,0] 1
-\(0,) 0
+(0,) 0

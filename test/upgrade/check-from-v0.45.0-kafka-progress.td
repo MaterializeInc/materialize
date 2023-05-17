@@ -10,7 +10,7 @@
 # Ensure progress sources automatically created
 $ set-regex match=\d+ replacement=<NUMBER>
 > SELECT partition::text, "offset" FROM kafka_source_progress
-\(<NUMBER>,) <NUMBER>
+(<NUMBER>,) <NUMBER>
 [<NUMBER>,<NUMBER>] <NUMBER>
 
 $ set-regex match=testdrive-upgrade-kafka-source-.*?' replacement=<TOPIC>'
