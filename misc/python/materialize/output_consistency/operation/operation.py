@@ -37,7 +37,6 @@ class DbOperationOrFunction:
         max_param_count: int,
         return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
-        commutative: bool = False,
         aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.NORMAL,
     ):
@@ -49,7 +48,6 @@ class DbOperationOrFunction:
         self.max_param_count = max_param_count
         self.return_type_category = return_type_category
         self.args_validators: set[OperationArgsValidator] = args_validators
-        self.commutative = commutative
         self.aggregation = aggregation
         self.relevance = relevance
 
@@ -83,7 +81,6 @@ class DbOperation(DbOperationOrFunction):
         params: list[OperationParam],
         return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
-        commutative: bool = False,
     ):
         param_count = len(params)
         super().__init__(
@@ -92,7 +89,6 @@ class DbOperation(DbOperationOrFunction):
             max_param_count=param_count,
             return_type_category=return_type_category,
             args_validators=args_validators,
-            commutative=commutative,
             aggregation=False,
         )
         self.pattern = pattern
@@ -117,7 +113,6 @@ class DbFunction(DbOperationOrFunction):
         params: list[OperationParam],
         return_type_category: DataTypeCategory,
         args_validators: Optional[set[OperationArgsValidator]] = None,
-        commutative: bool = False,
         aggregation: bool = False,
     ):
         self.validate_params(params)
@@ -128,7 +123,6 @@ class DbFunction(DbOperationOrFunction):
             max_param_count=len(params),
             return_type_category=return_type_category,
             args_validators=args_validators,
-            commutative=commutative,
             aggregation=aggregation,
         )
         self.function_name = function_name

@@ -35,7 +35,6 @@ NUMERIC_OPERATION_TYPES.append(
         [NumericOperationParam(), NumericOperationParam()],
         DataTypeCategory.NUMERIC,
         {ValueGrowsArgsValidator()},
-        commutative=True,
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -52,7 +51,6 @@ NUMERIC_OPERATION_TYPES.append(
         [NumericOperationParam(), NumericOperationParam()],
         DataTypeCategory.NUMERIC,
         {ValueGrowsArgsValidator()},
-        commutative=True,
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -88,7 +86,6 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         DataTypeCategory.NUMERIC,
-        commutative=True,
     )
 )
 # Bitwise OR
@@ -104,7 +101,6 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         DataTypeCategory.NUMERIC,
-        commutative=True,
     )
 )
 # Bitwise XOR
@@ -120,7 +116,6 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         DataTypeCategory.NUMERIC,
-        commutative=True,
     )
 )
 # Bitwise NOT

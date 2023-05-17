@@ -28,7 +28,6 @@ GENERIC_OPERATION_TYPES.append(
             NumericOperationParam(optional=True),
         ],
         DataTypeCategory.DYNAMIC,
-        commutative=True,
     )
 )
 GENERIC_OPERATION_TYPES.append(
@@ -40,6 +39,5 @@ GENERIC_OPERATION_TYPES.append(
             NumericOperationParam(optional=True),
         ],
         DataTypeCategory.DYNAMIC,
-        commutative=True,
     )
 )
