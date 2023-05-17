@@ -265,7 +265,6 @@ where
                     for ((key, value), ts, diff) in data.drain(..) {
                         // In the first phase we consolidate updates from our output that are not beyond
                         // resume_upper, in-place in `state`.
-                        #[allow(clippy::as_conversions)]
                         if !resume_upper.less_equal(&ts) {
                             update_buf.push((key, value, diff));
                             batch_key_counter.insert(key);
@@ -312,7 +311,8 @@ where
                     .try_into()
                     .unwrap_or_else(|e: std::num::TryFromIntError| {
                         tracing::warn!(
-                            "rehydration_total metric overflowed and is innacurate: {}",
+                            "rehydration_total metric overflowed or is negative \
+                            and is innacurate: {}. Defaulting to 0",
                             e.display_with_causes(),
                         );
 
@@ -334,8 +334,7 @@ where
             // antichain since we have dropped its token.
         }
 
-        // A re-usable buffer of changes, per key. This is
-        // an `IndexMap` because it has to be `drain`-able
+        // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
         let mut commands_state: indexmap::IndexMap<_, types::UpsertValueAndSize> =
             indexmap::IndexMap::new();

@@ -26,11 +26,20 @@ pub const BATCH_SIZE: usize = 1024;
 /// This is currently untested, and simply compiles.
 pub struct RocksDB {
     rocksdb: RocksDBInstance<UpsertKey, StateValue>,
+
+    // scratch vector used in the `multi_get` implementation.
+    multi_get_scratch: Vec<UpsertKey>,
+    // scratch vector used in the `multi_get` implementation.
+    multi_get_result_scratch: Vec<Option<mz_rocksdb::GetResult<StateValue>>>,
 }
 
 impl RocksDB {
     pub fn new(rocksdb: RocksDBInstance<UpsertKey, StateValue>) -> Self {
-        Self { rocksdb }
+        Self {
+            rocksdb,
+            multi_get_scratch: Vec::new(),
+            multi_get_result_scratch: Vec::new(),
+        }
     }
 }
 
@@ -97,8 +106,35 @@ impl UpsertStateBackend for RocksDB {
         if gets.peek().is_some() {
             let gets = gets.chunks(BATCH_SIZE);
             let results_out = results_out.into_iter().chunks(BATCH_SIZE);
+
             for (gets, results_out) in gets.into_iter().zip_eq(results_out.into_iter()) {
-                let stats = self.rocksdb.multi_get(gets, results_out).await?;
+                self.multi_get_scratch.clear();
+                self.multi_get_result_scratch.clear();
+                self.multi_get_scratch.extend(gets);
+                self.multi_get_result_scratch
+                    .extend((0..self.multi_get_scratch.len()).map(|_| None));
+
+                let stats = self
+                    .rocksdb
+                    .multi_get(
+                        self.multi_get_scratch.drain(..),
+                        self.multi_get_result_scratch.iter_mut(),
+                    )
+                    .await?;
+
+                for (get, result_out) in self.multi_get_result_scratch.drain(..).zip_eq(results_out)
+                {
+                    *result_out = get.map_or(
+                        UpsertValueAndSize {
+                            value: None,
+                            size: None,
+                        },
+                        |v| UpsertValueAndSize {
+                            value: Some(v.value),
+                            size: Some(v.size),
+                        },
+                    )
+                }
                 g_stats.processed_gets += stats.processed_gets;
             }
         }

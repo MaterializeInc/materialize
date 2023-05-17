@@ -75,17 +75,29 @@ use crate::source::metrics::UpsertSharedMetrics;
 
 /// The default set of `bincode` options used for consolidating
 /// upsert snapshots (and writing values to RocksDB).
-pub type BincodeOpts = bincode::config::WithOtherTrailing<
-    bincode::config::DefaultOptions,
-    bincode::config::AllowTrailing,
->;
+pub type BincodeOpts = bincode::config::DefaultOptions;
 
 /// Build the default `BincodeOpts`.
 pub fn upsert_bincode_opts() -> BincodeOpts {
-    bincode::DefaultOptions::new().allow_trailing_bytes()
+    // We don't allow trailing bytes, for now,
+    // and use varint encoding for space saving.
+    bincode::DefaultOptions::new()
 }
 
-pub type UpsertValueAndSize = mz_rocksdb::GetResult<StateValue>;
+/// The result type for individual gets.
+// The value and size are stored in individual options,
+// so that during upsert processing, we can track the
+// _original size of a value we get_ separate from
+// the updated value we want to write back to the `UpsertStateBackend`
+// implementation.
+#[derive(Debug, Default, Clone)]
+pub struct UpsertValueAndSize {
+    /// The value, if there was one.
+    pub value: Option<StateValue>,
+    /// The size of original`value` as persisted,
+    /// Useful for users keeping track of statistics.
+    pub size: Option<u64>,
+}
 
 #[derive(Clone, Debug)]
 pub struct PutValue<V> {
@@ -134,6 +146,9 @@ impl StateValue {
     /// - checksum_sum = SUM(checksum(bincode(value)) * diff)
     /// - len_sum = SUM(len(bincode(value)) * diff)
     /// - value_xor = XOR(bincode(value))
+    ///
+    /// ## Return value
+    /// Returns a `bool` indicating whether or not the current merged value is able to be deleted.
     ///
     /// ## Correctness
     ///
@@ -195,6 +210,9 @@ impl StateValue {
                 }
             }
 
+            // Returns whether or not the value can be deleted. This allows us to delete values in
+            // `UpsertState::merge_snapshot_chunk` (even if they come back later) during snapshotting,
+            // to minimize space usage.
             return diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0);
         } else {
             panic!("`merge_update` called after snapshot consolidation")
@@ -202,9 +220,9 @@ impl StateValue {
     }
 
     /// After consolidation of a snapshot, we assume that all values in the `UpsertStateBackend` implementation
-    /// are `Self::Snapshotting`, with a `diff_sum` of 1. Afterwards, if we need to retract one of
-    /// these values, we need to assert that its in this correct state, the mutate it to its
-    /// `Decoded` state, so the `upsert` operator can use it.
+    /// are `Self::Snapshotting`, with a `diff_sum` of 1 (or 0, if they have been deleted).
+    /// Afterwards, if we need to retract one of these values, we need to assert that its in this correct state,
+    /// then mutate it to its `Decoded` state, so the `upsert` operator can use it.
     #[allow(clippy::as_conversions)]
     pub fn ensure_decoded(&mut self, bincode_opts: BincodeOpts) {
         match self {
@@ -470,7 +488,7 @@ where
     // performant. This is because:
     // - We don't have proof we need that performance.
     // - This implementation is simpler (things like the RocksDB merge API are quite difficult to use
-    // properly)
+    // properly
     //
     // Additionally:
     // - Keeping track of stats is way easier this way
