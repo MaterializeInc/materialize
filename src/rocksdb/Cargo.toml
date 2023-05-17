@@ -27,6 +27,7 @@ tracing = "0.1.37"
 # https://github.com/lz4/lz4/blob/dev/LICENSE
 # https://github.com/facebook/zstd
 rocksdb = { version = "0.21.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
+uncased = "0.9.7"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]

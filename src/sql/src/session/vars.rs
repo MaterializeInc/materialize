@@ -533,16 +533,36 @@ const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
 
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
 mod upsert_rocksdb {
+    use std::str::FromStr;
+
+    use mz_rocksdb::tuning::CompactionStyle;
+
     use super::*;
-    pub static UPSERT_ROCKSDB_COMPACTION_STYLE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+
+    impl Value for CompactionStyle {
+        fn type_name() -> String {
+            "rocksdb_compaction_style".to_string()
+        }
+
+        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+            let s = extract_single_value(input)?;
+            CompactionStyle::from_str(s).map_err(|_| ())
+        }
+
+        fn format(&self) -> String {
+            self.to_string()
+        }
+    }
+
+    pub static UPSERT_ROCKSDB_COMPACTION_STYLE: ServerVar<CompactionStyle> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compaction_style"),
-        value: &*mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE_STR,
+        value: &mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
         safe: true,
-    });
+    };
     pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
         value: &mz_rocksdb::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
@@ -1959,8 +1979,8 @@ impl SystemVars {
         *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
     }
 
-    pub fn upsert_rocksdb_compaction_style(&self) -> &str {
-        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
+    pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb::tuning::CompactionStyle {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
     }
 
     pub fn upsert_rocksdb_optimize_compaction_memtable_budget(&self) -> usize {
