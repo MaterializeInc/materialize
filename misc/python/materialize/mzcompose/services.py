@@ -22,6 +22,7 @@ from materialize.mzcompose import (
     ServiceHealthcheck,
     loader,
 )
+from materialize.util import MzVersion
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 
@@ -128,7 +129,14 @@ class Materialized(Service):
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
 
-        self.default_storage_size = "1" if default_size == 1 else f"{default_size}-1"
+        self.default_storage_size = (
+            default_size
+            if image
+            and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse("0.41.0")
+            else "1"
+            if default_size == 1
+            else f"{default_size}-1"
+        )
 
         self.default_replica_size = (
             "1" if default_size == 1 else f"{default_size}-{default_size}"
