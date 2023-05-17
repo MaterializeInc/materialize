@@ -1140,6 +1140,14 @@ where
         self.collections.trace.num_batch_parts()
     }
 
+    pub fn hollow_batch_count(&self) -> usize {
+        self.collections.trace.num_hollow_batches()
+    }
+
+    pub fn spine_batch_count(&self) -> usize {
+        self.collections.trace.num_spine_batches()
+    }
+
     pub fn num_updates(&self) -> usize {
         self.collections.trace.num_updates()
     }

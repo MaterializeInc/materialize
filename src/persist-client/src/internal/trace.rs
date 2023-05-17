@@ -136,14 +136,12 @@ impl<T> Trace<T> {
         batches
     }
 
-    #[cfg(test)]
     pub fn num_spine_batches(&self) -> usize {
         let mut ret = 0;
         self.spine.map_batches(|_| ret += 1);
         ret
     }
 
-    #[cfg(test)]
     pub fn num_hollow_batches(&self) -> usize {
         let mut ret = 0;
         self.map_batches(|_| ret += 1);

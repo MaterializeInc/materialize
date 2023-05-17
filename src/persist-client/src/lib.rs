@@ -442,6 +442,7 @@ impl PersistClient {
         let fetcher = BatchFetcher {
             blob: Arc::clone(&self.blob),
             metrics: Arc::clone(&self.metrics),
+            shard_metrics,
             shard_id,
             schemas,
             _phantom: PhantomData,

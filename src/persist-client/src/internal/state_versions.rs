@@ -274,6 +274,12 @@ impl StateVersions {
                 shard_metrics.set_since(new_state.since());
                 shard_metrics.set_upper(new_state.upper());
                 shard_metrics
+                    .hollow_batch_count
+                    .set(u64::cast_from(new_state.hollow_batch_count()));
+                shard_metrics
+                    .spine_batch_count
+                    .set(u64::cast_from(new_state.spine_batch_count()));
+                shard_metrics
                     .batch_part_count
                     .set(u64::cast_from(new_state.batch_part_count()));
                 shard_metrics

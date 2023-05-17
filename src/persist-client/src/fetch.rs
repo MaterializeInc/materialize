@@ -31,7 +31,7 @@ use mz_persist_types::{Codec, Codec64};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{Metrics, ReadMetrics};
+use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::PartialBatchKey;
 use crate::read::{LeasedReaderId, ReadHandle};
 use crate::stats::PartStats;
@@ -49,6 +49,7 @@ where
 {
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) metrics: Arc<Metrics>,
+    pub(crate) shard_metrics: Arc<ShardMetrics>,
     pub(crate) shard_id: ShardId,
     pub(crate) schemas: Schemas<K, V>,
 
@@ -68,6 +69,7 @@ where
         let b = BatchFetcher {
             blob: Arc::clone(&handle.blob),
             metrics: Arc::clone(&handle.metrics),
+            shard_metrics: Arc::clone(&handle.machine.applier.shard_metrics),
             shard_id: handle.machine.shard_id(),
             schemas: handle.schemas.clone(),
             _phantom: PhantomData,
@@ -108,6 +110,7 @@ where
             self.blob.as_ref(),
             Arc::clone(&self.metrics),
             &self.metrics.read.batch_fetcher,
+            &self.shard_metrics,
             None,
             self.schemas.clone(),
         )
@@ -169,6 +172,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     blob: &(dyn Blob + Send + Sync),
     metrics: Arc<Metrics>,
     read_metrics: &ReadMetrics,
+    shard_metrics: &ShardMetrics,
     reader_id: Option<&LeasedReaderId>,
     schemas: Schemas<K, V>,
 ) -> (LeasedBatchPart<T>, FetchedPart<K, V, T, D>)
@@ -194,6 +198,7 @@ where
         &part.shard_id,
         blob,
         &metrics,
+        shard_metrics,
         read_metrics,
         &part.key,
         &part.desc,
@@ -232,6 +237,7 @@ pub(crate) async fn fetch_batch_part<T>(
     shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
+    shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     key: &PartialBatchKey,
     registered_desc: &Description<T>,
@@ -242,6 +248,7 @@ where
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
+        shard_metrics.blob_gets.inc();
         blob.get(&key.complete(shard_id)).await
     })
     .instrument(get_span.clone())
