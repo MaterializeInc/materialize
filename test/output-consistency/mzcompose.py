@@ -10,6 +10,7 @@
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Cockroach, Materialized
 from materialize.output_consistency.output_consistency import (
+    parse_output_consistency_input_args,
     run_output_consistency_tests,
 )
 
@@ -25,27 +26,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).
     """
 
-    parser.add_argument("--runtime-in-sec", default=600, type=int)
-    parser.add_argument("--seed", default=0, type=int)
-    parser.add_argument("--dry-run", default=False, type=bool)
-    parser.add_argument("--fail-fast", default=False, type=bool)
-    parser.add_argument("--execute-setup", default=True, type=bool)
-    parser.add_argument("--verbose", default=False, type=bool)
-    args = parser.parse_args()
-
     c.down(destroy_volumes=True)
 
     c.up("materialized")
+
+    args = parse_output_consistency_input_args(parser)
     cursor = c.sql_cursor()
 
-    test_summary = run_output_consistency_tests(
-        cursor,
-        args.runtime_in_sec,
-        args.seed,
-        args.dry_run,
-        args.fail_fast,
-        args.execute_setup,
-        args.verbose,
-    )
+    test_summary = run_output_consistency_tests(cursor, args)
 
     assert test_summary.all_passed(), "At least one test failed"
