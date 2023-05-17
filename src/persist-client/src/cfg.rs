@@ -219,7 +219,7 @@ impl PersistConfig {
     /// Default value for [`DynamicConfig::consensus_connect_timeout`].
     pub const DEFAULT_CRDB_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
     /// Default value for [`DynamicConfig::consensus_tcp_user_timeout`].
-    pub const DEFAULT_CRDB_TCP_USER_TIMEOUT: Duration = Duration::from_secs(15);
+    pub const DEFAULT_CRDB_TCP_USER_TIMEOUT: Duration = Duration::from_secs(30);
     /// Default value for [`DynamicConfig::stats_audit_percent`].
     pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 0;
     /// Default value for [`DynamicConfig::stats_collection_enabled`].
