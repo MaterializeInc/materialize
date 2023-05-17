@@ -42,6 +42,7 @@ use std::str::FromStr;
 use proptest_derive::Arbitrary;
 use rocksdb::{DBCompactionStyle, DBCompressionType};
 use serde::{Deserialize, Serialize};
+use uncased::UncasedStr;
 
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
@@ -138,7 +139,7 @@ impl Default for RocksDBTuningParameters {
 impl RocksDBTuningParameters {
     /// Build a `RocksDBTuningParameters` from strings and values from LD parameters.
     pub fn from_parameters(
-        compaction_style: &str,
+        compaction_style: CompactionStyle,
         optimize_compaction_memtable_budget: usize,
         level_compaction_dynamic_level_bytes: bool,
         universal_compaction_target_ratio: i32,
@@ -147,7 +148,7 @@ impl RocksDBTuningParameters {
         bottommost_compression_type: &str,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
-            compaction_style: compaction_style.parse()?,
+            compaction_style,
             optimize_compaction_memtable_budget,
             level_compaction_dynamic_level_bytes,
             universal_compaction_target_ratio: if universal_compaction_target_ratio > 100 {
@@ -241,13 +242,22 @@ impl FromStr for CompactionStyle {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "level" => Ok(Self::Level),
-            "universal" => Ok(Self::Universal),
-            other => Err(anyhow::anyhow!(
-                "{} is not a supported compaction style",
-                other
-            )),
+        let s = UncasedStr::new(s);
+        if s == "level" {
+            Ok(Self::Level)
+        } else if s == "universal" {
+            Ok(Self::Universal)
+        } else {
+            Err(anyhow::anyhow!("{} is not a supported compaction style", s))
+        }
+    }
+}
+
+impl std::fmt::Display for CompactionStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            CompactionStyle::Level => write!(f, "level"),
+            CompactionStyle::Universal => write!(f, "universal"),
         }
     }
 }
@@ -406,7 +416,6 @@ pub mod defaults {
     use once_cell::sync::Lazy;
 
     pub const DEFAULT_COMPACTION_STYLE: CompactionStyle = CompactionStyle::Level;
-    pub static DEFAULT_COMPACTION_STYLE_STR: Lazy<String> = Lazy::new(|| "level".to_string());
 
     /// From here: <https://github.com/facebook/rocksdb/blob/main/include/rocksdb/options.h#L102>
     pub const DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: usize = 512 * 1024 * 1024;
