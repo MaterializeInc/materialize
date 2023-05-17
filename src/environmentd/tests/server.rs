@@ -370,6 +370,7 @@ fn test_cancel_long_running_query() {
 fn test_cancellation_cancels_dataflows(query: &str) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
 
     let mut client1 = server.connect(postgres::NoTls).unwrap();
     let mut client2 = server.connect(postgres::NoTls).unwrap();
@@ -457,6 +458,7 @@ fn test_cancel_insert_select() {
 fn test_closing_connection_cancels_dataflows(query: String) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
+    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
 
     let mut cmd = Command::new("psql");
     let cmd = cmd
