@@ -94,6 +94,8 @@ use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
 /// prevent hot restart loops.
 const SUSPEND_AND_RESTART_DELAY: Duration = Duration::from_secs(30);
 
+pub type SourceStatistics = StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>;
+
 /// Shared configuration information for all source types. This is used in the
 /// `create_raw_source` functions, which produce raw sources.
 #[derive(Clone)]
@@ -129,7 +131,7 @@ pub struct RawSourceCreationConfig {
     /// A handle to the persist client cache
     pub persist_clients: Arc<PersistClientCache>,
     /// Place to share statistics updates with storage state.
-    pub source_statistics: StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>,
+    pub source_statistics: SourceStatistics,
     /// Enables reporting the remap operator's write frontier.
     pub shared_remap_upper: Rc<RefCell<Antichain<mz_repr::Timestamp>>>,
     /// Configuration parameters, possibly from LaunchDarkly

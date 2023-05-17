@@ -69,9 +69,12 @@ use bincode::Options;
 use itertools::Itertools;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::HashMap;
+use mz_ore::error::ErrorExt;
 
 use crate::render::upsert::{UpsertKey, UpsertValue};
 use crate::source::metrics::UpsertSharedMetrics;
+use crate::source::types::UpsertMetrics;
+use crate::source::SourceStatistics;
 
 /// The default set of `bincode` options used for consolidating
 /// upsert snapshots (and writing values to RocksDB).
@@ -444,7 +447,18 @@ impl UpsertStateBackend for InMemoryHashMap {
 /// snapshot merging, and reports basic metrics about the usage of the `UpsertStateBackend`.
 pub struct UpsertState<S> {
     inner: S,
+
+    // The status, start time, and stats about calls to `merge_snapshot_chunk`.
+    snapshot_start: Instant,
+    snapshot_stats: MergeStats,
+    snapshot_completed: bool,
+
+    // Metrics shared across all workers running the `upsert` operator.
     metrics: Arc<UpsertSharedMetrics>,
+    // Metrics for a specific worker.
+    worker_metrics: UpsertMetrics,
+    // User-facing statistics.
+    stats: SourceStatistics,
 
     // Bincode options and buffer used
     // in `merge_snapshot_chunk`.
@@ -461,10 +475,20 @@ pub struct UpsertState<S> {
 }
 
 impl<S> UpsertState<S> {
-    pub(crate) fn new(inner: S, metrics: Arc<UpsertSharedMetrics>) -> Self {
+    pub(crate) fn new(
+        inner: S,
+        metrics: Arc<UpsertSharedMetrics>,
+        worker_metrics: UpsertMetrics,
+        stats: SourceStatistics,
+    ) -> Self {
         Self {
             inner,
+            snapshot_start: Instant::now(),
+            snapshot_stats: MergeStats::default(),
+            snapshot_completed: false,
             metrics,
+            worker_metrics,
+            stats,
             bincode_opts: upsert_bincode_opts(),
             bincode_buffer: Vec::new(),
             merge_scratch: Vec::new(),
@@ -480,9 +504,12 @@ where
 {
     /// Merge and consolidate the following updates into the state, during snapshotting.
     ///
-    /// After an ensure snapshot has been `merged`, all values must be in the correct state
+    /// After an entire snapshot has been `merged`, all values must be in the correct state
     /// (as determined by `StateValue::ensure_decoded`, and `merge_snapshot_chunk` must NOT
     /// be called again.
+    ///
+    /// The `completed` boolean communicates whether or not this is the final chunk of updates
+    /// to be merged.
     // Note that this does not allow `UpsertStateBackend` backends to optimize this functionality,
     // (for example, using RocksDB's native merge functionality), which would be more
     // performant. This is because:
@@ -494,10 +521,20 @@ where
     // - Keeping track of stats is way easier this way
     // - The implementation is uses the exact same "mini-upsert" technique used in the upsert
     // operator.
-    pub async fn merge_snapshot_chunk<M>(&mut self, merges: M) -> Result<MergeStats, anyhow::Error>
+    //
+    // Also note that we use `self.inner.multi_*`, not `self.multi_*`. This is to avoid
+    // erroneously changing metric and stats values.
+    pub async fn merge_snapshot_chunk<M>(
+        &mut self,
+        merges: M,
+        completed: bool,
+    ) -> Result<(), anyhow::Error>
     where
         M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)>,
     {
+        if completed && self.snapshot_completed {
+            panic!("attempted completion of already completed upsert snapshot")
+        }
         let now = Instant::now();
         let mut merges = merges.into_iter().peekable();
 
@@ -562,12 +599,43 @@ where
             .merge_snapshot_updates
             .observe(f64::cast_lossy(stats.updates));
 
-        Ok(stats)
+        self.snapshot_stats += stats;
+
+        if completed {
+            self.worker_metrics
+                .rehydration_latency
+                .set(self.snapshot_start.elapsed().as_secs_f64());
+            self.worker_metrics
+                .rehydration_updates
+                .set(self.snapshot_stats.updates);
+            self.worker_metrics.rehydration_total.set(
+                self.snapshot_stats.values_diff.try_into().unwrap_or_else(
+                    |e: std::num::TryFromIntError| {
+                        tracing::warn!(
+                            "rehydration_total metric overflowed or is negative \
+                            and is innacurate: {}. Defaulting to 0",
+                            e.display_with_causes(),
+                        );
+
+                        0
+                    },
+                ),
+            );
+
+            // These `set_` functions also ensure that these values are non-negative.
+            self.stats
+                .set_envelope_state_bytes(self.snapshot_stats.size_diff);
+            self.stats
+                .set_envelope_state_count(self.snapshot_stats.values_diff);
+
+            self.snapshot_completed = true;
+        }
+        Ok(())
     }
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
-    pub async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
+    pub async fn multi_put<P>(&mut self, puts: P) -> Result<(), anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<UpsertValue>)>,
     {
@@ -592,7 +660,10 @@ where
             .multi_put_size
             .observe(f64::cast_lossy(stats.processed_puts));
 
-        Ok(stats)
+        self.stats.update_envelope_state_bytes_by(stats.size_diff);
+        self.stats.update_envelope_state_count_by(stats.values_diff);
+
+        Ok(())
     }
 
     /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
@@ -602,7 +673,7 @@ where
         &mut self,
         gets: G,
         results_out: R,
-    ) -> Result<GetStats, anyhow::Error>
+    ) -> Result<(), anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
         R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
@@ -617,6 +688,6 @@ where
             .multi_get_size
             .observe(f64::cast_lossy(stats.processed_gets));
 
-        Ok(stats)
+        Ok(())
     }
 }
