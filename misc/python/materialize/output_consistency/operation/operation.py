@@ -11,6 +11,10 @@ from enum import Enum
 from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.operation.operation_args_validator import (
     OperationArgsValidator,
 )
@@ -61,6 +65,12 @@ class DbOperationOrFunction:
             raise RuntimeError(
                 f"To many arguments (got {args_count}, expected at most {self.max_param_count})"
             )
+
+    def derive_characteristics(
+        self, args: list[Expression]
+    ) -> set[ExpressionCharacteristics]:
+        # a non-trivial implementation will be helpful for nested expressions
+        return set()
 
 
 class DbOperation(DbOperationOrFunction):

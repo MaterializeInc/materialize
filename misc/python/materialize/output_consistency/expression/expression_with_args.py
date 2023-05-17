@@ -22,7 +22,7 @@ class ExpressionWithArgs(Expression):
         args: list[Expression],
         is_expect_error: bool,
     ):
-        super().__init__(set(), is_expect_error)
+        super().__init__(operation.derive_characteristics(args), is_expect_error)
         self.pattern = operation.to_pattern(len(args))
         self.return_type_category = operation.return_type_category
         self.args = args
