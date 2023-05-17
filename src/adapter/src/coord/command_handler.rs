@@ -10,7 +10,6 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use opentelemetry::trace::TraceContextExt;
@@ -34,7 +33,8 @@ use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
 
 use crate::client::ConnectionId;
 use crate::command::{
-    Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
+    Canceled, Command, ExecuteResponse, GetVariablesResponse, Response, StartupMessage,
+    StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
@@ -60,6 +60,8 @@ impl Coordinator {
                 cancel_tx,
                 tx,
             } => {
+                // Note: We purposefully do not use a ClientTransmitter here because startup
+                // handles errors and cleanup of sessions itself.
                 self.handle_startup(session, cancel_tx, tx).await;
             }
 
@@ -107,13 +109,8 @@ impl Coordinator {
             }
 
             Command::DumpCatalog { session, tx } => {
-                // TODO(benesch/jkosh44): when we have RBAC, dumping the catalog should
-                // require superuser permissions.
-
-                let _ = tx.send(Response {
-                    result: Ok(self.catalog().dump()),
-                    session,
-                });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                tx.send(Ok(self.catalog().dump()), session);
             }
 
             Command::CopyRows {
@@ -133,14 +130,9 @@ impl Coordinator {
             }
 
             Command::GetSystemVars { session, tx } => {
-                let mut vars = BTreeMap::new();
-                for var in self.catalog().system_config().iter() {
-                    vars.insert(var.name().to_string(), var.value());
-                }
-                let _ = tx.send(Response {
-                    result: Ok(vars),
-                    session,
-                });
+                let vars = GetVariablesResponse::new(self.catalog.system_config().iter());
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                tx.send(Ok(vars), session);
             }
 
             Command::SetSystemVars { vars, session, tx } => {
@@ -152,11 +144,14 @@ impl Coordinator {
                     })
                     .collect();
                 let result = self.catalog_transact(Some(&session), ops).await;
-                let _ = tx.send(Response { result, session });
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+                tx.send(result, session);
             }
 
             Command::Terminate { mut session, tx } => {
                 self.handle_terminate(&mut session).await;
+                // Note: We purposefully do not use a ClientTransmitter here because we're already
+                // terminating the provided session.
                 if let Some(tx) = tx {
                     let _ = tx.send(Response {
                         result: Ok(()),
