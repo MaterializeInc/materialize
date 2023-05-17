@@ -78,11 +78,19 @@ We propose to introduce a mode in our `sqllogictest` runner wherein a `Query` di
 
 Automatically created view names above should be generated so as to avoid clashes with view names defined in tests. A simple strategy is, for example, to include a UUID in the view name string. Additonally, the special mode referred to above can be invoked by providing an additional option to the `sqllogictest` executable, e.g., `--auto_index_selects`, inspired by the existing option `auto_index_tables`.
 
+There is some degree of sensitivity to the amount of time that our SLT pipelines take to run. We consider three core scenarios that need further evaluation: (1) The CI run for each PR; (2) The nightly CI run; (3) The slow SLT pipeline. For (1), we may be able to run SLTs with `--auto_index_selects` turned on, depending on the performance impact that the additional DDL and redundant `SELECT` executions might have. If an evaluation shows that the time to completion of the pipeline is too large, a subset of the tests in the corpora that are candidates to produce different monotonic vs. non-monotonic plans can be selected. The latter can be achieved, e.g., by matching patterns for `MIN`, `MAX`, `DISTINCT ON`, and `LIMIT` against the test corpora to narrow down the search for relevant tests.
+
+For (2), one primary issue is that SQLancer / SQLsmith would be primarily run on the monotonic one-shot plan variants. We propose that this behavior be accepted for the stabilization of monotonic one-shot SELECTs, and that a follow-up issue be pursued subsequently.
+
+For (3), it is highly likely that the total time needed to execute these tests be excessive, as the current pipeline takes 7-10 hours to run. A first strategy would be to try pattern-based selection of a subset of tests; if the time would still be too large, we could refine the subset selection by sampling. The latter can be follow a random or just a simple round-robin strategy. Here, round-robin would guarantee that every SLT would eventually get a chance to run over a given number of repetitions of the pipeline, but it requires us to save state or implement a deterministic mapping (e.g., tests to day-of-week).
+
 ### Alternatives
 
-Note that the proposal above changes the semantics of our runner rather than changing the test corpora. Thus, reuse of existing corpora with low effort is achieved. However, the trade-off is reduced visibility of what all the statements actually run by a test are. Furthermore, we observe that not all tests need to be run with the option `auto_index_selects`. A subset of the tests in the corpora that are candidates to produce different monotonic vs. non-monotonic plans can be selected. The latter can be achieved, e.g., by matching patterns for `MIN`, `MAX`, `DISTINCT ON`, and `LIMIT` against the test corpora to narrow down the search for relevant tests.
+Note that the proposal above changes the semantics of our runner rather than changing the test corpora. Thus, reuse of existing corpora with low effort is achieved. However, the trade-off is reduced visibility of what all the statements actually run by a test are.
 
 Another alternative to the above proposal is to not retire the feature flag `enable_monotonic_oneshot_selects` and run selected tests from existing corpora with the flag either turned on or off. While simpler to implement, this solution goes against the notion that feature flags should eventually meet an endpoint in their lifecycle.
+
+A final alternative to be considered is a refinement of the proposal above in which we also run SQLancer / SQLsmith tests in the nightly CI pipeline by redundantly creating the SQL statements as indexed views in addition to one-shot `SELECT`s. In other words, in this alternative, we would consider running the nighltlies in this configuration also a requirement for stabilization of monotonic one-shot `SELECT`s.
 
 ## Lowering the Expense of Forced Consolidation
 
