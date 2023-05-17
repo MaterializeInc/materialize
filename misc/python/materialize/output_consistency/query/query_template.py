@@ -22,8 +22,11 @@ class QueryTemplate:
 
         self.select_expressions: list[Expression] = select_expressions
 
-    def add_select_exp(self, expr: Expression) -> None:
-        self.select_expressions.append(expr)
+    def add_select_expression(self, expression: Expression) -> None:
+        self.select_expressions.append(expression)
+
+    def add_multiple_select_expressions(self, expressions: list[Expression]) -> None:
+        self.select_expressions.extend(expressions)
 
     def to_sql(
         self, strategy: EvaluationStrategy, output_format: QueryOutputFormat

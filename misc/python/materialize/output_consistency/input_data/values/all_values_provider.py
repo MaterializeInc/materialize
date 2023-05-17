@@ -17,6 +17,6 @@ from materialize.output_consistency.input_data.values.number_values_provider imp
     VALUES_PER_NUMERIC_DATA_TYPE,
 )
 
-DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = []
-DATA_TYPES_WITH_VALUES.extend(list(VALUES_PER_NUMERIC_DATA_TYPE.values()))
-DATA_TYPES_WITH_VALUES.append(BOOLEAN_DATA_TYPE_WITH_VALUES)
+ALL_DATA_TYPES_WITH_VALUES: list[DataTypeWithValues] = []
+ALL_DATA_TYPES_WITH_VALUES.extend(list(VALUES_PER_NUMERIC_DATA_TYPE.values()))
+ALL_DATA_TYPES_WITH_VALUES.append(BOOLEAN_DATA_TYPE_WITH_VALUES)

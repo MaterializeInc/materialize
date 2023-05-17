@@ -20,6 +20,8 @@ class ConsistencyTestConfiguration:
         fail_fast: bool = False,
         execute_setup: bool = True,
         verbose_output: bool = False,
+        max_runtime_in_sec: int = 600,
+        max_iterations: int = 100000,
     ):
         self.queries_per_tx = queries_per_tx
         self.use_autocommit = use_autocommit
@@ -30,3 +32,5 @@ class ConsistencyTestConfiguration:
         self.fail_fast = fail_fast
         self.execute_setup = execute_setup
         self.verbose_output = verbose_output
+        self.max_runtime_in_sec = max_runtime_in_sec
+        self.max_iterations = max_iterations

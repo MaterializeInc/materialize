@@ -50,6 +50,7 @@ class QueryExecutionManager:
         self.config = config
         self.executor = executor
         self.comparator = comparator
+        self.query_counter = 0
 
     def setup_database_objects(
         self,
@@ -76,54 +77,37 @@ class QueryExecutionManager:
                     )
                     exit()
 
-    def execute_queries(
-        self,
-        queries: list[QueryTemplate],
-    ) -> ConsistencyTestSummary:
-        if len(queries) == 0:
-            print("No queries found!")
-            return ConsistencyTestSummary(0, 0, 0, self.config.dry_run)
+    def execute_query(
+        self, query: QueryTemplate, summary_to_update: ConsistencyTestSummary
+    ) -> bool:
+        if self.query_counter % self.config.queries_per_tx == 0:
+            # commit after every couple of queries
+            self.begin_tx(commit_previous_tx=self.query_counter > 0)
 
-        print(f"Processing {len(queries)} queries.")
+        query_index = self.query_counter
+        self.query_counter += 1
 
-        # can be larger than the number of queries in case of retries with split queries
-        count_executed = 0
-        count_passed = 0
-        count_with_warning = 0
-
-        for index, query in enumerate(queries):
-            if index % self.config.queries_per_tx == 0:
-                self.begin_tx(commit_previous_tx=index > 0)
-
-            test_outcomes = self.fire_and_compare_query(
-                query, index, "", self.evaluation_strategies
-            )
-
-            abort_early = False
-
-            for test_outcome in test_outcomes:
-                count_executed += 1
-
-                if test_outcome.success():
-                    count_passed += 1
-                elif self.config.fail_fast:
-                    abort_early = True
-
-                if test_outcome.has_warnings():
-                    print("Early abort due to comparison failure")
-                    count_with_warning += 1
-
-            if abort_early:
-                break
-
-        self.commit_tx()
-
-        return ConsistencyTestSummary(
-            count_executed_query_templates=count_executed,
-            count_successful_query_templates=count_passed,
-            count_with_warning_query_templates=count_with_warning,
-            dry_run=self.config.dry_run,
+        test_outcomes = self.fire_and_compare_query(
+            query, query_index, "", self.evaluation_strategies
         )
+
+        all_comparisons_passed = True
+
+        for test_outcome in test_outcomes:
+            summary_to_update.count_executed_query_templates += 1
+
+            if test_outcome.success():
+                summary_to_update.count_successful_query_templates += 1
+            else:
+                all_comparisons_passed = False
+
+            if test_outcome.has_warnings():
+                summary_to_update.count_with_warning_query_templates += 1
+
+        return all_comparisons_passed
+
+    def complete(self) -> None:
+        self.commit_tx()
 
     def begin_tx(self, commit_previous_tx: bool) -> None:
         if commit_previous_tx:
