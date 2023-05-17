@@ -17,6 +17,8 @@
 //!
 //! Consult the user-facing documentation for details.
 
+use std::{io::{self, Write}, os::unix::process::CommandExt};
+
 use crate::{context::RegionContext, error::Error};
 
 pub struct CreateArgs<'a> {
@@ -35,5 +37,61 @@ pub async fn create(
         force,
     }: CreateArgs<'_>,
 ) -> Result<(), Error> {
-    todo!()
+    let mut buffer = String::new();
+
+    // Ask the user to write the secret
+    print!("Secret: ");
+    let _ = std::io::stdout().flush();
+    io::stdin().read_line(&mut buffer)?;
+    buffer = buffer.trim().to_string();
+
+    // Retrieve information to open the psql shell sessions.
+    let claims = cx.admin_client().claims();
+    let region = cx.get_region().await?;
+    let enviornment = cx.get_environment(region).await?;
+    let email = claims.await?.email;
+
+    let mut client = cx
+    .sql_client()
+    .shell(enviornment, email);
+
+    // Build the queries to create the secret.
+    let mut commands: Vec<String> = vec![];
+
+    if let Some(database) = database {
+        client.args(vec!["-d", database]);
+    }
+
+    if let Some(schema) = schema {
+        commands.push(format!("SET search_path TO {}", schema));
+    }
+
+    // The most common ways to write a secret are the following ways:
+    // 1. Decode function: decode('c2VjcmV0Cg==', 'base64')
+    // 2. ASCII: 13de2601-24b4-4d8f-9931-375c0b2b5cd4
+    // For case 2) we want to scape the value for a better experience.
+    if !buffer.starts_with("decode") {
+        buffer = format!("'{}'", buffer);
+    }
+
+    if force {
+        // Rather than checking if the SECRET exists, do an upsert.
+        // Unfortunately the `-c` command in psql runs inside a transaction
+        // and CREATE and ALTER SECRET cannot be run inside a transaction block.
+        // The alternative is passing two `-c` commands to psql.
+
+        // Otherwise if the SECRET exists `psql` will display a NOTICE message.
+        commands.push("SET client_min_messages TO WARNING;".to_string());
+        commands.push(format!("CREATE SECRET IF NOT EXISTS {} AS {};", name, buffer));
+        commands.push(format!("ALTER SECRET {} AS {};", name, buffer));
+    } else {
+        commands.push(format!("CREATE SECRET {} AS {};", name, buffer));
+    }
+
+    commands.iter().for_each(|c| { client.args(vec!["-c", c]); });
+    let _error = client
+        .arg("-q")
+        .exec();
+
+    Ok(())
 }

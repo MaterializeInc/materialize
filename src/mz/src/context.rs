@@ -85,9 +85,10 @@ impl Context {
         let profile = config_file.load_profile(&profile_name)?;
 
         // Build clients
-        let admin_client: Arc<AdminClient> = Arc::new(AdminClientBuilder::default().build(AdminClientConfig {
-            app_password: profile.app_password().parse()?,
-        }));
+        let admin_client: Arc<AdminClient> =
+            Arc::new(AdminClientBuilder::default().build(AdminClientConfig {
+                app_password: profile.app_password().parse()?,
+            }));
 
         let mut cloud_client_builder = CloudClientBuilder::default();
 
@@ -129,7 +130,7 @@ impl Context {
 pub struct ProfileContext {
     context: Context,
     profile_name: String,
-    admin_client: Arc::<AdminClient>,
+    admin_client: Arc<AdminClient>,
     cloud_client: CloudClient,
     sql_client: SqlClient,
 }
