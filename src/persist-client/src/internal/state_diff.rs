@@ -34,7 +34,7 @@ use crate::read::LeasedReaderId;
 use crate::write::WriterId;
 use crate::{Metrics, PersistConfig};
 
-use self::StateFieldValDiff::*;
+use StateFieldValDiff::*;
 
 #[derive(Clone, Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]

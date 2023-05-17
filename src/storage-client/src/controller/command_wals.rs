@@ -24,9 +24,10 @@ use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
 use crate::client::{StorageCommand, StorageResponse};
-use crate::controller::{DurableCollectionMetadata, ProtoStorageCommand, ProtoStorageResponse};
-
-use super::{Controller, StorageController};
+use crate::controller::{
+    Controller, DurableCollectionMetadata, ProtoStorageCommand, ProtoStorageResponse,
+    StorageController,
+};
 
 pub(super) static SHARD_FINALIZATION: TypedCollection<ShardId, ()> =
     TypedCollection::new("storage-shards-to-finalize");

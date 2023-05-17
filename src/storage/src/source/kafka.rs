@@ -44,10 +44,9 @@ use timely::progress::Antichain;
 use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
+use crate::source::kafka::metrics::KafkaPartitionMetrics;
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
-
-use self::metrics::KafkaPartitionMetrics;
 
 mod metrics;
 

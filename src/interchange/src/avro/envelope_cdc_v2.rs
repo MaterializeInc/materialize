@@ -25,7 +25,7 @@ use mz_avro_derive::AvroDecodable;
 use mz_repr::{Diff, Row, Timestamp};
 use serde_json::json;
 
-use super::decode::RowWrapper;
+use crate::avro::decode::RowWrapper;
 
 pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode<'a>> {
     let data_name = FullName::from_parts("data", Some("com.materialize.cdc"), "");

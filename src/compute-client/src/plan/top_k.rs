@@ -22,7 +22,7 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use super::bucketing_of_expected_group_size;
+use crate::plan::bucketing_of_expected_group_size;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.top_k.rs"));
 

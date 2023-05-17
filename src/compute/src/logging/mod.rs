@@ -25,7 +25,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_repr::Timestamp;
 use mz_timely_util::activator::RcActivator;
 
-pub use self::initialize::initialize;
+pub use crate::logging::initialize::initialize;
 
 /// Logs events as a timely stream, with progress statements.
 struct BatchLogger<T, E, P>

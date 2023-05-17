@@ -70,7 +70,7 @@ use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use super::{bucketing_of_expected_group_size, AvailableCollections};
+use crate::plan::{bucketing_of_expected_group_size, AvailableCollections};
 
 include!(concat!(
     env!("OUT_DIR"),

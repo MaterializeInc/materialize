@@ -27,7 +27,7 @@ use tempfile::NamedTempFile;
 use tikv_jemalloc_ctl::{epoch, raw, stats};
 use tokio::sync::Mutex;
 
-use super::{ProfStartTime, StackProfile, WeightedStack};
+use crate::{ProfStartTime, StackProfile, WeightedStack};
 
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]

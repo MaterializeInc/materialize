@@ -41,13 +41,12 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::error::{Error, ErrorKind};
 use crate::catalog::{
-    is_reserved_name, RoleMembership, SerializedReplicaConfig, SerializedRole, SystemObjectMapping,
+    self, is_reserved_name, RoleMembership, SerializedCatalogItem, SerializedReplicaConfig,
+    SerializedReplicaLocation, SerializedReplicaLogging, SerializedRole, SystemObjectMapping,
     DEFAULT_CLUSTER_REPLICA_NAME,
 };
 use crate::coord::timeline;
-use crate::{catalog, rbac};
-
-use super::{SerializedCatalogItem, SerializedReplicaLocation, SerializedReplicaLogging};
+use crate::rbac;
 
 pub mod objects;
 pub mod stash;

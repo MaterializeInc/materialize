@@ -21,10 +21,10 @@ use proptest::result::Probability;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::join::{JoinBuildState, JoinClosure};
+use crate::plan::join::{
+    JoinBuildState, JoinClosure, ProtoLinearJoinPlan, ProtoLinearStagePlan, ProtoMirScalarVec,
+};
 use crate::plan::AvailableCollections;
-
-use super::{ProtoLinearJoinPlan, ProtoLinearStagePlan, ProtoMirScalarVec};
 
 /// A plan for the execution of a linear join.
 ///

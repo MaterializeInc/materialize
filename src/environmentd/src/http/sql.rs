@@ -36,9 +36,7 @@ use tokio::time;
 use tracing::warn;
 use tungstenite::protocol::frame::coding::CloseCode;
 
-use crate::http::{AuthedClient, MAX_REQUEST_SIZE};
-
-use super::{init_ws, WsState};
+use crate::http::{init_ws, AuthedClient, WsState, MAX_REQUEST_SIZE};
 
 pub async fn handle_sql(
     mut client: AuthedClient,

@@ -26,7 +26,7 @@ use timely::progress::Timestamp;
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
-use super::activator::ActivatorTrait;
+use crate::activator::ActivatorTrait;
 
 /// Replay a capture stream into a scope with the same timestamp.
 pub trait MzReplay<T: Timestamp, D: Data, A: ActivatorTrait>: Sized {

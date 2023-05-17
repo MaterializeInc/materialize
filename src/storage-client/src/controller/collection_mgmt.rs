@@ -22,9 +22,7 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::debug;
 
 use crate::client::TimestamplessUpdate;
-use crate::controller::StorageError;
-
-use super::persist_handles;
+use crate::controller::{persist_handles, StorageError};
 
 #[derive(Debug, Clone)]
 pub struct CollectionManager {

@@ -19,11 +19,10 @@ use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, Scala
 use once_cell::sync::Lazy;
 
 use crate::catalog::TypeCategory;
-
-use super::error::PlanError;
-use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
-use super::query::{ExprContext, QueryContext};
-use super::scope::Scope;
+use crate::plan::error::PlanError;
+use crate::plan::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
+use crate::plan::query::{ExprContext, QueryContext};
+use crate::plan::scope::Scope;
 
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {

@@ -13,9 +13,10 @@ use std::fmt;
 
 use mz_ore::str::{Indent, IndentLike};
 
+use crate::explain::{
+    CompactScalarSeq, ExprHumanizer, Indices, ScalarOps, UnsupportedFormat, UsedIndexes,
+};
 use crate::Row;
-
-use super::{CompactScalarSeq, ExprHumanizer, Indices, ScalarOps, UnsupportedFormat, UsedIndexes};
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`super::ExplainFormat::Text`].

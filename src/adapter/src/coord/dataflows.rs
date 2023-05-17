@@ -43,12 +43,11 @@ use crate::catalog::{
 };
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::{viewable_variables, ResultExt};
 use crate::{rbac, AdapterError};
-
-use super::timestamp_selection::TimestampProvider;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a, T> {

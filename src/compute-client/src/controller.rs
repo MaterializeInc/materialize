@@ -52,20 +52,19 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::controller::error::{
+    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
+    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+    SubscribeTargetError,
+};
+use crate::controller::instance::{ActiveInstance, Instance};
+use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
-
-use self::error::{
-    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
-    SubscribeTargetError,
-};
-use self::instance::{ActiveInstance, Instance};
-use self::replica::ReplicaConfig;
 
 mod instance;
 mod replica;

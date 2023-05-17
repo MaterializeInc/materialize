@@ -18,9 +18,8 @@ use proptest::prelude::{Arbitrary, Strategy};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::like_pattern::proto_matcher_impl::ProtoSubpatternVec;
 use crate::scalar::EvalError;
-
-use self::proto_matcher_impl::ProtoSubpatternVec;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
 

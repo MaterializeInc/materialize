@@ -39,11 +39,10 @@ use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Serialize, Serializer};
 use serde_json::{self, Map, Value};
 use tracing::{debug, warn};
-use types::{DecimalValue, Value as AvroValue};
 
 use crate::error::Error as AvroError;
 use crate::reader::SchemaResolver;
-use crate::types;
+use crate::types::{self, DecimalValue, Value as AvroValue};
 use crate::util::MapHelper;
 
 pub fn resolve_schemas(
@@ -2255,7 +2254,7 @@ fn field_ordering_position(field: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use types::{Record, ToAvro};
+    use crate::types::{Record, ToAvro};
 
     use super::*;
 

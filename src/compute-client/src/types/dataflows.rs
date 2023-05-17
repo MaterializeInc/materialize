@@ -22,13 +22,11 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
 use crate::plan::Plan;
-
-use self::proto_dataflow_description::{
+use crate::types::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
-
-use super::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use super::sources::{SourceInstanceArguments, SourceInstanceDesc};
+use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use crate::types::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 include!(concat!(
     env!("OUT_DIR"),

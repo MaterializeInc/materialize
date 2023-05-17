@@ -32,10 +32,9 @@ use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
+use crate::render::upsert::types::{InMemoryHashMap, StatsState, UpsertState};
 use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
-
-use self::types::{InMemoryHashMap, StatsState, UpsertState};
 
 mod rocksdb;
 mod types;

@@ -53,10 +53,9 @@ use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::{DataflowError, ProtoDataflowError};
 use crate::types::instances::StorageInstanceId;
-
-use self::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
-use self::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
-use self::proto_load_generator_source_connection::Generator as ProtoGenerator;
+use crate::types::sources::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
+use crate::types::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
+use crate::types::sources::proto_load_generator_source_connection::Generator as ProtoGenerator;
 
 pub mod encoding;
 

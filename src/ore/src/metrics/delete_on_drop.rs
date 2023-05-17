@@ -382,8 +382,8 @@ mod test {
     use prometheus::IntGaugeVec;
 
     use crate::metric;
+    use crate::metrics::{IntCounterVec, MetricsRegistry};
 
-    use super::super::{IntCounterVec, MetricsRegistry};
     use super::*;
 
     #[test]

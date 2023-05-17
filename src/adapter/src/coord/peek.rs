@@ -36,11 +36,10 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::client::ConnectionId;
+use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::util::{send_immediate_rows, ResultExt};
 use crate::AdapterError;
-
-use super::id_bundle::CollectionIdBundle;
 
 #[derive(Debug)]
 pub(crate) struct PendingPeek {

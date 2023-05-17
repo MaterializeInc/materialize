@@ -134,9 +134,8 @@ use timely::PartialOrder;
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::logging::compute::LogImportFrontiers;
+use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::typedefs::{ErrSpine, RowKeySpine};
-
-use self::context::{ArrangementFlavor, Context, ShutdownToken};
 
 pub mod context;
 mod errors;

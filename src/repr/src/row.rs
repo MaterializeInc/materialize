@@ -169,7 +169,7 @@ mod columnation {
 
     use columnation::{Columnation, Region, StableRegion};
 
-    use super::Row;
+    use crate::Row;
 
     /// Region allocation for `Row` data.
     ///

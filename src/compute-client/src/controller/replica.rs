@@ -23,13 +23,12 @@ use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
+use crate::controller::ReplicaId;
 use crate::logging::LoggingConfig;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
-
-use super::ReplicaId;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]

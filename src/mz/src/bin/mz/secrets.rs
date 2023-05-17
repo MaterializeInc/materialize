@@ -31,6 +31,7 @@ pub use self::clap_clippy_hack::*;
 #[allow(clippy::almost_swapped)]
 mod clap_clippy_hack {
     use super::*;
+
     #[derive(Debug, Subcommand)]
     pub enum SecretCommand {
         /// Create a new secret

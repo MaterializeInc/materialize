@@ -20,7 +20,7 @@
 use mz_repr::GlobalId;
 use thiserror::Error;
 
-use super::{instance, ComputeInstanceId, ReplicaId};
+use crate::controller::{instance, ComputeInstanceId, ReplicaId};
 
 /// Error returned in response to a reference to an unknown compute instance.
 #[derive(Error, Debug)]

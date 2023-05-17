@@ -51,7 +51,7 @@ use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 use tracing::warn;
 
-use super::is_null;
+use crate::avro::is_null;
 
 pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
     let schema = serde_json::from_str(schema)?;

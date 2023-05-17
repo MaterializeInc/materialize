@@ -20,7 +20,7 @@ use mz_sql::catalog::{CloudProvider, EnvironmentId};
 use prometheus::IntCounter;
 use tokio::time;
 
-use super::SynchronizedParameters;
+use crate::config::SynchronizedParameters;
 
 /// A frontend client for pulling [SynchronizedParameters] from LaunchDarkly.
 #[derive(Derivative)]

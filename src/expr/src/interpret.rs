@@ -37,9 +37,10 @@ enum Monotonic {
 }
 
 fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
-    use crate::func::impls as funcs;
     use Monotonic::*;
     use UnaryFunc::*;
+
+    use crate::func::impls as funcs;
     match func {
         // Casts are generally monotonic.
         CastUint64ToNumeric(_)

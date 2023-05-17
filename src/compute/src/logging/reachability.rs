@@ -27,10 +27,8 @@ use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Filter;
 
-use crate::logging::{LogVariant, TimelyLog};
+use crate::logging::{EventQueue, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
-
-use super::EventQueue;
 
 pub(super) type ReachabilityEvent = (
     Vec<usize>,

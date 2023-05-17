@@ -30,14 +30,13 @@ use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, 
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
 use crate::{
     func as scalar_func, EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc,
     VariadicFunc,
 };
-
-use self::func::{AggregateFunc, LagLeadType, TableFunc};
 
 pub mod canonicalize;
 pub mod func;

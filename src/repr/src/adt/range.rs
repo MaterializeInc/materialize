@@ -23,12 +23,11 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::types::{FromSql, Type as PgType};
 
+use crate::adt::date::Date;
+use crate::adt::numeric::Numeric;
+use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::DatumKind;
 use crate::Datum;
-
-use super::date::Date;
-use super::numeric::Numeric;
-use super::timestamp::CheckedTimestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 

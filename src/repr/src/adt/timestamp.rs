@@ -19,10 +19,9 @@ use once_cell::sync::Lazy;
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
+use crate::adt::numeric::DecimalLike;
 use crate::chrono::ProtoNaiveDateTime;
 use crate::Datum;
-
-use super::numeric::DecimalLike;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.date.rs"));
 

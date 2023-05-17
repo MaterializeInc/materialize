@@ -16,7 +16,7 @@ use mz_secrets::SecretsReader;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use super::StringOrSecret;
+use crate::types::connections::StringOrSecret;
 
 include!(concat!(
     env!("OUT_DIR"),

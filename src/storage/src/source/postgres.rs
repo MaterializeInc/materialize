@@ -49,10 +49,9 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::{Client, SimpleQueryMessage};
 use tracing::{info, warn};
 
+use crate::source::postgres::metrics::PgSourceMetrics;
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
-
-use self::metrics::PgSourceMetrics;
 
 mod metrics;
 

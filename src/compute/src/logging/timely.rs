@@ -35,10 +35,8 @@ use timely::logging::{
 };
 use tracing::error;
 
-use crate::logging::{LogVariant, TimelyLog};
+use crate::logging::{EventQueue, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
-
-use super::EventQueue;
 
 /// Constructs the logging dataflow for timely logs.
 ///

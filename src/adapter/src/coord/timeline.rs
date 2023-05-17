@@ -32,11 +32,10 @@ use crate::catalog::CatalogItem;
 use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{timeline, Coordinator};
 use crate::util::ResultExt;
 use crate::AdapterError;
-
-use super::timestamp_selection::TimestampProvider;
 
 /// An enum describing the timeline context of a query.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]

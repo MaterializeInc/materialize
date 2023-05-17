@@ -240,6 +240,7 @@ impl<P: Ord + Eq> PartialOrder for Interval<P> {
 impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
     fn results_in(&self, src: &Interval<P>) -> Option<Interval<P>> {
         use std::cmp::{max, min};
+
         use Interval::*;
         match (self, src) {
             // A range followed by another range contraints the range

@@ -31,12 +31,12 @@ use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::parse_timezone;
+use crate::scalar::func::{
+    parse_timezone, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+};
+use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::scalar::proto_mir_scalar_expr::*;
 use crate::visit::{Visit, VisitChildren};
-
-use self::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
-use self::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 
 pub mod func;
 pub mod like_pattern;

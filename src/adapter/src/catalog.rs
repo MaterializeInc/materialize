@@ -96,8 +96,8 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
-    BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
+    Builtin, BuiltinCluster, BuiltinLog, BuiltinRole, BuiltinSource, BuiltinTable, BuiltinType,
+    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
@@ -107,8 +107,6 @@ use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
-
-use self::builtin::{BuiltinCluster, BuiltinSource};
 
 mod builtin_table_updates;
 mod config;

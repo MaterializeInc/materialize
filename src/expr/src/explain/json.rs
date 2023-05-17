@@ -11,10 +11,8 @@
 
 use mz_repr::explain::json::DisplayJson;
 
-use crate::explain::{ExplainSource, PushdownInfo};
+use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource, PushdownInfo};
 use crate::interpret::Pushdownable;
-
-use super::{ExplainMultiPlan, ExplainSinglePlan};
 
 impl<'a, T: 'a> DisplayJson for ExplainSinglePlan<'a, T>
 where

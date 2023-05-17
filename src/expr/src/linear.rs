@@ -14,10 +14,9 @@ use mz_repr::{Datum, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::linear::proto_map_filter_project::ProtoPredicate;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
-
-use self::proto_map_filter_project::ProtoPredicate;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 
@@ -2021,7 +2020,8 @@ pub mod plan {
 mod tests {
     use mz_proto::protobuf_roundtrip;
 
-    use super::plan::*;
+    use crate::linear::plan::*;
+
     use super::*;
 
     proptest! {

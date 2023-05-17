@@ -77,13 +77,11 @@ use crate::plan::expr::{
 };
 use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
-use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidIterationLimit;
 use crate::plan::{transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan};
-
-use super::statement::show;
 
 #[derive(Debug)]
 pub struct PlannedQuery<E> {

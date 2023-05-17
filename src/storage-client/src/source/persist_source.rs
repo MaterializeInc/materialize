@@ -18,6 +18,7 @@ use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFun
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::operators::shard_source::shard_source;
+pub use mz_persist_client::operators::shard_source::FlowControl;
 use mz_persist_client::stats::PartStats;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
@@ -42,8 +43,6 @@ use tracing::error;
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
 use crate::types::sources::{RelationDescHack, SourceData};
-
-pub use mz_persist_client::operators::shard_source::FlowControl;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.

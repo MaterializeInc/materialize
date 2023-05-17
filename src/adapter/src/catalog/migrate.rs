@@ -17,10 +17,8 @@ use mz_storage_client::types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 
-use crate::catalog::{storage, Catalog, SerializedCatalogItem};
-
-use super::storage::Transaction;
-use super::ConnCatalog;
+use crate::catalog::storage::{self, Transaction};
+use crate::catalog::{Catalog, ConnCatalog, SerializedCatalogItem};
 
 async fn rewrite_items<F>(
     tx: &mut Transaction<'_>,

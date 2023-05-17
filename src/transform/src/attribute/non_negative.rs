@@ -11,8 +11,8 @@
 
 use mz_expr::{Id, MirRelationExpr};
 
-use super::subtree_size::SubtreeSize;
-use super::{Attribute, DerivedAttributes, Env, RequiredAttributes};
+use crate::attribute::subtree_size::SubtreeSize;
+use crate::attribute::{Attribute, DerivedAttributes, Env, RequiredAttributes};
 
 /// Traverses a [`MirRelationExpr`] tree and figures out whether for subtree
 /// the sum of all diffs up to a specific time for any record can be a

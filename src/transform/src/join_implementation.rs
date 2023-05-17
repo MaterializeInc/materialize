@@ -26,10 +26,9 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
+use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
 use crate::{TransformArgs, TransformError};
-
-use self::index_map::IndexMap;
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]

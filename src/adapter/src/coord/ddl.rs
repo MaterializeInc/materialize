@@ -43,14 +43,13 @@ use crate::catalog::{
     TransactionResult, SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
+use crate::coord::read_policy::SINCE_GRANULARITY;
+use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
-
-use super::read_policy::SINCE_GRANULARITY;
-use super::timeline::{TimelineContext, TimelineState};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {

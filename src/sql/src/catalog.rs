@@ -1181,9 +1181,7 @@ impl<'a, T> ErsatzCatalog<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::catalog::{EnvironmentId, InvalidEnvironmentIdError};
-
-    use super::CloudProvider;
+    use super::{CloudProvider, EnvironmentId, InvalidEnvironmentIdError};
 
     #[test]
     fn test_environment_id() {

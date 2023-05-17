@@ -24,7 +24,7 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client, Row};
 use tracing::error;
 
-use super::legacy_types::{
+use crate::upgrade::legacy_types::{
     AclMode, AlterSourceSinkV1, AuditLogKey, CatalogItemType, ClusterId,
     ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue, ClusterKey,
     ClusterReplicaKey, ClusterReplicaValue, ClusterValue, ConfigValue, CreateClusterReplicaV1,

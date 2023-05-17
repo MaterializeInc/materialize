@@ -20,10 +20,9 @@ use timely::logging::{Logger, TimelyEvent};
 use timely::progress::reachability::logging::TrackerEvent;
 
 use crate::arrangement::manager::TraceBundle;
-
-use super::compute::ComputeEvent;
-use super::reachability::ReachabilityEvent;
-use super::{BatchLogger, EventQueue};
+use crate::logging::compute::ComputeEvent;
+use crate::logging::reachability::ReachabilityEvent;
+use crate::logging::{BatchLogger, EventQueue};
 
 /// Initialize logging dataflows.
 ///

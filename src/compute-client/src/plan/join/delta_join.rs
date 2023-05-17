@@ -25,10 +25,10 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::join::{JoinBuildState, JoinClosure};
+use crate::plan::join::{
+    JoinBuildState, JoinClosure, ProtoDeltaJoinPlan, ProtoDeltaPathPlan, ProtoDeltaStagePlan,
+};
 use crate::plan::AvailableCollections;
-
-use super::{ProtoDeltaJoinPlan, ProtoDeltaPathPlan, ProtoDeltaStagePlan};
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///

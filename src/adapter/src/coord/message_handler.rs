@@ -30,13 +30,11 @@ use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
-    SinkConnectionReady,
+    Coordinator, CreateSourceStatementReady, Message, PeekStage, PeekStageFinish, PeekValidity,
+    PendingReadTxn, RealTimeRecencyContext, SinkConnectionReady,
 };
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice};
-
-use super::{PeekStage, PeekStageFinish, PeekValidity};
 
 impl Coordinator {
     pub(crate) async fn handle_message(&mut self, msg: Message) {

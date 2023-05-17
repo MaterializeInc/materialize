@@ -30,9 +30,7 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::plan::any_arranged_thin;
-
-use super::AvailableCollections;
+use crate::plan::{any_arranged_thin, AvailableCollections};
 
 include!(concat!(
     env!("OUT_DIR"),

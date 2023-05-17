@@ -24,14 +24,13 @@ use std::fmt::Debug;
 use anyhow::{anyhow, bail, Context};
 use byteorder::{BigEndian, ByteOrder};
 use chrono::NaiveDate;
-use serde_json::Value as JsonValue;
-
 // Re-export components from the various other Avro libraries, so that other
 // testdrive modules can import just this one.
 pub use mz_avro::schema::{Schema, SchemaKind, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 pub use mz_avro::types::{DecimalValue, ToAvro, Value};
 pub use mz_avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};
 pub use mz_interchange::avro::parse_schema;
+use serde_json::Value as JsonValue;
 
 // This function is derived from code in the avro_rs project. Update the license
 // header on this file accordingly if you move it to a new home.

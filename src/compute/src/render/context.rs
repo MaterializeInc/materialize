@@ -36,9 +36,8 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
+use crate::render::errors::ErrorLogger;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
-
-use super::errors::ErrorLogger;
 
 // Local type definition to avoid the horror in signatures.
 pub(crate) type KeyArrangement<S, K, V> =

@@ -9,9 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::{StashError, Transaction, TypedCollection};
-
-use super::InternalStashError;
+use crate::{InternalStashError, StashError, Transaction, TypedCollection};
 
 pub mod json_to_proto;
 pub mod legacy_types;

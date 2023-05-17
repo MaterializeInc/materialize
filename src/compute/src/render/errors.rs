@@ -15,7 +15,7 @@ use differential_dataflow::ExchangeData;
 use mz_repr::Row;
 use timely::container::columnation::Columnation;
 
-use super::context::ShutdownToken;
+use crate::render::context::ShutdownToken;
 
 /// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
 /// specialized for use in compute.  Validation code will only run when the error constructor is

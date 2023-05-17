@@ -20,10 +20,9 @@ use mz_stash::objects::proto;
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION};
 
 use crate::catalog::builtin::{MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE};
+use crate::catalog::storage::objects::StashType;
 use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::rbac;
-
-use super::objects::StashType;
 
 /// The key used within the "config" collection where we store the Stash version.
 const USER_VERSION: &str = "user_version";

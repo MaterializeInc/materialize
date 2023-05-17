@@ -34,10 +34,8 @@ use timely::Container;
 use tracing::error;
 use uuid::Uuid;
 
-use crate::logging::{ComputeLog, LogVariant};
+use crate::logging::{ComputeLog, EventQueue, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
-
-use super::EventQueue;
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;

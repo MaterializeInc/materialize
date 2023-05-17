@@ -25,6 +25,10 @@ use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES, SYSTEM_USER};
+pub use mz_sql::session::vars::{
+    EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
+};
 use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
@@ -37,11 +41,6 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::AdapterNotice;
-
-pub use mz_sql::session::vars::{
-    EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
-    SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
-};
 
 const DUMMY_CONNECTION_ID: ConnectionId = 0;
 const DUMMY_CONNECT_TIME: EpochMillis = 0;

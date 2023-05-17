@@ -26,6 +26,9 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use uuid::Uuid;
 
+use crate::controller::error::CollectionMissing;
+use crate::controller::replica::{Replica, ReplicaConfig};
+use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
@@ -35,10 +38,6 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
 use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use crate::types::sources::SourceInstanceDesc;
-
-use super::error::CollectionMissing;
-use super::replica::{Replica, ReplicaConfig};
-use super::{CollectionState, ComputeControllerResponse, ReplicaId};
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]

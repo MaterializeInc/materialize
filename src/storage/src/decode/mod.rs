@@ -41,12 +41,11 @@ use timely::dataflow::Scope;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
+use crate::decode::avro::AvroDecoderState;
+use crate::decode::csv::CsvDecoderState;
+use crate::decode::metrics::DecodeMetrics;
+use crate::decode::protobuf::ProtobufDecoderState;
 use crate::source::types::{DecodeResult, SourceOutput};
-
-use self::avro::AvroDecoderState;
-use self::csv::CsvDecoderState;
-use self::metrics::DecodeMetrics;
-use self::protobuf::ProtobufDecoderState;
 
 mod avro;
 mod csv;

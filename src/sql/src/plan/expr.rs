@@ -20,6 +20,11 @@ use itertools::Itertools;
 use mz_expr::func;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_expr::visit::{Visit, VisitChildren};
+// these happen to be unchanged at the moment, but there might be additions later
+pub use mz_expr::{
+    BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
+    WindowFrameBound, WindowFrameUnits,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
 use mz_ore::stack::RecursionLimitError;
@@ -32,12 +37,6 @@ use crate::plan::error::PlanError;
 use crate::plan::query::ExprContext;
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
-
-// these happen to be unchanged at the moment, but there might be additions later
-pub use mz_expr::{
-    BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
-};
 
 #[allow(missing_debug_implementations)]
 pub struct Hir;

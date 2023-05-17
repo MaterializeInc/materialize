@@ -20,9 +20,8 @@ use reqwest::{Method, RequestBuilder, Url};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+use crate::client::region::Region;
 use crate::error::{ApiError, Error};
-
-use self::region::Region;
 
 /// Represents the structure for the client.
 pub struct Client {
