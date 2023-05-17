@@ -63,6 +63,9 @@ class ConsistencyTestRunner:
         end_time = start_time + timedelta(seconds=self.config.max_runtime_in_sec)
 
         while True:
+            if iteration_count > 0 and iteration_count % 200 == 0:
+                print(f"Status: Expression {iteration_count}...")
+
             operation = self.expression_generator.pick_random_operation()
 
             shall_abort_after_iteration = self._shall_abort(iteration_count, end_time)
