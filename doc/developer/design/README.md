@@ -151,6 +151,20 @@ example, the [`persist` lectures
 slides and a talk track can be a more efficient means of communicating some
 types of technical content.
 
-## How should you push back on aspects of a design document?
+## How should you review a design document?
 
-Consult the draft [Raising an objection about a design](https://rustacean-principles.netlify.app/how_to_rustacean/show_up/raising_an_objection.html) Rustacean doc for guidance.
+As a reviewer, you play a key role in making the design review process a
+pleasant and productive experience:
+
+ - Keep the goals and non-goals outlined above in mind. We need authors and
+   reviewers aligned on the overall expectations for design documents in order
+   for the overall process to be productive.
+ - If you can only provide input on parts of the design doc, point that out
+   explicitly and focus on those areas.
+ - Avoid [bikeshedding](https://bikeshed.com). Bikeshedding can drain the
+   author's energy without adding any value.
+
+If you don't know how to productively push back on aspects of a design
+document, consult the draft [Raising an objection about a
+design](https://rustacean-principles.netlify.app/how_to_rustacean/show_up/raising_an_objection.html)
+Rustacean doc for guidance.
