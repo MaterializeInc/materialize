@@ -56,3 +56,7 @@ class ExpressionWithArgs(Expression):
                 return self.args[0].resolve_data_type_category()
 
         return self.return_type_category
+
+    def __str__(self) -> str:
+        args_desc = ", ".join(arg.__str__() for arg in self.args)
+        return f"ExpressionWithArgs with pattern {self.pattern} and args {args_desc}"

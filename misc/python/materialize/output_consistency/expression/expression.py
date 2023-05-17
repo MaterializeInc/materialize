@@ -25,3 +25,6 @@ class Expression:
 
     def resolve_data_type_category(self) -> DataTypeCategory:
         raise RuntimeError("Not implemented")
+
+    def __str__(self) -> str:
+        raise RuntimeError("Not implemented")

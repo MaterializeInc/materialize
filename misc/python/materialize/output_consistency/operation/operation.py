@@ -72,6 +72,9 @@ class DbOperationOrFunction:
         # a non-trivial implementation will be helpful for nested expressions
         return set()
 
+    def __str__(self) -> str:
+        raise RuntimeError("Not implemented")
+
 
 class DbOperation(DbOperationOrFunction):
     def __init__(
@@ -102,6 +105,9 @@ class DbOperation(DbOperationOrFunction):
     def to_pattern(self, args_count: int) -> str:
         self.validate_args_count_in_range(args_count)
         return self.pattern
+
+    def __str__(self) -> str:
+        return f"DbOperation: {self.pattern}"
 
 
 class DbFunction(DbOperationOrFunction):
@@ -148,3 +154,6 @@ class DbFunction(DbOperationOrFunction):
         self.validate_args_count_in_range(args_count)
         args_pattern = ", ".join(["$"] * args_count)
         return f"{self.function_name}({args_pattern})"
+
+    def __str__(self) -> str:
+        return f"DbFunction: {self.function_name}"
