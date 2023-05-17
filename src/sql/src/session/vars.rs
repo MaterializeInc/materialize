@@ -535,7 +535,7 @@ const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
 mod upsert_rocksdb {
     use std::str::FromStr;
 
-    use mz_rocksdb::tuning::CompactionStyle;
+    use mz_rocksdb::tuning::{CompactionStyle, CompressionType};
 
     use super::*;
 
@@ -547,6 +547,21 @@ mod upsert_rocksdb {
         fn parse(input: VarInput) -> Result<Self::Owned, ()> {
             let s = extract_single_value(input)?;
             CompactionStyle::from_str(s).map_err(|_| ())
+        }
+
+        fn format(&self) -> String {
+            self.to_string()
+        }
+    }
+
+    impl Value for CompressionType {
+        fn type_name() -> String {
+            "rocksdb_compression_type".to_string()
+        }
+
+        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+            let s = extract_single_value(input)?;
+            CompressionType::from_str(s).map_err(|_| ())
         }
 
         fn format(&self) -> String {
@@ -599,25 +614,24 @@ mod upsert_rocksdb {
         internal: true,
         safe: true,
     };
-    pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+    pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compression_type"),
-        value: &*mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE_STR,
+        value: &mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
         safe: true,
-    });
-    pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: Lazy<ServerVar<String>> =
-        Lazy::new(|| ServerVar {
-            name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
-            value: &*mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE_STR,
-            description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+    };
+    pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
+        value: &mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
-            internal: true,
-            safe: true,
-        });
+        internal: true,
+        safe: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -1999,12 +2013,14 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
     }
 
-    pub fn upsert_rocksdb_compression_type(&self) -> &str {
-        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
+    pub fn upsert_rocksdb_compression_type(&self) -> mz_rocksdb::tuning::CompressionType {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
     }
 
-    pub fn upsert_rocksdb_bottommost_compression_type(&self) -> &str {
-        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
+    pub fn upsert_rocksdb_bottommost_compression_type(
+        &self,
+    ) -> mz_rocksdb::tuning::CompressionType {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
