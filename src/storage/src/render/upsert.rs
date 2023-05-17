@@ -32,7 +32,7 @@ use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
-use crate::render::upsert::types::{InMemoryHashMap, StatsState, UpsertState};
+use crate::render::upsert::types::{InMemoryHashMap, UpsertState, UpsertStateBackend};
 use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 
@@ -219,7 +219,7 @@ where
     G::Timestamp: TotalOrder,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertState,
+    US: UpsertStateBackend,
 {
     // Sort key indices to ensure we can construct the key by iterating over the datums of the row
     key_indices.sort_unstable();
@@ -253,7 +253,7 @@ where
     builder.build(move |caps| async move {
         let mut output_cap = caps.into_element();
 
-        let mut state = StatsState::new(state().await, upsert_shared_metrics);
+        let mut state = UpsertState::new(state().await, upsert_shared_metrics);
 
         let mut batch_key_counter = HashSet::with_capacity(US::SNAPSHOT_BATCH_SIZE);
         let mut update_buf = Vec::with_capacity(US::SNAPSHOT_BATCH_SIZE * 10);
@@ -394,12 +394,12 @@ where
                     // Note that we are effectively doing "mini-upsert" here, using
                     // `command_state`. This "mini-upsert" is seeded with data from `state`, using
                     // a single `multi_get` above, and the final state is written out into
-                    // `state` using a single `multi_put`. This simplifies `UpsertState`
+                    // `state` using a single `multi_put`. This simplifies `UpsertStateBackend`
                     // implementations, and reduces the number of reads and write we need to do.
                     //
-                    // This "mini-upsert" technique is actually useful in some `UpsertState`
-                    // implementations, themselves, see `types::rocksdb` for an example. In some
-                    // sense, its "upsert all the way down".
+                    // This "mini-upsert" technique is actually useful in `UpsertState`'s
+                    // `merge_snapshot_chunk` implementation, minimizing gets and puts on
+                    // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
                     while let Some((ts, key, _, value)) = commands.next() {
                         let command_state = commands_state
                             .get_mut(&key)
