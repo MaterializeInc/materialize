@@ -31,7 +31,7 @@ SERVICES = [
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--runtime", default=600, type=int)
-    parser.add_argument("--num-tries", default=100000, type=int)
+    parser.add_argument("--num-tries", default=10, type=int)
     parser.add_argument("--num-threads", default=4, type=int)
     parser.add_argument("--seed", default=None, type=int)
     parser.add_argument("--qpg", default=True, action=argparse.BooleanOptionalAction)
