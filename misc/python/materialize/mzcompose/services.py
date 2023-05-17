@@ -132,6 +132,7 @@ class Materialized(Service):
         self.default_storage_size = (
             default_size
             if image
+            and "latest" not in image
             and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse("0.41.0")
             else "1"
             if default_size == 1
