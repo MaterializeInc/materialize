@@ -14,13 +14,11 @@ use std::convert::AsRef;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_client::types::sources::UpsertEnvelope;
@@ -253,12 +251,15 @@ where
     builder.build(move |caps| async move {
         let mut output_cap = caps.into_element();
 
-        let mut state = UpsertState::new(state().await, upsert_shared_metrics);
+        let mut state = UpsertState::new(
+            state().await,
+            upsert_shared_metrics,
+            upsert_metrics,
+            source_config.source_statistics,
+        );
 
         let mut batch_key_counter = HashSet::with_capacity(US::SNAPSHOT_BATCH_SIZE);
         let mut update_buf = Vec::with_capacity(US::SNAPSHOT_BATCH_SIZE * 10);
-        let now = Instant::now();
-        let mut stats = types::MergeStats::default();
         while let Some(event) = previous.next_mut().await {
             match event {
                 AsyncEvent::Data(_cap, data) => {
@@ -276,8 +277,8 @@ where
                                 || update_buf.len() >= US::SNAPSHOT_BATCH_SIZE * 10
                             {
                                 batch_key_counter.clear();
-                                stats += state
-                                    .merge_snapshot_chunk(update_buf.drain(..))
+                                state
+                                    .merge_snapshot_chunk(update_buf.drain(..), false)
                                     .await
                                     .expect("hashmap impl to not fail");
                             }
@@ -292,41 +293,12 @@ where
             }
         }
         // Flush out the rest of the snapshot.
-        stats += state
-            .merge_snapshot_chunk(update_buf.drain(..))
+        state
+            .merge_snapshot_chunk(update_buf.drain(..), true)
             .await
             .expect("hashmap impl to not fail");
         drop(update_buf);
         drop(batch_key_counter);
-
-        upsert_metrics
-            .rehydration_latency
-            .set(now.elapsed().as_secs_f64());
-        upsert_metrics.rehydration_updates.set(stats.updates);
-        upsert_metrics
-            .rehydration_total
-            .set(
-                stats
-                    .values_diff
-                    .try_into()
-                    .unwrap_or_else(|e: std::num::TryFromIntError| {
-                        tracing::warn!(
-                            "rehydration_total metric overflowed or is negative \
-                            and is innacurate: {}. Defaulting to 0",
-                            e.display_with_causes(),
-                        );
-
-                        0
-                    }),
-            );
-
-        // These `set_` functions also ensure that these values are non-negative.
-        source_config
-            .source_statistics
-            .set_envelope_state_bytes(stats.size_diff);
-        source_config
-            .source_statistics
-            .set_envelope_state_count(stats.values_diff);
 
         drop(previous_token);
         while let Some(_event) = previous.next().await {
@@ -425,7 +397,7 @@ where
                         }
                     }
 
-                    let stats = state
+                    state
                         .multi_put(commands_state.drain(..).map(|(k, cv)| {
                             (
                                 k,
@@ -439,14 +411,6 @@ where
                         }))
                         .await
                         .expect("hashmap impl to not fail");
-
-                    // Emitting metrics only after updating state
-                    source_config
-                        .source_statistics
-                        .update_envelope_state_bytes_by(stats.size_diff);
-                    source_config
-                        .source_statistics
-                        .update_envelope_state_count_by(stats.values_diff);
 
                     // Emit the _consolidated_ changes to the output.
                     output_handle
