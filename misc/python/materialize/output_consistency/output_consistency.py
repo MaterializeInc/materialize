@@ -137,7 +137,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         prog="output-consistency",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).",
+        description="Test the output consistency of different query evaluation strategies (e.g., dataflow rendering "
+        "and constant folding).",
     )
 
     parser.add_argument("--host", default="localhost", type=str)

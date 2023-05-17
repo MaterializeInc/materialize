@@ -28,7 +28,7 @@ class NumericOperationParam(OperationParam):
         if incompatibilities is None:
             incompatibilities = set()
 
-        # expect all numeric operations to have issues with an oversized input
+        # expect all numeric operations to have issues with an oversize input
         incompatibilities.add(ExpressionCharacteristics.OVERSIZE)
 
         super().__init__(

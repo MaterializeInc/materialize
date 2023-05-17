@@ -109,7 +109,10 @@ class ValidationError(ValidationMessage):
             # self.value1 will never be null in this case
             strategy1_desc = f" ({self.strategy1})"
             strategy2_desc = f" ({self.strategy2})"
-            value_and_strategy_desc = f"\n  Value 1: '{self.value1}'{strategy1_desc}\n  Value 2: '{self.value2}'{strategy2_desc}"
+            value_and_strategy_desc = (
+                f"\n  Value 1: '{self.value1}'{strategy1_desc}"
+                f"\n  Value 2: '{self.value2}'{strategy2_desc}"
+            )
         elif self.value1 is not None:
             strategy1_desc = f" ({self.strategy1})"
             value_and_strategy_desc = f"\n  Value: '{self.value1}'{strategy1_desc}"

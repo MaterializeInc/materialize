@@ -28,7 +28,8 @@ class ConsistencyTestSummary:
 
     def __str__(self) -> str:
         output_rows = [
-            f"{self.count_successful_query_templates}/{self.count_executed_query_templates} passed in mode '{self.mode}'.",
+            f"{self.count_successful_query_templates}/{self.count_executed_query_templates} passed"
+            f" in mode '{self.mode}'.",
             f"{self.count_with_warning_query_templates} queries had warnings.",
         ]
         return "\n".join(output_rows)

@@ -50,7 +50,8 @@ class ExpressionWithArgs(Expression):
         if self.return_type_category == DataTypeCategory.DYNAMIC:
             if len(self.args) == 0:
                 raise RuntimeError(
-                    f"Expression {self.pattern} uses return {DataTypeCategory.DYNAMIC} as return type but has no arguments"
+                    f"Expression {self.pattern} uses return {DataTypeCategory.DYNAMIC} as return type but has no "
+                    "arguments"
                 )
             else:
                 return self.args[0].resolve_data_type_category()

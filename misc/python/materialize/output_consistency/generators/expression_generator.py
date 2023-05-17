@@ -160,7 +160,8 @@ class ExpressionGenerator:
 
         return True
 
-    # checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max data_type)
+    # checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max
+    # data_type)
     def is_expected_to_cause_error(
         self, operation: DbOperationOrFunction, args: list[Expression]
     ) -> bool:
