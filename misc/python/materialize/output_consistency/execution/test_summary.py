@@ -8,7 +8,17 @@
 # by the Apache License, Version 2.0.
 
 
-class ConsistencyTestSummary:
+class ConsistencyTestLogger:
+    def __init__(
+        self,
+    ) -> None:
+        self.global_warnings: list[str] = []
+
+    def add_global_warning(self, message: str) -> None:
+        self.global_warnings.append(message)
+
+
+class ConsistencyTestSummary(ConsistencyTestLogger):
     def __init__(
         self,
         count_executed_query_templates: int,
@@ -32,4 +42,18 @@ class ConsistencyTestSummary:
             f" in mode '{self.mode}'.",
             f"{self.count_with_warning_query_templates} queries had warnings.",
         ]
+
+        output_rows.extend(self._get_global_warning_rows())
+
         return "\n".join(output_rows)
+
+    def _get_global_warning_rows(self) -> list[str]:
+        if len(self.global_warnings) == 0:
+            return []
+
+        warning_rows = [f"{len(self.global_warnings)} warnings occurred."]
+
+        for warning in self.global_warnings:
+            warning_rows.append(f"* {warning}")
+
+        return warning_rows
