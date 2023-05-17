@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This module defines the `UpsertState` trait and various implementations.
+//! This module defines the `UpsertStateBackend` trait and various implementations.
 //! This trait is the way the `upsert` operator interacts with various state backings.
 //!
 //! Because its a complex trait with a somewhat leaky abstraction, it warrants a high-level
@@ -42,14 +42,14 @@
 //! just like `multi_put`.
 //!
 //! Another curiosity is that implementation can assume that `merge_snapshot_chunk` is called with
-//! a set of updates with a number of keys not greater than `UpsertState::SNAPSHOT_BATCH_SIZE`. This
+//! a set of updates with a number of keys not greater than `UpsertStateBackend::SNAPSHOT_BATCH_SIZE`. This
 //! is different than `multi_put` and `multi_get` purely because it simplifies the way that the `upsert`
 //! operator handles snapshots.
 //!
 //!
 //! # A note on state size
 //!
-//! The `UpsertState` trait requires implementations report _relatively accurate_ information about
+//! The `UpsertStateBackend` trait requires implementations report _relatively accurate_ information about
 //! how the state size changes over time. Note that it does NOT ask the implementations to give
 //! accurate information about actual resource consumption (like disk space including space
 //! amplification), and instead is just asking about the size of the values, after they have been
@@ -61,7 +61,6 @@
 //! Note also that after snapshot consolidation, additional space may be used if `StateValue` is
 //! used.
 
-use std::collections::hash_map;
 use std::num::Wrapping;
 use std::sync::Arc;
 use std::time::Instant;
@@ -89,23 +88,23 @@ pub fn upsert_bincode_opts() -> BincodeOpts {
 pub type UpsertValueAndSize = mz_rocksdb::GetResult<StateValue>;
 
 #[derive(Clone, Debug)]
-pub struct PutValue {
-    pub value: Option<UpsertValue>,
+pub struct PutValue<V> {
+    pub value: Option<V>,
     pub previous_persisted_size: Option<i64>,
 }
 
-/// In any `UpsertState` implementation, we need to support 2 modes:
+/// In any `UpsertStateBackend` implementation, we need to support 2 modes:
 /// - Normal operation
 /// - Consolidation of snapshots (during rehydration).
 ///
 /// This struct (and `Snapshotting`) is effectively a helper to simplify the logic that
-/// individual `UpsertState` implementations need to do to manage these 2 modes.
+/// individual `UpsertStateBackend` implementations need to do to manage these 2 modes.
 ///
 /// Normal operation is easy, we just store an ordinary `UpsertValue`, and allow the implementer
 /// to store it any way they want. During consolidation of snapshots, the logic is more complex.
 /// See the docs on `StateValue::merge_update` for more information.
 ///
-/// This struct is not part of the `UpsertState` public API, but implementing that API without
+/// This struct is not part of the `UpsertStateBackend` public API, but implementing that API without
 /// using it is considered hard-mode.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub enum StateValue {
@@ -202,7 +201,7 @@ impl StateValue {
         }
     }
 
-    /// After consolidation of a snapshot, we assume that all values in the `UpsertState` implementation
+    /// After consolidation of a snapshot, we assume that all values in the `UpsertStateBackend` implementation
     /// are `Self::Snapshotting`, with a `diff_sum` of 1. Afterwards, if we need to retract one of
     /// these values, we need to assert that its in this correct state, the mutate it to its
     /// `Decoded` state, so the `upsert` operator can use it.
@@ -321,7 +320,7 @@ pub struct GetStats {
 /// A trait that defines the fundamental primitives required by a state-backing of
 /// the `upsert` operator.
 #[async_trait::async_trait(?Send)]
-pub trait UpsertState {
+pub trait UpsertStateBackend {
     /// Unlike `multi_get` and `multi_put`, which require the implementer
     /// to chunk large iterators as they please, `merge_snapshot_chunk` allows
     /// the implementer to specify their preferred batch size. This batch size
@@ -331,20 +330,12 @@ pub trait UpsertState {
     /// are merged from asynchronous, batched timely iterators, as opposed to normal
     /// sync iterators.
     const SNAPSHOT_BATCH_SIZE: usize;
-    /// Merge and consolidate the following updates into the state, during snapshotting.
-    ///
-    /// After an ensure snapshot has been `merged`, all values must be in the correct state
-    /// (as determined by `StateValue::ensure_decoded`, and `merge_snapshot_chunk` must NOT
-    /// be called again.
-    async fn merge_snapshot_chunk<P>(&mut self, puts: P) -> Result<MergeStats, anyhow::Error>
-    where
-        P: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)>;
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, PutValue)>;
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>;
 
     /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
     ///
@@ -363,80 +354,30 @@ pub trait UpsertState {
 /// methods.
 pub struct InMemoryHashMap {
     state: HashMap<UpsertKey, StateValue>,
-
-    // Bincode options and buffer used
-    // in `merge_snapshot_chunk`.
-    bincode_opts: BincodeOpts,
-    bincode_buffer: Vec<u8>,
 }
 
 impl Default for InMemoryHashMap {
     fn default() -> Self {
         Self {
             state: HashMap::new(),
-            bincode_opts: upsert_bincode_opts(),
-            bincode_buffer: Vec::new(),
         }
     }
 }
 
 #[async_trait::async_trait(?Send)]
-impl UpsertState for InMemoryHashMap {
+impl UpsertStateBackend for InMemoryHashMap {
     const SNAPSHOT_BATCH_SIZE: usize = 1;
-    async fn merge_snapshot_chunk<P>(&mut self, puts: P) -> Result<MergeStats, anyhow::Error>
-    where
-        P: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)>,
-    {
-        let mut stats = MergeStats::default();
-        for (key, value, diff) in puts {
-            stats.updates += 1;
-
-            let entry = self.state.entry(key);
-            let current_size: i64 = match &entry {
-                hash_map::Entry::Occupied(o) => o
-                    .get()
-                    .memory_size()
-                    .try_into()
-                    .expect("less than i64 size"),
-                hash_map::Entry::Vacant(_) => {
-                    stats.values_diff += 1;
-                    0
-                }
-            };
-            let current_value = entry.or_insert_with(Default::default);
-
-            if current_value.merge_update(value, diff, self.bincode_opts, &mut self.bincode_buffer)
-            {
-                stats.values_diff -= 1;
-                stats.size_diff -= current_size;
-                self.state.remove(&key);
-            } else {
-                stats.size_diff -= current_size;
-                let current_size: i64 = current_value
-                    .memory_size()
-                    .try_into()
-                    .expect("less than i64 size");
-                stats.size_diff += current_size
-            }
-        }
-
-        Ok(stats)
-    }
 
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, PutValue)>,
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
     {
         let mut stats = PutStats::default();
         for (key, p_value) in puts {
             stats.processed_puts += 1;
             match p_value.value {
                 Some(value) => {
-                    let decoded_value = StateValue::Decoded(value);
-                    let size: i64 = decoded_value
-                        .memory_size()
-                        .try_into()
-                        .expect("less than i64 size");
+                    let size: i64 = value.memory_size().try_into().expect("less than i64 size");
                     match p_value.previous_persisted_size {
                         Some(previous_size) => {
                             stats.size_diff -= previous_size;
@@ -447,7 +388,7 @@ impl UpsertState for InMemoryHashMap {
                             stats.size_diff += size;
                         }
                     }
-                    self.state.insert(key, decoded_value);
+                    self.state.insert(key, value);
                 }
                 None => {
                     if let Some(previous_size) = p_value.previous_persisted_size {
@@ -481,45 +422,150 @@ impl UpsertState for InMemoryHashMap {
     }
 }
 
-/// An `UpsertState` wrapper that reports basic metrics about the usage of the `UpsertState`.
-pub struct StatsState<S> {
+/// An `UpsertStateBackend` wrapper that supports
+/// snapshot merging, and reports basic metrics about the usage of the `UpsertStateBackend`.
+pub struct UpsertState<S> {
     inner: S,
     metrics: Arc<UpsertSharedMetrics>,
+
+    // Bincode options and buffer used
+    // in `merge_snapshot_chunk`.
+    bincode_opts: BincodeOpts,
+    bincode_buffer: Vec<u8>,
+
+    // We need to iterator over `merges` in `merge_snapshot_chunk`
+    // twice, so we have a scratch vector for this.
+    merge_scratch: Vec<(UpsertKey, UpsertValue, mz_repr::Diff)>,
+    // "mini-upsert" map used in `merge_snapshot_chunk`, plus a
+    // scratch vector for calling `multi_get`
+    merge_upsert_scratch: indexmap::IndexMap<UpsertKey, UpsertValueAndSize>,
+    multi_get_scratch: Vec<UpsertKey>,
 }
 
-impl<S> StatsState<S> {
+impl<S> UpsertState<S> {
     pub(crate) fn new(inner: S, metrics: Arc<UpsertSharedMetrics>) -> Self {
-        Self { inner, metrics }
+        Self {
+            inner,
+            metrics,
+            bincode_opts: upsert_bincode_opts(),
+            bincode_buffer: Vec::new(),
+            merge_scratch: Vec::new(),
+            merge_upsert_scratch: indexmap::IndexMap::new(),
+            multi_get_scratch: Vec::new(),
+        }
     }
 }
 
-#[async_trait::async_trait(?Send)]
-impl<S> UpsertState for StatsState<S>
+impl<S> UpsertState<S>
 where
-    S: UpsertState,
+    S: UpsertStateBackend,
 {
-    const SNAPSHOT_BATCH_SIZE: usize = S::SNAPSHOT_BATCH_SIZE;
-    async fn merge_snapshot_chunk<P>(&mut self, puts: P) -> Result<MergeStats, anyhow::Error>
+    /// Merge and consolidate the following updates into the state, during snapshotting.
+    ///
+    /// After an ensure snapshot has been `merged`, all values must be in the correct state
+    /// (as determined by `StateValue::ensure_decoded`, and `merge_snapshot_chunk` must NOT
+    /// be called again.
+    // Note that this does not allow `UpsertStateBackend` backends to optimize this functionality,
+    // (for example, using RocksDB's native merge functionality), which would be more
+    // performant. This is because:
+    // - We don't have proof we need that performance.
+    // - This implementation is simpler (things like the RocksDB merge API are quite difficult to use
+    // properly)
+    //
+    // Additionally:
+    // - Keeping track of stats is way easier this way
+    // - The implementation is uses the exact same "mini-upsert" technique used in the upsert
+    // operator.
+    pub async fn merge_snapshot_chunk<M>(&mut self, merges: M) -> Result<MergeStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)>,
+        M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)>,
     {
         let now = Instant::now();
-        let stats = self.inner.merge_snapshot_chunk(puts).await?;
+        let mut merges = merges.into_iter().peekable();
+
+        self.merge_scratch.clear();
+        self.merge_upsert_scratch.clear();
+        self.multi_get_scratch.clear();
+
+        let mut stats = MergeStats::default();
+
+        if merges.peek().is_some() {
+            self.merge_scratch.extend(merges);
+            self.merge_upsert_scratch.extend(
+                self.merge_scratch
+                    .iter()
+                    .map(|(k, _, _)| (*k, UpsertValueAndSize::default())),
+            );
+            self.multi_get_scratch
+                .extend(self.merge_upsert_scratch.iter().map(|(k, _)| *k));
+            self.inner
+                .multi_get(
+                    self.multi_get_scratch.drain(..),
+                    self.merge_upsert_scratch.iter_mut().map(|(_, v)| v),
+                )
+                .await?;
+
+            for (key, value, diff) in self.merge_scratch.drain(..) {
+                stats.updates += 1;
+                let entry = self.merge_upsert_scratch.get_mut(&key).unwrap();
+                let val = entry.value.get_or_insert_with(Default::default);
+
+                if val.merge_update(value, diff, self.bincode_opts, &mut self.bincode_buffer) {
+                    entry.value = None;
+                }
+            }
+
+            // Note we do 1 `multi_get` and 1 `multi_put` while processing a _batch of updates_.
+            // Within the batch, we effectively consolidate each key, before persisting that
+            // consolidated value. Easy!!
+            let p_stats = self
+                .inner
+                .multi_put(self.merge_upsert_scratch.drain(..).map(|(k, v)| {
+                    (
+                        k,
+                        PutValue {
+                            value: v.value,
+                            previous_persisted_size: v
+                                .size
+                                .map(|v| v.try_into().expect("less than i64 size")),
+                        },
+                    )
+                }))
+                .await?;
+
+            stats.values_diff = p_stats.values_diff;
+            stats.size_diff = p_stats.size_diff;
+        }
+
         self.metrics
             .merge_snapshot_latency
             .observe(now.elapsed().as_secs_f64());
         self.metrics
             .merge_snapshot_updates
             .observe(f64::cast_lossy(stats.updates));
+
         Ok(stats)
     }
 
-    async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
+    /// Insert or delete for all `puts` keys, prioritizing the last value for
+    /// repeated keys.
+    pub async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, PutValue)>,
+        P: IntoIterator<Item = (UpsertKey, PutValue<UpsertValue>)>,
     {
         let now = Instant::now();
-        let stats = self.inner.multi_put(puts).await?;
+        let stats = self
+            .inner
+            .multi_put(puts.into_iter().map(|(k, pv)| {
+                (
+                    k,
+                    PutValue {
+                        value: pv.value.map(StateValue::Decoded),
+                        previous_persisted_size: pv.previous_persisted_size,
+                    },
+                )
+            }))
+            .await?;
 
         self.metrics
             .multi_put_latency
@@ -531,7 +577,10 @@ where
         Ok(stats)
     }
 
-    async fn multi_get<'r, G, R>(
+    /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
+    ///
+    /// Panics if `gets` and `results_out` are not the same length.
+    pub async fn multi_get<'r, G, R>(
         &mut self,
         gets: G,
         results_out: R,
