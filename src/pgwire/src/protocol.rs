@@ -252,11 +252,13 @@ where
         let connections = {
             let mut connections = active_connection_count.lock().expect("lock poisoned");
             connections.current += 1;
+            tracing::info!("inc connection count in pgwire");
             *connections
         };
         let guard = scopeguard::guard(active_connection_count, |active_connection_count| {
             let mut connections = active_connection_count.lock().expect("lock poisoned");
             assert_ne!(0, connections.current);
+            tracing::info!("dec connection count in pgwire");
             connections.current -= 1;
         });
         if connections.current > connections.limit {

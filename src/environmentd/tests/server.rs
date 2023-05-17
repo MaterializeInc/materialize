@@ -85,11 +85,13 @@ use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use futures::FutureExt;
 use http::StatusCode;
 use itertools::Itertools;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use tokio::runtime::Runtime;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
@@ -1178,7 +1180,7 @@ struct HttpResponse<R> {
 
 #[derive(Debug, Deserialize)]
 struct HttpRows {
-    rows: Vec<Vec<String>>,
+    rows: Vec<Vec<serde_json::Value>>,
     col_names: Vec<String>,
     notices: Vec<Notice>,
 }
@@ -1260,4 +1262,147 @@ fn test_http_options_param() {
     assert!(notice
         .message
         .contains(r#"startup setting not_a_session_var not set"#));
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_max_connections_on_all_interfaces() {
+    mz_ore::test::init_logging();
+    let slow_query = "WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip";
+    let fast_query = "SELECT 1";
+    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    mz_client.batch_execute("ALTER SYSTEM SET max_connections = 1").unwrap();
+
+    // pgwire
+    tracing::info!("creating client");
+    let client = server.connect(postgres::NoTls).unwrap();
+    tracing::info!("created client");
+
+    // http
+    {
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let json = format!("{{\"query\":\"{fast_query}\"}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let slow_query_json: serde_json::Value = serde_json::from_str(&format!("{{\"query\":\"{slow_query}\"}}")).unwrap();
+
+        {
+            let res = Client::new().post(http_url.clone()).json(&json).send().unwrap();
+            tracing::info!("res: {:#?}", res);
+            let status = res.status();
+            let text = res.text().expect("no body?");
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+        }
+
+        tracing::info!("closing client");
+        client.close().unwrap();
+        tracing::info!("closed client");
+
+    Runtime::new().unwrap().block_on(async move {
+
+        tracing::info!("waiting for postgres client to close so that the query goes through");
+        Retry::default().max_tries(10).retry_async(|_state| async {
+            let res = reqwest::Client::new().post(http_url.clone()).json(&json).send().await.unwrap();
+            let status = res.status();
+            if status == StatusCode::INTERNAL_SERVER_ERROR {
+                assert_eq!(res.text().await.expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+                return Err(());
+            }
+            assert_eq!(status, StatusCode::OK);
+            let result: HttpResponse<HttpRows> = res.json().await.unwrap();
+            assert_eq!(result.results.len(), 1);
+            assert_eq!(result.results[0].rows, vec![vec![1]]);
+            Ok(())
+        }).await.unwrap();
+        tracing::info!("sent http query");
+
+        tracing::info!("spawning slow http query");
+
+        let task = tokio::spawn(reqwest::Client::new().post(http_url.clone()).json(&slow_query_json).send()
+          .then(|res| async move { panic!("slow query should never finish but returned {res:?}") }));
+
+        tracing::info!("waiting for max connections limit because of long running http query");
+        Retry::default().max_tries(10).retry_async(|_state| async {
+            let res = reqwest::Client::new().post(http_url.clone()).json(&json).send().await.unwrap();
+            let status = res.status();
+            if status == StatusCode::OK {
+                return Err(());
+            }
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(res.text().await.expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+            Ok(())
+        }).await.unwrap();
+        tracing::info!("found limit");
+/*
+        // ws
+        let ws_url = Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        tracing::info!("trying to connect to websocket; should fail");
+        //tokio::spawn_blocking(|| tungstenite::connect(ws_url).unwrap());
+*/
+        tracing::info!("aborting long running http query");
+        task.abort();
+
+        tracing::info!("trying to make short lived http query now that long running query is aborted");
+        Retry::default().max_tries(10).retry_async(|_state| async {
+            let res = reqwest::Client::new().post(http_url.clone()).json(&json).send().await.unwrap();
+            let status = res.status();
+            if status == StatusCode::INTERNAL_SERVER_ERROR {
+                assert_eq!(res.text().await.expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+                return Err(());
+            }
+            assert_eq!(status, StatusCode::OK);
+            Ok(())
+        }).await.unwrap();
+        tracing::info!("quick http query succeeded");
+
+        assert!(task.await.expect_err("should be cancelled").is_cancelled());
+        tracing::info!("task is awaitted");
+    }
+);
+
+    }
+
+    // ws
+    /*
+    {
+        let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
+        let param = std::iter::repeat("1").take(param_size).join("");
+        let ws_url = Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+        util::auth_with_ws(&mut ws, BTreeMap::default());
+        let json =
+            format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        ws.write_message(Message::Text(json.to_string())).unwrap();
+
+        // The specific error isn't forwarded to the client, the connection is just closed.
+        let err = ws.read_message().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)
+        ));
+    }
+    */
+
+    tracing::info!("waiting on long thread");
+    //handle.join().unwrap();
+    tracing::info!("waited on long thread");
 }

@@ -295,6 +295,7 @@ impl Drop for DropConnection {
     fn drop(&mut self) {
         let mut connections = self.active_connection_count.lock().expect("lock poisoned");
         assert_ne!(connections.current, 0);
+        tracing::info!("dec connection count in http");
         connections.current -= 1;
     }
 }
@@ -306,6 +307,7 @@ impl AuthedClient {
             let connections = {
                 let mut connections = active_connection_count.lock().expect("lock poisoned");
                 connections.current += 1;
+                tracing::info!("inc connection count in http");
                 *connections
             };
             let guard = DropConnection{active_connection_count};
