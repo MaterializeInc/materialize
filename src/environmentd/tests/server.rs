@@ -460,7 +460,12 @@ fn test_closing_connection_cancels_dataflows(query: String) {
     let server = util::start_server(config).unwrap();
 
     let mut cmd = Command::new("psql");
-    let cmd = cmd.arg(format!("postgres://{}:{}/materialize", Ipv4Addr::LOCALHOST.to_string(), server.inner.sql_local_addr().port()))
+    let cmd = cmd
+        .arg(format!(
+            "postgres://{}:{}/materialize",
+            Ipv4Addr::LOCALHOST.to_string(),
+            server.inner.sql_local_addr().port()
+        ))
         .stdin(Stdio::piped());
     tracing::info!("spawning: {cmd:#?}");
     let mut child = cmd.spawn().expect("failed to spawn psql");
@@ -468,7 +473,9 @@ fn test_closing_connection_cancels_dataflows(query: String) {
     let mut stdin = child.stdin.take().expect("failed to open stdin");
     thread::spawn(move || {
         use std::io::Write;
-        stdin.write_all("SET STATEMENT_TIMEOUT = \"120s\";".as_bytes()).unwrap();
+        stdin
+            .write_all("SET STATEMENT_TIMEOUT = \"120s\";".as_bytes())
+            .unwrap();
         stdin.write_all(query.as_bytes()).unwrap();
     });
 
@@ -502,7 +509,8 @@ fn test_closing_connection_cancels_dataflows(query: String) {
     // Expect the dataflows to shut down.
     Retry::default()
         .retry(|_state| {
-            if started.elapsed() > Duration::from_secs(30) {  // this has to be less than statement timeout
+            if started.elapsed() > Duration::from_secs(30) {
+                // this has to be less than statement timeout
                 panic!("waited too long for dataflow cancellation");
             }
             let count: i64 = client
@@ -520,7 +528,10 @@ fn test_closing_connection_cancels_dataflows(query: String) {
             }
         })
         .unwrap();
-    info!("Took {:#?} until dataflows were cancelled", started.elapsed());
+    info!(
+        "Took {:#?} until dataflows were cancelled",
+        started.elapsed()
+    );
 }
 
 #[test]
