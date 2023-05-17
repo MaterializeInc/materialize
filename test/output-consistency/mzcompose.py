@@ -25,7 +25,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).
     """
 
-    parser.add_argument("--runtime", default=600, type=int)
+    parser.add_argument("--runtime-in-sec", default=600, type=int)
     parser.add_argument("--seed", default=0, type=int)
     parser.add_argument("--dry-run", default=False, type=bool)
     parser.add_argument("--fail-fast", default=False, type=bool)
@@ -40,7 +40,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     test_summary = run_output_consistency_tests(
         cursor,
-        args.runtime,
+        args.runtime_in_sec,
         args.seed,
         args.dry_run,
         args.fail_fast,

@@ -34,7 +34,7 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 
 def run_output_consistency_tests(
     cursor: Cursor,
-    runtime: int,
+    runtime_in_sec: int,
     random_seed: int,
     dry_run: bool,
     fail_fast: bool,
@@ -90,7 +90,7 @@ def main() -> int:
         description="Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).",
     )
 
-    parser.add_argument("--runtime", default=600, type=int)
+    parser.add_argument("--runtime-in-sec", default=600, type=int)
     parser.add_argument("--seed", default=0, type=int)
     parser.add_argument(
         "--dry-run", default=False, type=bool, action=argparse.BooleanOptionalAction
@@ -120,7 +120,7 @@ def main() -> int:
 
     result = run_output_consistency_tests(
         cursor,
-        args.runtime,
+        args.runtime_in_sec,
         args.seed,
         args.dry_run,
         args.fail_fast,
