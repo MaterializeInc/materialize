@@ -31,8 +31,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized")
 
     args = parse_output_consistency_input_args(parser)
-    cursor = c.sql_cursor()
+    connection = c.sql_connection()
 
-    test_summary = run_output_consistency_tests(cursor, args)
+    test_summary = run_output_consistency_tests(connection, args)
 
     assert test_summary.all_passed(), "At least one test failed"

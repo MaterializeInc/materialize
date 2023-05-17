@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from typing import Any, Sequence, Union
 
-from pg8000 import Cursor
+from pg8000 import Connection
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError
 
@@ -45,9 +45,9 @@ class SqlExecutor:
 
 
 class PgWireDatabaseSqlExecutor(SqlExecutor):
-    def __init__(self, cursor: Cursor, use_autocommit: bool):
-        self.cursor = cursor
-        self.cursor.connection.autocommit = use_autocommit
+    def __init__(self, connection: Connection, use_autocommit: bool):
+        connection.autocommit = use_autocommit
+        self.cursor = connection.cursor()
 
     def ddl(self, sql: str) -> None:
         try:
@@ -112,9 +112,9 @@ class DryRunSqlExecutor(SqlExecutor):
 
 
 def create_sql_executor(
-    config: ConsistencyTestConfiguration, cursor: Cursor
+    config: ConsistencyTestConfiguration, connection: Connection
 ) -> SqlExecutor:
     if config.dry_run:
         return DryRunSqlExecutor()
     else:
-        return PgWireDatabaseSqlExecutor(cursor, config.use_autocommit)
+        return PgWireDatabaseSqlExecutor(connection, config.use_autocommit)

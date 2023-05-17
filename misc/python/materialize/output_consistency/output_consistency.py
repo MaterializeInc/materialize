@@ -9,7 +9,7 @@
 import argparse
 
 import pg8000
-from pg8000 import Cursor
+from pg8000 import Connection
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -33,10 +33,10 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 
 
 def run_output_consistency_tests(
-    cursor: Cursor, args: argparse.Namespace
+    connection: Connection, args: argparse.Namespace
 ) -> ConsistencyTestSummary:
     return _run_output_consistency_tests_internal(
-        cursor,
+        connection,
         args.runtime_in_sec,
         args.seed,
         args.dry_run,
@@ -74,7 +74,7 @@ def parse_output_consistency_input_args(
 
 
 def _run_output_consistency_tests_internal(
-    cursor: Cursor,
+    connection: Connection,
     runtime_in_sec: int,
     random_seed: int,
     dry_run: bool,
@@ -99,7 +99,7 @@ def _run_output_consistency_tests_internal(
     expression_generator = ExpressionGenerator(config, known_inconsistencies_filter)
     query_generator = QueryGenerator(config)
     output_comparator = ResultComparator()
-    sql_executor = create_sql_executor(config, cursor)
+    sql_executor = create_sql_executor(config, connection)
 
     test_runner = ConsistencyTestRunner(
         config,
@@ -135,11 +135,9 @@ def main() -> int:
     parser.add_argument("--port", default=6875, type=int)
     args = parse_output_consistency_input_args(parser)
 
-    conn = pg8000.connect(host=args.host, port=args.port, user="materialize")
-    conn.autocommit = True
-    cursor = conn.cursor()
+    connection = pg8000.connect(host=args.host, port=args.port, user="materialize")
 
-    result = run_output_consistency_tests(cursor, args)
+    result = run_output_consistency_tests(connection, args)
     return 0 if result.all_passed() else 1
 
 
