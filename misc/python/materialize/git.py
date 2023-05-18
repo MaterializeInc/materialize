@@ -141,7 +141,7 @@ def describe() -> str:
 
 def fetch() -> str:
     """Fetch from all configured default fetch remotes"""
-    return spawn.capture(["git", "fetch", "--tags", "--force"]).strip()
+    return spawn.capture(["git", "fetch", "--all", "--tags", "--force"]).strip()
 
 
 _fetch = fetch  # renamed because an argument shadows the fetch name in get_tags
