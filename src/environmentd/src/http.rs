@@ -294,7 +294,6 @@ impl Drop for DropConnection {
     fn drop(&mut self) {
         let mut connections = self.active_connection_count.lock().expect("lock poisoned");
         assert_ne!(connections.current, 0);
-        tracing::info!("dec connection count in http");
         connections.current -= 1;
     }
 }
@@ -306,14 +305,13 @@ impl AuthedClient {
         active_connection_count: SharedConnectionCounter,
     ) -> Result<Self, AdapterError> {
         let AuthedUser(user) = user;
-        let drop_connection = if !user.is_internal() && !user.is_external_admin() {
+        let drop_connection = if user.limit_max_connections() {
             let connections = {
                 let mut connections = active_connection_count.lock().expect("lock poisoned");
                 connections.current += 1;
-                tracing::info!("inc connection count in http");
                 *connections
             };
-            let guard = DropConnection {
+            let drop_connection = DropConnection {
                 active_connection_count,
             };
             if connections.current > connections.limit {
@@ -325,7 +323,7 @@ impl AuthedClient {
                     current: (connections.current - 1).to_string(),
                 });
             }
-            Some(guard)
+            Some(drop_connection)
         } else {
             None
         };

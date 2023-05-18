@@ -243,17 +243,15 @@ where
         .vars_mut()
         .end_transaction(EndTransactionAction::Commit);
 
-    let _guard = if !session.user().is_internal() && !session.user().is_external_admin() {
+    let _guard = if session.user().limit_max_connections() {
         let connections = {
             let mut connections = active_connection_count.lock().expect("lock poisoned");
             connections.current += 1;
-            tracing::info!("inc connection count in pgwire");
             *connections
         };
         let guard = scopeguard::guard(active_connection_count, |active_connection_count| {
             let mut connections = active_connection_count.lock().expect("lock poisoned");
             assert_ne!(0, connections.current);
-            tracing::info!("dec connection count in pgwire");
             connections.current -= 1;
         });
         if connections.current > connections.limit {
