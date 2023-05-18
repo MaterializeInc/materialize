@@ -8,10 +8,7 @@ menu:
 
 `ALTER ROLE` alters the attributes of an existing role.
 
-{{< warning >}}
-Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
-like to enable RBAC.
-{{< /warning >}}
+{{< alpha />}}
 
 ## Syntax
 

@@ -9,11 +9,7 @@ menu:
 `GRANT` grants membership of one role to another role. Roles can be members of
 other roles, as well as inherit all the attributes and privileges of those roles.
 
-{{< warning >}}
-Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
-like to enable RBAC.
-{{< /warning >}}
-
+{{< alpha />}}
 
 ## Syntax
 

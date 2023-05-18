@@ -11,10 +11,7 @@ menu:
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
 
-{{< warning >}}
-Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
-like to enable RBAC.
-{{< /warning >}}
+{{< alpha />}}
 
 ## Syntax
 

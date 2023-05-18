@@ -14,11 +14,7 @@ Privileges are cumulative: revoking a privilege from `PUBLIC` does not mean all
 roles have lost that privilege, if certain roles were explicitly granted that
 privilege.
 
-{{< warning >}}
-Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
-like to enable RBAC.
-{{< /warning >}}
-
+{{< alpha />}}
 
 ## Syntax
 

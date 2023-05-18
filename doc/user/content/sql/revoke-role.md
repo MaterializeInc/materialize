@@ -10,11 +10,7 @@ menu:
 of other roles, as well as inherit all the attributes and privileges of those
 roles. This membership can also be revoked.
 
-{{< warning >}}
-Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
-like to enable RBAC.
-{{< /warning >}}
-
+{{< alpha />}}
 
 ## Syntax
 

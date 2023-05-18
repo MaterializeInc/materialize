@@ -8,10 +8,7 @@ menu:
 
 `ALTER ... OWNER` updates the owner of an item.
 
-{{< warning >}}
-Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
-like to enable RBAC.
-{{< /warning >}}
+{{< alpha />}}
 
 ## Syntax
 

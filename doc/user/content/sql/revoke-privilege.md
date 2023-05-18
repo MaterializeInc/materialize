@@ -10,10 +10,7 @@ menu:
 be used to indicate that the privileges should be revoked from all roles
 (including roles that might not exist yet).
 
-{{< warning >}}
-Role-based access control (RBAC) is disabled by default. Please reach out to support if you would
-like to enable RBAC.
-{{< /warning >}}
+{{< alpha />}}
 
 ## Syntax
 
