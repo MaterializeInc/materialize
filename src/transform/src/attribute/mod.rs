@@ -82,7 +82,7 @@ pub struct Env<A: Attribute> {
     /// The [`BTreeMap`] backing this environment.
     env: BTreeMap<LocalId, A::Value>,
     // A stack of tasks to maintain the `env` map.
-    env_tasks: Vec<EnvTask<A::Value>>,
+    env_tasks: Vec<EnvTask>,
 }
 
 impl<A: Attribute> Env<A> {
@@ -98,11 +98,29 @@ impl<A: Attribute> Env<A> {
     pub fn schedule_tasks(&mut self, expr: &MirRelationExpr) {
         match expr {
             MirRelationExpr::Let { id, .. } => {
-                // Add an Extend task to be handled in the post_visit the node children.
+                // Add a Remove and an Extend task to be handled in the post_visit of the node's
+                // children. The Extend will be found after completing the `value`, and the `Remove`
+                // will be found after completing the body.
+                self.env_tasks.push(EnvTask::Remove(vec![id.clone()]));
                 self.env_tasks.push(EnvTask::Extend(id.clone()));
             }
+            MirRelationExpr::LetRec {
+                ids,
+                values: _,
+                max_iters: _,
+                body: _,
+            } => {
+                // Add:
+                //  - a Remove task, which will handle the removal of all ids from the env;
+                //  - one Extend task for each id, which will handle the insertion of the result
+                //    for the id into the env. Take care to add these in reverse order!
+                self.env_tasks.push(EnvTask::Remove(ids.clone()));
+                for id in ids.iter().rev() {
+                    self.env_tasks.push(EnvTask::Extend(id.clone()));
+                }
+            }
             _ => {
-                // Do not do anything with the environment in this node's children.
+                // Do not do anything with the environment after processing this node's first child.
                 self.env_tasks.push(EnvTask::NoOp);
             }
         }
@@ -117,50 +135,46 @@ impl<A: Attribute> Env<A> {
         // This should be always be NoOp, as this is either the original value or the
         // terminal state of the state machine that Let children implement (see the
         // code at the end of this method).
-        debug_assert!(parent.is_some() && parent.unwrap() == EnvTask::NoOp);
+        assert!(parent.is_some() && parent.unwrap() == EnvTask::NoOp);
 
         // Handle EnvTask initiated by the parent.
         if let Some(env_task) = self.env_tasks.pop() {
             // Compute a task to represent the next state of the state machine associated with
             // this task.
             let env_task = match env_task {
-                // An Extend indicates that the parent of the current node is a Let binding
-                // and we are about to leave a Let binding value.
+                // An Extend indicates that the parent of the current node is a Let or a LetRec,
+                // and we are about to leave a Let or LetRec binding value.
                 EnvTask::Extend(id) => {
-                    // Before descending to the next sibling (the Let binding body), do as follows:
-                    // 1. Update the env map with the attribute derived for the Let binding value.
+                    // Before descending to the next sibling (the Let binding body or the next
+                    // binding), do as follows: Update the env map with the attribute derived for
+                    // the Let or LetRec binding value.
                     let result = results.last().expect("unexpected empty results vector");
                     let oldval = self.env.insert(id, result.clone());
-                    // 2. Create a task to be handled after visiting the Let binding body.
-                    match oldval {
-                        Some(val) => EnvTask::Reset(id, val), // reset old value if present
-                        None => EnvTask::Remove(id),          // remove key otherwise
+                    // No shadowing
+                    assert!(oldval.is_none());
+                    // We've already pushed the corresponding Remove in schedule_tasks.
+                    // (If we wanted to push it here instead, we would need to insert it not at the
+                    // end, but below all the Extends, where we would possibly need to modify an
+                    // already existing Remove.)
+                    None
+                }
+                // A Remove task indicates that we are about to leave the Let or LetRec body.
+                EnvTask::Remove(ids) => {
+                    // Before moving to the post_visit of the enclosing Let parent, do as follows:
+                    // 1. Remove the value associated with the given `ids` from the environment.
+                    for id in ids {
+                        self.env.remove(&id);
                     }
-                }
-                // An Reset task indicates that we are about to leave the Let binding body
-                // and the id of the Let parent shadowed another `id` in the environment.
-                EnvTask::Reset(id, val) => {
-                    assert!(false); // There is no shadowing!
-                    // Before moving to the post_visit of the enclosing Let parent, do as follows:
-                    // 1. Reset the entry in the env map with the shadowed value.
-                    self.env.insert(id, val);
                     // 2. Create a NoOp task indicating that there is nothing more to be done.
-                    EnvTask::NoOp
-                }
-                // An Remove task indicates that we are about to leave the Let binding body
-                // and the id of the Let parent did not shadow another `id` in the environment.
-                EnvTask::Remove(id) => {
-                    // Before moving to the post_visit of the enclosing Let parent, do as follows:
-                    // 1. Remove the value associated with the given `id` from the environment.
-                    self.env.remove(&id);
-                    // 2. Create a NoOp task indicating that there is nothing more to be done.
-                    EnvTask::NoOp
+                    Some(EnvTask::NoOp)
                 }
                 // A NoOp task indicates that we don't need to do anything.
-                EnvTask::NoOp => EnvTask::NoOp,
+                EnvTask::NoOp => Some(EnvTask::NoOp),
             };
             // Advance the state machine.
-            self.env_tasks.push(env_task);
+            if let Some(env_task) = env_task {
+                self.env_tasks.push(env_task);
+            }
         };
     }
 }
@@ -175,18 +189,14 @@ impl<A: Attribute> Env<A> {
 /// by its parent and modifies it if needed, advancing it through the
 /// following state machine from left to right:
 /// ```text
-/// Set --- Reset ---- NoOp
-///     \            /
-///      -- Remove --
+/// Set --- Remove ---- NoOp
 /// ```
 #[derive(Eq, PartialEq, Debug)]
-enum EnvTask<T> {
+enum EnvTask {
     /// Add the latest attribute to the environment under the given key.
     Extend(LocalId),
-    /// Reset value of an environment entry.
-    Reset(LocalId, T),
-    /// Remove an entry from the environment.
-    Remove(LocalId),
+    /// Remove these entries from the environment.
+    Remove(Vec<LocalId>),
     /// Do not do anything.
     NoOp,
 }
