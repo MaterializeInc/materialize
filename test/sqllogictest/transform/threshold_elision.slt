@@ -408,10 +408,8 @@ Explained Query:
 
 EOF
 
-# WMR -- Threshold inside the cycle -- two Thresholds, the second one should be easy to eliminate, because the result of the
-# first one is obviously non-negative.
-# Currently a negative example, because we don't yet handle non-negativity of any Gets inside LetRec (not even
-# non-recursive ones).
+# WMR -- Threshold inside the cycle -- Two Thresholds, the second one should be easy to eliminate, because the result of
+# the first one is obviously non-negative.
 # The "Basic" implementation from #18175 should handle this.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
@@ -433,16 +431,15 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c1
 ----
 Explained Query:
-  Return // { non_negative: false }
-    Get l0 // { non_negative: false }
+  Return // { non_negative: true }
+    Get l0 // { non_negative: true }
   With Mutually Recursive
     cte l1 =
-      Threshold // { non_negative: true }
-        Union // { non_negative: false }
-          Get l0 // { non_negative: false }
-          Negate // { non_negative: false }
-            Filter (#0 > 2) // { non_negative: false }
-              Get l0 // { non_negative: false }
+      Union // { non_negative: false }
+        Get l0 // { non_negative: true }
+        Negate // { non_negative: false }
+          Filter (#0 > 2) // { non_negative: true }
+            Get l0 // { non_negative: true }
     cte l0 =
       Distinct group_by=[#0, #1] // { non_negative: true }
         Union // { non_negative: true }
@@ -460,8 +457,8 @@ Explained Query:
 
 EOF
 
-# WMR -- Threshold inside the cycle -- The Threshold could be eliminated only if we propagated non-negativity through recursive
-# bindings.
+# WMR -- Threshold inside the cycle -- The Threshold could be eliminated only if we propagated non-negativity through
+# recursive bindings.
 # Currently a negative example.
 # The "Advanced" implementation from #18175 should handle this.
 query T multiline
@@ -479,8 +476,8 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0
 ----
 Explained Query:
-  Return // { non_negative: false }
-    Get l0 // { non_negative: false }
+  Return // { non_negative: true }
+    Get l0 // { non_negative: true }
   With Mutually Recursive
     cte l0 =
       Distinct group_by=[#0, #1] // { non_negative: true }
