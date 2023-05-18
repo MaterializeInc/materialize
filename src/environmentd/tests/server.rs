@@ -1354,11 +1354,7 @@ fn test_max_connections_on_all_interfaces() {
     }
 
     // While the websocket connection is still open, http requests fail
-    let res = Client::new()
-        .post(http_url)
-        .json(&json)
-        .send()
-        .unwrap();
+    let res = Client::new().post(http_url).json(&json).send().unwrap();
     tracing::info!("res: {:#?}", res);
     let status = res.status();
     let text = res.text().expect("no body?");
