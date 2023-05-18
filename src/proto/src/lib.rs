@@ -411,6 +411,23 @@ where
     }
 }
 
+impl<R1, R2, P1, P2> RustType<(P1, P2)> for (R1, R2)
+where
+    R1: RustType<P1>,
+    R2: RustType<P2>,
+{
+    fn into_proto(&self) -> (P1, P2) {
+        (self.0.into_proto(), self.1.into_proto())
+    }
+
+    fn from_proto(proto: (P1, P2)) -> Result<Self, TryFromProtoError> {
+        let first = proto.0.into_rust()?;
+        let second = proto.1.into_rust()?;
+
+        Ok((first, second))
+    }
+}
+
 impl RustType<()> for () {
     fn into_proto(&self) -> () {
         *self
