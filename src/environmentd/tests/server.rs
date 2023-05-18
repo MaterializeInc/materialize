@@ -1355,7 +1355,7 @@ fn test_max_connections_on_all_interfaces() {
 
     // While the websocket connection is still open, http requests fail
     let res = Client::new()
-        .post(http_url.clone())
+        .post(http_url)
         .json(&json)
         .send()
         .unwrap();

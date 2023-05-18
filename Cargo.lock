@@ -4482,7 +4482,6 @@ dependencies = [
  "mz-sql",
  "openssl",
  "postgres",
- "scopeguard",
  "tokio",
  "tokio-openssl",
  "tokio-util",
