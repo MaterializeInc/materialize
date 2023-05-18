@@ -721,7 +721,9 @@ pub fn auth_with_ws(
             }
             Message::Ping(_) => continue,
             Message::Close(None) => return Err(anyhow!("ws closed after auth")),
-            Message::Close(Some(close_frame)) => return Err(anyhow!("ws closed after auth").context(close_frame)),
+            Message::Close(Some(close_frame)) => {
+                return Err(anyhow!("ws closed after auth").context(close_frame))
+            }
             _ => panic!("unexpected response: {:?}", resp),
         }
     }

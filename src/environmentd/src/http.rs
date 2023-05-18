@@ -40,7 +40,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::TracingHandle;
 use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
-use mz_sql::session::vars::{VarInput, ConnectionCounter};
+use mz_sql::session::vars::{ConnectionCounter, VarInput};
 use openssl::ssl::{Ssl, SslContext};
 use serde::Deserialize;
 use thiserror::Error;
@@ -300,7 +300,11 @@ impl Drop for DropConnection {
 }
 
 impl AuthedClient {
-    async fn new(adapter_client: &Client, user: AuthedUser, active_connection_count: SharedConnectionCounter) -> Result<Self, AdapterError> {
+    async fn new(
+        adapter_client: &Client,
+        user: AuthedUser,
+        active_connection_count: SharedConnectionCounter,
+    ) -> Result<Self, AdapterError> {
         let AuthedUser(user) = user;
         let drop_connection = if !user.is_internal() && !user.is_external_admin() {
             let connections = {
@@ -309,7 +313,9 @@ impl AuthedClient {
                 tracing::info!("inc connection count in http");
                 *connections
             };
-            let guard = DropConnection{active_connection_count};
+            let guard = DropConnection {
+                active_connection_count,
+            };
             if connections.current > connections.limit {
                 return Err(AdapterError::ResourceExhaustion {
                     limit_name: "max_connections".into(),
@@ -326,11 +332,12 @@ impl AuthedClient {
         let adapter_client = adapter_client.new_conn()?;
         let session = adapter_client.new_session(user);
         let (adapter_client, _) = adapter_client.startup(session).await?;
-        Ok(AuthedClient{ client: adapter_client, drop_connection })
+        Ok(AuthedClient {
+            client: adapter_client,
+            drop_connection,
+        })
     }
 }
-
-
 
 #[async_trait]
 impl<S> FromRequestParts<S> for AuthedClient
@@ -365,9 +372,13 @@ where
             )
         })?;
         let active_connection_count = req.extensions.get::<SharedConnectionCounter>().unwrap();
-        let mut client = AuthedClient::new(&adapter_client, user.clone(), Arc::clone(active_connection_count))
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let mut client = AuthedClient::new(
+            &adapter_client,
+            user.clone(),
+            Arc::clone(active_connection_count),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         // Apply options that were provided in query params.
         let session = client.client.session();
@@ -538,7 +549,8 @@ async fn init_ws(
     };
     let user = auth(frontegg, creds).await?;
 
-    let mut client = AuthedClient::new(adapter_client, user, Arc::clone(active_connection_count)).await?;
+    let mut client =
+        AuthedClient::new(adapter_client, user, Arc::clone(active_connection_count)).await?;
 
     // Assign any options we got from our WebSocket startup.
     let session = client.client.session();

@@ -258,13 +258,16 @@ where
         });
         if connections.current > connections.limit {
             return conn
-                .send(ErrorResponse::from_adapter_error(Severity::Fatal, AdapterError::ResourceExhaustion {
-                    limit_name: "max_connections".into(),
-                    resource_type: "connection".into(),
-                    desired: connections.current.to_string(),
-                    limit: connections.limit.to_string(),
-                    current: (connections.current - 1).to_string(),
-                }))
+                .send(ErrorResponse::from_adapter_error(
+                    Severity::Fatal,
+                    AdapterError::ResourceExhaustion {
+                        limit_name: "max_connections".into(),
+                        resource_type: "connection".into(),
+                        desired: connections.current.to_string(),
+                        limit: connections.limit.to_string(),
+                        current: (connections.current - 1).to_string(),
+                    },
+                ))
                 .await;
         }
         Some(guard)
