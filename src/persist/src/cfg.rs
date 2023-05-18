@@ -157,6 +157,8 @@ pub trait ConsensusKnobs: std::fmt::Debug + Send + Sync {
     fn connection_pool_ttl_stagger(&self) -> Duration;
     /// Time to wait for a connection to be made before trying.
     fn connect_timeout(&self) -> Duration;
+    /// TCP user timeout for connection to [Consensus].
+    fn tcp_user_timeout(&self) -> Duration;
 }
 
 impl ConsensusConfig {

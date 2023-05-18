@@ -147,6 +147,9 @@ impl PostgresConsensusConfig {
             fn connect_timeout(&self) -> Duration {
                 Duration::MAX
             }
+            fn tcp_user_timeout(&self) -> Duration {
+                Duration::ZERO
+            }
         }
 
         let config = PostgresConsensusConfig::new(
@@ -176,6 +179,7 @@ impl PostgresConsensus {
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
         let mut pg_config: Config = config.url.parse()?;
         pg_config.connect_timeout(config.knobs.connect_timeout());
+        pg_config.tcp_user_timeout(config.knobs.tcp_user_timeout());
         let tls = make_tls(&pg_config)?;
 
         let manager = Manager::from_config(

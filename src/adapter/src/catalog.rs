@@ -6897,6 +6897,7 @@ impl Catalog {
             blob_target_size: Some(config.persist_blob_target_size()),
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
             consensus_connect_timeout: Some(config.crdb_connect_timeout()),
+            consensus_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
             sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
             storage_sink_minimum_batch_updates: Some(
                 config.storage_persist_sink_minimum_batch_updates(),

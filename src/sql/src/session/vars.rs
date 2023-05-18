@@ -697,6 +697,20 @@ const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
+/// Controls the TCP user timeout to Cockroach.
+///
+/// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_tcp_user_timeout`].
+const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("crdb_tcp_user_timeout"),
+    value: &PersistConfig::DEFAULT_CRDB_TCP_USER_TIMEOUT,
+    description:
+        "The TCP timeout for connections to CockroachDB. Specifies the amount of time that \
+        transmitted data may remain unacknowledged before the TCP connection is forcibly \
+        closed.",
+    internal: true,
+    safe: true,
+};
+
 /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
 const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("dataflow_max_inflight_bytes"),
@@ -1699,6 +1713,7 @@ impl SystemVars {
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
+            .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
@@ -2075,6 +2090,11 @@ impl SystemVars {
     /// Returns the `crdb_connect_timeout` configuration parameter.
     pub fn crdb_connect_timeout(&self) -> Duration {
         *self.expect_value(&CRDB_CONNECT_TIMEOUT)
+    }
+
+    /// Returns the `crdb_tcp_user_timeout` configuration parameter.
+    pub fn crdb_tcp_user_timeout(&self) -> Duration {
+        *self.expect_value(&CRDB_TCP_USER_TIMEOUT)
     }
 
     /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
@@ -3247,6 +3267,7 @@ fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
+        || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
