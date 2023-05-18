@@ -6144,7 +6144,7 @@ dependencies = [
 [[package]]
 name = "prost"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
+source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -6153,7 +6153,7 @@ dependencies = [
 [[package]]
 name = "prost-build"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
+source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
 dependencies = [
  "bytes",
  "heck",
@@ -6174,7 +6174,7 @@ dependencies = [
 [[package]]
 name = "prost-derive"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
+source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
 dependencies = [
  "anyhow",
  "itertools",
@@ -6199,7 +6199,7 @@ dependencies = [
 [[package]]
 name = "prost-types"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
+source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
 dependencies = [
  "prost",
 ]
@@ -7789,7 +7789,7 @@ dependencies = [
 [[package]]
 name = "tonic-build"
 version = "0.8.2"
-source = "git+https://github.com/umanwizard/tonic#76489bf665af99d6e0e83f81648fcac283ea57e1"
+source = "git+https://github.com/MaterializeInc/tonic#76489bf665af99d6e0e83f81648fcac283ea57e1"
 dependencies = [
  "prettyplease",
  "proc-macro2",
