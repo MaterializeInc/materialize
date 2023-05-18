@@ -21,7 +21,9 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::stats::ProtoStructStats;
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::RustType;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -225,7 +227,7 @@ where
         ts_filter,
         part: encoded_part,
         schemas,
-        filter_pushdown_audit: part.filter_pushdown_audit.then(|| part.key.0.clone()),
+        filter_pushdown_audit: part.filter_pushdown_audit.clone(),
         _phantom: PhantomData,
     };
 
@@ -355,7 +357,7 @@ where
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
     pub(crate) leased_seqno: Option<SeqNo>,
-    pub(crate) filter_pushdown_audit: bool,
+    pub(crate) filter_pushdown_audit: Option<ProtoStructStats>,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -382,7 +384,7 @@ where
             encoded_size_bytes: self.encoded_size_bytes,
             leased_seqno: self.leased_seqno,
             reader_id: self.reader_id.clone(),
-            filter_pushdown_audit: self.filter_pushdown_audit,
+            filter_pushdown_audit: self.filter_pushdown_audit.clone(),
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
@@ -417,7 +419,7 @@ where
     /// we fetch the part like normal and if the MFP keeps anything from it,
     /// then something has gone horribly wrong.
     pub fn request_filter_pushdown_audit(&mut self) {
-        self.filter_pushdown_audit = true;
+        self.filter_pushdown_audit = Some(self.stats.as_ref().unwrap().key.into_proto());
     }
 }
 
@@ -438,7 +440,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     ts_filter: FetchBatchFilter<T>,
     part: EncodedPart<T>,
     schemas: Schemas<K, V>,
-    filter_pushdown_audit: Option<String>,
+    filter_pushdown_audit: Option<ProtoStructStats>,
 
     _phantom: PhantomData<fn() -> (K, V, D)>,
 }
@@ -462,8 +464,10 @@ impl<K: Codec, V: Codec, T, D> FetchedPart<K, V, T, D> {
     ///
     /// If set, the String is for debugging and should be included in any error
     /// messages.
-    pub fn is_filter_pushdown_audit(&self) -> Option<&String> {
-        self.filter_pushdown_audit.as_ref()
+    pub fn is_filter_pushdown_audit(&self) -> Option<String> {
+        self.filter_pushdown_audit
+            .as_ref()
+            .map(|x| format!("{:?}", x))
     }
 }
 
@@ -627,7 +631,7 @@ pub struct SerdeLeasedBatchPart {
     encoded_size_bytes: usize,
     leased_seqno: Option<SeqNo>,
     reader_id: LeasedReaderId,
-    filter_pushdown_audit: bool,
+    filter_pushdown_audit: Option<ProtoStructStats>,
 }
 
 impl<T: Timestamp + Codec64> LeasedBatchPart<T> {

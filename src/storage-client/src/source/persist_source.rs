@@ -317,7 +317,7 @@ impl PendingWork {
         P: Push<Bundle<Timestamp, (Result<Row, DataflowError>, Timestamp, Diff)>>,
         YFn: Fn(Instant, usize) -> bool,
     {
-        let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit().cloned();
+        let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit();
         while let Some(((key, val), time, diff)) = self.fetched_part.next() {
             if until.less_equal(&time) {
                 continue;
@@ -335,7 +335,7 @@ impl PendingWork {
                             |time| !until.less_equal(time),
                             row_builder,
                         ) {
-                            if let Some(key) = is_filter_pushdown_audit {
+                            if let Some(key) = is_filter_pushdown_audit.as_ref() {
                                 // Ideally we'd be able to include the part stats here, but that
                                 // would require us to exchange them around. It's unclear if that's
                                 // worth it for work that's already known to be unnecessary.

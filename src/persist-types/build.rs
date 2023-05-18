@@ -80,6 +80,7 @@ fn main() {
 
     prost_build::Config::new()
         .type_attribute(".", "#[derive(serde::Serialize)]")
+        .type_attribute(".mz_persist_types.stats", "#[derive(serde::Deserialize)]")
         .btree_map(["."])
         .compile_protos(&["persist-types/src/stats.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
