@@ -30,7 +30,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
-use mz_sql::session::vars::{ConnectionCounter, VarInput, DropConnection};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -246,8 +246,11 @@ where
     let _guard = if session.user().limit_max_connections() {
         match DropConnection::new_connection(active_connection_count) {
             Ok(drop_connection) => Some(drop_connection),
-            Err(e) => return conn.send(ErrorResponse::from_adapter_error(
-                Severity::Fatal, e.into())).await,
+            Err(e) => {
+                return conn
+                    .send(ErrorResponse::from_adapter_error(Severity::Fatal, e.into()))
+                    .await
+            }
         }
     } else {
         None

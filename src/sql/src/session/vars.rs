@@ -1657,10 +1657,7 @@ impl ConnectionCounter {
 #[derive(Debug)]
 pub enum ConnectionError {
     /// There were too many connections
-    TooManyConnections {
-        current: u64,
-        limit: u64,
-    }
+    TooManyConnections { current: u64, limit: u64 },
 }
 
 #[derive(Debug)]
@@ -1677,15 +1674,22 @@ impl Drop for DropConnection {
 }
 
 impl DropConnection {
-    pub fn new_connection(active_connection_count: Arc<Mutex<ConnectionCounter>>) -> Result<Self, ConnectionError> {
+    pub fn new_connection(
+        active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    ) -> Result<Self, ConnectionError> {
         {
             let mut connections = active_connection_count.lock().expect("lock poisoned");
             if connections.current >= connections.limit {
-                return Err(ConnectionError::TooManyConnections { current: connections.current, limit: connections.limit });
+                return Err(ConnectionError::TooManyConnections {
+                    current: connections.current,
+                    limit: connections.limit,
+                });
             }
             connections.current += 1;
         }
-        Ok(DropConnection{active_connection_count})
+        Ok(DropConnection {
+            active_connection_count,
+        })
     }
 }
 

@@ -40,7 +40,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::TracingHandle;
 use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
-use mz_sql::session::vars::{ConnectionCounter, VarInput, DropConnection};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
 use serde::Deserialize;
 use thiserror::Error;
