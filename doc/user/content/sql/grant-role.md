@@ -9,11 +9,7 @@ menu:
 `GRANT` grants membership of one role to another role. Roles can be members of
 other roles, as well as inherit all the attributes and privileges of those roles.
 
-{{< warning >}}
-Currently, roles have limited functionality in Materialize. This is part of the
-work to enable **Role-based access control** (RBAC) in a future release {{% gh 11579 %}}.
-{{< /warning >}}
-
+{{< alpha />}}
 
 ## Syntax
 

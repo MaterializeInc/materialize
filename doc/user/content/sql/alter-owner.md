@@ -8,11 +8,7 @@ menu:
 
 `ALTER ... OWNER` updates the owner of an item.
 
-{{< warning >}}
-Roles in Materialize are currently limited in functionality. In the future they
-will be used for role-based access control. See GitHub issue {{% gh 11579 %}}
-for details.
-{{< /warning >}}
+{{< alpha />}}
 
 ## Syntax
 
