@@ -949,7 +949,13 @@ where
             }
 
             seqno = match self.machine.next_listen_batch(frontier) {
-                Ok(b) => return b,
+                Ok(b) => {
+                    match &wake {
+                        Wake::Watch(_) => self.metrics.watch.listen_resolved_via_watch.inc(),
+                        Wake::Sleep(_) => self.metrics.watch.listen_resolved_via_sleep.inc(),
+                    }
+                    return b;
+                }
                 Err(seqno) => seqno,
             };
 
