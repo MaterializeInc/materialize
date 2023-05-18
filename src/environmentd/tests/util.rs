@@ -700,7 +700,7 @@ pub fn wait_for_view_population(
 pub fn auth_with_ws(
     ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
     options: BTreeMap<String, String>,
-) {
+) -> Result<(), anyhow::Error> {
     ws.write_message(Message::Text(
         serde_json::to_string(&WebSocketAuth::Basic {
             user: "materialize".into(),
@@ -708,11 +708,10 @@ pub fn auth_with_ws(
             options,
         })
         .unwrap(),
-    ))
-    .unwrap();
+    ))?;
     // Wait for initial ready response.
     loop {
-        let resp = ws.read_message().unwrap();
+        let resp = ws.read_message()?;
         match resp {
             Message::Text(msg) => {
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
@@ -725,4 +724,5 @@ pub fn auth_with_ws(
             _ => panic!("unexpected response: {:?}", resp),
         }
     }
+    Ok(())
 }
