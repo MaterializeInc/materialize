@@ -17,14 +17,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
+use mz_ore::error::ErrorExt;
+use mz_ore::task;
 use socket2::{SockRef, TcpKeepalive};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tracing::{debug, error};
-
-use mz_ore::error::ErrorExt;
-use mz_ore::task;
 
 /// TCP keepalive settings. The idle time and interval match CockroachDB [0].
 /// The number of retries matches the Linux default.

@@ -22,7 +22,7 @@ use std::fmt::{Debug, Display};
 
 mod hash;
 
-pub use self::hash::{HashMap, HashSet};
+pub use crate::collections::hash::{HashMap, HashSet};
 
 /// Extension methods for collections.
 pub trait CollectionExt<T>: Sized

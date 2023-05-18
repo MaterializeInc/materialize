@@ -23,24 +23,21 @@
 
 //! Logic handling reading from Avro format at user level.
 
+use std::collections::BTreeMap;
 use std::str::{from_utf8, FromStr};
 
 use serde_json::from_slice;
+use sha2::Sha256;
 
 use crate::decode::{decode, AvroRead};
 use crate::error::{DecodeError, Error as AvroError};
 use crate::schema::{
     resolve_schemas, FullName, NamedSchemaPiece, ParseSchemaError, RecordField,
-    ResolvedDefaultValueField, SchemaNodeOrNamed, SchemaPiece, SchemaPieceOrNamed,
-    SchemaPieceRefOrNamed,
+    ResolvedDefaultValueField, ResolvedRecordField, Schema, SchemaNodeOrNamed, SchemaPiece,
+    SchemaPieceOrNamed, SchemaPieceRefOrNamed,
 };
-use crate::schema::{ResolvedRecordField, Schema};
 use crate::types::Value;
-use crate::util;
-use crate::{Codec, SchemaResolutionError};
-
-use sha2::Sha256;
-use std::collections::BTreeMap;
+use crate::{util, Codec, SchemaResolutionError};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Header {
@@ -933,11 +930,12 @@ pub fn from_avro_datum<R: AvroRead>(schema: &Schema, reader: &mut R) -> Result<V
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::Cursor;
+
     use crate::types::{Record, ToAvro};
     use crate::Reader;
 
-    use std::io::Cursor;
+    use super::*;
 
     static SCHEMA: &str = r#"
             {

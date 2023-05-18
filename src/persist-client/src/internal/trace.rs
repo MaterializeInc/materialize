@@ -52,13 +52,12 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use timely::progress::frontier::AntichainRef;
-use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-
 use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
+use timely::progress::frontier::AntichainRef;
+use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 
 use crate::internal::state::HollowBatch;
 
@@ -1201,8 +1200,9 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
 
 #[cfg(test)]
 pub mod datadriven {
-    use super::*;
     use crate::internal::datadriven::DirectiveArgs;
+
+    use super::*;
 
     /// Shared state for a single [crate::internal::trace] [datadriven::TestFile].
     #[derive(Debug, Default)]

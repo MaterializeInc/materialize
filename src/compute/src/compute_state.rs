@@ -15,14 +15,6 @@ use std::sync::Arc;
 
 use bytesize::ByteSize;
 use differential_dataflow::trace::TraceReader;
-use timely::communication::Allocate;
-use timely::order::PartialOrder;
-use timely::progress::frontier::Antichain;
-use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
-use tracing::{error, info, span, Level};
-use uuid::Uuid;
-
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::protocol::command::{ComputeCommand, ComputeParameters, Peek};
@@ -35,6 +27,13 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Row, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_timely_util::probe;
+use timely::communication::Allocate;
+use timely::order::PartialOrder;
+use timely::progress::frontier::Antichain;
+use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc;
+use tracing::{error, info, span, Level};
+use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;

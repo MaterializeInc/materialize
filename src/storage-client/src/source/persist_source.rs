@@ -14,16 +14,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use timely::communication::Push;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::Bundle;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Capability, OkErr};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::scheduling::Activator;
-use tracing::error;
-
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
@@ -40,6 +30,15 @@ use mz_repr::{
     Row, RowArena, ScalarType, Timestamp,
 };
 use mz_timely_util::buffer::ConsolidateBuffer;
+use timely::communication::Push;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::Bundle;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::{Capability, OkErr};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
+use timely::scheduling::Activator;
+use tracing::error;
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;

@@ -18,24 +18,22 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
-use timely::order::PartialOrder;
-use timely::progress::{Antichain, Timestamp};
-use tokio::sync::mpsc;
-use tracing::Instrument;
-
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::local::Activatable;
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::controller::ResumptionFrontierCalculator;
+use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use mz_storage_client::types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, PostgresSourceConnection, SourceConnection, SourceData,
     SourceTimestamp, TestScriptSourceConnection,
 };
+use timely::order::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
+use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::source::reclock::{ReclockBatch, ReclockFollower};
 use crate::source::types::SourceRender;

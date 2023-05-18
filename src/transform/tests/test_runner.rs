@@ -101,7 +101,7 @@ mod tests {
     use mz_transform::{Optimizer, Transform, TransformArgs};
     use proc_macro2::TokenTree;
 
-    use super::explain::Explainable;
+    use crate::explain::Explainable;
 
     // Global options
     const IN: &str = "in";

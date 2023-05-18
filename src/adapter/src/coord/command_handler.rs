@@ -12,11 +12,6 @@
 
 use std::sync::Arc;
 
-use opentelemetry::trace::TraceContextExt;
-use tokio::sync::{oneshot, watch};
-use tracing::Instrument;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -30,6 +25,10 @@ use mz_sql::plan::{
     TransactionType,
 };
 use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
+use opentelemetry::trace::TraceContextExt;
+use tokio::sync::{oneshot, watch};
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::client::ConnectionId;
 use crate::command::{

@@ -40,10 +40,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
 use itertools::Itertools;
-
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
-use mz_repr::RelationType;
 use mz_repr::*;
 
 use crate::plan::expr::{
@@ -181,8 +179,10 @@ impl HirRelationExpr {
         cte_map: &mut CteMap,
     ) -> Result<mz_expr::MirRelationExpr, PlanError> {
         maybe_grow(|| {
-            use self::HirRelationExpr::*;
             use mz_expr::MirRelationExpr as SR;
+
+            use HirRelationExpr::*;
+
             if let mz_expr::MirRelationExpr::Get { .. } = &get_outer {
             } else {
                 panic!(
@@ -772,8 +772,9 @@ impl HirScalarExpr {
         subquery_map: &Option<&BTreeMap<HirScalarExpr, usize>>,
     ) -> Result<mz_expr::MirScalarExpr, PlanError> {
         maybe_grow(|| {
-            use self::HirScalarExpr::*;
             use mz_expr::MirScalarExpr as SS;
+
+            use HirScalarExpr::*;
 
             if let Some(subquery_map) = subquery_map {
                 if let Some(col) = subquery_map.get(&self) {
@@ -1462,8 +1463,9 @@ impl HirScalarExpr {
 
     /// Rewrites `self` into a `mz_expr::ScalarExpr`.
     pub fn lower_uncorrelated(self) -> Result<mz_expr::MirScalarExpr, PlanError> {
-        use self::HirScalarExpr::*;
         use mz_expr::MirScalarExpr as SS;
+
+        use HirScalarExpr::*;
 
         Ok(match self {
             Column(ColumnRef { level: 0, column }) => SS::Column(column),
@@ -1818,8 +1820,7 @@ pub(crate) fn derive_equijoin_cols(
     ra: usize,
     on: Vec<mz_expr::MirScalarExpr>,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
-    use mz_expr::BinaryFunc;
-    use mz_expr::VariadicFunc;
+    use mz_expr::{BinaryFunc, VariadicFunc};
     // TODO: Replace this predicate deconstruction with
     // `mz_expr::canonicalize::canonicalize_predicates`, which will also enable
     // treating select * from lhs left join rhs on lhs.id = rhs.id and true as

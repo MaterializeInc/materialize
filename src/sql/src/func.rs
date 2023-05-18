@@ -15,12 +15,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-
 use mz_expr::func;
 use mz_ore::collections::CollectionExt;
 use mz_pgrepr::oid;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
+use once_cell::sync::Lazy;
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};

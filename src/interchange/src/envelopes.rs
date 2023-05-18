@@ -16,13 +16,12 @@ use differential_dataflow::trace::{Batch, BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
+use mz_ore::cast::CastFrom;
+use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
 use once_cell::sync::Lazy;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
-
-use mz_ore::cast::CastFrom;
-use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
 
 use crate::avro::DiffPair;
 

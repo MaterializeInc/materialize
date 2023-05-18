@@ -10,16 +10,14 @@
 use std::fmt;
 
 use chrono::{NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike};
-use mz_repr::adt::datetime::DateTimeField;
-use mz_repr::adt::timestamp::TimeLike;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
-use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
+use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits, Timezone};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
+use mz_repr::adt::timestamp::TimeLike;
 use mz_repr::{strconv, ColumnType, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;

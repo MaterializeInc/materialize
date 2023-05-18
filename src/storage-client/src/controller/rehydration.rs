@@ -22,14 +22,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
-use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tokio::select;
-use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::warn;
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_ore::retry::Retry;
@@ -37,6 +29,13 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_persist_types::Codec64;
 use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
+use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
+use tokio::select;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::warn;
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, StorageClient, StorageCommand, StorageGrpcClient,

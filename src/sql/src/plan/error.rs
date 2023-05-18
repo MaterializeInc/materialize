@@ -9,11 +9,9 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::fmt;
-use std::io;
-use std::num::ParseIntError;
-use std::num::TryFromIntError;
+use std::num::{ParseIntError, TryFromIntError};
 use std::sync::Arc;
+use std::{fmt, io};
 
 use itertools::Itertools;
 use mz_expr::EvalError;
@@ -25,16 +23,13 @@ use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::strconv;
-use mz_repr::ColumnName;
-use mz_repr::GlobalId;
+use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{MutRecBlockOptionName, ObjectType, Privilege, UnresolvedItemName};
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
-use crate::names::PartialItemName;
-use crate::names::ResolvedItemName;
+use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 

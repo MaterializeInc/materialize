@@ -19,8 +19,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{GlobalId, Row};
 
-use super::{ExplainMultiPlan, ExplainSinglePlan};
-use crate::explain::ExplainSource;
+use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource};
 use crate::{
     AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RowSetFinishing,

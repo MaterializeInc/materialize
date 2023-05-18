@@ -163,6 +163,6 @@
 #![allow(clippy::all)]
 #![allow(unused_variables)]
 
-use super::*;
+use crate::ast::*;
 
 include!(concat!(env!("OUT_DIR"), "/visit.rs"));

@@ -11,13 +11,6 @@
 
 use std::collections::BTreeSet;
 
-use proptest::prelude::{any, Arbitrary};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-use timely::progress::frontier::Antichain;
-use uuid::Uuid;
-
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -26,6 +19,12 @@ use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError}
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::client::ProtoAllowCompaction;
 use mz_storage_client::controller::CollectionMetadata;
+use proptest::prelude::{any, Arbitrary};
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use timely::progress::frontier::Antichain;
+use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
 use crate::types::dataflows::DataflowDescription;
@@ -495,10 +494,9 @@ fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
-
-    use mz_proto::protobuf_roundtrip;
 
     use super::*;
 

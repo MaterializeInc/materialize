@@ -12,7 +12,7 @@
 use mz_repr::explain::{Explain, ExplainError};
 use mz_sql::plan::HirRelationExpr;
 
-use super::Explainable;
+use crate::explain::Explainable;
 
 impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
     type Context = <HirRelationExpr as Explain<'a>>::Context;

@@ -74,7 +74,6 @@
 // END LINT CONFIG
 
 use askama::Template;
-
 use mz_build_info::build_info;
 use mz_prof::http::FlamegraphTemplate;
 

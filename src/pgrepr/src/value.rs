@@ -9,14 +9,10 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::io;
-use std::str;
+use std::{io, str};
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
-use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
-use uuid::Uuid;
-
 use mz_ore::cast::ReinterpretCast;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
@@ -27,6 +23,8 @@ use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
 use mz_repr::{Datum, RelationType, Row, RowArena, ScalarType};
+use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
+use uuid::Uuid;
 
 use crate::types::{UINT2, UINT4, UINT8};
 use crate::{Format, Interval, Jsonb, Numeric, Type, UInt2, UInt4, UInt8};

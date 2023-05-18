@@ -15,7 +15,6 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::ResourceExt;
-
 use maplit::btreemap;
 use mz_cloud_resources::crd::vpc_endpoint::v1::{VpcEndpoint, VpcEndpointSpec};
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};

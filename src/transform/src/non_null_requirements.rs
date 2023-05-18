@@ -24,10 +24,11 @@
 //! Null arguments*.
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::TransformArgs;
 use itertools::{zip_eq, Either, Itertools};
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+
+use crate::TransformArgs;
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]

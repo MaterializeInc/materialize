@@ -16,22 +16,20 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::fmt;
-use std::str;
+use std::{fmt, str};
 
 use async_trait::async_trait;
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
 use futures::{sink, SinkExt, TryStreamExt};
+use mz_ore::cast::{u64_to_usize, CastFrom};
+use mz_ore::future::OreSinkExt;
+use mz_ore::netio::{self, AsyncReady};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, Interest, Ready};
 use tokio::time::{self, Duration};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::trace;
-
-use mz_ore::cast::{u64_to_usize, CastFrom};
-use mz_ore::future::OreSinkExt;
-use mz_ore::netio::{self, AsyncReady};
 
 use crate::message::{
     BackendMessage, ErrorResponse, FrontendMessage, FrontendStartupMessage, VERSION_CANCEL,

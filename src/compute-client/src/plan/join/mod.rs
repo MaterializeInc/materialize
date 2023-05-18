@@ -27,18 +27,17 @@
 //! output column reckoning", as is what we use when reasoning about
 //! work still available to be done on the partial join results.
 
-pub mod delta_join;
-pub mod linear_join;
-
 use std::collections::BTreeMap;
-
-use proptest::prelude::*;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
 
 use mz_expr::{MapFilterProject, MirScalarExpr};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row, RowArena};
+use proptest::prelude::*;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+
+pub mod delta_join;
+pub mod linear_join;
 
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
@@ -414,8 +413,9 @@ impl JoinBuildState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

@@ -169,8 +169,9 @@ pub fn encode_to_vec(value: &Value, schema: &Schema) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::BTreeMap;
+
+    use super::*;
 
     #[test]
     fn test_encode_empty_array() {

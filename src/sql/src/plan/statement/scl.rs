@@ -12,10 +12,9 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use uncased::UncasedStr;
-
 use mz_repr::adt::interval::Interval;
 use mz_repr::{RelationDesc, ScalarType};
+use uncased::UncasedStr;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{

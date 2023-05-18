@@ -16,16 +16,15 @@ use std::any::Any;
 use std::rc::Rc;
 
 use differential_dataflow::Hashable;
+use mz_ore::cast::CastFrom;
+use mz_repr::Timestamp;
+use mz_storage_client::controller::ResumptionFrontierCalculator;
+use mz_timely_util::builder_async::OperatorBuilder;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::timestamp::Timestamp as _;
-
-use mz_ore::cast::CastFrom;
-use mz_repr::Timestamp;
-use mz_storage_client::controller::ResumptionFrontierCalculator;
-use mz_timely_util::builder_async::OperatorBuilder;
 
 use crate::source::source_reader_pipeline::RawSourceCreationConfig;
 

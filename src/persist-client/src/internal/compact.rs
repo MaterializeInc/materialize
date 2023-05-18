@@ -949,14 +949,14 @@ fn start_prefetches<T: Timestamp + Lattice + Codec64>(
 
 #[cfg(test)]
 mod tests {
-    use crate::internal::paths::PartialBatchKey;
-    use crate::PersistLocation;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use timely::progress::Antichain;
 
+    use crate::internal::paths::PartialBatchKey;
     use crate::tests::{
         all_ok, expect_fetch_part, new_test_client, new_test_client_cache, CodecProduct,
     };
+    use crate::PersistLocation;
 
     use super::*;
 

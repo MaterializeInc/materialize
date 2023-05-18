@@ -17,15 +17,6 @@ use std::sync::Arc;
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
-use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::source;
-use timely::dataflow::operators::Operator;
-use timely::progress::{Antichain, Timestamp};
-use timely::scheduling::{Scheduler, SyncActivator};
-use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
-
 use mz_cluster::server::TimelyContainerRef;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
@@ -35,6 +26,14 @@ use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_persist_client::cache::PersistClientCache;
+use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::generic::source;
+use timely::dataflow::operators::Operator;
+use timely::progress::{Antichain, Timestamp};
+use timely::scheduling::{Scheduler, SyncActivator};
+use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc;
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;

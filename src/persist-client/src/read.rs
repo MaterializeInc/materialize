@@ -20,8 +20,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
-use futures::FutureExt;
-use futures::Stream;
+use futures::{FutureExt, Stream};
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, SeqNo};
@@ -1138,6 +1137,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
@@ -1146,7 +1147,6 @@ mod tests {
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
-    use std::str::FromStr;
 
     use crate::async_runtime::CpuHeavyRuntime;
     use crate::cache::StateCache;

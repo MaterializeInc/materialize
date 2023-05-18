@@ -97,17 +97,15 @@ use kube::error::Error;
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
 use maplit::btreemap;
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use tracing::warn;
-
 use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator::{
-    LabelSelectionLogic, NamespacedOrchestrator, NotReadyReason, Orchestrator, Service,
-    ServiceConfig, ServiceEvent, ServiceStatus,
+    LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator, NotReadyReason,
+    Orchestrator, Service, ServiceConfig, ServiceEvent, ServiceProcessMetrics, ServiceStatus,
 };
-use mz_orchestrator::{LabelSelector as MzLabelSelector, ServiceProcessMetrics};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use tracing::warn;
 
 pub mod cloud_resource_controller;
 pub mod secrets;

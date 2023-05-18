@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::iter::Peekable;
 use std::marker::PhantomData;
-use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
+use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::slice;
 use std::sync::Arc;
@@ -1369,9 +1369,9 @@ mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
 
-    use super::*;
-
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
+
+    use super::*;
 
     fn hollow<T: Timestamp>(lower: T, upper: T, keys: &[&str], len: usize) -> HollowBatch<T> {
         HollowBatch {

@@ -18,7 +18,8 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::PartialOrder;
@@ -239,6 +240,7 @@ impl<P: Ord + Eq> PartialOrder for Interval<P> {
 impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
     fn results_in(&self, src: &Interval<P>) -> Option<Interval<P>> {
         use std::cmp::{max, min};
+
         use Interval::*;
         match (self, src) {
             // A range followed by another range contraints the range

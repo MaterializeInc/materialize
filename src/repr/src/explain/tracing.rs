@@ -11,8 +11,7 @@
 
 #![cfg(feature = "tracing_")]
 
-use std::fmt::Debug;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::ops::DerefMut;
 use std::sync::Mutex;
 
@@ -318,12 +317,10 @@ impl field::Visit for ExtractStr {
 
 #[cfg(test)]
 mod test {
-    use tracing::dispatcher;
-    use tracing::instrument;
+    use tracing::{dispatcher, instrument};
     use tracing_subscriber::prelude::*;
 
-    use super::trace_plan;
-    use super::PlanTrace;
+    use super::{trace_plan, PlanTrace};
 
     #[test]
     fn test_optimizer_trace() {

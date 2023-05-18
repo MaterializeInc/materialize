@@ -83,13 +83,11 @@ use std::path::Path;
 
 use action::Run;
 use anyhow::{anyhow, Context};
-
 use mz_ore::error::ErrorExt;
 
-use self::action::ControlFlow;
-use self::error::{ErrorLocation, PosError};
-use self::parser::LineReader;
-use self::parser::{BuiltinCommand, Command};
+use crate::action::ControlFlow;
+use crate::error::{ErrorLocation, PosError};
+use crate::parser::{BuiltinCommand, Command, LineReader};
 
 mod action;
 mod error;
@@ -97,8 +95,8 @@ mod format;
 mod parser;
 mod util;
 
-pub use self::action::Config;
-pub use self::error::Error;
+pub use crate::action::Config;
+pub use crate::error::Error;
 
 /// Runs a testdrive script stored in a file.
 pub async fn run_file(config: &Config, filename: &Path) -> Result<(), Error> {

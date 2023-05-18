@@ -84,12 +84,10 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use itertools::Itertools;
 use std::error::Error;
 use std::iter;
 
-use unicode_width::UnicodeWidthStr;
-
+use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -99,6 +97,7 @@ use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName};
 use mz_sql_parser::parser::{
     self, parse_statements, parse_statements_with_limit, ParserError, MAX_STATEMENT_BATCH_SIZE,
 };
+use unicode_width::UnicodeWidthStr;
 
 #[test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`

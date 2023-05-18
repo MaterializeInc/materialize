@@ -11,7 +11,6 @@ use std::net::Ipv4Addr;
 
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
-
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
@@ -48,13 +47,12 @@ use crate::catalog::builtin::{
     MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
-    MaterializedView, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    AwsPrincipalContext, CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error,
+    ErrorKind, Func, Index, MaterializedView, Sink, StorageSinkConnectionState, Type, View,
+    SYSTEM_CONN_ID,
 };
 use crate::session::Session;
 use crate::subscribe::ActiveSubscribe;
-
-use super::AwsPrincipalContext;
 
 /// An update to a built-in table.
 #[derive(Debug)]

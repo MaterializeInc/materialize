@@ -13,8 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytesize::ByteSize;
-use serde::Deserialize;
-
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
@@ -25,6 +23,7 @@ use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
+use serde::Deserialize;
 
 use crate::catalog::storage;
 use crate::config::SystemParameterFrontend;

@@ -16,14 +16,11 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::generic::{
-    operator::{self, Operator},
-    InputHandle, OperatorInfo, OutputHandle,
-};
+use timely::dataflow::operators::generic::operator::{self, Operator};
+use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandle};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;

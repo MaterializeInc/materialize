@@ -87,6 +87,12 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use itertools::Itertools;
+use mz_environmentd::WebSocketResponse;
+use mz_ore::cast::CastLossy;
+use mz_ore::now::NowFn;
+use mz_ore::retry::Retry;
+use mz_pgrepr::UInt8;
+use mz_sql::session::user::SYSTEM_USER;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -94,13 +100,6 @@ use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
-
-use mz_environmentd::WebSocketResponse;
-use mz_ore::cast::CastLossy;
-use mz_ore::now::NowFn;
-use mz_ore::retry::Retry;
-use mz_pgrepr::UInt8;
-use mz_sql::session::user::SYSTEM_USER;
 
 use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 

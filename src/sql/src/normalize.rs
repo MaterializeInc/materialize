@@ -17,7 +17,6 @@
 use std::fmt;
 
 use itertools::Itertools;
-
 use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};

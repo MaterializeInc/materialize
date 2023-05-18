@@ -39,13 +39,12 @@
 
 use std::str::FromStr;
 
+use mz_ore::cast::CastFrom;
+use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use rocksdb::{DBCompactionStyle, DBCompressionType};
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
-
-use mz_ore::cast::CastFrom;
-use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_rocksdb.tuning.rs"));
 
@@ -446,9 +445,10 @@ pub mod defaults {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
 
     #[test]
     fn defaults_equality() {

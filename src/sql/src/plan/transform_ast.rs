@@ -13,8 +13,6 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
-use uuid::Uuid;
-
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
@@ -22,6 +20,7 @@ use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
     TableFactor, TableFunction, TableWithJoins, Value,
 };
+use uuid::Uuid;
 
 use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
 use crate::normalize;

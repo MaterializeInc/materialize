@@ -11,12 +11,11 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
+use mz_ore::collections::CollectionExt;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 use rdkafka::ClientContext;
 use tracing::warn;
-
-use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
-use mz_ore::collections::CollectionExt;
 
 use crate::types::connections::ConnectionContext;
 use crate::types::sinks::{

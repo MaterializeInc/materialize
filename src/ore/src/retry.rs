@@ -53,11 +53,10 @@
 //! assert_eq!(res, Err("contrived failure"));
 //! ```
 
-use std::cmp;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::thread;
+use std::{cmp, thread};
 
 use futures::{ready, Stream, StreamExt};
 use pin_project::pin_project;

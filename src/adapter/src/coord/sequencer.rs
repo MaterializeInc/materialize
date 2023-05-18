@@ -12,8 +12,6 @@
 
 //! Logic for executing a planned SQL query.
 
-use tracing::{event, Level};
-
 use inner::return_if_err;
 use mz_controller::clusters::ClusterId;
 use mz_expr::OptimizedMirRelationExpr;
@@ -24,17 +22,16 @@ use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CopyRowsPlan, CreateRolePlan, FetchPlan, Plan,
     PlanKind, RaisePlan, RotateKeysPlan,
 };
+use tracing::{event, Level};
 
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::{Coordinator, Message};
+use crate::coord::{introspection, Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::rbac;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionStatus};
 use crate::util::{send_immediate_rows, ClientTransmitter};
-
-use super::introspection;
 
 // DO NOT make this visible in anyway, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
