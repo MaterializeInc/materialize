@@ -85,8 +85,13 @@ materialize_public_lg2  linked  4
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_lg2'
 materialize_public_lg2  linked  ${arg.default-storage-size}
 
+# Create a connection for use in sinks.
+> CREATE CONNECTION kafka_conn
+  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+
 # Test that linked clusters cannot be dropped, nor can their replicas be
-# dropped, nor can new replicas be created, nor can they run queries.
+# dropped, nor can new replicas be created, nor can they run queries,
+# nor can new sources be scheduled on them.
 ! DROP CLUSTER materialize_public_lg2 CASCADE
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! DROP CLUSTER REPLICA materialize_public_lg2.linked
@@ -97,6 +102,12 @@ contains:cannot create more than one replica of a cluster containing sources or 
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE INDEX IN CLUSTER materialize_public_lg2 ON v (a)
 contains:cannot modify linked cluster "materialize_public_lg2"
+! CREATE SOURCE lg_bad IN CLUSTER "materialize_public_lg1" FROM LOAD GENERATOR COUNTER
+contains:cannot modify linked cluster "materialize_public_lg1"
+! CREATE SINK snk_bad IN CLUSTER "materialize_public_lg1" FROM v
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-bad-${testdrive.seed}')
+  FORMAT JSON ENVELOPE DEBEZIUM
+contains:cannot modify linked cluster "materialize_public_lg1"
 > SET cluster = materialize_public_lg2
 ! SELECT 1
 contains:cannot execute queries on cluster containing sources or sinks
@@ -118,10 +129,6 @@ mz_system
 default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
-
-# Create a connection for use in sinks.
-> CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
 
 # Test that creating a sink without an explicit size creates a linked cluster
 # with the default size. (Unsafe mode only.)

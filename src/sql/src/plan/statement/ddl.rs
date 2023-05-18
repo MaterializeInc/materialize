@@ -1415,6 +1415,11 @@ fn source_sink_cluster_config(
             if !is_storage_cluster(scx, cluster) {
                 sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
             }
+
+            // We also don't allow more objects to be added to a cluster that is already
+            // linked to another object.
+            ensure_cluster_is_not_linked(scx, cluster.id())?;
+
             Ok(SourceSinkClusterConfig::Existing { id: in_cluster.id })
         }
         (None, Some(size)) => Ok(SourceSinkClusterConfig::Linked { size }),
