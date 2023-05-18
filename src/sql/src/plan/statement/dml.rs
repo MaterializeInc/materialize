@@ -42,6 +42,7 @@ use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
 };
+use crate::session::vars::SystemVars;
 use crate::{normalize, plan};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -338,7 +339,10 @@ pub fn plan_explain(
     let config = ExplainConfig::try_from(config_flags)?;
 
     if config.mfp_pushdown {
-        scx.require_unsafe_mode("`mfp_pushdown` explain flag")?;
+        scx.require_var_or_unsafe_mode(
+            SystemVars::persist_stats_filter_enabled,
+            "`mfp_pushdown` explain flag",
+        )?;
     }
 
     let format = match format {
