@@ -48,15 +48,15 @@ The values in this table may change at any time, and users should not rely on
 them for any kind of capacity planning.
 {{< /warning >}}
 
-| Field            | Type      | Meaning                                                       |
-|------------------|-----------|---------------------------------------------------------------|
-| `size`           | [`text`]  | The human-readable replica size.                              |
-| `processes`      | [`uint8`] | The number of processes in the replica.                       |
-| `workers`        | [`uint8`] | The number of Timely Dataflow workers per process.            |
-| `cpu_nano_cores` | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
-| `memory_bytes`   | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
-| `disk_bytes`     | [`uint8`] | Currently null. Reserved for later use.                       |
-
+| Field                  | Type      | Meaning                                                       |
+|------------------------|-----------|---------------------------------------------------------------|
+| `size`                 | [`text`]  | The human-readable replica size.                              |
+| `processes`            | [`uint8`] | The number of processes in the replica.                       |
+| `workers`              | [`uint8`] | The number of Timely Dataflow workers per process.            |
+| `cpu_nano_cores`       | [`uint8`] | The CPU allocation per process, in billionths of a vCPU core. |
+| `memory_bytes`         | [`uint8`] | The RAM allocation per process, in billionths of a vCPU core. |
+| `disk_bytes`           | [`uint8`] | Currently null. Reserved for later use.                       |
+| `credits_per_hour`     | [`uint8`] | The number of compute credits consumed per hour.              |
 
 ### `mz_cluster_links`
 
@@ -132,8 +132,9 @@ extant cluster replicas.
 
 ### `mz_cluster_replica_history`
 
-The `mz_cluster_replica_history` gives the times each replica was
-created and (if applicable) dropped.
+The `mz_cluster_replica_history` view contains information about the timespan of
+each replica, including the times at which it was created and dropped
+(if applicable).
 
 | Field                 | Type                         | Meaning                                                                                                                                   |
 |-----------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
@@ -143,7 +144,7 @@ created and (if applicable) dropped.
 | `size`                | [`text`]                     | The size of the cluster replica. Corresponds to [`mz_cluster_replica_sizes.size`](#mz_cluster_replica_sizes).                             |
 | `created_at`          | [`timestamp with time zone`] | The time at which the replica was created.                                                                                                |
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
-| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credtis_per_hour`](#mz_cluster_replica_sizes). |
+| `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
 
 ### `mz_sessions`
 
