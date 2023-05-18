@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -87,12 +88,17 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         Ok(client) => client,
         Err(e) => {
             // We omit most detail from the error message we send to the client, to
-            // avoid giving attackers unnecessary information.
-            warn!("WS request failed authentication: {}", e);
+            // avoid giving attackers unnecessary information during auth. AdapterErrors
+            // are safe to return because they're generated after authentication.
+            warn!("WS request failed init: {}", e);
+            let reason = match e.downcast_ref::<AdapterError>() {
+                Some(error) => Cow::Owned(error.to_string()),
+                None => "unauthorized".into(),
+            };
             let _ = ws
                 .send(Message::Close(Some(CloseFrame {
                     code: CloseCode::Protocol.into(),
-                    reason: "unauthorized".into(),
+                    reason,
                 })))
                 .await;
             return;

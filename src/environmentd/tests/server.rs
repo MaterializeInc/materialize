@@ -1290,8 +1290,7 @@ fn test_max_connections_on_all_interfaces() {
     .unwrap();
 
 
-    // http
-    {
+// http
         let http_url = Url::parse(&format!(
             "http://{}/api/sql",
             server.inner.http_local_addr()
@@ -1312,8 +1311,8 @@ fn test_max_connections_on_all_interfaces() {
 
 {
     let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
-    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
-
+    let err = util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
+    assert!(err.to_string().contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"), "{err}");
 }
 
         tracing::info!("closing client");
@@ -1356,86 +1355,4 @@ fn test_max_connections_on_all_interfaces() {
             }
 
         }
-
-        /*
-
-        tracing::info!("spawning slow http query");
-
-        let task = tokio::spawn(reqwest::Client::new().post(http_url.clone()).json(&slow_query_json).send()
-          .then(|res| async move { panic!("slow query should never finish but returned {res:?}") }));
-
-        tracing::info!("waiting for max connections limit because of long running http query");
-        Retry::default().max_tries(10).retry_async(|_state| async {
-            let res = reqwest::Client::new().post(http_url.clone()).json(&json).send().await.unwrap();
-            let status = res.status();
-            if status == StatusCode::OK {
-                return Err(());
-            }
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-            assert_eq!(res.text().await.expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
-            Ok(())
-        }).await.unwrap();
-        tracing::info!("found limit");
-
-        // ws
-        let ws_url = Url::parse(&format!(
-            "ws://{}/api/experimental/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
-        tracing::info!("trying to connect to websocket; should fail");
-        //tokio::spawn_blocking(|| tungstenite::connect(ws_url).unwrap());
-*
-        tracing::info!("aborting long running http query");
-        task.abort();
-
-        tracing::info!("trying to make short lived http query now that long running query is aborted");
-        Retry::default().max_tries(10).retry_async(|_state| async {
-            let res = reqwest::Client::new().post(http_url.clone()).json(&json).send().await.unwrap();
-            let status = res.status();
-            if status == StatusCode::INTERNAL_SERVER_ERROR {
-                assert_eq!(res.text().await.expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
-                return Err(());
-            }
-            assert_eq!(status, StatusCode::OK);
-            Ok(())
-        }).await.unwrap();
-        tracing::info!("quick http query succeeded");
-
-        assert!(task.await.expect_err("should be cancelled").is_cancelled());
-        tracing::info!("task is awaitted");
-    }
-*/
-
-    }
-
-    // ws
-    /*
-    {
-        let param_size = mz_environmentd::http::MAX_REQUEST_SIZE - statement_size + 1;
-        let param = std::iter::repeat("1").take(param_size).join("");
-        let ws_url = Url::parse(&format!(
-            "ws://{}/api/experimental/sql",
-            server.inner.http_local_addr()
-        ))
-        .unwrap();
-        let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default());
-        let json =
-            format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
-        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.write_message(Message::Text(json.to_string())).unwrap();
-
-        // The specific error isn't forwarded to the client, the connection is just closed.
-        let err = ws.read_message().unwrap_err();
-        assert!(matches!(
-            err,
-            Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)
-        ));
-    }
-    */
-
-    tracing::info!("waiting on long thread");
-    //handle.join().unwrap();
-    tracing::info!("waited on long thread");
 }
