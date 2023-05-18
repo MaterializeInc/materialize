@@ -40,13 +40,17 @@ As a _superuser_:
 
 {{< tab "AWS RDS">}}
 
+# TODO(jpepin) This assumes an RDS instance that is publicly accessible and that is using IP allowlisting. We should make that explicit
+
 We recommend following the [AWS RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication) documentation for detailed information on logical replication configuration and best practices.
 
-As a _superuser_ (`rds_superuser`):
+As a _superuser_ ( a user with the role `rds_superuser`):
 
 1. Create a custom RDS parameter group and associate it with your instance. You will not be able to set custom parameters on the default RDS parameter groups.
 
 1. In the custom RDS parameter group, set the `rds.logical_replication` static parameter to `1`.
+
+# TODO(jpepin) This has security implications -- we might want to link to the doc where we discuss that in more depth. Many infra teams may not be happy to allowlist a full Materialize region where other users may share the same egress IP
 
 1. Add the egress IP addresses associated with your Materialize region to the security group of the RDS instance. You can find these addresses by querying the `mz_egress_ips` table in Materialize.
 
@@ -110,18 +114,31 @@ As a _superuser_ (`cloudsqlsuperuser`):
 
 Once logical replication is enabled:
 
-1. Grant the required privileges to the replication user:
+1. Create a user for Materialize and grant the required privileges to the user:
 
     ```sql
-    ALTER ROLE "dbuser" WITH REPLICATION;
+      -- materialize replication user
+      CREATE USER materialize PASSWORD <password>;
     ```
 
+    _for RDS_
+
+    ```sql
+      -- RDS-specific syntax
+      GRANT rds_replication to materialize;
+    ```
+
+    _for other Postgres DBs_
+
+    ```sql
+    ALTER ROLE "materialize" WITH REPLICATION;
+    ```
     And ensure that this user has the right permissions on the tables you want to replicate:
 
     ```sql
-    GRANT CONNECT ON DATABASE dbname TO dbuser;
-    GRANT USAGE ON SCHEMA schema TO dbuser;
-    GRANT SELECT ON ALL TABLES IN SCHEMA schema TO dbuser;
+    GRANT CONNECT ON DATABASE dbname TO materialize;
+    GRANT USAGE ON SCHEMA schema TO materialize;
+    GRANT SELECT ON ALL TABLES IN SCHEMA schema TO materialize;
     ```
 
     **Note:** `SELECT` privileges on the tables you want to replicate are needed for the initial table sync.
@@ -154,11 +171,16 @@ Once logical replication is enabled:
 
 ## Create a source
 
+# TODO: pg_connection is not explained here -- we should link to the Connection docs as this will need to be set up before this command can succeed
+
 Postgres sources ingest the raw replication stream data for all tables included in a publication to avoid creating multiple [replication slots](/sql/create-source/postgres/#postgresql-replication-slots) and minimize the required bandwidth.
 
 When you define a Postgres source, Materialize will automatically create a **subsource** for each original table in the publication (so you don't have to!):
 
 _Create subsources for all tables included in the Postgres publication_
+
+# TODO: should note here that this creates a cluster and replica at time of source creation by using "with size"
+# TODO: Also it's not clear if these are supposed to be copy-pasted in order, or if these are possible options, and you pick one
 
 ```sql
 CREATE SOURCE mz_source
@@ -185,11 +207,22 @@ CREATE SOURCE mz_source
   WITH (SIZE = '3xsmall');
 ```
 
+You can check the status of your source like this:
+
+```sql
+SELECT * FROM mz_internal.mz_source_statuses where name = 'mz_source_progress';
+```
+
+# TODO: What does the user do if they get a connection error when attempting to create this source?
+# There is no troubleshooting step for source connection error: https://materialize.com/docs/manage/troubleshooting/#why-isnt-my-source-ingesting-data
+
 {{< note >}}
 Materialize performs an initial sync of all tables in the publication before it starts ingesting change events.
 {{</ note >}}
 
 ## Create a materialized view
+
+# TODO: This section skips a crucial explanatory step of how to access the data from the source we just added. Where is it? How do we query it?
 
 Any materialized view that depends on replication subsources will be incrementally updated as change events stream in, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original Postgres database.
 
