@@ -266,7 +266,7 @@ fn test_http_sql() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default());
+        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
@@ -977,7 +977,7 @@ fn test_max_request_size() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default());
+        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1049,7 +1049,7 @@ fn test_max_statement_batch_size() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default());
+        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         ws.write_message(Message::Text(json.to_string())).unwrap();
@@ -1109,7 +1109,7 @@ fn test_ws_passes_options() {
         "application_name".to_string(),
         "billion_dollar_idea".to_string(),
     )]);
-    util::auth_with_ws(&mut ws, options);
+    util::auth_with_ws(&mut ws, options).unwrap();
 
     // Query to make sure we get back the correct session var, which should be
     // set from the options map we passed with the auth.
@@ -1152,7 +1152,7 @@ fn test_ws_notifies_for_bad_options() {
     .unwrap();
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     let options = BTreeMap::from([("bad_var_name".to_string(), "i_do_not_exist".to_string())]);
-    util::auth_with_ws(&mut ws, options);
+    util::auth_with_ws(&mut ws, options).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read_message().unwrap();
@@ -1177,7 +1177,7 @@ struct HttpResponse<R> {
 
 #[derive(Debug, Deserialize)]
 struct HttpRows {
-    rows: Vec<Vec<String>>,
+    rows: Vec<Vec<serde_json::Value>>,
     col_names: Vec<String>,
     notices: Vec<Notice>,
 }
@@ -1259,4 +1259,105 @@ fn test_http_options_param() {
     assert!(notice
         .message
         .contains(r#"startup setting not_a_session_var not set"#));
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_max_connections_on_all_interfaces() {
+    mz_ore::test::init_logging();
+    let query = "SELECT 1";
+    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections = 1")
+        .unwrap();
+
+    let client = server.connect(postgres::NoTls).unwrap();
+
+    let ws_url: Url = Url::parse(&format!(
+        "ws://{}/api/experimental/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr()
+    ))
+    .unwrap();
+    let json = format!("{{\"query\":\"{query}\"}}");
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    {
+        // while postgres client is connected, http connections error out
+        let res = Client::new()
+            .post(http_url.clone())
+            .json(&json)
+            .send()
+            .unwrap();
+        let status = res.status();
+        let text = res.text().expect("no body?");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+    }
+
+    {
+        // while postgres client is connected, websockets can't auth
+        let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
+        let err = util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
+        assert!(err.to_string().contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"), "{err}");
+    }
+
+    tracing::info!("closing postgres client");
+    client.close().unwrap();
+    tracing::info!("closed postgres client");
+
+    tracing::info!("waiting for postgres client to close so that the query goes through");
+    Retry::default().max_tries(10).retry(|_state| {
+            let res = Client::new().post(http_url.clone()).json(&json).send().unwrap();
+            let status = res.status();
+            if status == StatusCode::INTERNAL_SERVER_ERROR {
+                assert_eq!(res.text().expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+                return Err(());
+            }
+            assert_eq!(status, StatusCode::OK);
+            let result: HttpResponse<HttpRows> = res.json().unwrap();
+            assert_eq!(result.results.len(), 1);
+            assert_eq!(result.results[0].rows, vec![vec![1]]);
+            Ok(())
+        }).unwrap();
+
+    tracing::info!("http query succeeded");
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    let json = format!("{{\"query\":\"{query}\"}}");
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    ws.write_message(Message::Text(json.to_string())).unwrap();
+
+    // The specific error isn't forwarded to the client, the connection is just closed.
+    match ws.read_message() {
+        Ok(Message::Text(msg)) => {
+            assert_eq!(msg, "{\"type\":\"Rows\",\"payload\":[\"?column?\"]}");
+            assert_eq!(
+                ws.read_message().unwrap(),
+                Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
+            );
+            tracing::info!("data: {:?}", ws.read_message().unwrap());
+        }
+        Ok(msg) => panic!("unexpected msg: {msg:?}"),
+        Err(e) => panic!("{e}"),
+    }
+
+    // While the websocket connection is still open, http requests fail
+    let res = Client::new().post(http_url).json(&json).send().unwrap();
+    tracing::info!("res: {:#?}", res);
+    let status = res.status();
+    let text = res.text().expect("no body?");
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
 }
