@@ -147,7 +147,7 @@ impl PostgresConsensusConfig {
                 Duration::MAX
             }
             fn tcp_user_timeout(&self) -> Duration {
-                Duration::MAX
+                Duration::ZERO
             }
         }
 
