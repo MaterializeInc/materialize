@@ -30,8 +30,10 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, Statement};
 use tracing::{error, event, info, warn, Level};
 
+use crate::upgrade;
 use crate::{
     AppendBatch, Data, Diff, Id, InternalStashError, StashCollection, StashError, Timestamp,
+    COLLECTION_CONFIG, MIN_STASH_VERSION, STASH_VERSION,
 };
 
 // TODO: Change the indexes on data to be more applicable to the current
@@ -55,8 +57,8 @@ CREATE TABLE collections (
 
 CREATE TABLE data (
     collection_id bigint NOT NULL REFERENCES collections (collection_id),
-    key jsonb NOT NULL,
-    value jsonb NOT NULL,
+    key bytea NOT NULL,
+    value bytea NOT NULL,
     time bigint NOT NULL,
     diff bigint NOT NULL
 );
@@ -612,6 +614,32 @@ impl Stash {
             };
 
             tx.commit().await?;
+
+            // Migration added in 0.54.0. This block can be removed anytime after that
+            // release.
+            {
+                // Check if we still use JSON.
+                let rows = client
+                    .query("SELECT pg_typeof(key) kind FROM data LIMIT 1", &[])
+                    .await?;
+                let is_json = rows
+                    .get(0)
+                    .map(|row| {
+                        row.try_get("kind")
+                            .map(|ty: String| ty == "jsonb")
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+
+                if is_json {
+                    upgrade::migrate_json_to_proto(&mut client, epoch)
+                        .await
+                        .map_err(|e| StashError {
+                            inner: InternalStashError::Other(e.to_string()),
+                        })?;
+                }
+            }
+
             self.epoch = Some(epoch);
         }
 
@@ -867,6 +895,56 @@ impl Stash {
             return Err(InternalStashError::Fence("unexpected epoch or nonce".into()).into());
         }
         Ok(version == committed_if_version)
+    }
+
+    #[tracing::instrument(name = "stash::is_initialized", level = "debug", skip_all)]
+    pub async fn is_initialized(&mut self) -> Result<bool, StashError> {
+        let initialized =
+            COLLECTION_CONFIG.upper(self).await?.elements() != [crate::Timestamp::MIN];
+        Ok(initialized)
+    }
+
+    #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
+    pub async fn upgrade(&mut self) -> Result<(), StashError> {
+        // Run migrations until we're up-to-date.
+        while run_upgrade(self).await? < STASH_VERSION {}
+
+        pub async fn run_upgrade(stash: &mut Stash) -> Result<u64, StashError> {
+            stash
+                .with_transaction(|mut tx| {
+                    async move {
+                        let version = COLLECTION_CONFIG.version(&mut tx).await?;
+
+                        // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
+                        // but const expressions aren't yet supported in match statements.
+                        const TOO_OLD_VERSION: u64 = MIN_STASH_VERSION - 1;
+                        const FUTURE_VERSION: u64 = STASH_VERSION + 1;
+                        let incompatible = StashError {
+                            inner: InternalStashError::IncompatibleVersion(version),
+                        };
+
+                        match version {
+                            ..=TOO_OLD_VERSION => return Err(incompatible),
+                            // TODO(parkmycar): Add these migrations.
+                            13 => (),
+                            14 => (),
+                            //
+                            // Up-to-date, no migration needed!
+                            STASH_VERSION => return Ok(STASH_VERSION),
+                            FUTURE_VERSION.. => return Err(incompatible),
+                        };
+                        // Set the new version.
+                        let new_version = version + 1;
+                        COLLECTION_CONFIG.set_version(&mut tx, new_version).await?;
+
+                        Ok(new_version)
+                    }
+                    .boxed()
+                })
+                .await
+        }
+
+        Ok(())
     }
 }
 
@@ -1223,23 +1301,21 @@ impl Consolidator {
                 // In a single query we can detect all candidate entries (things
                 // with a negative diff) and delete and return all associated
                 // keys.
-                let rows = tx
+                let mut rows = tx
                     .query(self.stmt_candidates.as_ref().unwrap(), &[&id, since])
                     .await?
                     .into_iter()
                     .map(|row| {
                         (
-                            (
-                                row.get::<_, serde_json::Value>("key"),
-                                row.get::<_, serde_json::Value>("value"),
-                            ),
+                            (row.get::<_, Vec<u8>>("key"), row.get::<_, Vec<u8>>("value")),
                             row.get::<_, Diff>("diff"),
                         )
                     })
                     .collect::<Vec<_>>();
                 let deleted = rows.len();
                 // Perform the consolidation in Rust.
-                let rows = crate::consolidate(&rows);
+                differential_dataflow::consolidation::consolidate(&mut rows);
+
                 // Then for any items that have a positive diff, INSERT them
                 // back into the database. Our current production stash usage
                 // will never have any results here (all consolidations sum to
