@@ -93,7 +93,7 @@ pub struct RunParams<'a, A> {
 /// error to the client. It only returns `Err` if an unexpected I/O error occurs
 /// while communicating with the client, e.g., if the connection is severed in
 /// the middle of a request.
-//#[tracing::instrument(level = "debug", skip_all)]
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn run<'a, A>(
     RunParams {
         tls_mode,
@@ -243,17 +243,13 @@ where
         .vars_mut()
         .end_transaction(EndTransactionAction::Commit);
 
-    let _guard = if session.user().limit_max_connections() {
-        match DropConnection::new_connection(active_connection_count) {
-            Ok(drop_connection) => Some(drop_connection),
-            Err(e) => {
-                return conn
-                    .send(ErrorResponse::from_adapter_error(Severity::Fatal, e.into()))
-                    .await
-            }
+    let _guard = match DropConnection::new_connection(session.user(), active_connection_count) {
+        Ok(drop_connection) => drop_connection,
+        Err(e) => {
+            return conn
+                .send(ErrorResponse::from_adapter_error(Severity::Fatal, e.into()))
+                .await
         }
-    } else {
-        None
     };
 
     let mut buf = vec![BackendMessage::AuthenticationOk];

@@ -1675,20 +1675,25 @@ impl Drop for DropConnection {
 
 impl DropConnection {
     pub fn new_connection(
+        user: &User,
         active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    ) -> Result<Self, ConnectionError> {
-        {
-            let mut connections = active_connection_count.lock().expect("lock poisoned");
-            if connections.current >= connections.limit {
-                return Err(ConnectionError::TooManyConnections {
-                    current: connections.current,
-                    limit: connections.limit,
-                });
+    ) -> Result<Option<Self>, ConnectionError> {
+        Ok(if user.limit_max_connections() {
+            {
+                let mut connections = active_connection_count.lock().expect("lock poisoned");
+                if connections.current >= connections.limit {
+                    return Err(ConnectionError::TooManyConnections {
+                        current: connections.current,
+                        limit: connections.limit,
+                    });
+                }
+                connections.current += 1;
             }
-            connections.current += 1;
-        }
-        Ok(DropConnection {
-            active_connection_count,
+            Some(DropConnection {
+                active_connection_count,
+            })
+        } else {
+            None
         })
     }
 }

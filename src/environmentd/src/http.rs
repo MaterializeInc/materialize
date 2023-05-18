@@ -293,11 +293,7 @@ impl AuthedClient {
         active_connection_count: SharedConnectionCounter,
     ) -> Result<Self, AdapterError> {
         let AuthedUser(user) = user;
-        let drop_connection = if user.limit_max_connections() {
-            Some(DropConnection::new_connection(active_connection_count)?)
-        } else {
-            None
-        };
+        let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
         let adapter_client = adapter_client.new_conn()?;
         let session = adapter_client.new_session(user);
         let (adapter_client, _) = adapter_client.startup(session).await?;
