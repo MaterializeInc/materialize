@@ -3942,7 +3942,6 @@ dependencies = [
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
- "mz-persist-types",
  "mz-pgrepr",
  "mz-proto",
  "mz-repr",

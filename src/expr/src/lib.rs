@@ -95,7 +95,7 @@ pub mod visit;
 
 pub use id::{Id, LocalId, PartitionId, ProtoId, ProtoLocalId, ProtoPartitionId, SourceInstanceId};
 pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace};
-pub use linear::plan::{MfpPlan, MfpPushdown, SafeMfpPlan};
+pub use linear::plan::{MfpPlan, SafeMfpPlan};
 pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{
     memoize_expr, MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan,
