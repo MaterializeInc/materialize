@@ -91,6 +91,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_stash::objects::{proto, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -217,6 +218,28 @@ impl TryFrom<String> for ShardId {
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         s.parse()
+    }
+}
+
+impl RustType<proto::ShardId> for ShardId {
+    fn into_proto(&self) -> proto::ShardId {
+        proto::ShardId {
+            id: self.0.to_vec().into(),
+        }
+    }
+
+    fn from_proto(proto: proto::ShardId) -> Result<Self, TryFromProtoError> {
+        // TODO(parkmycar): Use static-assertions here to validate the length of a ShardId.
+        if proto.id.len() != 16 {
+            return Err(TryFromProtoError::InvalidShardId(
+                "Invalid ShardId length!".to_string(),
+            ));
+        }
+
+        let mut id = [0u8; 16];
+        id.copy_from_slice(&proto.id[..]);
+
+        Ok(ShardId(id))
     }
 }
 

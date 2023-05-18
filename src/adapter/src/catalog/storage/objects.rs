@@ -7,249 +7,706 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_controller::clusters::ClusterId;
-use mz_ore::now::EpochMillis;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
-use mz_repr::role_id::RoleId;
-use mz_sql::catalog::RoleAttributes;
-use mz_sql::names::{DatabaseId, SchemaId};
-use mz_stash::objects::proto;
+use mz_ore::cast::CastFrom;
+use mz_proto::{IntoRustIfSome, ProtoType};
+use mz_stash::objects::{proto, RustType, TryFromProtoError};
 
-/// [`StashType`] is a trait that is generally used for converting catalog types, e.g.
-/// [`DatabaseId`] into the corresponding type that we serialize into the stash, e.g.
-/// [`proto::DatabaseId`].
-///
-/// While we store serialized protobufs in the Stash, that is more of an implementation detail than
-/// a public interface, which is why we don't use the helpers from the `mz_proto` crate.
-pub trait StashType: Sized {
-    type Stash: ::prost::Message;
+use crate::catalog::{RoleMembership, SerializedCatalogItem, SerializedRole};
 
-    fn into_stash(self) -> Self::Stash;
-    fn from_stash(stash: Self::Stash) -> Result<Self, anyhow::Error>;
-}
+use super::{
+    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
+    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, ConfigKey, ConfigValue,
+    DatabaseKey, DatabaseNamespace, DatabaseValue, GidMappingKey, GidMappingValue, IdAllocKey,
+    IdAllocValue, ItemKey, ItemValue, RoleKey, RoleValue, SchemaKey, SchemaNamespace, SchemaValue,
+    SerializedReplicaConfig, SerializedReplicaLocation, SerializedReplicaLogging,
+    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey,
+    TimestampKey, TimestampValue,
+};
 
-impl StashType for AclMode {
-    type Stash = proto::AclMode;
-
-    fn into_stash(self) -> Self::Stash {
-        proto::AclMode {
-            bitflags: self.bits(),
+impl RustType<proto::ConfigKey> for ConfigKey {
+    fn into_proto(&self) -> proto::ConfigKey {
+        proto::ConfigKey {
+            key: self.key.to_string(),
         }
     }
 
-    fn from_stash(stash: Self::Stash) -> Result<Self, anyhow::Error> {
-        AclMode::from_bits(stash.bitflags)
-            .ok_or_else(|| anyhow::anyhow!("Invalid AclMode from Stash {stash:?}"))
+    fn from_proto(proto: proto::ConfigKey) -> Result<Self, TryFromProtoError> {
+        Ok(ConfigKey { key: proto.key })
     }
 }
 
-impl StashType for MzAclItem {
-    type Stash = proto::MzAclItem;
+impl RustType<proto::ConfigValue> for ConfigValue {
+    fn into_proto(&self) -> proto::ConfigValue {
+        proto::ConfigValue { value: self.value }
+    }
 
-    fn into_stash(self) -> Self::Stash {
-        proto::MzAclItem {
-            grantee: Some(self.grantee.into_stash()),
-            grantor: Some(self.grantor.into_stash()),
-            acl_mode: Some(self.acl_mode.into_stash()),
+    fn from_proto(proto: proto::ConfigValue) -> Result<Self, TryFromProtoError> {
+        Ok(ConfigValue { value: proto.value })
+    }
+}
+
+impl RustType<proto::SettingKey> for SettingKey {
+    fn into_proto(&self) -> proto::SettingKey {
+        proto::SettingKey {
+            name: self.name.to_string(),
         }
     }
 
-    fn from_stash(stash: Self::Stash) -> Result<Self, anyhow::Error> {
-        let grantee = stash
-            .grantee
-            .map(RoleId::from_stash)
-            .ok_or_else(|| anyhow::anyhow!("Invalid MzAclItem, missing grantee"))??;
-        let grantor = stash
-            .grantor
-            .map(RoleId::from_stash)
-            .ok_or_else(|| anyhow::anyhow!("Invalid MzAclItem, missing grantor"))??;
-        let acl_mode = stash
-            .acl_mode
-            .map(AclMode::from_stash)
-            .ok_or_else(|| anyhow::anyhow!("Invalid MzAclItem, missing acl_mode"))??;
+    fn from_proto(proto: proto::SettingKey) -> Result<Self, TryFromProtoError> {
+        Ok(SettingKey { name: proto.name })
+    }
+}
 
-        Ok(MzAclItem {
-            grantee,
-            grantor,
-            acl_mode,
+impl RustType<proto::SettingValue> for SettingValue {
+    fn into_proto(&self) -> proto::SettingValue {
+        proto::SettingValue {
+            value: self.value.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::SettingValue) -> Result<Self, TryFromProtoError> {
+        Ok(SettingValue { value: proto.value })
+    }
+}
+
+impl RustType<proto::IdAllocKey> for IdAllocKey {
+    fn into_proto(&self) -> proto::IdAllocKey {
+        proto::IdAllocKey {
+            name: self.name.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::IdAllocKey) -> Result<Self, TryFromProtoError> {
+        Ok(IdAllocKey { name: proto.name })
+    }
+}
+
+impl RustType<proto::IdAllocValue> for IdAllocValue {
+    fn into_proto(&self) -> proto::IdAllocValue {
+        proto::IdAllocValue {
+            next_id: self.next_id,
+        }
+    }
+
+    fn from_proto(proto: proto::IdAllocValue) -> Result<Self, TryFromProtoError> {
+        Ok(IdAllocValue {
+            next_id: proto.next_id,
         })
     }
 }
 
-impl StashType for RoleAttributes {
-    type Stash = proto::RoleAttributes;
-
-    fn into_stash(self) -> Self::Stash {
-        let RoleAttributes {
-            inherit,
-            create_role,
-            create_db,
-            create_cluster,
-            ..
-        } = self;
-
-        proto::RoleAttributes {
-            inherit,
-            create_role,
-            create_db,
-            create_cluster,
+impl RustType<proto::GidMappingKey> for GidMappingKey {
+    fn into_proto(&self) -> proto::GidMappingKey {
+        proto::GidMappingKey {
+            schema_name: self.schema_name.to_string(),
+            object_type: self.object_type.into_proto().into(),
+            object_name: self.object_name.to_string(),
         }
     }
 
-    fn from_stash(stash: Self::Stash) -> Result<Self, anyhow::Error> {
-        let proto::RoleAttributes {
-            inherit,
-            create_cluster,
-            create_role,
-            create_db,
-        } = stash;
-
-        let mut attributes = RoleAttributes::new();
-
-        attributes.inherit = inherit;
-        attributes.create_cluster = create_cluster;
-        attributes.create_role = create_role;
-        attributes.create_db = create_db;
-
-        Ok(attributes)
+    fn from_proto(proto: proto::GidMappingKey) -> Result<Self, TryFromProtoError> {
+        let object_type = proto::CatalogItemType::from_i32(proto.object_type)
+            .ok_or_else(|| TryFromProtoError::unknown_enum_variant("CatalogItemType"))?;
+        Ok(GidMappingKey {
+            schema_name: proto.schema_name,
+            object_type: object_type.into_rust()?,
+            object_name: proto.object_name,
+        })
     }
 }
 
-impl StashType for RoleId {
-    type Stash = proto::RoleId;
+impl RustType<proto::GidMappingValue> for GidMappingValue {
+    fn into_proto(&self) -> proto::GidMappingValue {
+        proto::GidMappingValue {
+            id: self.id,
+            fingerprint: self.fingerprint.to_string(),
+        }
+    }
 
-    fn into_stash(self) -> Self::Stash {
-        let value = match self {
-            RoleId::User(id) => proto::role_id::Value::User(id),
-            RoleId::System(id) => proto::role_id::Value::System(id),
-            RoleId::Public => proto::role_id::Value::Public(Default::default()),
+    fn from_proto(proto: proto::GidMappingValue) -> Result<Self, TryFromProtoError> {
+        Ok(GidMappingValue {
+            id: proto.id,
+            fingerprint: proto.fingerprint,
+        })
+    }
+}
+
+impl RustType<proto::ClusterKey> for ClusterKey {
+    fn into_proto(&self) -> proto::ClusterKey {
+        proto::ClusterKey {
+            id: Some(self.id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterKey {
+            id: proto.id.into_rust_if_some("ClusterKey::id")?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterValue> for ClusterValue {
+    fn into_proto(&self) -> proto::ClusterValue {
+        proto::ClusterValue {
+            name: self.name.to_string(),
+            linked_object_id: self.linked_object_id.into_proto(),
+            owner_id: Some(self.owner_id.into_proto()),
+            privileges: self
+                .privileges
+                .as_ref()
+                .cloned()
+                .unwrap_or_default()
+                .into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterValue {
+            name: proto.name,
+            linked_object_id: proto.linked_object_id.into_rust()?,
+            owner_id: proto.owner_id.into_rust_if_some("ClusterValue::owner_id")?,
+            privileges: Some(proto.privileges.into_rust()?),
+        })
+    }
+}
+
+impl RustType<proto::ClusterIntrospectionSourceIndexKey> for ClusterIntrospectionSourceIndexKey {
+    fn into_proto(&self) -> proto::ClusterIntrospectionSourceIndexKey {
+        proto::ClusterIntrospectionSourceIndexKey {
+            cluster_id: Some(self.cluster_id.into_proto()),
+            name: self.name.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::ClusterIntrospectionSourceIndexKey,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterIntrospectionSourceIndexKey {
+            cluster_id: proto
+                .cluster_id
+                .into_rust_if_some("ClusterIntrospectionSourceIndexKey::cluster_id")?,
+            name: proto.name,
+        })
+    }
+}
+
+impl RustType<proto::ClusterIntrospectionSourceIndexValue>
+    for ClusterIntrospectionSourceIndexValue
+{
+    fn into_proto(&self) -> proto::ClusterIntrospectionSourceIndexValue {
+        proto::ClusterIntrospectionSourceIndexValue {
+            index_id: self.index_id,
+        }
+    }
+
+    fn from_proto(
+        proto: proto::ClusterIntrospectionSourceIndexValue,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterIntrospectionSourceIndexValue {
+            index_id: proto.index_id,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaKey> for ClusterReplicaKey {
+    fn into_proto(&self) -> proto::ClusterReplicaKey {
+        proto::ClusterReplicaKey {
+            id: Some(proto::ReplicaId { value: self.id }),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaKey {
+            id: proto
+                .id
+                .map(|id| id.value)
+                .ok_or_else(|| TryFromProtoError::missing_field("ClusterReplicaKey::id"))?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaValue> for ClusterReplicaValue {
+    fn into_proto(&self) -> proto::ClusterReplicaValue {
+        proto::ClusterReplicaValue {
+            cluster_id: Some(self.cluster_id.into_proto()),
+            name: self.name.to_string(),
+            config: Some(self.config.into_proto()),
+            owner_id: Some(self.owner_id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaValue {
+            cluster_id: proto
+                .cluster_id
+                .into_rust_if_some("ClusterReplicaValue::cluster_id")?,
+            name: proto.name,
+            config: proto
+                .config
+                .into_rust_if_some("ClusterReplicaValue::config")?,
+            owner_id: proto
+                .owner_id
+                .into_rust_if_some("ClusterReplicaValue::owner_id")?,
+        })
+    }
+}
+
+impl RustType<proto::ReplicaConfig> for SerializedReplicaConfig {
+    fn into_proto(&self) -> proto::ReplicaConfig {
+        proto::ReplicaConfig {
+            logging: Some(self.logging.into_proto()),
+            location: Some(self.location.into_proto()),
+            idle_arrangement_merge_effort: self
+                .idle_arrangement_merge_effort
+                .map(|effort| proto::replica_config::MergeEffort { effort }),
+        }
+    }
+
+    fn from_proto(proto: proto::ReplicaConfig) -> Result<Self, TryFromProtoError> {
+        Ok(SerializedReplicaConfig {
+            location: proto
+                .location
+                .into_rust_if_some("ReplicaConfig::location")?,
+            logging: proto.logging.into_rust_if_some("ReplicaConfig::logging")?,
+            idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort.map(|e| e.effort),
+        })
+    }
+}
+
+impl RustType<proto::replica_config::Logging> for SerializedReplicaLogging {
+    fn into_proto(&self) -> proto::replica_config::Logging {
+        proto::replica_config::Logging {
+            log_logging: self.log_logging,
+            interval: self.interval.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::replica_config::Logging) -> Result<Self, TryFromProtoError> {
+        Ok(SerializedReplicaLogging {
+            log_logging: proto.log_logging,
+            interval: proto.interval.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::replica_config::Location> for SerializedReplicaLocation {
+    fn into_proto(&self) -> proto::replica_config::Location {
+        match self {
+            SerializedReplicaLocation::Unmanaged {
+                storagectl_addrs,
+                storage_addrs,
+                computectl_addrs,
+                compute_addrs,
+                workers,
+            } => proto::replica_config::Location::Unmanaged(
+                proto::replica_config::UnmanagedLocation {
+                    storagectl_addrs: storagectl_addrs.clone(),
+                    storage_addrs: storage_addrs.clone(),
+                    computectl_addrs: computectl_addrs.clone(),
+                    compute_addrs: compute_addrs.clone(),
+                    workers: CastFrom::cast_from(*workers),
+                },
+            ),
+            SerializedReplicaLocation::Managed {
+                size,
+                availability_zone,
+                az_user_specified,
+            } => proto::replica_config::Location::Managed(proto::replica_config::ManagedLocation {
+                size: size.to_string(),
+                availability_zone: availability_zone.to_string(),
+                az_user_specified: *az_user_specified,
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto::replica_config::Location) -> Result<Self, TryFromProtoError> {
+        match proto {
+            proto::replica_config::Location::Unmanaged(location) => {
+                Ok(SerializedReplicaLocation::Unmanaged {
+                    storagectl_addrs: location.storagectl_addrs,
+                    storage_addrs: location.storage_addrs,
+                    computectl_addrs: location.computectl_addrs,
+                    compute_addrs: location.compute_addrs,
+                    workers: CastFrom::cast_from(location.workers),
+                })
+            }
+            proto::replica_config::Location::Managed(location) => {
+                Ok(SerializedReplicaLocation::Managed {
+                    size: location.size,
+                    availability_zone: location.availability_zone,
+                    az_user_specified: location.az_user_specified,
+                })
+            }
+        }
+    }
+}
+
+impl RustType<proto::DatabaseKey> for DatabaseKey {
+    fn into_proto(&self) -> proto::DatabaseKey {
+        let value = match self.ns {
+            None | Some(DatabaseNamespace::User) => proto::database_id::Value::User(self.id),
+            Some(DatabaseNamespace::System) => proto::database_id::Value::System(self.id),
         };
 
-        proto::RoleId { value: Some(value) }
+        proto::DatabaseKey {
+            id: Some(proto::DatabaseId { value: Some(value) }),
+        }
     }
 
-    fn from_stash(stash: Self::Stash) -> Result<Self, anyhow::Error> {
-        match stash.value {
-            Some(proto::role_id::Value::User(id)) => Ok(RoleId::User(id)),
-            Some(proto::role_id::Value::System(id)) => Ok(RoleId::System(id)),
-            Some(proto::role_id::Value::Public(_)) => Ok(RoleId::Public),
-            None => Err(anyhow::anyhow!("Invalid RoleId, found None value")),
+    fn from_proto(proto: proto::DatabaseKey) -> Result<Self, TryFromProtoError> {
+        let id = proto
+            .id
+            .ok_or_else(|| TryFromProtoError::missing_field("DatabaseKey::id"))?;
+        match id.value {
+            Some(proto::database_id::Value::User(id)) => Ok(DatabaseKey {
+                id,
+                ns: Some(DatabaseNamespace::User),
+            }),
+            Some(proto::database_id::Value::System(id)) => Ok(DatabaseKey {
+                id,
+                ns: Some(DatabaseNamespace::System),
+            }),
+            None => Err(TryFromProtoError::missing_field("DatabaseId::value")),
         }
     }
 }
 
-impl StashType for DatabaseId {
-    type Stash = proto::DatabaseId;
+impl RustType<proto::DatabaseValue> for DatabaseValue {
+    fn into_proto(&self) -> proto::DatabaseValue {
+        proto::DatabaseValue {
+            name: self.name.clone(),
+            owner_id: Some(self.owner_id.into_proto()),
+            privileges: self
+                .privileges
+                .as_ref()
+                .cloned()
+                .unwrap_or_default()
+                .into_proto(),
+        }
+    }
 
-    fn into_stash(self) -> Self::Stash {
-        let value = match self {
-            DatabaseId::User(id) => proto::database_id::Value::User(id),
-            DatabaseId::System(id) => proto::database_id::Value::System(id),
+    fn from_proto(proto: proto::DatabaseValue) -> Result<Self, TryFromProtoError> {
+        Ok(DatabaseValue {
+            name: proto.name,
+            owner_id: (proto
+                .owner_id
+                .into_rust_if_some("DatabaseValue::owner_id")?),
+            privileges: Some(proto.privileges.into_rust()?),
+        })
+    }
+}
+
+impl RustType<proto::SchemaKey> for SchemaKey {
+    fn into_proto(&self) -> proto::SchemaKey {
+        let value = match self.ns {
+            None | Some(SchemaNamespace::User) => proto::schema_id::Value::User(self.id),
+            Some(SchemaNamespace::System) => proto::schema_id::Value::System(self.id),
         };
 
-        proto::DatabaseId { value: Some(value) }
+        proto::SchemaKey {
+            id: Some(proto::SchemaId { value: Some(value) }),
+        }
     }
 
-    fn from_stash(stash: Self::Stash) -> Result<Self, anyhow::Error> {
-        match stash.value {
-            Some(proto::database_id::Value::User(id)) => Ok(DatabaseId::User(id)),
-            Some(proto::database_id::Value::System(id)) => Ok(DatabaseId::System(id)),
-            None => Err(anyhow::anyhow!("Invalid DatabaseId, found None value")),
+    fn from_proto(proto: proto::SchemaKey) -> Result<Self, TryFromProtoError> {
+        let id = proto
+            .id
+            .ok_or_else(|| TryFromProtoError::missing_field("SchemaKey::id"))?;
+        match id.value {
+            Some(proto::schema_id::Value::User(id)) => Ok(SchemaKey {
+                id,
+                ns: Some(SchemaNamespace::User),
+            }),
+            Some(proto::schema_id::Value::System(id)) => Ok(SchemaKey {
+                id,
+                ns: Some(SchemaNamespace::System),
+            }),
+            None => Err(TryFromProtoError::missing_field("SchemaKey::value")),
         }
     }
 }
 
-impl StashType for SchemaId {
-    type Stash = proto::SchemaId;
-
-    fn into_stash(self) -> Self::Stash {
-        let value = match self {
-            SchemaId::User(id) => proto::schema_id::Value::User(id),
-            SchemaId::System(id) => proto::schema_id::Value::System(id),
+impl RustType<proto::SchemaValue> for SchemaValue {
+    fn into_proto(&self) -> proto::SchemaValue {
+        let database_id = match (self.database_id, self.database_ns) {
+            (Some(id), Some(DatabaseNamespace::User)) | (Some(id), None) => {
+                Some(proto::DatabaseId {
+                    value: Some(proto::database_id::Value::User(id)),
+                })
+            }
+            (Some(id), Some(DatabaseNamespace::System)) => Some(proto::DatabaseId {
+                value: Some(proto::database_id::Value::System(id)),
+            }),
+            // Note: it's valid for a schema to not be associated with a database.
+            (None, _) => None,
         };
 
-        proto::SchemaId { value: Some(value) }
-    }
-
-    fn from_stash(stash: Self::Stash) -> Result<Self, anyhow::Error> {
-        match stash.value {
-            Some(proto::schema_id::Value::User(id)) => Ok(SchemaId::User(id)),
-            Some(proto::schema_id::Value::System(id)) => Ok(SchemaId::System(id)),
-            None => Err(anyhow::anyhow!("Invalid SchemaId, found None value")),
+        proto::SchemaValue {
+            name: self.name.clone(),
+            database_id,
+            owner_id: Some(self.owner_id.into_proto()),
+            privileges: self
+                .privileges
+                .as_ref()
+                .cloned()
+                .unwrap_or_default()
+                .into_proto(),
         }
     }
-}
 
-impl StashType for ClusterId {
-    type Stash = proto::ClusterId;
-
-    fn into_stash(self) -> Self::Stash {
-        let value = match self {
-            ClusterId::User(id) => proto::cluster_id::Value::User(id),
-            ClusterId::System(id) => proto::cluster_id::Value::System(id),
+    fn from_proto(proto: proto::SchemaValue) -> Result<Self, TryFromProtoError> {
+        let (database_id, database_ns) = match proto.database_id {
+            // Note: it's valid for a schema to not be associated with a database.
+            None => (None, None),
+            Some(proto::DatabaseId { value }) => {
+                let value =
+                    value.ok_or_else(|| TryFromProtoError::missing_field("DatabaseId::value"))?;
+                match value {
+                    proto::database_id::Value::User(id) => {
+                        (Some(id), Some(DatabaseNamespace::User))
+                    }
+                    proto::database_id::Value::System(id) => {
+                        (Some(id), Some(DatabaseNamespace::System))
+                    }
+                }
+            }
         };
 
-        proto::ClusterId { value: Some(value) }
+        Ok(SchemaValue {
+            name: proto.name,
+            database_id,
+            database_ns,
+            owner_id: (proto
+                .owner_id
+                .into_rust_if_some("DatabaseValue::owner_id")?),
+            privileges: Some(proto.privileges.into_rust()?),
+        })
+    }
+}
+
+impl RustType<proto::ItemKey> for ItemKey {
+    fn into_proto(&self) -> proto::ItemKey {
+        proto::ItemKey {
+            gid: Some(self.gid.into_proto()),
+        }
     }
 
-    fn from_stash(stash: Self::Stash) -> Result<Self, anyhow::Error> {
-        match stash.value {
-            Some(proto::cluster_id::Value::User(id)) => Ok(ClusterId::User(id)),
-            Some(proto::cluster_id::Value::System(id)) => Ok(ClusterId::System(id)),
-            None => Err(anyhow::anyhow!("Invalid ClusterId, found None value")),
+    fn from_proto(proto: proto::ItemKey) -> Result<Self, TryFromProtoError> {
+        Ok(ItemKey {
+            gid: proto.gid.into_rust_if_some("ItemKey::gid")?,
+        })
+    }
+}
+
+impl RustType<proto::CatalogItem> for SerializedCatalogItem {
+    fn into_proto(&self) -> proto::CatalogItem {
+        let value = match self.clone() {
+            SerializedCatalogItem::V1 { create_sql } => {
+                proto::catalog_item::Value::V1(proto::catalog_item::V1 { create_sql })
+            }
+        };
+
+        proto::CatalogItem { value: Some(value) }
+    }
+
+    fn from_proto(proto: proto::CatalogItem) -> Result<Self, TryFromProtoError> {
+        let value = proto
+            .value
+            .ok_or_else(|| TryFromProtoError::missing_field("CatalogItem::value"))?;
+        match value {
+            proto::catalog_item::Value::V1(c) => Ok(SerializedCatalogItem::V1 {
+                create_sql: c.create_sql,
+            }),
         }
     }
 }
 
-impl StashType for EpochMillis {
-    type Stash = proto::EpochMillis;
+impl RustType<proto::ItemValue> for ItemValue {
+    fn into_proto(&self) -> proto::ItemValue {
+        let schema_id = match self.schema_ns {
+            None | Some(SchemaNamespace::User) => proto::SchemaId {
+                value: Some(proto::schema_id::Value::User(self.schema_id)),
+            },
+            Some(SchemaNamespace::System) => proto::SchemaId {
+                value: Some(proto::schema_id::Value::System(self.schema_id)),
+            },
+        };
 
-    fn into_stash(self) -> Self::Stash {
-        proto::EpochMillis { millis: self }
+        proto::ItemValue {
+            schema_id: Some(schema_id),
+            name: self.name.to_string(),
+            definition: Some(self.definition.into_proto()),
+            owner_id: Some(self.owner_id.into_proto()),
+            privileges: self
+                .privileges
+                .as_ref()
+                .cloned()
+                .unwrap_or_default()
+                .into_proto(),
+        }
     }
 
-    fn from_stash(stash: Self::Stash) -> Result<Self, anyhow::Error> {
-        Ok(stash.millis)
+    fn from_proto(proto: proto::ItemValue) -> Result<Self, TryFromProtoError> {
+        let schema_id = proto
+            .schema_id
+            .ok_or_else(|| TryFromProtoError::missing_field("ItemValue::schema_id"))?;
+        let (schema_id, schema_ns) = match schema_id.value {
+            Some(proto::schema_id::Value::User(id)) => (id, SchemaNamespace::User),
+            Some(proto::schema_id::Value::System(id)) => (id, SchemaNamespace::System),
+            None => return Err(TryFromProtoError::missing_field("SchemaId::value")),
+        };
+
+        Ok(ItemValue {
+            schema_id,
+            schema_ns: Some(schema_ns),
+            name: proto.name,
+            definition: proto
+                .definition
+                .into_rust_if_some("ItemValue::definition")?,
+            owner_id: proto.owner_id.into_rust_if_some("ItemValue::owner_id")?,
+            privileges: Some(proto.privileges.into_rust()?),
+        })
     }
 }
 
-#[cfg(test)]
-mod test {
-    use proptest::prelude::*;
-
-    use super::*;
-
-    proptest! {
-        #[test]
-        fn proptest_role_attributes_roundtrips(attrs: RoleAttributes) {
-            let stash = attrs.clone().into_stash();
-            let after = RoleAttributes::from_stash(stash).expect("roundtrip");
-
-            prop_assert_eq!(attrs, after);
+impl RustType<proto::RoleKey> for RoleKey {
+    fn into_proto(&self) -> proto::RoleKey {
+        proto::RoleKey {
+            id: Some(self.id.into_proto()),
         }
+    }
 
-        #[test]
-        fn proptest_role_id_roundtrips(role_id: RoleId) {
-            let stash = role_id.clone().into_stash();
-            let after = RoleId::from_stash(stash).expect("roundtrip");
+    fn from_proto(proto: proto::RoleKey) -> Result<Self, TryFromProtoError> {
+        Ok(RoleKey {
+            id: proto.id.into_rust_if_some("RoleKey::id")?,
+        })
+    }
+}
 
-            prop_assert_eq!(role_id, after);
+impl RustType<proto::RoleMembership> for RoleMembership {
+    fn into_proto(&self) -> proto::RoleMembership {
+        proto::RoleMembership {
+            map: self
+                .map
+                .iter()
+                .map(|(key, val)| proto::role_membership::Entry {
+                    key: Some(key.into_proto()),
+                    value: Some(val.into_proto()),
+                })
+                .collect(),
         }
+    }
 
-        #[test]
-        fn proptest_database_id_roundtrips(id: DatabaseId) {
-            let stash = id.clone().into_stash();
-            let after = DatabaseId::from_stash(stash).expect("roundtrip");
+    fn from_proto(proto: proto::RoleMembership) -> Result<Self, TryFromProtoError> {
+        Ok(RoleMembership {
+            map: proto
+                .map
+                .into_iter()
+                .map(|e| {
+                    let key = e.key.into_rust_if_some("RoleMembership::Entry::key")?;
+                    let val = e.value.into_rust_if_some("RoleMembership::Entry::value")?;
 
-            prop_assert_eq!(id, after);
+                    Ok((key, val))
+                })
+                .collect::<Result<_, TryFromProtoError>>()?,
+        })
+    }
+}
+
+impl RustType<proto::RoleValue> for RoleValue {
+    fn into_proto(&self) -> proto::RoleValue {
+        proto::RoleValue {
+            name: self.role.name.to_string(),
+            attributes: self.role.attributes.into_proto(),
+            membership: self.role.membership.into_proto(),
         }
+    }
 
-        #[test]
-        fn proptest_schema_id_roundtrips(id: SchemaId) {
-            let stash = id.clone().into_stash();
-            let after = SchemaId::from_stash(stash).expect("roundtrip");
+    fn from_proto(proto: proto::RoleValue) -> Result<Self, TryFromProtoError> {
+        Ok(RoleValue {
+            role: SerializedRole {
+                name: proto.name,
+                attributes: proto.attributes.into_rust()?,
+                membership: proto.membership.into_rust()?,
+            },
+        })
+    }
+}
 
-            prop_assert_eq!(id, after);
+impl RustType<proto::TimestampKey> for TimestampKey {
+    fn into_proto(&self) -> proto::TimestampKey {
+        proto::TimestampKey {
+            id: self.id.clone(),
         }
+    }
+
+    fn from_proto(proto: proto::TimestampKey) -> Result<Self, TryFromProtoError> {
+        Ok(TimestampKey { id: proto.id })
+    }
+}
+
+impl RustType<proto::TimestampValue> for TimestampValue {
+    fn into_proto(&self) -> proto::TimestampValue {
+        proto::TimestampValue {
+            ts: Some(self.ts.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::TimestampValue) -> Result<Self, TryFromProtoError> {
+        Ok(TimestampValue {
+            ts: proto.ts.into_rust_if_some("TimestampValue::ts")?,
+        })
+    }
+}
+
+impl RustType<proto::ServerConfigurationKey> for ServerConfigurationKey {
+    fn into_proto(&self) -> proto::ServerConfigurationKey {
+        proto::ServerConfigurationKey {
+            name: self.name.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ServerConfigurationKey) -> Result<Self, TryFromProtoError> {
+        Ok(ServerConfigurationKey { name: proto.name })
+    }
+}
+
+impl RustType<proto::ServerConfigurationValue> for ServerConfigurationValue {
+    fn into_proto(&self) -> proto::ServerConfigurationValue {
+        proto::ServerConfigurationValue {
+            value: self.value.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ServerConfigurationValue) -> Result<Self, TryFromProtoError> {
+        Ok(ServerConfigurationValue { value: proto.value })
+    }
+}
+
+impl RustType<proto::StorageUsageKey> for StorageUsageKey {
+    fn into_proto(&self) -> proto::StorageUsageKey {
+        proto::StorageUsageKey {
+            usage: Some(self.metric.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::StorageUsageKey) -> Result<Self, TryFromProtoError> {
+        Ok(StorageUsageKey {
+            metric: proto.usage.into_rust_if_some("StorageUsageKey::usage")?,
+        })
+    }
+}
+
+impl RustType<proto::AuditLogKey> for AuditLogKey {
+    fn into_proto(&self) -> proto::AuditLogKey {
+        proto::AuditLogKey {
+            event: Some(self.event.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::AuditLogKey) -> Result<Self, TryFromProtoError> {
+        Ok(AuditLogKey {
+            event: proto.event.into_rust_if_some("AuditLogKey::event")?,
+        })
     }
 }

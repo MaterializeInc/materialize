@@ -16,11 +16,10 @@ use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{DatabaseId, SchemaId, PUBLIC_ROLE_NAME};
-use mz_stash::objects::proto;
+use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION};
 
 use crate::catalog::builtin::{MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE};
-use crate::catalog::storage::objects::StashType;
 use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::rbac;
 
@@ -122,7 +121,7 @@ pub async fn initialize(
                 RoleAttributes::new()
                     .with_create_db()
                     .with_create_cluster()
-                    .into_stash(),
+                    .into_proto(),
             ),
             membership: Some(proto::RoleMembership::default()),
         };
@@ -136,7 +135,8 @@ pub async fn initialize(
             }),
         ));
 
-        Some((role_id.into_stash(), role_val))
+        let proto_role_id: proto::RoleId = role_id.into_proto();
+        Some((proto_role_id, role_val))
     } else {
         None
     };
@@ -147,27 +147,27 @@ pub async fn initialize(
             [
                 (
                     proto::RoleKey {
-                        id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+                        id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     },
                     proto::RoleValue {
                         name: MZ_SYSTEM_ROLE.name.to_string(),
-                        attributes: Some(MZ_SYSTEM_ROLE.attributes.clone().into_stash()),
+                        attributes: Some(MZ_SYSTEM_ROLE.attributes.clone().into_proto()),
                         membership: Some(proto::RoleMembership::default()),
                     },
                 ),
                 (
                     proto::RoleKey {
-                        id: Some(MZ_INTROSPECTION_ROLE_ID.into_stash()),
+                        id: Some(MZ_INTROSPECTION_ROLE_ID.into_proto()),
                     },
                     proto::RoleValue {
                         name: MZ_INTROSPECTION_ROLE.name.to_string(),
-                        attributes: Some(MZ_INTROSPECTION_ROLE.attributes.clone().into_stash()),
+                        attributes: Some(MZ_INTROSPECTION_ROLE.attributes.clone().into_proto()),
                         membership: Some(proto::RoleMembership::default()),
                     },
                 ),
                 (
                     proto::RoleKey {
-                        id: Some(RoleId::Public.into_stash()),
+                        id: Some(RoleId::Public.into_proto()),
                     },
                     proto::RoleValue {
                         name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
@@ -189,19 +189,19 @@ pub async fn initialize(
 
     let mut db_privileges = vec![
         proto::MzAclItem {
-            grantee: Some(RoleId::Public.into_stash()),
-            grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-            acl_mode: Some(AclMode::USAGE.into_stash()),
+            grantee: Some(RoleId::Public.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
         },
         rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Database, MZ_SYSTEM_ROLE_ID)
-            .into_stash(),
+            .into_proto(),
     ];
     // Optionally add a privilege for the bootstrap role.
     if let Some((role_id, _)) = &bootstrap_role {
         db_privileges.push(proto::MzAclItem {
             grantee: Some(role_id.clone()),
-            grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-            acl_mode: Some(AclMode::CREATE.into_stash()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::CREATE.into_proto()),
         })
     };
 
@@ -210,11 +210,11 @@ pub async fn initialize(
             tx,
             [(
                 proto::DatabaseKey {
-                    id: Some(MATERIALIZE_DATABASE_ID.into_stash()),
+                    id: Some(MATERIALIZE_DATABASE_ID.into_proto()),
                 },
                 proto::DatabaseValue {
                     name: "materialize".into(),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     privileges: db_privileges,
                 },
             )],
@@ -230,66 +230,66 @@ pub async fn initialize(
     ));
 
     let schema_privileges = vec![
-        rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema).into_stash(),
+        rbac::default_catalog_privilege(mz_sql_parser::ast::ObjectType::Schema).into_proto(),
         rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
-            .into_stash(),
+            .into_proto(),
     ];
 
     let mz_catalog_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(MZ_CATALOG_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::System(MZ_CATALOG_SCHEMA_ID).into_proto()),
     };
     let mz_catalog_schema = proto::SchemaValue {
         database_id: None,
         name: "mz_catalog".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: schema_privileges.clone(),
     };
 
     let pg_catalog_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(PG_CATALOG_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::System(PG_CATALOG_SCHEMA_ID).into_proto()),
     };
     let pg_catalog_schema = proto::SchemaValue {
         database_id: None,
         name: "pg_catalog".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: schema_privileges.clone(),
     };
 
     let mz_internal_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(MZ_INTERNAL_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::System(MZ_INTERNAL_SCHEMA_ID).into_proto()),
     };
     let mz_internal_schema = proto::SchemaValue {
         database_id: None,
         name: "mz_internal".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: schema_privileges.clone(),
     };
 
     let information_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(INFORMATION_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::System(INFORMATION_SCHEMA_ID).into_proto()),
     };
     let information_schema = proto::SchemaValue {
         database_id: None,
         name: "information_schema".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: schema_privileges.clone(),
     };
 
     let public_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(PUBLIC_SCHEMA_ID).into_stash()),
+        id: Some(SchemaId::System(PUBLIC_SCHEMA_ID).into_proto()),
     };
     let public_schema = proto::SchemaValue {
-        database_id: Some(MATERIALIZE_DATABASE_ID.into_stash()),
+        database_id: Some(MATERIALIZE_DATABASE_ID.into_proto()),
         name: "public".to_string(),
-        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+        owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
         privileges: vec![
             proto::MzAclItem {
-                grantee: Some(RoleId::Public.into_stash()),
-                grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-                acl_mode: Some(AclMode::USAGE.into_stash()),
+                grantee: Some(RoleId::Public.into_proto()),
+                grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                acl_mode: Some(AclMode::USAGE.into_proto()),
             },
             rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Schema, MZ_SYSTEM_ROLE_ID)
-                .into_stash(),
+                .into_proto(),
         ]
         .into_iter()
         // Optionally add the bootstrap role to the public schema.
@@ -298,8 +298,8 @@ pub async fn initialize(
                 .as_ref()
                 .map(|(role_id, _)| proto::MzAclItem {
                     grantee: Some(role_id.clone()),
-                    grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-                    acl_mode: Some(AclMode::CREATE.into_stash()),
+                    grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+                    acl_mode: Some(AclMode::CREATE.into_proto()),
                 }),
         )
         .collect(),
@@ -329,20 +329,20 @@ pub async fn initialize(
 
     let mut cluster_privileges = vec![
         proto::MzAclItem {
-            grantee: Some(RoleId::Public.into_stash()),
-            grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-            acl_mode: Some(AclMode::USAGE.into_stash()),
+            grantee: Some(RoleId::Public.into_proto()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::USAGE.into_proto()),
         },
         rbac::owner_privilege(mz_sql_parser::ast::ObjectType::Cluster, MZ_SYSTEM_ROLE_ID)
-            .into_stash(),
+            .into_proto(),
     ];
 
     // Optionally add a privilege for the bootstrap role.
     if let Some((role_id, _)) = &bootstrap_role {
         cluster_privileges.push(proto::MzAclItem {
             grantee: Some(role_id.clone()),
-            grantor: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
-            acl_mode: Some(AclMode::CREATE.into_stash()),
+            grantor: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
+            acl_mode: Some(AclMode::CREATE.into_proto()),
         });
     };
 
@@ -351,12 +351,12 @@ pub async fn initialize(
             tx,
             [(
                 proto::ClusterKey {
-                    id: Some(DEFAULT_USER_CLUSTER_ID.into_stash()),
+                    id: Some(DEFAULT_USER_CLUSTER_ID.into_proto()),
                 },
                 proto::ClusterValue {
                     name: DEFAULT_USER_CLUSTER_NAME.to_string(),
                     linked_object_id: None,
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                     privileges: cluster_privileges,
                 },
             )],
@@ -381,7 +381,7 @@ pub async fn initialize(
                     }),
                 },
                 proto::ClusterReplicaValue {
-                    cluster_id: Some(DEFAULT_USER_CLUSTER_ID.into_stash()),
+                    cluster_id: Some(DEFAULT_USER_CLUSTER_ID.into_proto()),
                     name: DEFAULT_REPLICA_NAME.to_string(),
                     config: Some(proto::ReplicaConfig {
                         location: Some(proto::replica_config::Location::Managed(
@@ -397,7 +397,7 @@ pub async fn initialize(
                         }),
                         idle_arrangement_merge_effort: None,
                     }),
-                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_stash()),
+                    owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                 },
             )],
         )
@@ -435,7 +435,7 @@ pub async fn initialize(
                         event_type: ty.into(),
                         object_type: obj.into(),
                         user: None,
-                        occurred_at: Some(now.into_stash()),
+                        occurred_at: Some(now.into_proto()),
                         details: Some(details),
                     });
                     (proto::AuditLogKey { event: Some(event) }, ())

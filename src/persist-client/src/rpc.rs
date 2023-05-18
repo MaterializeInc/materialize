@@ -1258,7 +1258,8 @@ mod pubsub_state {
             .expect("proto contains message");
         match message {
             Message::PushDiff(x) => {
-                assert_eq!(x.shard_id, shard.into_proto());
+                let shard_id: String = shard.into_proto();
+                assert_eq!(x.shard_id, shard_id);
                 assert_eq!(x.seqno, data.seqno.into_proto());
                 assert_eq!(x.diff, data.data);
             }
@@ -1674,7 +1675,8 @@ mod grpc {
         let message = message.message.expect("proto contains message");
         match message {
             Message::PushDiff(x) => {
-                assert_eq!(x.shard_id, shard.into_proto());
+                let shard_id: String = shard.into_proto();
+                assert_eq!(x.shard_id, shard_id);
                 assert_eq!(x.seqno, data.seqno.into_proto());
                 assert_eq!(x.diff, data.data);
             }

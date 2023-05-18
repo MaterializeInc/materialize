@@ -14,6 +14,7 @@ use std::str::FromStr;
 
 use anyhow::bail;
 use mz_proto::{RustType, TryFromProtoError};
+use mz_stash::objects::proto;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -94,5 +95,27 @@ impl RustType<ProtoStorageInstanceId> for StorageInstanceId {
                 "ProtoStorageInstanceId::kind",
             )),
         }
+    }
+}
+
+impl RustType<proto::ClusterId> for StorageInstanceId {
+    fn into_proto(&self) -> proto::ClusterId {
+        let value = match self {
+            StorageInstanceId::User(id) => proto::cluster_id::Value::User(*id),
+            StorageInstanceId::System(id) => proto::cluster_id::Value::System(*id),
+        };
+
+        proto::ClusterId { value: Some(value) }
+    }
+
+    fn from_proto(proto: proto::ClusterId) -> Result<Self, TryFromProtoError> {
+        let value = proto
+            .value
+            .ok_or_else(|| TryFromProtoError::missing_field("ClusterId::value"))?;
+        let id = match value {
+            proto::cluster_id::Value::User(id) => StorageInstanceId::User(id),
+            proto::cluster_id::Value::System(id) => StorageInstanceId::System(id),
+        };
+        Ok(id)
     }
 }

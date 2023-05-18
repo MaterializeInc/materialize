@@ -2617,6 +2617,11 @@ pub struct RoleValue {
     role: SerializedRole,
 }
 
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ConfigKey {
+    key: String,
+}
+
 #[derive(Clone, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ConfigValue {
     value: u64,
