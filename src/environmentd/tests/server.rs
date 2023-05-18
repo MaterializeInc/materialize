@@ -1335,35 +1335,35 @@ fn test_max_connections_on_all_interfaces() {
         }).unwrap();
 
     tracing::info!("http query succeeded");
-        let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
-        let json = format!("{{\"query\":\"{query}\"}}");
-        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.write_message(Message::Text(json.to_string())).unwrap();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    let json = format!("{{\"query\":\"{query}\"}}");
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    ws.write_message(Message::Text(json.to_string())).unwrap();
 
-        // The specific error isn't forwarded to the client, the connection is just closed.
-        match ws.read_message() {
-            Ok(Message::Text(msg)) => {
-                assert_eq!(msg, "{\"type\":\"Rows\",\"payload\":[\"?column?\"]}");
-                assert_eq!(
-                    ws.read_message().unwrap(),
-                    Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
-                );
-                tracing::info!("data: {:?}", ws.read_message().unwrap());
-            }
-            Ok(msg) => panic!("unexpected msg: {msg:?}"),
-            Err(e) => panic!("{e}"),
+    // The specific error isn't forwarded to the client, the connection is just closed.
+    match ws.read_message() {
+        Ok(Message::Text(msg)) => {
+            assert_eq!(msg, "{\"type\":\"Rows\",\"payload\":[\"?column?\"]}");
+            assert_eq!(
+                ws.read_message().unwrap(),
+                Message::Text("{\"type\":\"Row\",\"payload\":[1]}".to_string())
+            );
+            tracing::info!("data: {:?}", ws.read_message().unwrap());
         }
+        Ok(msg) => panic!("unexpected msg: {msg:?}"),
+        Err(e) => panic!("{e}"),
+    }
 
-        // While the websocket connection is still open, http requests fail
-        let res = Client::new()
-            .post(http_url.clone())
-            .json(&json)
-            .send()
-            .unwrap();
-        tracing::info!("res: {:#?}", res);
-        let status = res.status();
-        let text = res.text().expect("no body?");
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+    // While the websocket connection is still open, http requests fail
+    let res = Client::new()
+        .post(http_url.clone())
+        .json(&json)
+        .send()
+        .unwrap();
+    tracing::info!("res: {:#?}", res);
+    let status = res.status();
+    let text = res.text().expect("no body?");
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
 }
