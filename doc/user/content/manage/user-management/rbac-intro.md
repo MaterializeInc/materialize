@@ -27,8 +27,6 @@ Materialize object access is also dependant on cluster privileges.
 Users who need access to an object like a schema or a database must also have
 the same level of access to the cluster.
 
-!(#TODO_Diagram)
-
 The next sections go over the concepts of authorization and authentication and
 the objects within Materialize.
 
@@ -82,32 +80,32 @@ objects that role needs to access.
 
 Materialize supports the following privileges:
 
-| Privilege   | Description                                                  | `psql`   |
-| :---------: | :----------------------------------------------------------: | :------: |
-| `SELECT`    | Allows selecting rows from an object.                        | `r`      |
-| `INSERT`    | Allows inserting into an object.                             | `a`      |
-| `UPDATE`    | Allows updating an object (requires `SELECT`).               | `w`      |
-| `DELETE`    | Allows deleting from an object (requires `SELECT`).          | `d`      |
-| `CREATE`    | Allows creating a new object within another object.          | `U`      |
-| `USAGE`     | Allows using an object or looking up members of an object.   | `C`      |
+| Privilege | Description                                                | `psql` |
+| --------- | ---------------------------------------------------------- | ------ |
+| `SELECT`  | Allows selecting rows from an object.                      | `r`    |
+| `INSERT`  | Allows inserting into an object.                           | `a`    |
+| `UPDATE`  | Allows updating an object (requires `SELECT`).             | `w`    |
+| `DELETE`  | Allows deleting from an object (requires `SELECT`).        | `d`    |
+| `CREATE`  | Allows creating a new object within another object.        | `U`    |
+| `USAGE`   | Allows using an object or looking up members of an object. | `C`    |
 
 Note that `psql` returns an abbreviation of the privilege name.
 
 Objects in Materialize have different levels of privileges available to them.
 Materialize supports the following object type privileges:
 
-|     Object Type      |             Privileges              |
-|:--------------------:|:-----------------------------------:|
-|      `DATABASE`      |          `USAGE` `CREATE`           |
-|       `SCHEMA`       |          `USAGE` `CREATE`           |
-|       `TABLE`        | `INSERT` `SELECT` `UPDATE` `DELETE` |
-|        `VIEW`        |              `SELECT`               |
-| `MATERIALIZED  VIEW` |              `SELECT`               |
-|        `TYPE`        |               `USAGE`               |
-|       `SOURCE`       |              `SELECT`               |
-|     `CONNECTION`     |               `USAGE`               |
-|       `SECRET`       |               `USAGE`               |
-|      `CLUSTER`       |          `USAGE` `CREATE`           |
+| Object Type          | Privileges                          |
+|----------------------|-------------------------------------|
+| `DATABASE`           | `USAGE` `CREATE`                    |
+| `SCHEMA`             | `USAGE` `CREATE`                    |
+| `TABLE`              | `INSERT` `SELECT` `UPDATE` `DELETE` |
+| `VIEW`               | `SELECT`                            |
+| `MATERIALIZED  VIEW` | `SELECT`                            |
+| `TYPE`               | `USAGE`                             |
+| `SOURCE`             | `SELECT`                            |
+| `CONNECTION`         | `USAGE`                             |
+| `SECRET`             | `USAGE`                             |
+| `CLUSTER`            | `USAGE` `CREATE`                    |
 
 
 ### Inheritance

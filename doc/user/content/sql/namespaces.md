@@ -24,6 +24,7 @@ Materialize structure is:
     - Tables
     - Views
     - Materialized views
+    - Connections
     - Sources
     - Sinks
     - Indexes

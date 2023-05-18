@@ -80,19 +80,19 @@ to this table.
     ```
     Your `id` and `oid` values will look different.
 
-    The `inherit`, `create_role`, `create_db`, and `create_cluster` are the
-    role attributes assigned to a role when it is created. These attributes
-    determine the system-level permissions of a role and do not impact object-level privileges.
+  The `inherit`, `create_role`, `create_db`, and `create_cluster` are the
+  role attributes assigned to a role when it is created. These attributes
+  determine the system-level permissions of a role and do not impact object-level privileges.
 
-   * `INHERIT` is set to true by default and allows roles to inherit the
+  * `INHERIT` is set to true by default and allows roles to inherit the
     privileges of roles it is a member of.
 
-   * `CREATEROLE` allows the role to create, change, or delete other roles or
+  * `CREATEROLE` allows the role to create, change, or delete other roles or
     assign role membership.
 
-   * `CREATEDB` allows the role to create new databases.
+  * `CREATEDB` allows the role to create new databases.
 
-   * `CREATECLUSTER` allows the role to create Materialize clusters. This
+  * `CREATECLUSTER` allows the role to create Materialize clusters. This
     attribute is unique to the Materialize concept of clusters.
 
 ## Step 4. Create example objects
