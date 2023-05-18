@@ -19,7 +19,7 @@ use itertools::izip;
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
 };
-use mz_adapter::{AdapterError, AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
+use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::{Authentication as FronteggAuthentication, Claims};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -30,7 +30,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
-use mz_sql::session::vars::{ConnectionCounter, VarInput};
+use mz_sql::session::vars::{ConnectionCounter, VarInput, DropConnection};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -244,31 +244,11 @@ where
         .end_transaction(EndTransactionAction::Commit);
 
     let _guard = if session.user().limit_max_connections() {
-        let connections = {
-            let mut connections = active_connection_count.lock().expect("lock poisoned");
-            connections.current += 1;
-            *connections
-        };
-        let guard = scopeguard::guard(active_connection_count, |active_connection_count| {
-            let mut connections = active_connection_count.lock().expect("lock poisoned");
-            assert_ne!(0, connections.current);
-            connections.current -= 1;
-        });
-        if connections.current > connections.limit {
-            return conn
-                .send(ErrorResponse::from_adapter_error(
-                    Severity::Fatal,
-                    AdapterError::ResourceExhaustion {
-                        limit_name: "max_connections".into(),
-                        resource_type: "connection".into(),
-                        desired: connections.current.to_string(),
-                        limit: connections.limit.to_string(),
-                        current: (connections.current - 1).to_string(),
-                    },
-                ))
-                .await;
+        match DropConnection::new_connection(active_connection_count) {
+            Ok(drop_connection) => Some(drop_connection),
+            Err(e) => return conn.send(ErrorResponse::from_adapter_error(
+                Severity::Fatal, e.into())).await,
         }
-        Some(guard)
     } else {
         None
     };

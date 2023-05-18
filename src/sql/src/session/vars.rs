@@ -1654,6 +1654,40 @@ impl ConnectionCounter {
     }
 }
 
+#[derive(Debug)]
+pub enum ConnectionError {
+    /// There were too many connections
+    TooManyConnections {
+        current: u64,
+        limit: u64,
+    }
+}
+
+#[derive(Debug)]
+pub struct DropConnection {
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+}
+
+impl Drop for DropConnection {
+    fn drop(&mut self) {
+        let mut connections = self.active_connection_count.lock().expect("lock poisoned");
+        assert_ne!(connections.current, 0);
+        connections.current -= 1;
+    }
+}
+
+impl DropConnection {
+    pub fn new_connection(active_connection_count: Arc<Mutex<ConnectionCounter>>) -> Result<Self, ConnectionError> {
+        {
+            let connections = active_connection_count.lock().expect("lock poisoned");
+            if connections.current >= connections.limit {
+                return Err(ConnectionError::TooManyConnections { current: connections.current, limit: connections.limit });
+            }
+        }
+        Ok(DropConnection{active_connection_count})
+    }
+}
+
 /// On disk variables.
 ///
 /// See [`SessionVars`] for more details on the Materialize configuration model.

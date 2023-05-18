@@ -40,7 +40,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
 use mz_ore::tracing::TracingHandle;
 use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
-use mz_sql::session::vars::{ConnectionCounter, VarInput};
+use mz_sql::session::vars::{ConnectionCounter, VarInput, DropConnection};
 use openssl::ssl::{Ssl, SslContext};
 use serde::Deserialize;
 use thiserror::Error;
@@ -286,18 +286,6 @@ pub struct AuthedClient {
     pub drop_connection: Option<DropConnection>,
 }
 
-pub struct DropConnection {
-    pub active_connection_count: SharedConnectionCounter,
-}
-
-impl Drop for DropConnection {
-    fn drop(&mut self) {
-        let mut connections = self.active_connection_count.lock().expect("lock poisoned");
-        assert_ne!(connections.current, 0);
-        connections.current -= 1;
-    }
-}
-
 impl AuthedClient {
     async fn new(
         adapter_client: &Client,
@@ -306,24 +294,7 @@ impl AuthedClient {
     ) -> Result<Self, AdapterError> {
         let AuthedUser(user) = user;
         let drop_connection = if user.limit_max_connections() {
-            let connections = {
-                let mut connections = active_connection_count.lock().expect("lock poisoned");
-                connections.current += 1;
-                *connections
-            };
-            let drop_connection = DropConnection {
-                active_connection_count,
-            };
-            if connections.current > connections.limit {
-                return Err(AdapterError::ResourceExhaustion {
-                    limit_name: "max_connections".into(),
-                    resource_type: "connection".into(),
-                    desired: connections.current.to_string(),
-                    limit: connections.limit.to_string(),
-                    current: (connections.current - 1).to_string(),
-                });
-            }
-            Some(drop_connection)
+            Some(DropConnection::new_connection(active_connection_count)?)
         } else {
             None
         };
