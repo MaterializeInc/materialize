@@ -1267,8 +1267,7 @@ fn test_http_options_param() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_max_connections_on_all_interfaces() {
     mz_ore::test::init_logging();
-    let slow_query = "WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip";
-    let fast_query = "SELECT 1";
+    let query = "SELECT 1";
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
 
     let mut mz_client = server
@@ -1280,10 +1279,7 @@ fn test_max_connections_on_all_interfaces() {
         .batch_execute("ALTER SYSTEM SET max_connections = 1")
         .unwrap();
 
-    // pgwire
-    tracing::info!("creating client");
     let client = server.connect(postgres::NoTls).unwrap();
-    tracing::info!("created client");
 
     let ws_url: Url = Url::parse(&format!(
         "ws://{}/api/experimental/sql",
@@ -1291,23 +1287,21 @@ fn test_max_connections_on_all_interfaces() {
     ))
     .unwrap();
 
-    // http
     let http_url = Url::parse(&format!(
         "http://{}/api/sql",
         server.inner.http_local_addr()
     ))
     .unwrap();
-    let json = format!("{{\"query\":\"{fast_query}\"}}");
+    let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    //let slow_query_json: serde_json::Value = serde_json::from_str(&format!("{{\"query\":\"{slow_query}\"}}")).unwrap();
 
     {
+        // while postgres client is connected, http connections error out
         let res = Client::new()
             .post(http_url.clone())
             .json(&json)
             .send()
             .unwrap();
-        tracing::info!("res: {:#?}", res);
         let status = res.status();
         let text = res.text().expect("no body?");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -1315,14 +1309,15 @@ fn test_max_connections_on_all_interfaces() {
     }
 
     {
+        // while postgres client is connected, websockets can't auth
         let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
         let err = util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
         assert!(err.to_string().contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"), "{err}");
     }
 
-    tracing::info!("closing client");
+    tracing::info!("closing postgres client");
     client.close().unwrap();
-    tracing::info!("closed client");
+    tracing::info!("closed postgres client");
 
     tracing::info!("waiting for postgres client to close so that the query goes through");
     Retry::default().max_tries(10).retry(|_state| {
@@ -1338,12 +1333,11 @@ fn test_max_connections_on_all_interfaces() {
             assert_eq!(result.results[0].rows, vec![vec![1]]);
             Ok(())
         }).unwrap();
-    tracing::info!("sent http query");
 
-    {
+    tracing::info!("http query succeeded");
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
         util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
-        let json = format!("{{\"query\":\"{fast_query}\"}}");
+        let json = format!("{{\"query\":\"{query}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         ws.write_message(Message::Text(json.to_string())).unwrap();
 
@@ -1360,5 +1354,16 @@ fn test_max_connections_on_all_interfaces() {
             Ok(msg) => panic!("unexpected msg: {msg:?}"),
             Err(e) => panic!("{e}"),
         }
-    }
+
+        // While the websocket connection is still open, http requests fail
+        let res = Client::new()
+            .post(http_url.clone())
+            .json(&json)
+            .send()
+            .unwrap();
+        tracing::info!("res: {:#?}", res);
+        let status = res.status();
+        let text = res.text().expect("no body?");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
 }
