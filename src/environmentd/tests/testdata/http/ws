@@ -10,13 +10,13 @@
 ws-text
 {"query": "bad sql"}
 ----
-{"type":"Error","payload":"Expected a keyword at the beginning of a statement, found identifier \"bad\""}
+{"type":"Error","payload":{"message":"Expected a keyword at the beginning of a statement, found identifier \"bad\"","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "bad sql"}]}
 ----
-{"type":"Error","payload":"Expected a keyword at the beginning of a statement, found identifier \"bad\""}
+{"type":"Error","payload":{"message":"Expected a keyword at the beginning of a statement, found identifier \"bad\"","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -84,19 +84,19 @@ ws-text
 ws-text
 {"queries": [{"query": ""}]}
 ----
-{"type":"Error","payload":"each query must contain exactly 1 statement, but \"\" contains 0"}
+{"type":"Error","payload":{"message":"each query must contain exactly 1 statement, but \"\" contains 0","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1"}]}
 ----
-{"type":"Error","payload":"request supplied 0 parameters, but SELECT $1 requires 1"}
+{"type":"Error","payload":{"message":"request supplied 0 parameters, but SELECT $1 requires 1","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1::int", "params": []}]}
 ----
-{"type":"Error","payload":"request supplied 0 parameters, but SELECT ($1)::int4 requires 1"}
+{"type":"Error","payload":{"message":"request supplied 0 parameters, but SELECT ($1)::int4 requires 1","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -110,13 +110,13 @@ ws-text
 ws-text
 {"queries": [{"query": "select $1::int", "params": ["z"]}]}
 ----
-{"type":"Error","payload":"unable to decode parameter: invalid input syntax for type integer: invalid digit found in string: \"z\""}
+{"type":"Error","payload":{"message":"unable to decode parameter: invalid input syntax for type integer: invalid digit found in string: \"z\"","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "select $1::int", "params": [2]}]}
 ----
-{"type":"Error","payload":"data did not match any variant of untagged enum SqlRequest"}
+{"type":"Error","payload":{"message":"data did not match any variant of untagged enum SqlRequest","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -141,20 +141,20 @@ ws-text
 ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
-{"type":"Error","payload":"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block"}
+{"type":"Error","payload":{"message":"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
-{"type":"Error","payload":"current transaction is aborted, commands ignored until end of transaction block"}
+{"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 
 ws-text
 {"query": "SELECT 2"}
 ----
-{"type":"Error","payload":"current transaction is aborted, commands ignored until end of transaction block"}
+{"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 ws-text
@@ -169,7 +169,7 @@ ws-text
 ws-text
 {"query": "SUBSCRIBE v"}
 ----
-{"type":"Error","payload":"unknown catalog item 'v'"}
+{"type":"Error","payload":{"message":"unknown catalog item 'v'","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -190,7 +190,7 @@ ws-text
 {"type":"Rows","payload":["mz_timestamp","mz_diff","column1"]}
 {"type":"Row","payload":["18446744073709551615",1,1]}
 {"type":"CommandComplete","payload":"SUBSCRIBE"}
-{"type":"Error","payload":"SUBSCRIBE in transactions must be the only read statement"}
+{"type":"Error","payload":{"message":"SUBSCRIBE in transactions must be the only read statement","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text rows=2 fixtimestamp=true

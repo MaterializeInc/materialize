@@ -33,7 +33,7 @@ http
 {"query":"select 1; select * from noexist;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"error":"unknown catalog item 'noexist'","notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"error":{"message":"unknown catalog item 'noexist'","code":"XX000"},"notices":[]}]}
 
 # CREATEs should work when provided alone.
 http
@@ -54,7 +54,7 @@ http
 {"query":"create view v1 as select 1; create view v2 as select 1"}
 ----
 200 OK
-{"results":[{"error":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block","notices":[]}]}
+{"results":[{"error":{"message":"CREATE VIEW v1 AS SELECT 1 cannot be run inside a transaction block","code":"XX000"},"notices":[]}]}
 
 # Syntax errors fail the request.
 http
@@ -117,25 +117,25 @@ http
 {"query":"begin; select 1/0; commit; select 2;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"error":"division by zero","notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"begin; select 1; commit; select 1/0;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]},{"error":"division by zero","notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"select 1/0; begin; select 2; commit;"}
 ----
 200 OK
-{"results":[{"error":"division by zero","notices":[]}]}
+{"results":[{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"select 1; begin; select 1/0; commit;"}
 ----
 200 OK
-{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"BEGIN","notices":[]},{"error":"division by zero","notices":[]}]}
+{"results":[{"tag":"SELECT 1","rows":[[1]],"col_names":["?column?"],"notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 # Txns w/ writes
 
@@ -144,7 +144,7 @@ http
 {"query":"insert into t values (1); select 1/0; insert into t values (2)"}
 ----
 200 OK
-{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
  # Values not successfully written due to aborted txn
 http
@@ -158,7 +158,7 @@ http
 {"query":"begin; insert into t values (1); commit; insert into t values (2); select 1/0;"}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"select * from t;"}
@@ -221,7 +221,7 @@ http
 {"query":"select $1"}
 ----
 200 OK
-{"results":[{"error":"request supplied 0 parameters, but SELECT $1 requires 1","notices":[]}]}
+{"results":[{"error":{"message":"request supplied 0 parameters, but SELECT $1 requires 1","code":"XX000"},"notices":[]}]}
 
 http
 {"query":"subscribe (select * from t)"}
@@ -305,14 +305,14 @@ http
 {"queries":[{"query":"select $1 as col","params":["1","2"]}]}
 ----
 200 OK
-{"results":[{"error":"request supplied 2 parameters, but SELECT $1 AS col requires 1","notices":[]}]}
+{"results":[{"error":{"message":"request supplied 2 parameters, but SELECT $1 AS col requires 1","code":"XX000"},"notices":[]}]}
 
 # Too few parameters
 http
 {"queries":[{"query":"select $1+$2::int as col","params":["1"]}]}
 ----
 200 OK
-{"results":[{"error":"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2","notices":[]}]}
+{"results":[{"error":{"message":"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2","code":"XX000"},"notices":[]}]}
 
 # NaN
 http
@@ -367,14 +367,14 @@ http
 {"queries":[{"query":"insert into t values (1);","params":[]},{"query":"select 1/0;","params":[]}]}
 ----
 200 OK
-{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 # Errors prevent commit + further execution
 http
 {"queries":[{"query":"begin;","params":[]},{"query":"insert into t values (1);","params":[]},{"query":"select 1/0;","params":[]},{"query":"select * from t","params":[]},{"query":"commit","params":[]}]}
 ----
 200 OK
-{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":"division by zero","notices":[]}]}
+{"results":[{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 # Requires explicit commit in explicit txn
 http
@@ -394,7 +394,7 @@ http
 {"queries":[{"query":"insert into t values ($1);","params":["1"]},{"query":"begin;","params":[]},{"query":"insert into t values ($1);","params":["2"]},{"query":"insert into t values ($1);","params":["3"]},{"query":"commit;","params":[]},{"query":"select 1/0","params":[]}]}
 ----
 200 OK
-{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"error":"division by zero","notices":[]}]}
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"INSERT 0 1","notices":[]},{"ok":"COMMIT","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 http
 {"queries":[{"query":"select * from t","params":[]}]}
@@ -406,7 +406,7 @@ http
 {"queries":[{"query":"insert into t values ($1);","params":["4"]},{"query":"begin;","params":[]},{"query":"select 1/0;","params":[]},{"query":"commit;","params":[]}]}
 ----
 200 OK
-{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"error":"division by zero","notices":[]}]}
+{"results":[{"ok":"INSERT 0 1","notices":[]},{"ok":"BEGIN","notices":[]},{"error":{"message":"division by zero","code":"XX000"},"notices":[]}]}
 
 http
 {"queries":[{"query":"select * from t","params":[]}]}
@@ -419,3 +419,10 @@ http
 ----
 400 Bad Request
 unsupported via this API: SUBSCRIBE (SELECT * FROM t)
+
+# Test detail and hint error fields.
+http
+{"query":"CREATE MATERIALIZED VIEW _now AS SELECT now()"}
+----
+200 OK
+{"results":[{"error":{"message":"cannot materialize call to current_timestamp","code":"XX000","detail":"See: https://materialize.com/docs/sql/functions/now_and_mz_now/","hint":"Try using `mz_now()` here instead."},"notices":[]}]}

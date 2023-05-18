@@ -152,13 +152,27 @@ A notice can appear at any time and contains diagnostic messages that were gener
 The payload has the following structure:
 
 ```
-{"severity": <"warning"|"notice"|"debug"|"info"|"log">, "message": <informational message>}
+{
+    "message": <informational message>,
+    "severity": <"warning"|"notice"|"debug"|"info"|"log">,
+    "detail": <optional error detail>,
+    "hint": <optional error hint>,
+}
 ```
 
 #### `Error`
 
 Executing a statement resulted in an error.
-The payload is a `string` containing the error.
+The payload has the following structure:
+
+```
+{
+    "message": <informational message>,
+    "code": <error code>,
+    "detail": <optional error detail>,
+    "hint": <optional error hint>,
+}
+```
 
 #### `CommandComplete`
 
@@ -203,15 +217,24 @@ interface Extended {
 type SqlRequest = Simple | Extended;
 
 interface Notice {
-    message: string;
-    severity: string;
+	message: string;
+	severity: string;
+	detail?: string;
+	hint?: string;
+}
+
+interface Error {
+	message: string;
+	code: string;
+	detail?: string;
+	hint?: string;
 }
 
 type WebSocketResult =
     | { type: "ReadyForQuery"; payload: string }
     | { type: "Notice"; payload: Notice }
     | { type: "CommandComplete"; payload: string }
-    | { type: "Error"; payload: string }
+    | { type: "Error"; payload: Error }
     | { type: "Rows"; payload: string[] }
     | { type: "Row"; payload: any[] }
     ;
