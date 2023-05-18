@@ -533,6 +533,7 @@ where
         let builder = BatchBuilderInternal::new(
             BatchBuilderConfig::from(&self.cfg),
             Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
             self.schemas.clone(),
             self.metrics.user.clone(),
             lower,

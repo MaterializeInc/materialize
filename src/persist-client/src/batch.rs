@@ -36,7 +36,7 @@ use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{BatchWriteMetrics, Metrics};
+use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::stats::PartStats;
@@ -318,6 +318,7 @@ where
     pub(crate) fn new(
         cfg: BatchBuilderConfig,
         metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
         schemas: Schemas<K, V>,
         batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
@@ -332,6 +333,7 @@ where
         let parts = BatchParts::new(
             cfg.clone(),
             Arc::clone(&metrics),
+            shard_metrics,
             shard_id,
             writer_id,
             lower.clone(),
@@ -657,6 +659,7 @@ where
 pub(crate) struct BatchParts<T> {
     cfg: BatchBuilderConfig,
     metrics: Arc<Metrics>,
+    shard_metrics: Arc<ShardMetrics>,
     shard_id: ShardId,
     writer_id: WriterId,
     lower: Antichain<T>,
@@ -682,6 +685,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) fn new(
         cfg: BatchBuilderConfig,
         metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
         shard_id: ShardId,
         writer_id: WriterId,
         lower: Antichain<T>,
@@ -692,6 +696,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         BatchParts {
             cfg,
             metrics,
+            shard_metrics,
             shard_id,
             writer_id,
             lower,
@@ -712,6 +717,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     ) {
         let desc = Description::new(self.lower.clone(), upper, since);
         let metrics = Arc::clone(&self.metrics);
+        let shard_metrics = Arc::clone(&self.shard_metrics);
         let blob = Arc::clone(&self.blob);
         let cpu_heavy_runtime = Arc::clone(&self.cpu_heavy_runtime);
         let batch_metrics = self.batch_metrics.clone();
@@ -786,6 +792,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let start = Instant::now();
                 let payload_len = buf.len();
                 let () = retry_external(&metrics.retries.external.batch_set, || async {
+                    shard_metrics.blob_sets.inc();
                     blob.set(&key, Bytes::clone(&buf), Atomicity::RequireAtomic)
                         .await
                 })

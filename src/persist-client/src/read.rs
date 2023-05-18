@@ -406,6 +406,7 @@ where
             self.handle.blob.as_ref(),
             Arc::clone(&self.handle.metrics),
             &self.handle.metrics.read.listen,
+            &self.handle.machine.applier.shard_metrics,
             Some(&self.handle.reader_id),
             self.handle.schemas.clone(),
         )
@@ -1035,6 +1036,7 @@ where
                 self.blob.as_ref(),
                 Arc::clone(&self.metrics),
                 &self.metrics.read.snapshot,
+                &self.machine.applier.shard_metrics,
                 Some(&self.reader_id),
                 self.schemas.clone(),
             )

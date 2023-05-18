@@ -233,6 +233,7 @@ pub async fn force_compaction(
                     CompactConfig::from(&cfg),
                     Arc::clone(&blob),
                     Arc::clone(&metrics),
+                    Arc::clone(&machine.applier.shard_metrics),
                     Arc::new(CpuHeavyRuntime::new()),
                     req,
                     writer_id.clone(),
