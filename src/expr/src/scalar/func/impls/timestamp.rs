@@ -10,17 +10,16 @@
 use std::fmt;
 
 use chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
+use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::timestamp::CheckedTimestamp;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
-use mz_lowertest::MzReflect;
 use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{strconv, ColumnType, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 use crate::EvalError;

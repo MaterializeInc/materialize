@@ -20,13 +20,6 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, MutexGuard};
-use tracing::{info, trace, warn};
-use uuid::Uuid;
-
 use mz_audit_log::{
     EventDetails, EventType, FullNameV1, IdFullNameV1, ObjectType, VersionedEvent,
     VersionedStorageUsage,
@@ -35,22 +28,27 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::protocol::command::ComputeParameters;
-use mz_controller::clusters::ClusterRole;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation,
-    ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
+    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaLocation, ProcessId,
+    ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
+    UnmanagedReplicaLocation,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::soft_assert;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::explain::ExprHumanizer;
+use mz_repr::namespaces::{
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+};
 use mz_repr::role_id::RoleId;
-use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
@@ -75,7 +73,7 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
-    OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
+    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
@@ -90,24 +88,25 @@ use mz_storage_client::types::sinks::{
 };
 use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnvelope, Timeline};
 use mz_transform::Optimizer;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use tokio::sync::MutexGuard;
+use tracing::{info, trace, warn};
+use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
-    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
-    MZ_INTROSPECTION_CLUSTER, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinCluster, BuiltinLog, BuiltinRole, BuiltinSource, BuiltinTable, BuiltinType,
+    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
-pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
+use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
-
-use self::builtin::{BuiltinCluster, BuiltinSource};
 
 mod builtin_table_updates;
 mod config;
@@ -116,6 +115,10 @@ mod migrate;
 
 pub mod builtin;
 pub mod storage;
+
+pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
+pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 
@@ -149,7 +152,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 #[derive(Debug)]
 pub struct Catalog {
     state: CatalogState,
-    storage: Arc<Mutex<storage::Connection>>,
+    storage: Arc<tokio::sync::Mutex<storage::Connection>>,
     transient_revision: u64,
 }
 
@@ -486,7 +489,11 @@ impl CatalogState {
         }
     }
 
-    fn ensure_no_unstable_uses(&self, item: &CatalogItem) -> Result<(), AdapterError> {
+    fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), AdapterError> {
+        if self.system_config().allow_unstable_dependencies() {
+            return Ok(());
+        }
+
         let unstable_dependencies: Vec<_> = item
             .uses()
             .iter()
@@ -1302,6 +1309,27 @@ impl CatalogState {
         Err(SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
+    pub fn resolve_search_path(
+        &self,
+        session: &Session,
+    ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        let database = self
+            .database_by_name
+            .get(session.vars().database())
+            .map(|id| id.clone());
+
+        session
+            .vars()
+            .search_path()
+            .iter()
+            .map(|schema| {
+                self.resolve_schema(database.as_ref(), None, schema.as_str(), session.conn_id())
+            })
+            .filter_map(|schema| schema.ok())
+            .map(|schema| (schema.name().database.clone(), schema.id().clone()))
+            .collect()
+    }
+
     pub fn resolve_cluster(&self, name: &str) -> Result<&Cluster, SqlCatalogError> {
         let id = self
             .clusters_by_name
@@ -1346,6 +1374,7 @@ impl CatalogState {
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
         conn_id: ConnectionId,
+        err_gen: fn(String) -> SqlCatalogError,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
         // schema. If no schema was specified, try to find the item in the connection's
@@ -1384,7 +1413,7 @@ impl CatalogState {
                 return Ok(&self.entry_by_id[id]);
             }
         }
-        Err(SqlCatalogError::UnknownItem(name.to_string()))
+        Err(err_gen(name.to_string()))
     }
 
     /// Resolves `name` to a non-function [`CatalogEntry`].
@@ -1401,6 +1430,7 @@ impl CatalogState {
             search_path,
             name,
             conn_id,
+            SqlCatalogError::UnknownItem,
         )
     }
 
@@ -1418,6 +1448,10 @@ impl CatalogState {
             search_path,
             name,
             conn_id,
+            |name| SqlCatalogError::UnknownFunction {
+                name,
+                alternative: None,
+            },
         )
     }
 
@@ -2759,13 +2793,13 @@ impl Catalog {
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 default_storage_cluster_size: config.default_storage_cluster_size,
                 availability_zones: config.availability_zones,
-                system_configuration: SystemVars::default(),
+                system_configuration: SystemVars::new(config.active_connection_count),
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             },
             transient_revision: 0,
-            storage: Arc::new(Mutex::new(config.storage)),
+            storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
         };
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
@@ -4134,6 +4168,7 @@ impl Catalog {
             },
         )
         .await?;
+        let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
@@ -4155,6 +4190,7 @@ impl Catalog {
             // when debugging, no reaping
             storage_usage_retention_period: None,
             connection_context: None,
+            active_connection_count,
         })
         .await?;
         Ok(catalog)
@@ -4165,20 +4201,11 @@ impl Catalog {
     }
 
     pub fn for_session_state<'a>(state: &'a CatalogState, session: &'a Session) -> ConnCatalog<'a> {
+        let search_path = state.resolve_search_path(session);
         let database = state
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
-        let search_path = session
-            .vars()
-            .search_path()
-            .iter()
-            .map(|schema| {
-                state.resolve_schema(database.as_ref(), None, schema.as_str(), session.conn_id())
-            })
-            .filter_map(|schema| schema.ok())
-            .map(|schema| (schema.name().database.clone(), schema.id().clone()))
-            .collect();
         ConnCatalog {
             state: Cow::Borrowed(state),
             conn_id: session.conn_id(),
@@ -4346,6 +4373,13 @@ impl Catalog {
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
+    }
+
+    pub fn resolve_search_path(
+        &self,
+        session: &Session,
+    ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        self.state.resolve_search_path(session)
     }
 
     /// Resolves `name` to a non-function [`CatalogEntry`].
@@ -5415,7 +5449,7 @@ impl Catalog {
                     item,
                     owner_id,
                 } => {
-                    state.ensure_no_unstable_uses(&item)?;
+                    state.check_unstable_dependencies(&item)?;
 
                     if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
                         let cluster_name = state.clusters_by_id[&id].name.clone();
@@ -6688,8 +6722,8 @@ impl Catalog {
     /// There are no guarantees about the format of the serialized state, except
     /// that the serialized state for two identical catalogs will compare
     /// identically.
-    pub fn dump(&self) -> String {
-        self.state.dump()
+    pub fn dump(&self) -> CatalogDump {
+        CatalogDump::new(self.state.dump())
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -6815,9 +6849,6 @@ impl Catalog {
     /// Return the current storage configuration, derived from the system configuration.
     pub fn storage_config(&self) -> StorageParameters {
         StorageParameters {
-            enable_multi_worker_storage_persist_sink: self
-                .system_config()
-                .enable_multi_worker_storage_persist_sink(),
             persist: self.persist_config(),
             pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
                 connect_timeout: Some(self.system_config().pg_replication_connect_timeout()),
@@ -6831,6 +6862,32 @@ impl Catalog {
             keep_n_source_status_history_entries: self
                 .system_config()
                 .keep_n_source_status_history_entries(),
+            upsert_rocksdb_tuning_config: {
+                match mz_rocksdb::RocksDBTuningParameters::from_parameters(
+                    self.system_config().upsert_rocksdb_compaction_style(),
+                    self.system_config()
+                        .upsert_rocksdb_optimize_compaction_memtable_budget(),
+                    self.system_config()
+                        .upsert_rocksdb_level_compaction_dynamic_level_bytes(),
+                    self.system_config()
+                        .upsert_rocksdb_universal_compaction_ratio(),
+                    self.system_config().upsert_rocksdb_parallelism(),
+                    self.system_config().upsert_rocksdb_compression_type(),
+                    self.system_config()
+                        .upsert_rocksdb_bottommost_compression_type(),
+                ) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to deserialize upsert_rocksdb parameters \
+                            into a `RocksDBTuningParameters`, \
+                            failing back to reasonable defaults: {}",
+                            e.display_with_causes()
+                        );
+                        mz_rocksdb::RocksDBTuningParameters::default()
+                    }
+                }
+            },
         }
     }
 
@@ -6840,6 +6897,7 @@ impl Catalog {
             blob_target_size: Some(config.persist_blob_target_size()),
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
             consensus_connect_timeout: Some(config.crdb_connect_timeout()),
+            consensus_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
             sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
             storage_sink_minimum_batch_updates: Some(
                 config.storage_persist_sink_minimum_batch_updates(),
@@ -7201,46 +7259,11 @@ impl ConnCatalog<'_> {
     ) -> Result<&QualifiedItemName, SqlCatalogError> {
         self.resolve_item(name).map(|entry| entry.name())
     }
-
-    /// returns a `PartialItemName` with the minimum amount of qualifiers to unambiguously resolve
-    /// the object.
-    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
-        let database_id = match &qualified_name.qualifiers.database_spec {
-            ResolvedDatabaseSpecifier::Ambient => None,
-            ResolvedDatabaseSpecifier::Id(id)
-                if self.database.is_some() && self.database == Some(*id) =>
-            {
-                None
-            }
-            ResolvedDatabaseSpecifier::Id(id) => Some(id.clone()),
-        };
-
-        let schema_spec = if database_id.is_none()
-            && self.resolve_item_name(&PartialItemName {
-                database: None,
-                schema: None,
-                item: qualified_name.item.clone(),
-            }) == Ok(qualified_name)
-        {
-            None
-        } else {
-            // If `search_path` does not contain `full_name.schema`, the
-            // `PartialName` must contain it.
-            Some(qualified_name.qualifiers.schema_spec.clone())
-        };
-
-        let res = PartialItemName {
-            database: database_id.map(|id| self.get_database(&id).name().to_string()),
-            schema: schema_spec.map(|spec| {
-                self.get_schema(&qualified_name.qualifiers.database_spec, &spec)
-                    .name()
-                    .schema
-                    .clone()
-            }),
-            item: qualified_name.item.clone(),
-        };
-        assert_eq!(self.resolve_item_name(&res), Ok(qualified_name));
-        res
+    fn resolve_function_name(
+        &self,
+        name: &PartialItemName,
+    ) -> Result<&QualifiedItemName, SqlCatalogError> {
+        self.resolve_function(name).map(|entry| entry.name())
     }
 }
 
@@ -7665,6 +7688,55 @@ impl SessionCatalog for ConnCatalog<'_> {
             }
         }
     }
+
+    /// Returns a [`PartialItemName`] with the minimum amount of qualifiers to unambiguously resolve
+    /// the object.
+    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
+        let database_id = match &qualified_name.qualifiers.database_spec {
+            ResolvedDatabaseSpecifier::Ambient => None,
+            ResolvedDatabaseSpecifier::Id(id)
+                if self.database.is_some() && self.database == Some(*id) =>
+            {
+                None
+            }
+            ResolvedDatabaseSpecifier::Id(id) => Some(id.clone()),
+        };
+
+        let schema_spec = if database_id.is_none()
+            && self.resolve_item_name(&PartialItemName {
+                database: None,
+                schema: None,
+                item: qualified_name.item.clone(),
+            }) == Ok(qualified_name)
+            || self.resolve_function_name(&PartialItemName {
+                database: None,
+                schema: None,
+                item: qualified_name.item.clone(),
+            }) == Ok(qualified_name)
+        {
+            None
+        } else {
+            // If `search_path` does not contain `full_name.schema`, the
+            // `PartialName` must contain it.
+            Some(qualified_name.qualifiers.schema_spec.clone())
+        };
+
+        let res = PartialItemName {
+            database: database_id.map(|id| self.get_database(&id).name().to_string()),
+            schema: schema_spec.map(|spec| {
+                self.get_schema(&qualified_name.qualifiers.database_spec, &spec)
+                    .name()
+                    .schema
+                    .clone()
+            }),
+            item: qualified_name.item.clone(),
+        };
+        assert!(
+            self.resolve_item_name(&res) == Ok(qualified_name)
+                || self.resolve_function_name(&res) == Ok(qualified_name)
+        );
+        res
+    }
 }
 
 impl mz_sql::catalog::CatalogDatabase for Database {
@@ -7921,10 +7993,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use std::iter;
 
+    use itertools::Itertools;
     use mz_controller::clusters::ClusterId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
@@ -7933,9 +8005,8 @@ mod tests {
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
-    use mz_sql::names;
     use mz_sql::names::{
-        DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
+        self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
@@ -8112,7 +8183,11 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("pg_catalog"), false)
+                .set(
+                    "search_path",
+                    VarInput::Flat(mz_repr::namespaces::PG_CATALOG_SCHEMA),
+                    false,
+                )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -8139,7 +8214,11 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("mz_catalog"), false)
+                .set(
+                    "search_path",
+                    VarInput::Flat(mz_repr::namespaces::MZ_CATALOG_SCHEMA),
+                    false,
+                )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -8166,7 +8245,11 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("mz_temp"), false)
+                .set(
+                    "search_path",
+                    VarInput::Flat(mz_repr::namespaces::MZ_TEMP_SCHEMA),
+                    false,
+                )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(

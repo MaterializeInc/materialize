@@ -13,11 +13,10 @@ use std::fmt;
 use byteorder::{NetworkEndian, ReadBytesExt};
 use bytes::{BufMut, BytesMut};
 use dec::OrderedDecimal;
-use once_cell::sync::Lazy;
-use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::numeric::{self, cx_datum, Numeric as AdtNumeric, NumericAgg};
+use once_cell::sync::Lazy;
+use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
 /// A wrapper for the `repr` crate's `Decimal` type that can be serialized to
 /// and deserialized from the PostgreSQL binary format.

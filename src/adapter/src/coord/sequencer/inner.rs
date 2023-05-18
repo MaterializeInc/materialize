@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
 use std::time::Duration;
@@ -16,11 +17,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use maplit::btreeset;
-use rand::seq::SliceRandom;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
-use tracing::{event, warn, Level};
-
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
@@ -45,10 +41,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
-    CatalogTypeDetails, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogRole, CatalogSchema, CatalogTypeDetails, SessionCatalog,
 };
-use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
 use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
@@ -59,20 +54,23 @@ use mz_sql::plan::{
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan,
     GrantRolePlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig,
-    PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan,
-    RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig,
-    SubscribeFrom, SubscribePlan, VariableValue, View,
+    PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
+    RevokePrivilegePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
 };
-use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, OwnedVarInput, Var, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 use mz_transform::Optimizer;
+use rand::seq::SliceRandom;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
+use tracing::{event, warn, Level};
 
 use crate::catalog::{
     self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
@@ -96,12 +94,13 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
+use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{
     send_immediate_rows, viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt,
 };
-use crate::{guard_write_critical_section, rbac, PeekResponseUnary, TimestampExplanation};
+use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
 /// Attempts to execute an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
@@ -114,7 +113,6 @@ macro_rules! return_if_err {
     };
 }
 
-use crate::rbac::is_rbac_enabled_for_session;
 pub(super) use return_if_err;
 
 struct DropOps {
@@ -1733,6 +1731,33 @@ impl Coordinator {
         session: &Session,
         plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if &plan.name == SCHEMA_ALIAS {
+            let schemas = self.catalog.resolve_search_path(session);
+            let schema = schemas.first();
+            return match schema {
+                Some((database_spec, schema_spec)) => {
+                    let schema_name = &self
+                        .catalog
+                        .get_schema(database_spec, schema_spec, session.conn_id())
+                        .name()
+                        .schema;
+                    let row = Row::pack_slice(&[Datum::String(schema_name)]);
+                    Ok(send_immediate_rows(vec![row]))
+                }
+                None => {
+                    session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
+                        search_path: session
+                            .vars()
+                            .search_path()
+                            .into_iter()
+                            .map(|schema| schema.to_string())
+                            .collect(),
+                    });
+                    Ok(send_immediate_rows(vec![Row::pack_slice(&[Datum::Null])]))
+                }
+            };
+        }
+
         let variable = session
             .vars()
             .get(&plan.name)
@@ -1740,6 +1765,23 @@ impl Coordinator {
 
         if variable.visible(session.user()) && (variable.safe() || self.catalog().unsafe_mode()) {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
+            if variable.name() == DATABASE_VAR_NAME
+                && matches!(
+                    self.catalog().resolve_database(&variable.value()),
+                    Err(CatalogError::UnknownDatabase(_))
+                )
+            {
+                let name = variable.value();
+                session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
+            } else if variable.name() == CLUSTER_VAR_NAME
+                && matches!(
+                    self.catalog().resolve_cluster(&variable.value()),
+                    Err(CatalogError::UnknownCluster(_))
+                )
+            {
+                let name = variable.value();
+                session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
+            }
             Ok(send_immediate_rows(vec![row]))
         } else {
             Err(AdapterError::VarError(VarError::UnknownParameter(
@@ -3508,9 +3550,7 @@ impl Coordinator {
                                     Ok(diffs)
                                 }(rows)
                             }
-                            PeekResponseUnary::Canceled => {
-                                Err(AdapterError::Unstructured(anyhow!("execution canceled")))
-                            }
+                            PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))
                             }
@@ -4182,6 +4222,32 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::AlteredObject(object_type))
+    }
+
+    pub(super) async fn sequence_reassign_owned(
+        &mut self,
+        session: &mut Session,
+        ReassignOwnedPlan {
+            old_roles,
+            new_role,
+            reassign_ids,
+        }: ReassignOwnedPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        for role_id in old_roles.iter().chain(iter::once(&new_role)) {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
+
+        let ops = reassign_ids
+            .into_iter()
+            .map(|id| Op::UpdateOwner {
+                id,
+                new_owner: new_role,
+            })
+            .collect();
+
+        self.catalog_transact(Some(session), ops)
+            .await
+            .map(|_| ExecuteResponse::ReassignOwned)
     }
 
     /// Generates the catalog operations to create a linked cluster for the

@@ -8,12 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-
 use mz_ore::result::ResultExt;
-use mz_repr::{
-    adt::{numeric::Numeric, timestamp::CheckedTimestamp},
-    strconv, Timestamp,
-};
+use mz_repr::adt::numeric::Numeric;
+use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::{strconv, Timestamp};
 
 use crate::EvalError;
 

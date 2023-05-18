@@ -81,9 +81,8 @@
 
 use std::panic;
 
-use scopeguard::defer;
-
 use mz_ore::panic::{catch_unwind, set_abort_on_panic};
+use scopeguard::defer;
 
 // IMPORTANT!!! Do not add any additional tests to this file. This test sets and
 // removes panic hooks and can interfere with any concurrently running test.

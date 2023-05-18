@@ -14,12 +14,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 
-use proptest::arbitrary::Arbitrary;
-use proptest::prelude::*;
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LocalId,
@@ -31,6 +25,11 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::{Diff, GlobalId, Row};
+use proptest::arbitrary::Arbitrary;
+use proptest::prelude::*;
+use proptest::strategy::Strategy;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
@@ -2137,8 +2136,9 @@ fn bucketing_of_expected_group_size(expected_group_size: Option<u64>) -> Vec<u64
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]

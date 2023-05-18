@@ -21,8 +21,8 @@ use mz_expr::visit::Visit;
 use mz_expr::{CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr};
 use tracing::warn;
 
-use crate::TransformArgs;
-use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
+use crate::monotonic::MonotonicFlag;
+use crate::{IndexOracle, Optimizer, TransformArgs, TransformError};
 
 /// Optimizes the implementation of each dataflow.
 ///

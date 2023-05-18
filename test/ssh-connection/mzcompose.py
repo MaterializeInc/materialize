@@ -260,8 +260,9 @@ def workflow_default(c: Composition) -> None:
     # and kafka implementations.
     workflow_basic_ssh_features(c, redpanda=False)
     workflow_basic_ssh_features(c, redpanda=True)
-    workflow_kafka_csr_via_ssh_tunnel(c, redpanda=False)
-    workflow_kafka_csr_via_ssh_tunnel(c, redpanda=True)
+    # https://github.com/MaterializeInc/materialize/issues/19252
+    # workflow_kafka_csr_via_ssh_tunnel(c, redpanda=False)
+    # workflow_kafka_csr_via_ssh_tunnel(c, redpanda=True)
     workflow_ssh_key_after_restart(c)
     workflow_rotated_ssh_key_after_restart(c)
     workflow_pg_via_ssh_tunnel(c)

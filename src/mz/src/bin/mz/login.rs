@@ -12,14 +12,16 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use anyhow::{bail, Context, Ok, Result};
+use axum::extract::Query;
 use axum::http::StatusCode;
-use axum::{extract::Query, response::IntoResponse, routing::get, Router};
+use axum::response::IntoResponse;
+use axum::routing::get;
+use axum::Router;
+use mz::configuration::{Endpoint, FronteggAPIToken, FronteggAuth};
+use mz::utils::RequestBuilderExt;
 use reqwest::Client;
 use tokio::select;
 use tokio::sync::mpsc::{self, UnboundedSender};
-
-use mz::configuration::{Endpoint, FronteggAPIToken, FronteggAuth};
-use mz::utils::RequestBuilderExt;
 
 use crate::utils::trim_newline;
 use crate::BrowserAPIToken;

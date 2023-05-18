@@ -22,6 +22,7 @@ from materialize.mzcompose import (
     ServiceHealthcheck,
     loader,
 )
+from materialize.util import MzVersion
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
 
@@ -99,6 +100,10 @@ class Materialized(Service):
                 "persist_sink_minimum_batch_updates=128",
                 "enable_multi_worker_storage_persist_sink=true",
                 "storage_persist_sink_minimum_batch_updates=100",
+                "persist_pubsub_push_diff_enabled=true",
+                "persist_pubsub_client_enabled=true",
+                "persist_stats_filter_enabled=true",
+                "persist_stats_collection_enabled=true",
             ]
 
         if additional_system_parameter_defaults is not None:
@@ -128,7 +133,18 @@ class Materialized(Service):
         if propagate_crashes:
             command += ["--orchestrator-process-propagate-crashes"]
 
-        self.default_storage_size = default_size
+        self.default_storage_size = (
+            default_size
+            if image
+            and "latest" not in image
+            and "devel" not in image
+            and "unstable" not in image
+            and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse("0.41.0")
+            else "1"
+            if default_size == 1
+            else f"{default_size}-1"
+        )
+
         self.default_replica_size = (
             "1" if default_size == 1 else f"{default_size}-{default_size}"
         )
@@ -333,7 +349,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v22.3.13",
+        version: str = "v23.1.9",
         auto_create_topics: bool = False,
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
@@ -477,7 +493,7 @@ class MySql(Service):
 
 
 class Cockroach(Service):
-    DEFAULT_COCKROACH_TAG = "v22.2.3"
+    DEFAULT_COCKROACH_TAG = "v23.1.1"
 
     def __init__(
         self,
@@ -488,6 +504,7 @@ class Cockroach(Service):
         setup_materialize: bool = True,
         in_memory: bool = False,
         healthcheck: Optional[ServiceHealthcheck] = None,
+        restart: str = "no",
     ):
         volumes = []
 
@@ -526,6 +543,7 @@ class Cockroach(Service):
                 "volumes": volumes,
                 "init": True,
                 "healthcheck": healthcheck,
+                "restart": restart,
             },
         )
 

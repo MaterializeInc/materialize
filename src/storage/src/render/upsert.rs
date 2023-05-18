@@ -16,12 +16,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{consolidation, AsCollection, Collection};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_client::types::sources::UpsertEnvelope;
+use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
@@ -29,14 +32,9 @@ use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
+use crate::render::upsert::types::{InMemoryHashMap, StatsState, UpsertState};
 use crate::source::types::UpsertMetrics;
-use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
-use mz_storage_client::types::instances::StorageInstanceContext;
-use mz_storage_client::types::sources::UpsertEnvelope;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
-
-use self::types::{InMemoryHashMap, StatsState, UpsertState};
+use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
 mod types;
@@ -202,6 +200,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     previous_token: Option<Rc<dyn Any>>,
     source_config: crate::source::RawSourceCreationConfig,
     instance_context: &StorageInstanceContext,
+    dataflow_paramters: &crate::internal_control::DataflowParameters,
 ) -> Collection<G, Result<Row, DataflowError>, Diff>
 where
     G::Timestamp: TotalOrder,
@@ -213,7 +212,10 @@ where
     );
 
     if upsert_envelope.disk {
+        let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
+
         tracing::info!(
+            ?tuning,
             "timely-{} rendering {} with rocksdb-backed upsert state",
             source_config.worker_id,
             source_config.id
@@ -225,6 +227,9 @@ where
             .expect("instance directory to be there if rendering an ON DISK source")
             .join(source_config.id.to_string())
             .join(source_config.worker_id.to_string());
+
+        let env = instance_context.rocksdb_env.clone();
+
         upsert_inner(
             input,
             upsert_envelope.key_indices,
@@ -237,7 +242,8 @@ where
                 rocksdb::RocksDB::new(
                     mz_rocksdb::RocksDBInstance::new(
                         &rocksdb_dir,
-                        mz_rocksdb::Options::new_with_defaults().unwrap(),
+                        mz_rocksdb::Options::defaults_with_env(env),
+                        tuning,
                         rocksdb_metrics,
                     )
                     .await

@@ -31,19 +31,8 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
-use prost::Message;
-use serde::{Deserialize, Serialize};
-use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::{AntichainRef, MutableAntichain};
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio_stream::StreamMap;
-use tracing::{debug, info};
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -56,6 +45,15 @@ use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
+use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
+use prost::Message;
+use serde::{Deserialize, Serialize};
+use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tokio_stream::StreamMap;
+use tracing::{debug, info};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
@@ -65,7 +63,6 @@ use crate::controller::rehydration::RehydratingStorageClient;
 use crate::healthcheck;
 use crate::metrics::StorageControllerMetrics;
 use crate::types::errors::DataflowError;
-use crate::types::instances::StorageInstanceContext;
 use crate::types::instances::StorageInstanceId;
 use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{
@@ -270,6 +267,13 @@ pub trait StorageController: Debug + Send {
     /// of storage instances (i.e., multiple replicas attached to a given
     /// storage instance).
     fn connect_replica(&mut self, id: StorageInstanceId, location: ClusterReplicaLocation);
+
+    /// Disconnects the storage instance from the specified replica.
+    fn drop_replica(
+        &mut self,
+        instance_id: StorageInstanceId,
+        replica_id: mz_cluster_client::ReplicaId,
+    );
 
     /// Acquire a mutable reference to the collection state, should it exist.
     fn collection_mut(
@@ -779,8 +783,8 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64 + TimestampMa
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances.
     config: StorageParameters,
-    /// Additional context used to validate sources being created.
-    instance_context: StorageInstanceContext,
+    /// Whther clusters have scratch directories enabled.
+    scratch_directory_enabled: bool,
 }
 
 /// A storage controller for a storage instance.
@@ -937,7 +941,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         now: NowFn,
         factory: &StashFactory,
         envd_epoch: NonZeroI64,
-        instance_context: StorageInstanceContext,
+        scratch_directory_enabled: bool,
     ) -> Self {
         let tls = mz_postgres_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
@@ -1026,7 +1030,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
             clients: BTreeMap::new(),
             initialized: false,
             config: StorageParameters::default(),
-            instance_context,
+            scratch_directory_enabled,
         }
     }
 }
@@ -1109,6 +1113,19 @@ where
             .get_mut(&id)
             .unwrap_or_else(|| panic!("instance {id} does not exist"));
         client.connect(location);
+    }
+
+    fn drop_replica(
+        &mut self,
+        instance_id: StorageInstanceId,
+        _replica_id: mz_cluster_client::ReplicaId,
+    ) {
+        let client = self
+            .state
+            .clients
+            .get_mut(&instance_id)
+            .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
+        client.reset();
     }
 
     // Add new migrations below and precede them with a short summary of the
@@ -1442,10 +1459,15 @@ where
                         source_imports.insert(id, metadata);
                     }
 
-                    ingestion
-                        .desc
-                        .validate_against_context(&self.state.instance_context)
-                        .map_err(|e| StorageError::InvalidUsage(e.to_string_with_causes()))?;
+                    if let SourceEnvelope::Upsert(upsert) = &ingestion.desc.envelope {
+                        if upsert.disk && !self.state.scratch_directory_enabled {
+                            return Err(StorageError::InvalidUsage(
+                                "Attempting to render `ON DISK` source without a \
+                                configured scratch directory. This is a bug."
+                                    .into(),
+                            ));
+                        }
+                    }
 
                     // The ingestion metadata is simply the collection metadata of the collection with
                     // the associated ingestion
@@ -2262,7 +2284,7 @@ where
         postgres_factory: &StashFactory,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
-        initialize_context: StorageInstanceContext,
+        scratch_directory_enabled: bool,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -2274,7 +2296,7 @@ where
                 now,
                 postgres_factory,
                 envd_epoch,
-                initialize_context,
+                scratch_directory_enabled,
             )
             .await,
             internal_response_queue: rx,

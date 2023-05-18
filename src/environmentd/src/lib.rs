@@ -85,15 +85,10 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-use rand::seq::SliceRandom;
-use tokio::sync::oneshot;
-use tower_http::cors::AllowOrigin;
-
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterBackend, SystemParameterFrontend};
@@ -109,7 +104,12 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::types::connections::ConnectionContext;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rand::seq::SliceRandom;
+use tokio::sync::oneshot;
+use tower_http::cors::AllowOrigin;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 use crate::server::ListenerHandle;
@@ -364,6 +364,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         None
     };
 
+    let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0)));
+
     // Initialize adapter.
     let segment_client = config.segment_api_key.map(mz_segment::Client::new);
     let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
@@ -389,6 +391,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         system_parameter_frontend: system_parameter_frontend.clone(),
         aws_account_id: config.aws_account_id,
         aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
+        active_connection_count: Arc::clone(&active_connection_count),
     })
     .await?;
 
@@ -406,6 +409,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             frontegg: config.frontegg.clone(),
             metrics: metrics.clone(),
             internal: false,
+            active_connection_count: Arc::clone(&active_connection_count),
         });
         server::serve(sql_conns, sql_server)
     });
@@ -427,6 +431,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             frontegg: None,
             metrics,
             internal: true,
+            active_connection_count: Arc::clone(&active_connection_count),
         });
         server::serve(internal_sql_conns, internal_sql_server)
     });

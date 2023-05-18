@@ -88,15 +88,17 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use itertools::Itertools;
-use rocksdb::{
-    DBCompressionType, Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB,
-};
-use serde::{de::DeserializeOwned, Serialize};
-use tokio::sync::{mpsc, oneshot};
-
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::DeleteOnDropHistogram;
+use rocksdb::{Env, Error as RocksDBError, Options as RocksDBOptions, WriteOptions, DB};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use tokio::sync::{mpsc, oneshot};
+
+pub mod tuning;
+
+pub use tuning::{defaults, RocksDBTuningParameters};
 
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
@@ -130,11 +132,9 @@ pub struct Options {
     pub cleanup_on_drop: bool,
 
     /// Whether or not to write writes
-    /// to the wal.
+    /// to the wal. This is not in `RocksDBTuningParameters` because it
+    /// applies to `WriteOptions` when creating `WriteBatch`es.
     pub use_wal: bool,
-
-    /// Compression type for blocks and blobs.
-    pub compression_type: DBCompressionType,
 
     /// A possibly shared RocksDB `Env`.
     pub env: Env,
@@ -155,30 +155,25 @@ pub struct RocksDBMetrics {
 
 impl Options {
     /// A new `Options` object with reasonable defaults.
-    pub fn new_with_defaults() -> Result<Self, RocksDBError> {
-        Ok(Options {
+    pub fn defaults_with_env(env: rocksdb::Env) -> Self {
+        Options {
             cleanup_on_new: true,
             cleanup_on_drop: true,
             use_wal: false,
-            compression_type: DBCompressionType::Snappy,
-            env: rocksdb::Env::new()?,
-        })
+            env,
+        }
     }
 
-    fn as_rocksdb_options(&self) -> RocksDBOptions {
+    fn as_rocksdb_options(&self, tuning_config: &RocksDBTuningParameters) -> RocksDBOptions {
+        // Defaults + `create_if_missing`
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
 
-        /*
-        // Dumped every 600 seconds.
-        rocks_options.enable_statistics();
-        rocks_options.set_report_bg_io_stats(true);
-        */
-
-        options.set_compression_type(self.compression_type);
-        options.set_blob_compression_type(self.compression_type);
-
+        // Set the env first so tuning applies to the shared `Env`.
         options.set_env(&self.env);
+
+        tuning_config.apply_to_options(&mut options);
+
         options
     }
 
@@ -243,6 +238,7 @@ where
     pub async fn new<M: Deref<Target = RocksDBMetrics> + Send + 'static>(
         instance_path: &Path,
         options: Options,
+        tuning_config: RocksDBTuningParameters,
         metrics: M,
     ) -> Result<Self, Error> {
         if options.cleanup_on_new && instance_path.exists() {
@@ -268,7 +264,14 @@ where
 
         let (creation_error_tx, creation_error_rx) = oneshot::channel();
         std::thread::spawn(move || {
-            rocksdb_core_loop(options, instance_path, rx, metrics, creation_error_tx)
+            rocksdb_core_loop(
+                options,
+                tuning_config,
+                instance_path,
+                rx,
+                metrics,
+                creation_error_tx,
+            )
         });
 
         if let Ok(creation_error) = creation_error_rx.await {
@@ -390,6 +393,7 @@ where
 // TODO(guswynn): retry retryable rocksdb errors.
 fn rocksdb_core_loop<K, V, M>(
     options: Options,
+    tuning_config: RocksDBTuningParameters,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     metrics: M,
@@ -399,7 +403,7 @@ fn rocksdb_core_loop<K, V, M>(
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
 {
-    let db: DB = match DB::open(&options.as_rocksdb_options(), &instance_path) {
+    let db: DB = match DB::open(&options.as_rocksdb_options(&tuning_config), &instance_path) {
         Ok(db) => {
             drop(creation_error_tx);
             db

@@ -19,11 +19,6 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use timely::progress::Timestamp;
-use tokio::sync::{Mutex, OnceCell};
-use tokio::task::JoinHandle;
-use tracing::{debug, instrument};
-
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
@@ -31,6 +26,10 @@ use mz_persist::location::{
     CONSENSUS_HEAD_LIVENESS_KEY,
 };
 use mz_persist_types::{Codec, Codec64};
+use timely::progress::Timestamp;
+use tokio::sync::{Mutex, OnceCell};
+use tokio::task::JoinHandle;
+use tracing::{debug, instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
@@ -644,7 +643,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use futures::stream::{FuturesUnordered, StreamExt};
-
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
     use mz_ore::task::spawn;

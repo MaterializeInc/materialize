@@ -12,7 +12,7 @@
 
 mode cockroach
 
-statement error window function row_number requires an OVER clause
+statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT row_number() FROM t
 

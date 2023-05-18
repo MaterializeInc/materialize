@@ -87,10 +87,6 @@ use async_trait::async_trait;
 use clap::{FromArgMatches, IntoApp};
 use futures_core::stream::BoxStream;
 use http::header::{HeaderName, HeaderValue};
-use opentelemetry::sdk::resource::Resource;
-use opentelemetry::KeyValue;
-use tracing_subscriber::filter::Targets;
-
 use mz_build_info::BuildInfo;
 #[cfg(feature = "tokio-console")]
 use mz_orchestrator::ServicePort;
@@ -107,6 +103,9 @@ use mz_ore::tracing::{
     OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
     TracingGuard, TracingHandle,
 };
+use opentelemetry::sdk::resource::Resource;
+use opentelemetry::KeyValue;
+use tracing_subscriber::filter::Targets;
 
 /// Command line arguments for application tracing.
 ///

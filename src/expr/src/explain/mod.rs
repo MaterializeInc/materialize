@@ -14,7 +14,6 @@ use std::fmt::Formatter;
 use std::time::Duration;
 
 use itertools::Itertools;
-
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
 use mz_repr::explain::text::DisplayText;
@@ -25,9 +24,8 @@ use mz_repr::explain::{
 };
 
 use crate::interpret::{Interpreter, Pushdownable, RelationTrace, Trace};
-use crate::{
-    visit::Visit, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
-};
+use crate::visit::Visit;
+use crate::{Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 
 mod json;
 mod text;

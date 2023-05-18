@@ -22,12 +22,11 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use mz_persist::location::ExternalError;
+use mz_persist_client::ShardId;
 use serde_json::Value;
 use tokio::sync::oneshot;
 use tracing::{info, trace};
-
-use mz_persist::location::ExternalError;
-use mz_persist_client::ShardId;
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, Msg, MsgId, NodeId};
 use crate::maelstrom::Args;

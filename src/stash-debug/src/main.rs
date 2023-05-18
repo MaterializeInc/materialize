@@ -75,38 +75,30 @@
 
 //! Debug utility for stashes.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::File,
-    io::{self, Write},
-    path::PathBuf,
-    process,
-    str::FromStr,
-    sync::Arc,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::process;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use clap::Parser;
-use once_cell::sync::Lazy;
-
-use mz_adapter::{
-    catalog::{
-        storage::{self as catalog, BootstrapArgs},
-        Catalog, ClusterReplicaSizeMap, Config,
-    },
-    DUMMY_AVAILABILITY_ZONE,
-};
+use mz_adapter::catalog::storage::{self as catalog, BootstrapArgs};
+use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
+use mz_adapter::DUMMY_AVAILABILITY_ZONE;
 use mz_build_info::{build_info, BuildInfo};
-use mz_ore::{
-    cli::{self, CliConfig},
-    error::ErrorExt,
-    metrics::MetricsRegistry,
-    now::SYSTEM_TIME,
-};
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::error::ErrorExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::SYSTEM_TIME;
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_client::controller as storage;
+use once_cell::sync::Lazy;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
@@ -148,7 +140,7 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("stash: {}", err.display_with_causes());
+        eprintln!("stash: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
 }
@@ -402,6 +394,7 @@ impl Usage {
         )
         .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
+
         let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -421,6 +414,7 @@ impl Usage {
             system_parameter_frontend: None,
             storage_usage_retention_period: None,
             connection_context: None,
+            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
         })
         .await?;
 

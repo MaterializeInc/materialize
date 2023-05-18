@@ -15,16 +15,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
-use rdkafka::client::BrokerAddr;
-use rdkafka::config::FromClientConfigAndContext;
-use rdkafka::ClientContext;
-use serde::{Deserialize, Serialize};
-use tokio::net;
-use tokio_postgres::config::SslMode;
-use url::Url;
-
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_kafka_util::client::{BrokerRewrite, BrokerRewritingClientContext};
@@ -35,6 +25,15 @@ use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_ssh_util::tunnel::SshTunnelConfig;
+use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
+use rdkafka::client::BrokerAddr;
+use rdkafka::config::FromClientConfigAndContext;
+use rdkafka::ClientContext;
+use serde::{Deserialize, Serialize};
+use tokio::net;
+use tokio_postgres::config::SslMode;
+use url::Url;
 
 use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelManager};
 use crate::types::connections::aws::AwsConfig;

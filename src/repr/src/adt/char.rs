@@ -11,12 +11,11 @@ use std::error::Error;
 use std::fmt;
 
 use anyhow::bail;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.char.rs"));
 
@@ -184,10 +183,10 @@ impl RustType<ProtoCharLength> for CharLength {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     use super::*;
-    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #[test]

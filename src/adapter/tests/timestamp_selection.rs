@@ -88,18 +88,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
-
-use mz_adapter::{
-    catalog::CatalogState, session::Session, CollectionIdBundle, TimelineContext, TimestampProvider,
-};
+use mz_adapter::catalog::CatalogState;
+use mz_adapter::session::Session;
+use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_repr::{Datum, GlobalId, ScalarType, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::types::sources::Timeline;
+use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(transparent)]

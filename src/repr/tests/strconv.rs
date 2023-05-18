@@ -74,7 +74,6 @@
 // END LINT CONFIG
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
-
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeField;
 use mz_repr::adt::interval::Interval;

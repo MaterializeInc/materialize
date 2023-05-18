@@ -12,20 +12,21 @@ use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use const_format::concatcp;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use serde::Serialize;
-use uncased::UncasedStr;
-
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
+use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use uncased::UncasedStr;
 
 use crate::ast::Ident;
 use crate::session::user::{ExternalUserMetadata, User, SYSTEM_USER};
@@ -229,6 +230,8 @@ const INTERVAL_STYLE: ServerVar<str> = ServerVar {
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
 const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
+// Schema can be used an alias for a search path with a single element.
+pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
 static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
@@ -508,18 +511,6 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
-/// Controls whether or not to use the new storage `persist_sink` implementation in storage
-/// ingestions.
-const ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_multi_worker_storage_persist_sink"),
-    value: &false,
-    description: "Whether or not to use the new multi-worker storage `persist_sink` \
-                  implementation in storage ingestions. Is applied only \
-                  when a cluster or dataflow is restarted.",
-    internal: true,
-    safe: true,
-};
-
 /// The default for the `DISK` option in `UPSERT` sources.
 const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("upsert_source_disk_default"),
@@ -538,6 +529,109 @@ const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
     internal: true,
     safe: true,
 };
+
+/// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
+mod upsert_rocksdb {
+    use std::str::FromStr;
+
+    use mz_rocksdb::tuning::{CompactionStyle, CompressionType};
+
+    use super::*;
+
+    impl Value for CompactionStyle {
+        fn type_name() -> String {
+            "rocksdb_compaction_style".to_string()
+        }
+
+        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+            let s = extract_single_value(input)?;
+            CompactionStyle::from_str(s).map_err(|_| ())
+        }
+
+        fn format(&self) -> String {
+            self.to_string()
+        }
+    }
+
+    impl Value for CompressionType {
+        fn type_name() -> String {
+            "rocksdb_compression_type".to_string()
+        }
+
+        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+            let s = extract_single_value(input)?;
+            CompressionType::from_str(s).map_err(|_| ())
+        }
+
+        fn format(&self) -> String {
+            self.to_string()
+        }
+    }
+
+    pub static UPSERT_ROCKSDB_COMPACTION_STYLE: ServerVar<CompactionStyle> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_compaction_style"),
+        value: &mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
+        value: &mz_rocksdb::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_level_compaction_dynamic_level_bytes"),
+        value: &mz_rocksdb::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO: ServerVar<i32> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_universal_compaction_ratio"),
+        value: &mz_rocksdb::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub const UPSERT_ROCKSDB_PARALLELISM: ServerVar<Option<i32>> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_parallelism"),
+        value: &mz_rocksdb::defaults::DEFAULT_PARALLELISM,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_compression_type"),
+        value: &mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+    pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
+        value: &mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  Only takes effect on source restart (Materialize).",
+        internal: true,
+        safe: true,
+    };
+}
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
 const PG_REPLICATION_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
@@ -603,6 +697,20 @@ const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     safe: true,
 };
 
+/// Controls the TCP user timeout to Cockroach.
+///
+/// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_tcp_user_timeout`].
+const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("crdb_tcp_user_timeout"),
+    value: &PersistConfig::DEFAULT_CRDB_TCP_USER_TIMEOUT,
+    description:
+        "The TCP timeout for connections to CockroachDB. Specifies the amount of time that \
+        transmitted data may remain unacknowledged before the TCP connection is forcibly \
+        closed.",
+    internal: true,
+    safe: true,
+};
+
 /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
 const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("dataflow_max_inflight_bytes"),
@@ -627,7 +735,8 @@ const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::PersistConfig::storage_sink_minimum_batch_updates`].
 const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("storage_persist_sink_minimum_batch_updates"),
-    value: &PersistConfig::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
+    // Reasonable default based on our experience in production.
+    value: &1024,
     description: "In the storage persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
@@ -844,6 +953,15 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
     internal: true,
     safe: true,
+};
+
+pub const ALLOW_UNSTABLE_DEPENDENCIES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("allow_unstable_dependencies"),
+    value: &false,
+    description:
+        "Whether to allow catalog objects to depend on unstable items, e.g. those in the `mz_internal` schema (Materialize).",
+    internal: true,
+    safe: false,
 };
 
 /// Represents the input to a variable.
@@ -1524,25 +1642,49 @@ impl SessionVars {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct ConnectionCounter {
+    pub current: u64,
+    pub limit: u64,
+}
+
+impl ConnectionCounter {
+    pub fn new(limit: u64) -> Self {
+        ConnectionCounter { current: 0, limit }
+    }
+}
+
 /// On disk variables.
 ///
 /// See [`SessionVars`] for more details on the Materialize configuration model.
 #[derive(Debug)]
 pub struct SystemVars {
     vars: BTreeMap<&'static UncasedStr, Box<dyn VarMut>>,
+    active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 impl Clone for SystemVars {
     fn clone(&self) -> Self {
         SystemVars {
             vars: self.vars.iter().map(|(k, v)| (*k, v.clone_var())).collect(),
+            active_connection_count: Arc::clone(&self.active_connection_count),
         }
     }
 }
 
 impl Default for SystemVars {
     fn default() -> Self {
-        SystemVars::empty()
+        Self::new(Arc::new(Mutex::new(ConnectionCounter::new(0))))
+    }
+}
+
+impl SystemVars {
+    pub fn new(active_connection_count: Arc<Mutex<ConnectionCounter>>) -> Self {
+        let vars = SystemVars {
+            vars: Default::default(),
+            active_connection_count,
+        };
+        let mut vars = vars
             .with_var(&CONFIG_HAS_SYNCED_ONCE)
             .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
             .with_var(&MAX_TABLES)
@@ -1559,12 +1701,19 @@ impl Default for SystemVars {
             .with_var(&MAX_ROLES)
             .with_var(&MAX_RESULT_SIZE)
             .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
-            .with_var(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
             .with_var(&UPSERT_SOURCE_DISK_DEFAULT)
             .with_var(&ENABLE_UPSERT_SOURCE_DISK)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
+            .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
@@ -1594,14 +1743,9 @@ impl Default for SystemVars {
             .with_var(&ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
-    }
-}
-
-impl SystemVars {
-    fn empty() -> Self {
-        SystemVars {
-            vars: Default::default(),
-        }
+            .with_var(&ALLOW_UNSTABLE_DEPENDENCIES);
+        vars.refresh_internal_state();
+        vars
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1707,20 +1851,26 @@ impl SystemVars {
     /// 2. If `value` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, VarError> {
-        self.vars
+        let result = self
+            .vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .and_then(|v| v.set(input))
+            .and_then(|v| v.set(input))?;
+        self.propagate_var_change(name);
+        Ok(result)
     }
 
     /// Set the default for this variable. This is the value this
     /// variable will be be `reset` to. If no default is set, the static default in the
     /// variable definition is used instead.
     pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
-        self.vars
+        let result = self
+            .vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .and_then(|v| v.set_default(input))
+            .and_then(|v| v.set_default(input))?;
+        self.propagate_var_change(name);
+        Ok(result)
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -1737,10 +1887,31 @@ impl SystemVars {
     /// The call will return an error:
     /// 1. If `name` does not refer to a valid [`SystemVars`] field.
     pub fn reset(&mut self, name: &str) -> Result<bool, VarError> {
-        self.vars
+        let result = self
+            .vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
-            .map(|v| v.reset())
+            .map(|v| v.reset())?;
+        self.propagate_var_change(name);
+        Ok(result)
+    }
+
+    /// Propagate a change to the parameter named `name` to our state.
+    fn propagate_var_change(&mut self, name: &str) {
+        if name == MAX_CONNECTIONS.name {
+            self.active_connection_count
+                .lock()
+                .expect("lock poisoned")
+                .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
+        }
+    }
+
+    /// Make sure that the internal state matches the SystemVars. Generally
+    /// only needed when initializing, `set`, `set_default`, and `reset`
+    /// are responsible for keeping the internal state in sync with
+    /// the affected SystemVars.
+    fn refresh_internal_state(&mut self) {
+        self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
     }
 
     /// Returns the `config_has_synced_once` configuration parameter.
@@ -1826,11 +1997,6 @@ impl SystemVars {
             .collect()
     }
 
-    /// Returns the `enable_multi_worker_storage_persist_sink` configuration parameter.
-    pub fn enable_multi_worker_storage_persist_sink(&self) -> bool {
-        *self.expect_value(&ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK)
-    }
-
     /// Returns the `upsert_source_disk_default` configuration parameter.
     pub fn upsert_source_disk_default(&self) -> bool {
         *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
@@ -1839,6 +2005,36 @@ impl SystemVars {
     /// Returns the `enable_upsert_source_disk` configuration parameter.
     pub fn enable_upsert_source_disk(&self) -> bool {
         *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
+    }
+
+    pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb::tuning::CompactionStyle {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
+    }
+
+    pub fn upsert_rocksdb_optimize_compaction_memtable_budget(&self) -> usize {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
+    }
+
+    pub fn upsert_rocksdb_level_compaction_dynamic_level_bytes(&self) -> bool {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
+    }
+
+    pub fn upsert_rocksdb_universal_compaction_ratio(&self) -> i32 {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO)
+    }
+
+    pub fn upsert_rocksdb_parallelism(&self) -> Option<i32> {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
+    }
+
+    pub fn upsert_rocksdb_compression_type(&self) -> mz_rocksdb::tuning::CompressionType {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
+    }
+
+    pub fn upsert_rocksdb_bottommost_compression_type(
+        &self,
+    ) -> mz_rocksdb::tuning::CompressionType {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
@@ -1894,6 +2090,11 @@ impl SystemVars {
     /// Returns the `crdb_connect_timeout` configuration parameter.
     pub fn crdb_connect_timeout(&self) -> Duration {
         *self.expect_value(&CRDB_CONNECT_TIMEOUT)
+    }
+
+    /// Returns the `crdb_tcp_user_timeout` configuration parameter.
+    pub fn crdb_tcp_user_timeout(&self) -> Duration {
+        *self.expect_value(&CRDB_TCP_USER_TIMEOUT)
     }
 
     /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
@@ -2012,6 +2213,11 @@ impl SystemVars {
     pub fn keep_n_source_status_history_entries(&self) -> usize {
         *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
     }
+
+    /// Returns the `enable_rbac_checks` configuration parameter.
+    pub fn allow_unstable_dependencies(&self) -> bool {
+        *self.expect_value(&ALLOW_UNSTABLE_DEPENDENCIES)
+    }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
@@ -2031,7 +2237,7 @@ pub trait Var: fmt::Debug {
     fn description(&self) -> &'static str;
 
     /// Returns the name of the type of this variable.
-    fn type_name(&self) -> &'static str;
+    fn type_name(&self) -> String;
 
     /// Indicates wither the [`Var`] is visible for the given [`User`].
     ///
@@ -2109,8 +2315,8 @@ where
         self.description
     }
 
-    fn type_name(&self) -> &'static str {
-        V::TYPE_NAME
+    fn type_name(&self) -> String {
+        V::type_name()
     }
 
     fn visible(&self, user: &User) -> bool {
@@ -2197,8 +2403,8 @@ where
         self.parent.description()
     }
 
-    fn type_name(&self) -> &'static str {
-        V::TYPE_NAME
+    fn type_name(&self) -> String {
+        V::type_name()
     }
 
     fn visible(&self, user: &User) -> bool {
@@ -2359,8 +2565,8 @@ where
         self.parent.description()
     }
 
-    fn type_name(&self) -> &'static str {
-        V::TYPE_NAME
+    fn type_name(&self) -> String {
+        V::type_name()
     }
 
     fn visible(&self, user: &User) -> bool {
@@ -2385,8 +2591,8 @@ impl Var for BuildInfo {
         "Shows the Materialize server version (Materialize)."
     }
 
-    fn type_name(&self) -> &'static str {
-        str::TYPE_NAME
+    fn type_name(&self) -> String {
+        str::type_name()
     }
 
     fn visible(&self, _: &User) -> bool {
@@ -2411,8 +2617,8 @@ impl Var for User {
         "Reports whether the current session is a superuser (PostgreSQL)."
     }
 
-    fn type_name(&self) -> &'static str {
-        bool::TYPE_NAME
+    fn type_name(&self) -> String {
+        bool::type_name()
     }
 
     fn visible(&self, _: &User) -> bool {
@@ -2427,7 +2633,7 @@ impl Var for User {
 /// A value that can be stored in a session or server variable.
 pub trait Value: ToOwned + Send + Sync {
     /// The name of the value type.
-    const TYPE_NAME: &'static str;
+    fn type_name() -> String;
     /// Parses a value of this type from a [`VarInput`].
     fn parse(input: VarInput) -> Result<Self::Owned, ()>;
     /// Formats this value as a flattened string.
@@ -2446,7 +2652,9 @@ fn extract_single_value(input: VarInput) -> Result<&str, ()> {
 }
 
 impl Value for bool {
-    const TYPE_NAME: &'static str = "boolean";
+    fn type_name() -> String {
+        "boolean".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self, ()> {
         let s = extract_single_value(input)?;
@@ -2466,7 +2674,9 @@ impl Value for bool {
 }
 
 impl Value for i32 {
-    const TYPE_NAME: &'static str = "integer";
+    fn type_name() -> String {
+        "integer".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<i32, ()> {
         let s = extract_single_value(input)?;
@@ -2479,7 +2689,9 @@ impl Value for i32 {
 }
 
 impl Value for u32 {
-    const TYPE_NAME: &'static str = "unsigned integer";
+    fn type_name() -> String {
+        "unsigned integer".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<u32, ()> {
         let s = extract_single_value(input)?;
@@ -2492,7 +2704,9 @@ impl Value for u32 {
 }
 
 impl Value for mz_repr::Timestamp {
-    const TYPE_NAME: &'static str = "mz-timestamp";
+    fn type_name() -> String {
+        "mz-timestamp".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<mz_repr::Timestamp, ()> {
         let s = extract_single_value(input)?;
@@ -2505,7 +2719,9 @@ impl Value for mz_repr::Timestamp {
 }
 
 impl Value for usize {
-    const TYPE_NAME: &'static str = "unsigned integer";
+    fn type_name() -> String {
+        "unsigned integer".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<usize, ()> {
         let s = extract_single_value(input)?;
@@ -2518,7 +2734,9 @@ impl Value for usize {
 }
 
 impl Value for Numeric {
-    const TYPE_NAME: &'static str = "numeric";
+    fn type_name() -> String {
+        "numeric".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
@@ -2548,7 +2766,9 @@ const SEC_TO_DAY: u64 = 60u64 * 60 * 24;
 const MICRO_TO_MILLI: u32 = 1000u32;
 
 impl Value for Duration {
-    const TYPE_NAME: &'static str = "duration";
+    fn type_name() -> String {
+        "duration".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Duration, ()> {
         let s = extract_single_value(input)?;
@@ -2677,7 +2897,25 @@ fn test_value_duration() {
 }
 
 impl Value for str {
-    const TYPE_NAME: &'static str = "string";
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse(input: VarInput) -> Result<String, ()> {
+        let s = extract_single_value(input)?;
+        Ok(s.to_owned())
+    }
+
+    fn format(&self) -> String {
+        self.to_owned()
+    }
+}
+
+// The same as the above impl, but works in `SystemVar`s.
+impl Value for String {
+    fn type_name() -> String {
+        "string".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<String, ()> {
         let s = extract_single_value(input)?;
@@ -2690,7 +2928,9 @@ impl Value for str {
 }
 
 impl Value for Vec<String> {
-    const TYPE_NAME: &'static str = "string list";
+    fn type_name() -> String {
+        "string list".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Vec<String>, ()> {
         match input {
@@ -2715,7 +2955,9 @@ impl Value for Vec<String> {
 }
 
 impl Value for Vec<Ident> {
-    const TYPE_NAME: &'static str = "identifier list";
+    fn type_name() -> String {
+        "identifier list".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Vec<Ident>, ()> {
         let holder;
@@ -2736,33 +2978,20 @@ impl Value for Vec<Ident> {
     }
 }
 
-impl Value for Option<String> {
-    const TYPE_NAME: &'static str = "optional string";
+// Implement `Value` for `Option<V>` for any owned `V`.
+impl<V> Value for Option<V>
+where
+    V: Value + Clone + ToOwned<Owned = V>,
+{
+    fn type_name() -> String {
+        format!("optional {}", V::type_name())
+    }
 
-    fn parse(input: VarInput) -> Result<Option<String>, ()> {
+    fn parse(input: VarInput) -> Result<Option<V>, ()> {
         let s = extract_single_value(input)?;
         match s {
             "" => Ok(None),
-            _ => Ok(Some(s.to_string())),
-        }
-    }
-
-    fn format(&self) -> String {
-        match self {
-            Some(s) => s.format(),
-            None => "".into(),
-        }
-    }
-}
-
-impl Value for Option<mz_repr::Timestamp> {
-    const TYPE_NAME: &'static str = "optional unsigned integer";
-
-    fn parse(input: VarInput) -> Result<Option<mz_repr::Timestamp>, ()> {
-        let s = extract_single_value(input)?;
-        match s {
-            "" => Ok(None),
-            _ => <mz_repr::Timestamp as Value>::parse(VarInput::Flat(s)).map(Some),
+            _ => <V as Value>::parse(VarInput::Flat(s)).map(Some),
         }
     }
 
@@ -2848,7 +3077,9 @@ impl ClientSeverity {
 }
 
 impl Value for ClientSeverity {
-    const TYPE_NAME: &'static str = "string";
+    fn type_name() -> String {
+        "string".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
@@ -2908,7 +3139,9 @@ impl TimeZone {
 }
 
 impl Value for TimeZone {
-    const TYPE_NAME: &'static str = "string";
+    fn type_name() -> String {
+        "string".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
@@ -2961,7 +3194,9 @@ impl IsolationLevel {
 }
 
 impl Value for IsolationLevel {
-    const TYPE_NAME: &'static str = "string";
+    fn type_name() -> String {
+        "string".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
@@ -3008,13 +3243,23 @@ pub fn is_compute_config_var(name: &str) -> bool {
 
 /// Returns whether the named variable is a storage configuration parameter.
 pub fn is_storage_config_var(name: &str) -> bool {
-    name == ENABLE_MULTI_WORKER_STORAGE_PERSIST_SINK.name()
-        || name == PG_REPLICATION_CONNECT_TIMEOUT.name()
+    name == PG_REPLICATION_CONNECT_TIMEOUT.name()
         || name == PG_REPLICATION_KEEPALIVES_IDLE.name()
         || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+        || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
+}
+
+fn is_upsert_rocksdb_config_var(name: &str) -> bool {
+    name == upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.
@@ -3022,6 +3267,7 @@ fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
+        || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()

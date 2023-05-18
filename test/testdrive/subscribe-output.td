@@ -134,11 +134,10 @@ UPDATE t0 SET value = 4 WHERE key = 1
 > DECLARE c CURSOR FOR SUBSCRIBE t WITH (PROGRESS, SNAPSHOT) WITHIN TIMESTAMP ORDER BY c, b, a
 > FETCH 1 c
 <TIMESTAMP> true <null> <null> <null> <null>
-> FETCH 4 c
+> FETCH 3 c
 <TIMESTAMP> false 1 2 5 -6
 <TIMESTAMP> false 1 4 0 -4
 <TIMESTAMP> false 1 1 2 3
-<TIMESTAMP> true <null> <null> <null> <null>
 > COMMIT
 
 

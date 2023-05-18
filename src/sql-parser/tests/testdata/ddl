@@ -134,7 +134,7 @@ CREATE TEMPORARY TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) 
 ----
 CREATE TEMPORARY TABLE foo (id int4, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: UnresolvedItemName([Ident("rtrim")]), args: Args { args: [Function(Function { name: UnresolvedItemName([Ident("ltrim")]), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: [], op: "<>" }, expr1: Function(Function { name: Name(UnresolvedItemName([Ident("rtrim")])), args: Args { args: [Function(Function { name: Name(UnresolvedItemName([Ident("ltrim")])), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
 
 parse-statement
 CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
@@ -541,7 +541,7 @@ CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop W
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("baz")])), key_parts: Some([Function(Function { name: UnresolvedItemName([Ident("ascii")]), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("baz")])), key_parts: Some([Function(Function { name: Name(UnresolvedItemName([Ident("ascii")])), args: Args { args: [Identifier([Ident("x")])], order_by: [] }, filter: None, over: None, distinct: false }), IsExpr { expr: Identifier([Ident("a")]), construct: Null, negated: true }, Nested(Exists(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
@@ -772,14 +772,14 @@ SUBSCRIBE foo.bar AS OF now()
 ----
 SUBSCRIBE foo.bar AS OF now()
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
 
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 ----
 SUBSCRIBE foo.bar WITH (SNAPSHOT) AS OF now()
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [SubscribeOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: None, output: Diffs })
 
 parse-statement
 SUBSCRIBE foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
@@ -807,14 +807,14 @@ SUBSCRIBE foo.bar AS OF now() UP TO now() + interval '1' day
 ----
 SUBSCRIBE foo.bar AS OF now() UP TO now() + INTERVAL '1' DAY
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), output: Diffs })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: Some(At(Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))), up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), output: Diffs })
 
 parse-statement
 SUBSCRIBE foo.bar UP TO now() + interval '1' day
 ----
 SUBSCRIBE foo.bar UP TO now() + INTERVAL '1' DAY
 =>
-Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: UnresolvedItemName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), output: Diffs })
+Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))), options: [], as_of: None, up_to: Some(Op { op: Op { namespace: [], op: "+" }, expr1: Function(Function { name: Name(UnresolvedItemName([Ident("now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(Interval(IntervalValue { value: "1", precision_high: Year, precision_low: Day, fsec_max_precision: None }))) }), output: Diffs })
 
 parse-statement
 SUBSCRIBE foo.bar ENVELOPE UPSERT KEY (a)
@@ -1289,14 +1289,14 @@ CREATE SECRET secret AS decode('c2VjcmV0Cg==', 'base64')
 ----
 CREATE SECRET secret AS decode('c2VjcmV0Cg==', 'base64')
 =>
-CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: false, value: Function(Function { name: UnresolvedItemName([Ident("decode")]), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: false, value: Function(Function { name: Name(UnresolvedItemName([Ident("decode")])), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 CREATE SECRET IF NOT EXISTS secret AS decode('c2VjcmV0Cg==', 'base64')
 ----
 CREATE SECRET IF NOT EXISTS secret AS decode('c2VjcmV0Cg==', 'base64')
 =>
-CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: true, value: Function(Function { name: UnresolvedItemName([Ident("decode")]), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+CreateSecret(CreateSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_not_exists: true, value: Function(Function { name: Name(UnresolvedItemName([Ident("decode")])), args: Args { args: [Value(String("c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 DROP SECRET secret
@@ -1331,7 +1331,7 @@ ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 ----
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 =>
-AlterSecret(AlterSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_exists: false, value: Function(Function { name: UnresolvedItemName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+AlterSecret(AlterSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_exists: false, value: Function(Function { name: Name(UnresolvedItemName([Ident("decode")])), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
 CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux';
@@ -2326,6 +2326,20 @@ REVOKE CREATE ON CLUSTER c FROM joe, GROUP mike, GROUP yisachar
 REVOKE CREATE ON CLUSTER c FROM joe, mike, yisachar
 =>
 RevokePrivilege(RevokePrivilegeStatement { privileges: Privileges([CREATE]), object_type: Cluster, name: Cluster(Ident("c")), roles: [Ident("joe"), Ident("mike"), Ident("yisachar")] })
+
+parse-statement
+REASSIGN OWNED BY joe TO yisachar
+----
+REASSIGN OWNED BY joe TO yisachar
+=>
+ReassignOwned(ReassignOwnedStatement { old_roles: [Ident("joe")], new_role: Ident("yisachar") })
+
+parse-statement
+REASSIGN OWNED BY joe, mike TO yisachar
+----
+REASSIGN OWNED BY joe, mike TO yisachar
+=>
+ReassignOwned(ReassignOwnedStatement { old_roles: [Ident("joe"), Ident("mike")], new_role: Ident("yisachar") })
 
 parse-statement
 DROP OWNED BY joe

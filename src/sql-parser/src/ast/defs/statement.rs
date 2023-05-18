@@ -94,6 +94,7 @@ pub enum Statement<T: AstInfo> {
     RevokeRole(RevokeRoleStatement<T>),
     GrantPrivilege(GrantPrivilegeStatement<T>),
     RevokePrivilege(RevokePrivilegeStatement<T>),
+    ReassignOwned(ReassignOwnedStatement<T>),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -153,6 +154,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::RevokeRole(stmt) => f.write_node(stmt),
             Statement::GrantPrivilege(stmt) => f.write_node(stmt),
             Statement::RevokePrivilege(stmt) => f.write_node(stmt),
+            Statement::ReassignOwned(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -2980,3 +2982,22 @@ impl<T: AstInfo> AstDisplay for RevokePrivilegeStatement<T> {
     }
 }
 impl_display_t!(RevokePrivilegeStatement);
+
+/// `REASSIGN OWNED ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReassignOwnedStatement<T: AstInfo> {
+    /// The roles whose owned objects are being reassigned.
+    pub old_roles: Vec<T::RoleName>,
+    /// The new owner of the objects.
+    pub new_role: T::RoleName,
+}
+
+impl<T: AstInfo> AstDisplay for ReassignOwnedStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("REASSIGN OWNED BY ");
+        f.write_node(&display::comma_separated(&self.old_roles));
+        f.write_str(" TO ");
+        f.write_node(&self.new_role);
+    }
+}
+impl_display_t!(ReassignOwnedStatement);

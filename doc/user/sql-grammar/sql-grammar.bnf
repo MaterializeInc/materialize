@@ -287,6 +287,8 @@ prepare ::=
   'PREPARE' name 'AS' statement
 privilege ::=
   ('SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'CREATE' | 'USAGE')
+reassign_owned ::=
+  'REASSIGN' 'OWNED' 'BY' old_role (',' old_role)* 'TO' new_role
 reset_session_variable ::=
   'RESET' variable_name
 revoke_privilege ::=

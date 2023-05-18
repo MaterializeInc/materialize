@@ -12,10 +12,9 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use uncased::UncasedStr;
-
 use mz_repr::adt::interval::Interval;
 use mz_repr::{RelationDesc, ScalarType};
+use uncased::UncasedStr;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -31,6 +30,7 @@ use crate::plan::{
     FetchPlan, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan, ShowVariablePlan,
     VariableValue,
 };
+use crate::session::vars::SCHEMA_ALIAS;
 
 pub fn describe_set_variable(
     _: &StatementContext,
@@ -98,6 +98,8 @@ pub fn describe_show_variable(
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("setting", ScalarType::String.nullable(false))
             .with_column("description", ScalarType::String.nullable(false))
+    } else if variable.as_str() == SCHEMA_ALIAS {
+        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(true))
     } else {
         RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(false))
     };

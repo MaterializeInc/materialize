@@ -18,8 +18,9 @@ pub mod reduce;
 pub mod top_k;
 pub mod union;
 
-use crate::{all, TransformArgs};
 use mz_expr::MirRelationExpr;
+
+use crate::{all, TransformArgs};
 
 /// Fuses multiple like operators together when possible.
 #[derive(Debug)]

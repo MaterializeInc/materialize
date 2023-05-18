@@ -9,21 +9,12 @@
 
 #![allow(missing_docs)]
 
-use std::fmt;
-use std::iter;
 use std::ops::Deref;
+use std::{fmt, iter};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
-use num::{CheckedAdd, Integer, Signed};
-use ordered_float::OrderedFloat;
-use proptest::prelude::{Arbitrary, Just};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
-use proptest_derive::Arbitrary;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -32,14 +23,20 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
-use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::adt::timestamp::TimestampLike;
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use num::{CheckedAdd, Integer, Signed};
+use ordered_float::OrderedFloat;
+use proptest::prelude::{Arbitrary, Just};
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
+use proptest_derive::Arbitrary;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 
+use crate::relation::proto_aggregate_func::{self, ProtoColumnOrders};
 use crate::relation::{
-    compare_columns, proto_aggregate_func, proto_aggregate_func::ProtoColumnOrders,
-    proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
+    compare_columns, proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc,
+    WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
@@ -2222,8 +2219,7 @@ pub enum TableFunc {
 
 impl RustType<ProtoTableFunc> for TableFunc {
     fn into_proto(&self) -> ProtoTableFunc {
-        use proto_table_func::Kind;
-        use proto_table_func::ProtoWrap;
+        use proto_table_func::{Kind, ProtoWrap};
 
         ProtoTableFunc {
             kind: Some(match self {
@@ -2538,9 +2534,10 @@ impl fmt::Display for TableFunc {
 
 #[cfg(test)]
 mod tests {
-    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
 
     proptest! {
        #[test]

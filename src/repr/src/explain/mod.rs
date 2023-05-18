@@ -33,8 +33,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mz_ore::{stack::RecursionLimitError, str::Indent};
+use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::Indent;
 
+use crate::explain::dot::{dot_string, DisplayDot};
+use crate::explain::json::{json_string, DisplayJson};
+use crate::explain::text::{text_string, DisplayText};
 use crate::{ColumnType, GlobalId, ScalarType};
 
 pub mod dot;
@@ -43,11 +47,8 @@ pub mod text;
 #[cfg(feature = "tracing_")]
 pub mod tracing;
 
-use self::dot::{dot_string, DisplayDot};
-use self::json::{json_string, DisplayJson};
-use self::text::{text_string, DisplayText};
 #[cfg(feature = "tracing_")]
-pub use self::tracing::trace_plan;
+pub use crate::explain::tracing::trace_plan;
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]

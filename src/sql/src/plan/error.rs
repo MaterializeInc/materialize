@@ -9,11 +9,9 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::fmt;
-use std::io;
-use std::num::ParseIntError;
-use std::num::TryFromIntError;
+use std::num::{ParseIntError, TryFromIntError};
 use std::sync::Arc;
+use std::{fmt, io};
 
 use itertools::Itertools;
 use mz_expr::EvalError;
@@ -25,16 +23,13 @@ use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::strconv;
-use mz_repr::ColumnName;
-use mz_repr::GlobalId;
+use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{MutRecBlockOptionName, ObjectType, Privilege, UnresolvedItemName};
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
-use crate::names::PartialItemName;
-use crate::names::ResolvedItemName;
+use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 
@@ -144,7 +139,6 @@ pub enum PlanError {
     UnknownFunction {
         name: String,
         arg_types: Vec<String>,
-        alternative_hint: Option<String>,
     },
     IndistinctFunction {
         name: String,
@@ -182,6 +176,7 @@ pub enum PlanError {
     InvalidKeysInSubscribeEnvelopeUpsert,
     InvalidKeysInSubscribeEnvelopeDebezium,
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
+    FromValueRequiresParen,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -252,12 +247,7 @@ impl PlanError {
                 None
             }
             Self::InvalidOptionValue { err, .. } => err.hint(),
-            Self::UnknownFunction { alternative_hint, ..} => {
-                match alternative_hint {
-                    Some(_) => alternative_hint.clone(),
-                    None => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
-                }
-            }
+            Self::UnknownFunction { ..} => Some("No function matches the given name and argument types. You might need to add explicit type casts.".into()),
             Self::IndistinctFunction {..} => {
                 Some("Could not choose a best candidate function. You might need to add explicit type casts.".into())
             }
@@ -283,6 +273,7 @@ impl PlanError {
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 Some("All order bys must be output columns.".into())
             }
+            Self::Catalog(e) => e.hint(),
             _ => None,
         }
     }
@@ -474,6 +465,9 @@ impl fmt::Display for PlanError {
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 write!(f, "invalid ORDER BY in SUBSCRIBE WITHIN TIMESTAMP ORDER BY")
             }
+            Self::FromValueRequiresParen => f.write_str(
+                "VALUES expression in FROM clause must be surrounded by parentheses"
+            ),
         }
     }
 }

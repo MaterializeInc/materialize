@@ -22,23 +22,6 @@ use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
 use maplit::btreemap;
-use prometheus::core::AtomicU64;
-use rdkafka::client::ClientContext;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::{KafkaError, KafkaResult, RDKafkaError, RDKafkaErrorCode};
-use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
-use rdkafka::producer::Producer;
-use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
-use rdkafka::{Offset, TopicPartitionList};
-use serde::{Deserialize, Serialize};
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Enter, Leave, Map};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp as _};
-use timely::PartialOrder;
-use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
-
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
@@ -60,6 +43,21 @@ use mz_storage_client::types::sinks::{
     StorageSinkDesc,
 };
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use prometheus::core::AtomicU64;
+use rdkafka::client::ClientContext;
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::error::{KafkaError, KafkaResult, RDKafkaError, RDKafkaErrorCode};
+use rdkafka::message::{Header, Message, OwnedHeaders, OwnedMessage, ToBytes};
+use rdkafka::producer::{BaseRecord, DeliveryResult, Producer, ProducerContext, ThreadedProducer};
+use rdkafka::{Offset, TopicPartitionList};
+use serde::{Deserialize, Serialize};
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::{Enter, Leave, Map};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::{Antichain, Timestamp as _};
+use timely::PartialOrder;
+use tokio::sync::Mutex;
+use tracing::{debug, error, info, warn};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 use crate::render::sinks::{HealthcheckerArgs, SinkRender};

@@ -8,9 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::{bail, Context};
-use tokio::process::Command;
-
 use mz_ore::option::OptionExt;
+use tokio::process::Command;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;

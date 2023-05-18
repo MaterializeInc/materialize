@@ -11,10 +11,9 @@
 
 use std::sync::Arc;
 
-use timely::worker::Worker as TimelyWorker;
-
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_persist_client::cache::PersistClientCache;
+use timely::worker::Worker as TimelyWorker;
 
 /// A trait for letting specific server implementations hook
 /// into handling of `CreateTimely` commands. Usually implemented by

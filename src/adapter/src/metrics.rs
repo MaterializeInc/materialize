@@ -7,13 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
-
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
+use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -141,6 +140,7 @@ where
         StatementKind::RevokeRole => "revoke_role",
         StatementKind::GrantPrivilege => "grant_privilege",
         StatementKind::RevokePrivilege => "revoke_privilege",
+        StatementKind::ReassignOwned => "reassign_owned",
     }
 }
 

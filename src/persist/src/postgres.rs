@@ -9,7 +9,11 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use crate::cfg::ConsensusKnobs;
+use std::fmt::Formatter;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -17,9 +21,9 @@ use deadpool_postgres::tokio_postgres::config::SslMode;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::{
-    Hook, HookError, HookErrorCause, ManagerConfig, Object, PoolError, RecyclingMethod,
+    Hook, HookError, HookErrorCause, Manager, ManagerConfig, Object, Pool, PoolError,
+    RecyclingMethod,
 };
-use deadpool_postgres::{Manager, Pool};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -27,12 +31,9 @@ use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
-use std::fmt::Formatter;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tracing::debug;
 
+use crate::cfg::ConsensusKnobs;
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
 use crate::metrics::PostgresConsensusMetrics;
@@ -146,6 +147,9 @@ impl PostgresConsensusConfig {
             fn connect_timeout(&self) -> Duration {
                 Duration::MAX
             }
+            fn tcp_user_timeout(&self) -> Duration {
+                Duration::ZERO
+            }
         }
 
         let config = PostgresConsensusConfig::new(
@@ -175,6 +179,7 @@ impl PostgresConsensus {
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
         let mut pg_config: Config = config.url.parse()?;
         pg_config.connect_timeout(config.knobs.connect_timeout());
+        pg_config.tcp_user_timeout(config.knobs.tcp_user_timeout());
         let tls = make_tls(&pg_config)?;
 
         let manager = Manager::from_config(
@@ -494,9 +499,10 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::consensus_impl_test;
     use tracing::info;
     use uuid::Uuid;
+
+    use crate::location::tests::consensus_impl_test;
 
     use super::*;
 

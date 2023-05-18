@@ -9,13 +9,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{Datum, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Row};
-
-use self::proto_map_filter_project::ProtoPredicate;
+use crate::linear::proto_map_filter_project::ProtoPredicate;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
@@ -1426,12 +1425,11 @@ pub mod plan {
     use std::collections::BTreeMap;
     use std::iter;
 
+    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+    use mz_repr::{Datum, Diff, Row, RowArena};
     use proptest::prelude::*;
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
-
-    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-    use mz_repr::{Datum, Diff, Row, RowArena};
 
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
@@ -1885,9 +1883,11 @@ pub mod plan {
 
 #[cfg(test)]
 mod tests {
-    use super::plan::*;
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use crate::linear::plan::*;
+
+    use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

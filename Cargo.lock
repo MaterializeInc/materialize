@@ -787,9 +787,9 @@ dependencies = [
 
 [[package]]
 name = "bindgen"
-version = "0.64.0"
+version = "0.65.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4243e6031260db77ede97ad86c27e501d646a27ab57b59a574f725d98ab1fb4"
+checksum = "cfdf7b466f9a4903edc73f95d6d2bcd5baf8ae620638762244d3f60143643cc5"
 dependencies = [
  "bitflags",
  "cexpr",
@@ -797,12 +797,13 @@ dependencies = [
  "lazy_static",
  "lazycell",
  "peeking_take_while",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
  "rustc-hash",
  "shlex",
- "syn 1.0.107",
+ "syn 2.0.12",
 ]
 
 [[package]]
@@ -1008,10 +1009,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "chrono"
 version = "0.4.24"
-source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#35b145bd0ca721b5926e36f047eec8e1060372c0"
+source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#ada0629bb45cf08e9ff72f0ac18fe5eb43d628cb"
 dependencies = [
  "iana-time-zone",
- "num-integer",
  "num-traits",
  "serde",
  "winapi",
@@ -3043,16 +3043,18 @@ dependencies = [
 
 [[package]]
 name = "librocksdb-sys"
-version = "0.10.0+7.9.2"
+version = "0.11.0+8.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fe4d5874f5ff2bc616e55e8c6086d478fcda13faf9495768a4aa1c22042d30b"
+checksum = "d3386f101bcb4bd252d8e9d2fb41ec3b0862a15a62b478c355b2982efa469e3e"
 dependencies = [
- "bindgen 0.64.0",
+ "bindgen 0.65.1",
  "bzip2-sys",
  "cc",
  "glob",
  "libc",
  "libz-sys",
+ "lz4-sys",
+ "zstd-sys",
 ]
 
 [[package]]
@@ -3122,6 +3124,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6e8aaa3f231bb4bd57b84b2d5dc3ae7f350265df8aa96492e0bc394a1571909"
 dependencies = [
  "hashbrown",
+]
+
+[[package]]
+name = "lz4-sys"
+version = "1.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57d27b317e207b10f69f5e75494119e391a96f48861ae870d1da6edac98ca900"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
@@ -3415,6 +3427,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-segment",
  "mz-sql",
@@ -3612,6 +3625,7 @@ dependencies = [
  "once_cell",
  "prometheus",
  "regex",
+ "rocksdb",
  "scopeguard",
  "serde",
  "smallvec",
@@ -3656,7 +3670,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.54.0-dev"
+version = "0.55.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3806,7 +3820,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.54.0-dev"
+version = "0.55.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4330,7 +4344,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.54.0-dev"
+version = "0.55.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4632,13 +4646,24 @@ dependencies = [
  "bincode",
  "itertools",
  "mz-ore",
+ "mz-proto",
+ "num_cpus",
+ "once_cell",
  "prometheus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
  "rocksdb",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
+ "tonic-build",
  "tracing",
+ "uncased",
  "workspace-hack",
 ]
 
@@ -4750,6 +4775,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-sql-parser",
  "mz-storage-client",
@@ -4862,16 +4888,21 @@ name = "mz-stash"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bitflags",
+ "bytes",
  "criterion",
  "differential-dataflow",
  "fail",
  "futures",
+ "itertools",
  "md-5",
  "mz-ore",
  "mz-postgres-util",
  "once_cell",
  "postgres-openssl",
  "prometheus",
+ "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -4882,6 +4913,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -5016,6 +5048,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-rocksdb",
  "mz-secrets",
  "mz-service",
  "mz-ssh-util",
@@ -5033,6 +5066,7 @@ dependencies = [
  "regex",
  "scopeguard",
  "serde",
+ "serde_json",
  "thiserror",
  "timely",
  "tokio",
@@ -5994,12 +6028,12 @@ dependencies = [
 
 [[package]]
 name = "prettyplease"
-version = "0.1.9"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b83ec2d0af5c5c556257ff52c9f98934e243b9fd39604bfb2a9b75ec2e97f18"
+checksum = "1ceca8aaf45b5c46ec7ed39fff75f57290368c1846d33d24a122ca81416ab058"
 dependencies = [
  "proc-macro2",
- "syn 1.0.107",
+ "syn 2.0.12",
 ]
 
 [[package]]
@@ -6104,8 +6138,7 @@ dependencies = [
 [[package]]
 name = "prost"
 version = "0.11.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b82eaa1d779e9a4bc1c3217db8ffbeabaae1dca241bf70183242128d48681cd"
+source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -6114,8 +6147,7 @@ dependencies = [
 [[package]]
 name = "prost-build"
 version = "0.11.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "119533552c9a7ffacc21e099c24a0ac8bb19c2a2a3f363de84cd9b844feab270"
+source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
 dependencies = [
  "bytes",
  "heck",
@@ -6128,7 +6160,7 @@ dependencies = [
  "prost",
  "prost-types",
  "regex",
- "syn 1.0.107",
+ "syn 2.0.12",
  "tempfile",
  "which",
 ]
@@ -6136,8 +6168,7 @@ dependencies = [
 [[package]]
 name = "prost-derive"
 version = "0.11.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5d2d8d10f3c6ded6da8b05b5fb3b8a5082514344d56c9f871412d29b4e075b4"
+source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
 dependencies = [
  "anyhow",
  "itertools",
@@ -6162,8 +6193,7 @@ dependencies = [
 [[package]]
 name = "prost-types"
 version = "0.11.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "213622a1460818959ac1181aaeb2dc9c7f63df720db7d788b3e24eacd1983e13"
+source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
 dependencies = [
  "prost",
 ]
@@ -6460,9 +6490,9 @@ dependencies = [
 
 [[package]]
 name = "rocksdb"
-version = "0.20.1"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "015439787fce1e75d55f279078d33ff14b4af5d93d995e8838ee4631301c8a99"
+checksum = "bb6f170a4041d50a0ce04b0d2e14916d6ca863ea2e422689a5b694395d299ffe"
 dependencies = [
  "libc",
  "librocksdb-sys",
@@ -7753,14 +7783,13 @@ dependencies = [
 [[package]]
 name = "tonic-build"
 version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48c6fd7c2581e36d63388a9e04c350c21beb7a8b059580b2e93993c526899ddc"
+source = "git+https://github.com/umanwizard/tonic#76489bf665af99d6e0e83f81648fcac283ea57e1"
 dependencies = [
  "prettyplease",
  "proc-macro2",
  "prost-build",
  "quote",
- "syn 1.0.107",
+ "syn 2.0.12",
 ]
 
 [[package]]

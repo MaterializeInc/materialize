@@ -105,6 +105,7 @@ fn main() {
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
+        .extern_path(".mz_rocksdb", "::mz_rocksdb")
         .extern_path(".mz_cluster_client", "::mz_cluster_client")
         .compile_with_config(
             config,

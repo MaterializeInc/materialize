@@ -172,7 +172,14 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use differential_dataflow::Hashable;
 use itertools::Itertools;
+use mz_build_info::{build_info, BuildInfo};
+use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
+use mz_ore::cast::CastFrom;
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task;
+use mz_persist::indexed::columnar::ColumnarRecords;
+use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
@@ -183,14 +190,6 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, info_span, trace, warn, Instrument};
-
-use mz_build_info::{build_info, BuildInfo};
-use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
-use mz_ore::cast::CastFrom;
-use mz_ore::cli::{self, CliConfig};
-use mz_ore::metrics::MetricsRegistry;
-use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 
 // TODO(aljoscha): Make workload configurable: cardinality of keyspace, hot vs. cold keys, the
 // works.
@@ -1184,8 +1183,9 @@ impl Map for BTreeMap<Vec<u8>, Vec<u8>> {
     }
 }
 
-use rocksdb::{Error, DB};
 use std::path::{Path, PathBuf};
+
+use rocksdb::{Error, DB};
 use tokio::sync::oneshot::{channel, Sender};
 
 #[derive(Clone)]

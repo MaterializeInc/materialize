@@ -39,6 +39,7 @@ use crate::fetch::{fetch_batch_part, EncodedPart};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
+use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::{Metrics, PersistConfig, ShardId, WriterId};
@@ -309,6 +310,7 @@ where
                         CompactConfig::from(&cfg),
                         Arc::clone(&blob),
                         Arc::clone(&metrics),
+                        Arc::clone(&machine.applier.shard_metrics),
                         Arc::clone(&cpu_heavy_runtime),
                         req,
                         writer_id,
@@ -409,6 +411,7 @@ where
         cfg: CompactConfig,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         req: CompactReq<T>,
         writer_id: WriterId,
@@ -476,6 +479,7 @@ where
                 runs,
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
+                Arc::clone(&shard_metrics),
                 Arc::clone(&cpu_heavy_runtime),
                 writer_id.clone(),
                 schemas.clone(),
@@ -639,6 +643,7 @@ where
         runs: Vec<(&'a Description<T>, &'a [HollowBatchPart])>,
         blob: Arc<dyn Blob + Send + Sync>,
         metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         writer_id: WriterId,
         real_schemas: Schemas<K, V>,
@@ -681,6 +686,7 @@ where
         let mut batch = BatchBuilderInternal::<Vec<u8>, Vec<u8>, T, D>::new(
             cfg.batch.clone(),
             Arc::clone(&metrics),
+            Arc::clone(&shard_metrics),
             fake_compaction_schema,
             metrics.compaction.batch.clone(),
             desc.lower().clone(),
@@ -693,7 +699,14 @@ where
             true,
         );
 
-        start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
+        start_prefetches(
+            prefetch_budget_bytes,
+            &mut runs,
+            shard_id,
+            &blob,
+            &metrics,
+            &shard_metrics,
+        );
 
         let all_prefetched = runs
             .iter()
@@ -707,7 +720,7 @@ where
             if let Some(part) = parts.pop_front() {
                 let start = Instant::now();
                 let mut part = part
-                    .join(shard_id, blob.as_ref(), &metrics, part_desc)
+                    .join(shard_id, blob.as_ref(), &metrics, &shard_metrics, part_desc)
                     .await?;
                 // Ideally we'd hook into start_prefetches here, too, but runs
                 // is mutable borrowed. Not the end of the world. Instead do it
@@ -727,7 +740,14 @@ where
             }
         }
 
-        start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
+        start_prefetches(
+            prefetch_budget_bytes,
+            &mut runs,
+            shard_id,
+            &blob,
+            &metrics,
+            &shard_metrics,
+        );
 
         // repeatedly pull off the least element from our heap, refilling from the originating run
         // if needed. the heap will be exhausted only when all parts from all input runs have been
@@ -740,7 +760,7 @@ where
                 if let Some(part) = parts.pop_front() {
                     let start = Instant::now();
                     let mut part = part
-                        .join(shard_id, blob.as_ref(), &metrics, part_desc)
+                        .join(shard_id, blob.as_ref(), &metrics, &shard_metrics, part_desc)
                         .await?;
                     // start_prefetches is O(n) so calling it here is O(n^2). N
                     // is the number of things we're about to fetch over the
@@ -748,7 +768,14 @@ where
                     // got bigger problems. It might be possible to do make this
                     // overall linear, but the bookkeeping would be pretty
                     // subtle.
-                    start_prefetches(prefetch_budget_bytes, &mut runs, shard_id, &blob, &metrics);
+                    start_prefetches(
+                        prefetch_budget_bytes,
+                        &mut runs,
+                        shard_id,
+                        &blob,
+                        &metrics,
+                        &shard_metrics,
+                    );
                     timings.part_fetching += start.elapsed();
                     let start = Instant::now();
                     while let Some((k, v, mut t, d)) = part.next() {
@@ -851,6 +878,7 @@ impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
         shard_id: &ShardId,
         blob: &(dyn Blob + Send + Sync),
         metrics: &Metrics,
+        shard_metrics: &ShardMetrics,
         part_desc: &Description<T>,
     ) -> Result<EncodedPart<T>, anyhow::Error> {
         match self {
@@ -868,6 +896,7 @@ impl<'a, T: Timestamp + Lattice + Codec64> CompactionPart<'a, T> {
                     shard_id,
                     blob,
                     metrics,
+                    shard_metrics,
                     &metrics.read.compaction,
                     &part.key,
                     part_desc,
@@ -884,6 +913,7 @@ fn start_prefetches<T: Timestamp + Lattice + Codec64>(
     shard_id: &ShardId,
     blob: &Arc<dyn Blob + Send + Sync>,
     metrics: &Arc<Metrics>,
+    shard_metrics: &Arc<ShardMetrics>,
 ) {
     // First account for how much budget has already been used
     for (_, run) in runs.iter() {
@@ -925,6 +955,7 @@ fn start_prefetches<T: Timestamp + Lattice + Codec64>(
             let shard_id = *shard_id;
             let blob = Arc::clone(blob);
             let metrics = Arc::clone(metrics);
+            let shard_metrics = Arc::clone(shard_metrics);
             let part_key = part.key.clone();
             let part_desc = part_desc.clone();
             let handle = spawn(
@@ -934,6 +965,7 @@ fn start_prefetches<T: Timestamp + Lattice + Codec64>(
                         &shard_id,
                         blob.as_ref(),
                         &metrics,
+                        &shard_metrics,
                         &metrics.read.compaction,
                         &part_key,
                         &part_desc,
@@ -949,14 +981,14 @@ fn start_prefetches<T: Timestamp + Lattice + Codec64>(
 
 #[cfg(test)]
 mod tests {
-    use crate::internal::paths::PartialBatchKey;
-    use crate::PersistLocation;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use timely::progress::Antichain;
 
+    use crate::internal::paths::PartialBatchKey;
     use crate::tests::{
         all_ok, expect_fetch_part, new_test_client, new_test_client_cache, CodecProduct,
     };
+    use crate::PersistLocation;
 
     use super::*;
 
@@ -1011,6 +1043,7 @@ mod tests {
             CompactConfig::from(&write.cfg),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
+            write.metrics.shards.shard(&write.machine.shard_id()),
             Arc::new(CpuHeavyRuntime::new()),
             req.clone(),
             write.writer_id.clone(),
@@ -1098,6 +1131,7 @@ mod tests {
             CompactConfig::from(&write.cfg),
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
+            write.metrics.shards.shard(&write.machine.shard_id()),
             Arc::new(CpuHeavyRuntime::new()),
             req.clone(),
             write.writer_id.clone(),
@@ -1178,41 +1212,42 @@ mod tests {
         let shard_id = ShardId::new();
         let blob = &client.blob;
         let metrics = &client.metrics;
+        let shard_metrics = &client.metrics.shards.shard(&shard_id);
 
         // NB: In the below, parts within a run are separated by `,` and runs
         // are separated by `|`. Example: `r0p0,r0p1|r1p0|r2p0,r2p1,r2p2`
 
         // Enough budget for none, some, and all parts of a single run
         let mut runs = parse(" 1, 1, 1");
-        start_prefetches(0, &mut runs, &shard_id, blob, metrics);
+        start_prefetches(0, &mut runs, &shard_id, blob, metrics, shard_metrics);
         assert_eq!(print(&runs), " 1, 1, 1");
 
         let mut runs = parse(" 1, 1, 1");
-        start_prefetches(1, &mut runs, &shard_id, blob, metrics);
+        start_prefetches(1, &mut runs, &shard_id, blob, metrics, shard_metrics);
         assert_eq!(print(&runs), "f1, 1, 1");
 
         let mut runs = parse(" 1, 1, 1");
-        start_prefetches(3, &mut runs, &shard_id, blob, metrics);
+        start_prefetches(3, &mut runs, &shard_id, blob, metrics, shard_metrics);
         assert_eq!(print(&runs), "f1,f1,f1");
 
         // Budget partially covers some part (which is then not prefetched)
         let mut runs = parse(" 1| 2| 2");
-        start_prefetches(4, &mut runs, &shard_id, blob, metrics);
+        start_prefetches(4, &mut runs, &shard_id, blob, metrics, shard_metrics);
         assert_eq!(print(&runs), "f1|f2| 2");
 
         // Runs of length > 1
         let mut runs = parse(" 1, 1, 1, 1| 1| 1, 1, 1");
-        start_prefetches(5, &mut runs, &shard_id, blob, metrics);
+        start_prefetches(5, &mut runs, &shard_id, blob, metrics, shard_metrics);
         assert_eq!(print(&runs), "f1,f1, 1, 1|f1|f1,f1, 1");
 
         // Some budget is already used from a previous call
         let mut runs = parse(" 1| 1|f1,f1");
-        start_prefetches(3, &mut runs, &shard_id, blob, metrics);
+        start_prefetches(3, &mut runs, &shard_id, blob, metrics, shard_metrics);
         assert_eq!(print(&runs), "f1| 1|f1,f1");
 
         // Sanity check budget has gone down (no panics)
         let mut runs = parse(" 1| 1|f9");
-        start_prefetches(1, &mut runs, &shard_id, blob, metrics);
+        start_prefetches(1, &mut runs, &shard_id, blob, metrics, shard_metrics);
         assert_eq!(print(&runs), " 1| 1|f9");
     }
 }

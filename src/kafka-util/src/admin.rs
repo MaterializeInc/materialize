@@ -12,12 +12,11 @@
 use std::iter;
 use std::time::Duration;
 
+use mz_ore::collections::CollectionExt;
+use mz_ore::retry::Retry;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic};
 use rdkafka::client::ClientContext;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
-
-use mz_ore::collections::CollectionExt;
-use mz_ore::retry::Retry;
 
 /// Creates a Kafka topic and waits for it to be reported in the broker
 /// metadata.

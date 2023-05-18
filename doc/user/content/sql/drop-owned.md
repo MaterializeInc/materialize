@@ -37,6 +37,7 @@ DROP OWNED BY joe, george CASCADE;
 
 - [REVOKE PRIVILEGE](../revoke-privilege)
 - [CREATE ROLE](../create-role)
+- [REASSIGN OWNED](../reassign-owned)
 - [DROP CLUSTER](../drop-cluster)
 - [DROP CLUSTER REPLICA](../drop-cluster-replica)
 - [DROP CONNECTION](../drop-connection)

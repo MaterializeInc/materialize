@@ -52,13 +52,12 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use timely::progress::frontier::AntichainRef;
-use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-
 use mz_ore::cast::CastFrom;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
+use timely::progress::frontier::AntichainRef;
+use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 
 use crate::internal::state::HollowBatch;
 
@@ -136,7 +135,6 @@ impl<T> Trace<T> {
         batches
     }
 
-    #[cfg(test)]
     pub fn num_spine_batches(&self) -> usize {
         let mut ret = 0;
         self.spine.map_batches(|_| ret += 1);
@@ -150,17 +148,10 @@ impl<T> Trace<T> {
         ret
     }
 
+    #[cfg(test)]
     pub fn num_updates(&self) -> usize {
         let mut ret = 0;
         self.map_batches(|b| ret += b.len);
-        ret
-    }
-
-    pub fn num_batch_parts(&self) -> usize {
-        let mut ret = 0;
-        self.map_batches(|b| {
-            ret += b.parts.len();
-        });
         ret
     }
 }
@@ -1201,8 +1192,9 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
 
 #[cfg(test)]
 pub mod datadriven {
-    use super::*;
     use crate::internal::datadriven::DirectiveArgs;
+
+    use super::*;
 
     /// Shared state for a single [crate::internal::trace] [datadriven::TestFile].
     #[derive(Debug, Default)]

@@ -533,6 +533,7 @@ where
         let builder = BatchBuilderInternal::new(
             BatchBuilderConfig::from(&self.cfg),
             Arc::clone(&self.metrics),
+            Arc::clone(&self.machine.applier.shard_metrics),
             self.schemas.clone(),
             self.metrics.user.clone(),
             lower,
@@ -766,9 +767,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use differential_dataflow::consolidation::consolidate_updates;
     use serde_json::json;
-    use std::str::FromStr;
 
     use crate::tests::{all_ok, new_test_client};
     use crate::ShardId;

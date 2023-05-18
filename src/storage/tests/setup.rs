@@ -82,8 +82,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use timely::progress::{Antichain, Timestamp as _};
-
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
@@ -92,18 +90,19 @@ use mz_ore::task::RuntimeExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::TimestampManipulation;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp, TimestampManipulation};
 use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use mz_storage::sink::SinkBaseMetrics;
 use mz_storage::source::metrics::SourceBaseMetrics;
 use mz_storage::source::testscript::ScriptCommand;
 use mz_storage::source::types::SourceRender;
 use mz_storage::DecodeMetrics;
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{
-    encoding::SourceDataEncoding, GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope,
-    SourceTimestamp, TestScriptSourceConnection,
+    GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceTimestamp,
+    TestScriptSourceConnection,
 };
+use timely::progress::{Antichain, Timestamp as _};
 
 pub fn run_script_source(
     source: Vec<ScriptCommand>,
@@ -239,7 +238,9 @@ where
                     sink_metrics,
                     SYSTEM_TIME.clone(),
                     connection_context,
-                    mz_storage_client::types::instances::StorageInstanceContext::for_tests(),
+                    mz_storage::storage_state::StorageInstanceContext::for_tests(
+                        rocksdb::Env::new().unwrap(),
+                    ),
                     Arc::clone(&persist_clients),
                 )
             };

@@ -15,10 +15,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use itertools::Itertools;
+use mz_repr::{GlobalId, Row};
 use timely::progress::ChangeBatch;
 use tokio::sync::oneshot;
-
-use mz_repr::{GlobalId, Row};
 
 use crate::client::PackableStats;
 use crate::controller::collection_mgmt::CollectionManager;
