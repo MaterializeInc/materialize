@@ -4939,6 +4939,7 @@ dependencies = [
  "mz-stash",
  "mz-storage-client",
  "once_cell",
+ "prost",
  "serde_json",
  "tokio",
  "tokio-postgres",
