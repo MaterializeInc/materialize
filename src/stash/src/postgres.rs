@@ -925,10 +925,11 @@ impl Stash {
 
                         match version {
                             ..=TOO_OLD_VERSION => return Err(incompatible),
-                            // TODO(parkmycar): Add these migrations.
-                            13 => (),
-                            14 => (),
-                            //
+
+                            13 => upgrade::v13_to_v14::upgrade(),
+                            14 => upgrade::v14_to_v15::upgrade(),
+                            15 => upgrade::v15_to_v16::upgrade(&mut tx).await?,
+
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),
                             FUTURE_VERSION.. => return Err(incompatible),
