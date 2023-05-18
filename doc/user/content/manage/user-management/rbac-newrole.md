@@ -23,10 +23,10 @@ the end of this tutorial you will:
 
 ## Step 1. Invite a new user
 
-First, [login to the Materialize console](https://console.materialize.com/) and navigate to Account > Account
+1. [Login to the Materialize console](https://console.materialize.com/) and navigate to Account > Account
 Settings > Users.
 
-Click **Invite User** and fill in the user information.
+1. Click **Invite User** and fill in the user information.
 
 The **Organization Admin** and **Organization Member** roles refer to `SUPERUSER`
 privileges
@@ -37,7 +37,13 @@ Materialize stores role names, IDs, and object IDs in the `mz_roles` catalog
 table. You need to connect to your Materialize instance with `psql` to add roles
 to this table.
 
-1. In the [Materialize UI](https://console.materialize.com/), go to the **Connect** screen, create a new app password and then copy the `psql` command.
+1. In the [Materialize UI](https://console.materialize.com/), go to the **Connect** screen.
+
+1. Create a new app password.
+
+    The app password will be displayed only once, so be sure to copy the password somewhere safe. If you forget your password, you can create a new one.
+
+1. Copy the `psql` command.
 
     The app password will be displayed only once, so be sure to copy the password somewhere safe. If you forget your password, you can create a new one.
 
