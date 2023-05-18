@@ -44,6 +44,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_stash::objects::proto;
 use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -59,6 +60,7 @@ use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
 };
+use crate::controller::command_wals::ProtoShardId;
 use crate::controller::rehydration::RehydratingStorageClient;
 use crate::healthcheck;
 use crate::metrics::StorageControllerMetrics;
@@ -78,10 +80,10 @@ mod statistics;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.controller.rs"));
 
-pub static METADATA_COLLECTION: TypedCollection<GlobalId, DurableCollectionMetadata> =
+pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableCollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");
 
-pub static METADATA_EXPORT: TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> =
+pub static METADATA_EXPORT: TypedCollection<proto::GlobalId, proto::DurableExportMetadata> =
     TypedCollection::new("storage-export-metadata-u64");
 
 pub static ALL_COLLECTIONS: &[&str] = &[
@@ -95,14 +97,15 @@ struct MetadataExportFetcher;
 trait MetadataExport<T>
 where
     // Associated type would be better but you can't express this relationship without unstable
-    DurableExportMetadata<T>: mz_stash::Data,
+    DurableExportMetadata<T>: RustType<proto::DurableExportMetadata>,
 {
-    fn get_stash_collection() -> &'static TypedCollection<GlobalId, DurableExportMetadata<T>>;
+    fn get_stash_collection(
+    ) -> &'static TypedCollection<proto::GlobalId, proto::DurableExportMetadata>;
 }
 
 impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
     fn get_stash_collection(
-    ) -> &'static TypedCollection<GlobalId, DurableExportMetadata<mz_repr::Timestamp>> {
+    ) -> &'static TypedCollection<proto::GlobalId, proto::DurableExportMetadata> {
         &METADATA_EXPORT
     }
 }
@@ -669,12 +672,10 @@ impl RustType<mz_stash::objects::proto::DurableCollectionMetadata> for DurableCo
         mz_stash::objects::proto::DurableCollectionMetadata {
             remap_shard: self
                 .remap_shard
-                .map(|id| mz_stash::objects::proto::ShardId {
-                    id: id.into_proto(),
+                .map(|id| mz_stash::objects::proto::StringWrapper {
+                    inner: id.into_proto(),
                 }),
-            data_shard: Some(mz_stash::objects::proto::ShardId {
-                id: self.data_shard.into_proto(),
-            }),
+            data_shard: self.data_shard.into_proto(),
         }
     }
 
@@ -683,14 +684,9 @@ impl RustType<mz_stash::objects::proto::DurableCollectionMetadata> for DurableCo
     ) -> Result<Self, TryFromProtoError> {
         let remap_shard = proto
             .remap_shard
-            .map(|shard| ShardId::from_proto(shard.id))
+            .map(|shard| ShardId::from_proto(shard.inner))
             .transpose()?;
-        let data_shard = proto
-            .data_shard
-            .ok_or_else(|| {
-                TryFromProtoError::missing_field("DurableCollectionMetadata::data_shard")
-            })
-            .and_then(|shard| ShardId::from_proto(shard.id))?;
+        let data_shard = proto.data_shard.into_rust()?;
         Ok(DurableCollectionMetadata {
             remap_shard,
             data_shard,
@@ -1089,7 +1085,7 @@ where
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
     MetadataExportFetcher: MetadataExport<T>,
-    DurableExportMetadata<T>: mz_stash::Data,
+    DurableExportMetadata<T>: RustType<proto::DurableExportMetadata>,
 {
     type Timestamp = T;
 
@@ -1244,10 +1240,22 @@ where
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
         // the time spent waiting for stash.
         METADATA_COLLECTION
-            .insert_without_overwrite(&mut self.state.stash, entries.into_iter())
+            .insert_without_overwrite(
+                &mut self.state.stash,
+                entries
+                    .into_iter()
+                    .map(|(key, val)| (key.into_proto(), val.into_proto())),
+            )
             .await?;
 
-        let mut durable_metadata = METADATA_COLLECTION.peek_one(&mut self.state.stash).await?;
+        let mut durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> =
+            METADATA_COLLECTION
+                .peek_one(&mut self.state.stash)
+                .await?
+                .into_iter()
+                .map(RustType::from_proto)
+                .collect::<Result<_, _>>()
+                .map_err(|e| StorageError::IOError(e.into()))?;
 
         // We first enrich each collection description with some additional metadata...
         use futures::stream::{StreamExt, TryStreamExt};
@@ -1755,15 +1763,18 @@ where
 
             let storage_dependencies = vec![from_id];
 
-            let mut durable_export_data = MetadataExportFetcher::get_stash_collection()
+            let value = MetadataExportFetcher::get_stash_collection()
                 .insert_key_without_overwrite(
                     &mut self.state.stash,
-                    id,
+                    id.into_proto(),
                     DurableExportMetadata {
                         initial_as_of: description.sink.as_of.clone(),
-                    },
+                    }
+                    .into_proto(),
                 )
                 .await?;
+            let mut durable_export_data = DurableExportMetadata::from_proto(value)
+                .map_err(|e| StorageError::IOError(e.into()))?;
 
             durable_export_data.initial_as_of.downgrade(&acquired_since);
 
@@ -2194,7 +2205,12 @@ where
                     .await;
 
                 METADATA_COLLECTION
-                    .delete_keys(&mut self.state.stash, ids)
+                    .delete_keys(
+                        &mut self.state.stash,
+                        ids.into_iter()
+                            .map(|id| RustType::into_proto(&id))
+                            .collect(),
+                    )
                     .await
                     .expect("stash operation must succeed");
 
@@ -2832,7 +2848,10 @@ where
 
         // Update the on-disk representation.
         METADATA_COLLECTION
-            .upsert(&mut self.state.stash, upsert_state.into_iter())
+            .upsert(
+                &mut self.state.stash,
+                upsert_state.into_iter().map(|s| RustType::into_proto(&s)),
+            )
             .await
             .expect("connect to stash");
 
@@ -2897,7 +2916,7 @@ where
             .with_transaction(move |tx| {
                 Box::pin(async move {
                     let collection = tx
-                        .collection::<ShardId, ()>(command_wals::SHARD_FINALIZATION.name())
+                        .collection::<ProtoShardId, ()>(command_wals::SHARD_FINALIZATION.name())
                         .await
                         .expect("named collection must exist");
                     tx.peek(collection).await
@@ -2906,7 +2925,7 @@ where
             .await
             .expect("stash operation succeeds")
             .into_iter()
-            .map(|(shard, _, _)| shard);
+            .map(|(shard, _, _)| ShardId::from_proto(shard).expect("invalid ShardId"));
 
         // Open a persist client to delete unused shards.
         let persist_client = self
