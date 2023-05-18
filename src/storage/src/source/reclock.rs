@@ -29,14 +29,13 @@ use differential_dataflow::consolidation;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
-use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
-use timely::progress::Timestamp;
-
 use mz_persist_client::error::UpperMismatch;
 use mz_repr::Diff;
 use mz_storage_client::util::remap_handle::RemapHandle;
 use mz_timely_util::antichain::AntichainExt;
+use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::progress::Timestamp;
 
 pub mod compat;
 
@@ -607,22 +606,18 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::time::Duration;
 
     use futures::Stream;
     use itertools::Itertools;
-    use once_cell::sync::Lazy;
-    use timely::progress::Timestamp as _;
-
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
@@ -630,6 +625,10 @@ mod tests {
     use mz_storage_client::types::sources::{MzOffset, SourceData};
     use mz_storage_client::util::remap_handle::RemapHandle;
     use mz_timely_util::order::Partitioned;
+    use once_cell::sync::Lazy;
+    use timely::progress::Timestamp as _;
+
+    use super::*;
 
     // 15 minutes
     static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
@@ -637,7 +636,11 @@ mod tests {
     static PERSIST_CACHE: Lazy<Arc<PersistClientCache>> = Lazy::new(|| {
         let mut persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         persistcfg.reader_lease_duration = PERSIST_READER_LEASE_TIMEOUT_MS;
-        Arc::new(PersistClientCache::new(persistcfg, &MetricsRegistry::new()))
+        Arc::new(PersistClientCache::new(
+            persistcfg,
+            &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
+        ))
     });
 
     static PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {

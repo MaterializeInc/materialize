@@ -22,20 +22,22 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Blob, Consensus, ExternalError, BLOB_GET_LIVENESS_KEY, CONSENSUS_HEAD_LIVENESS_KEY,
+    Blob, Consensus, ExternalError, VersionedData, BLOB_GET_LIVENESS_KEY,
+    CONSENSUS_HEAD_LIVENESS_KEY,
 };
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus};
+use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus, ShardMetrics};
 use crate::internal::state::TypedState;
 use crate::internal::watch::StateWatchNotifier;
+use crate::rpc::{PubSubClientConnection, PubSubSender, ShardSubscriptionToken};
 use crate::{PersistClient, PersistConfig, PersistLocation, ShardId};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
@@ -53,7 +55,9 @@ pub struct PersistClientCache {
     blob_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Blob + Send + Sync>)>>,
     consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus + Send + Sync>)>>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-    state_cache: Arc<StateCache>,
+    pub(crate) state_cache: Arc<StateCache>,
+    pubsub_sender: Arc<dyn PubSubSender>,
+    _pubsub_receiver_task: JoinHandle<()>,
 }
 
 #[derive(Debug)]
@@ -67,15 +71,32 @@ impl Drop for RttLatencyTask {
 
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
-    pub fn new(cfg: PersistConfig, registry: &MetricsRegistry) -> Self {
+    pub fn new<F>(cfg: PersistConfig, registry: &MetricsRegistry, pubsub: F) -> Self
+    where
+        F: FnOnce(&PersistConfig, Arc<Metrics>) -> PubSubClientConnection,
+    {
         let metrics = Arc::new(Metrics::new(&cfg, registry));
+        let pubsub_client = pubsub(&cfg, Arc::clone(&metrics));
+
+        let state_cache = Arc::new(StateCache::new(
+            &cfg,
+            Arc::clone(&metrics),
+            Arc::clone(&pubsub_client.sender),
+        ));
+        let _pubsub_receiver_task = crate::rpc::subscribe_state_cache_to_pubsub(
+            Arc::clone(&state_cache),
+            pubsub_client.receiver,
+        );
+
         PersistClientCache {
             cfg,
-            metrics: Arc::clone(&metrics),
+            metrics,
             blob_by_uri: Mutex::new(BTreeMap::new()),
             consensus_by_uri: Mutex::new(BTreeMap::new()),
             cpu_heavy_runtime: Arc::new(CpuHeavyRuntime::new()),
-            state_cache: Arc::new(StateCache::new(metrics)),
+            state_cache,
+            pubsub_sender: pubsub_client.sender,
+            _pubsub_receiver_task,
         }
     }
 
@@ -83,7 +104,11 @@ impl PersistClientCache {
     /// metrics.
     #[cfg(test)]
     pub fn new_no_metrics() -> Self {
-        Self::new(PersistConfig::new_for_tests(), &MetricsRegistry::new())
+        Self::new(
+            PersistConfig::new_for_tests(),
+            &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
+        )
     }
 
     /// Returns the [PersistConfig] being used by this cache.
@@ -106,6 +131,7 @@ impl PersistClientCache {
             Arc::clone(&self.metrics),
             Arc::clone(&self.cpu_heavy_runtime),
             Arc::clone(&self.state_cache),
+            Arc::clone(&self.pubsub_sender),
         )
     }
 
@@ -263,16 +289,17 @@ async fn consensus_rtt_latency_task(
     })
 }
 
-trait DynState: Debug + Send + Sync {
+pub(crate) trait DynState: Debug + Send + Sync {
     fn codecs(&self) -> (String, String, String, String, Option<CodecConcreteType>);
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
+    fn push_diff(&self, diff: VersionedData);
 }
 
 impl<K, V, T, D> DynState for LockingTypedState<K, V, T, D>
 where
     K: Codec,
     V: Codec,
-    T: Timestamp + Codec64,
+    T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
     fn codecs(&self) -> (String, String, String, String, Option<CodecConcreteType>) {
@@ -288,6 +315,29 @@ where
     fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
         self
     }
+
+    fn push_diff(&self, diff: VersionedData) {
+        self.write_lock(&self.metrics.locks.applier_write, |state| {
+            let seqno_before = state.seqno;
+            state.apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(&diff));
+            let seqno_after = state.seqno;
+            assert!(seqno_after >= seqno_before);
+
+            if seqno_before != seqno_after {
+                debug!(
+                    "applied pushed diff {}. seqno {} -> {}.",
+                    state.shard_id, seqno_before, state.seqno
+                );
+                self.shard_metrics.pubsub_push_diff_applied.inc();
+            } else {
+                debug!(
+                    "failed to apply pushed diff {}. seqno {} vs diff {}",
+                    state.shard_id, seqno_before, diff.seqno
+                );
+                self.shard_metrics.pubsub_push_diff_not_applied.inc();
+            }
+        })
+    }
 }
 
 /// A cache of `TypedState`, shared between all machines for that shard.
@@ -302,8 +352,10 @@ where
 /// if the racing commands are on the same process.
 #[derive(Debug)]
 pub struct StateCache {
-    metrics: Arc<Metrics>,
-    states: Mutex<BTreeMap<ShardId, Arc<OnceCell<Weak<dyn DynState>>>>>,
+    cfg: Arc<PersistConfig>,
+    pub(crate) metrics: Arc<Metrics>,
+    states: Arc<std::sync::Mutex<BTreeMap<ShardId, Arc<OnceCell<Weak<dyn DynState>>>>>>,
+    pubsub_sender: Arc<dyn PubSubSender>,
 }
 
 #[derive(Debug)]
@@ -314,19 +366,29 @@ enum StateCacheInit {
 
 impl StateCache {
     /// Returns a new StateCache.
-    pub fn new(metrics: Arc<Metrics>) -> Self {
+    pub fn new(
+        cfg: &PersistConfig,
+        metrics: Arc<Metrics>,
+        pubsub_sender: Arc<dyn PubSubSender>,
+    ) -> Self {
         StateCache {
+            cfg: Arc::new(cfg.clone()),
             metrics,
             states: Default::default(),
+            pubsub_sender,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn new_no_metrics() -> Self {
-        Self::new(Arc::new(Metrics::new(
+        Self::new(
             &PersistConfig::new_for_tests(),
-            &MetricsRegistry::new(),
-        )))
+            Arc::new(Metrics::new(
+                &PersistConfig::new_for_tests(),
+                &MetricsRegistry::new(),
+            )),
+            Arc::new(crate::rpc::NoopPubSubSender),
+        )
     }
 
     pub(crate) async fn get<K, V, T, D, F, InitFn>(
@@ -344,7 +406,7 @@ impl StateCache {
     {
         loop {
             let init = {
-                let mut states = self.states.lock().await;
+                let mut states = self.states.lock().expect("lock poisoned");
                 let state = states.entry(shard_id).or_default();
                 match state.get() {
                     Some(once_val) => match once_val.upgrade() {
@@ -368,11 +430,13 @@ impl StateCache {
                     let state = init_once
                         .get_or_try_init::<Box<CodecMismatch>, _, _>(|| async {
                             let init_res = init_fn().await;
-                            let state = Arc::new(LockingTypedState {
+                            let state = Arc::new(LockingTypedState::new(
                                 shard_id,
-                                notifier: StateWatchNotifier::new(Arc::clone(&self.metrics)),
-                                state: RwLock::new(init_res?),
-                            });
+                                init_res?,
+                                Arc::clone(&self.metrics),
+                                Arc::clone(&self.cfg),
+                                Arc::clone(&self.pubsub_sender).subscribe(&shard_id),
+                            ));
                             let ret = Arc::downgrade(&state);
                             did_init = Some(state);
                             let ret: Weak<dyn DynState> = ret;
@@ -381,7 +445,8 @@ impl StateCache {
                         .await?;
                     if let Some(x) = did_init {
                         // We actually did the init work, don't bother casting back
-                        // the type erased and weak version.
+                        // the type erased and weak version. Additionally, inform
+                        // any listeners of this new state.
                         return Ok(x);
                     }
                     let Some(state) = state.upgrade() else {
@@ -418,31 +483,40 @@ impl StateCache {
         }
     }
 
-    #[cfg(test)]
-    async fn get_cached(&self, shard_id: &ShardId) -> Option<Arc<dyn DynState>> {
+    pub(crate) fn get_state_weak(&self, shard_id: &ShardId) -> Option<Weak<dyn DynState>> {
         self.states
             .lock()
-            .await
+            .expect("lock")
+            .get(shard_id)
+            .and_then(|x| x.get())
+            .map(Weak::clone)
+    }
+
+    #[cfg(test)]
+    fn get_cached(&self, shard_id: &ShardId) -> Option<Arc<dyn DynState>> {
+        self.states
+            .lock()
+            .expect("lock")
             .get(shard_id)
             .and_then(|x| x.get())
             .and_then(|x| x.upgrade())
     }
 
     #[cfg(test)]
-    async fn initialized_count(&self) -> usize {
+    fn initialized_count(&self) -> usize {
         self.states
             .lock()
-            .await
+            .expect("lock")
             .values()
             .filter(|x| x.initialized())
             .count()
     }
 
     #[cfg(test)]
-    async fn strong_count(&self) -> usize {
+    fn strong_count(&self) -> usize {
         self.states
             .lock()
-            .await
+            .expect("lock")
             .values()
             .filter(|x| x.get().map_or(false, |x| x.upgrade().is_some()))
             .count()
@@ -456,6 +530,10 @@ pub(crate) struct LockingTypedState<K, V, T, D> {
     shard_id: ShardId,
     state: RwLock<TypedState<K, V, T, D>>,
     notifier: StateWatchNotifier,
+    cfg: Arc<PersistConfig>,
+    metrics: Arc<Metrics>,
+    shard_metrics: Arc<ShardMetrics>,
+    _subscription_token: Arc<ShardSubscriptionToken>,
 }
 
 impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
@@ -464,6 +542,10 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
             shard_id,
             state,
             notifier,
+            cfg: _cfg,
+            metrics: _metrics,
+            shard_metrics: _shard_metrics,
+            _subscription_token,
         } = self;
         f.debug_struct("LockingTypedState")
             .field("shard_id", shard_id)
@@ -474,6 +556,24 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
 }
 
 impl<K, V, T, D> LockingTypedState<K, V, T, D> {
+    fn new(
+        shard_id: ShardId,
+        initial_state: TypedState<K, V, T, D>,
+        metrics: Arc<Metrics>,
+        cfg: Arc<PersistConfig>,
+        subscription_token: Arc<ShardSubscriptionToken>,
+    ) -> Self {
+        Self {
+            shard_id,
+            notifier: StateWatchNotifier::new(Arc::clone(&metrics)),
+            state: RwLock::new(initial_state),
+            cfg: Arc::clone(&cfg),
+            shard_metrics: metrics.shards.shard(&shard_id),
+            metrics,
+            _subscription_token: subscription_token,
+        }
+    }
+
     pub(crate) fn shard_id(&self) -> &ShardId {
         &self.shard_id
     }
@@ -555,6 +655,7 @@ mod tests {
         let cache = PersistClientCache::new(
             PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
         );
         assert_eq!(cache.blob_by_uri.lock().await.len(), 0);
         assert_eq!(cache.consensus_by_uri.lock().await.len(), 0);
@@ -646,7 +747,7 @@ mod tests {
         let states = Arc::new(StateCache::new_no_metrics());
 
         // The cache starts empty.
-        assert_eq!(states.states.lock().await.len(), 0);
+        assert_eq!(states.states.lock().expect("lock").len(), 0);
 
         // Panic'ing during init_fn .
         let s = Arc::clone(&states);
@@ -656,7 +757,7 @@ mod tests {
         })
         .await;
         assert!(res.is_err());
-        assert_eq!(states.initialized_count().await, 0);
+        assert_eq!(states.initialized_count(), 0);
 
         // Returning an error from init_fn doesn't initialize an entry in the cache.
         let res = states
@@ -668,7 +769,7 @@ mod tests {
             })
             .await;
         assert!(res.is_err());
-        assert_eq!(states.initialized_count().await, 0);
+        assert_eq!(states.initialized_count(), 0);
 
         // Initialize one shard.
         let did_work = Arc::new(AtomicBool::new(false));
@@ -683,8 +784,8 @@ mod tests {
             .await
             .expect("should successfully initialize");
         assert_eq!(did_work.load(Ordering::SeqCst), true);
-        assert_eq!(states.initialized_count().await, 1);
-        assert_eq!(states.strong_count().await, 1);
+        assert_eq!(states.initialized_count(), 1);
+        assert_eq!(states.strong_count(), 1);
 
         // Trying to initialize it again does no work and returns the same state.
         let did_work = Arc::new(AtomicBool::new(false));
@@ -700,8 +801,8 @@ mod tests {
             .await
             .expect("should successfully initialize");
         assert_eq!(did_work.load(Ordering::SeqCst), false);
-        assert_eq!(states.initialized_count().await, 1);
-        assert_eq!(states.strong_count().await, 1);
+        assert_eq!(states.initialized_count(), 1);
+        assert_eq!(states.strong_count(), 1);
         assert_same(&s1_state1, &s1_state2);
 
         // Trying to initialize with different types doesn't work.
@@ -720,8 +821,8 @@ mod tests {
             format!("{}", res.expect_err("types shouldn't match")),
             "requested codecs (\"String\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"(alloc::string::String, (), u64, i64)\"))) did not match ones in durable storage (\"()\", \"()\", \"u64\", \"i64\", Some(CodecConcreteType(\"((), (), u64, i64)\")))"
         );
-        assert_eq!(states.initialized_count().await, 1);
-        assert_eq!(states.strong_count().await, 1);
+        assert_eq!(states.initialized_count(), 1);
+        assert_eq!(states.strong_count(), 1);
 
         // We can add a shard of a different type.
         let s2 = ShardId::new();
@@ -729,8 +830,8 @@ mod tests {
             .get::<String, (), u64, i64, _, _>(s2, || async { Ok(new_state(s2)) })
             .await
             .expect("should successfully initialize");
-        assert_eq!(states.initialized_count().await, 2);
-        assert_eq!(states.strong_count().await, 2);
+        assert_eq!(states.initialized_count(), 2);
+        assert_eq!(states.strong_count(), 2);
         let s2_state2 = states
             .get::<String, (), u64, i64, _, _>(s2, || async { Ok(new_state(s2)) })
             .await
@@ -740,21 +841,21 @@ mod tests {
         // The cache holds weak references to State so we reclaim memory if the
         // shards stops being used.
         drop(s1_state1);
-        assert_eq!(states.strong_count().await, 2);
+        assert_eq!(states.strong_count(), 2);
         drop(s1_state2);
-        assert_eq!(states.strong_count().await, 1);
-        assert_eq!(states.initialized_count().await, 2);
-        assert!(states.get_cached(&s1).await.is_none());
+        assert_eq!(states.strong_count(), 1);
+        assert_eq!(states.initialized_count(), 2);
+        assert!(states.get_cached(&s1).is_none());
 
         // But we can re-init that shard if necessary.
         let s1_state1 = states
             .get::<(), (), u64, i64, _, _>(s1, || async { Ok(new_state(s1)) })
             .await
             .expect("should successfully initialize");
-        assert_eq!(states.initialized_count().await, 2);
-        assert_eq!(states.strong_count().await, 2);
+        assert_eq!(states.initialized_count(), 2);
+        assert_eq!(states.strong_count(), 2);
         drop(s1_state1);
-        assert_eq!(states.strong_count().await, 1);
+        assert_eq!(states.strong_count(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -763,7 +864,7 @@ mod tests {
 
         const COUNT: usize = 1000;
         let id = ShardId::new();
-        let cache = Arc::new(StateCache::new_no_metrics());
+        let cache = StateCache::new_no_metrics();
 
         let mut futures = (0..COUNT)
             .map(|_| {

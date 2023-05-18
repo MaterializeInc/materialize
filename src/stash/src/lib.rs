@@ -92,7 +92,9 @@ pub mod objects;
 
 mod postgres;
 mod transaction;
-mod upgrade;
+
+// TODO(parkmycar): This shouldn't be public, but it is for now to prevent dead code warnings.
+pub mod upgrade;
 
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
 pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};

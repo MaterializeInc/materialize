@@ -10,21 +10,19 @@
 //! Maintains a catalog of valid casts between [`mz_repr::ScalarType`]s, as well as
 //! other cast-related functions.
 
-use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
+use mz_expr::{func, VariadicFunc};
+use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 use once_cell::sync::Lazy;
 
-use mz_expr::func;
-use mz_expr::VariadicFunc;
-use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
-
-use super::error::PlanError;
-use super::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
-use super::query::{ExprContext, QueryContext};
-use super::scope::Scope;
 use crate::catalog::TypeCategory;
+use crate::plan::error::PlanError;
+use crate::plan::expr::{CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
+use crate::plan::query::{ExprContext, QueryContext};
+use crate::plan::scope::Scope;
 
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {

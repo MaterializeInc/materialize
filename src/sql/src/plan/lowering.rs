@@ -37,12 +37,11 @@
 //! against a relation containing the assignments of values to those holes.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter::repeat;
 
 use itertools::Itertools;
-
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
-use mz_repr::RelationType;
 use mz_repr::*;
 
 use crate::plan::expr::{
@@ -180,8 +179,10 @@ impl HirRelationExpr {
         cte_map: &mut CteMap,
     ) -> Result<mz_expr::MirRelationExpr, PlanError> {
         maybe_grow(|| {
-            use self::HirRelationExpr::*;
             use mz_expr::MirRelationExpr as SR;
+
+            use HirRelationExpr::*;
+
             if let mz_expr::MirRelationExpr::Get { .. } = &get_outer {
             } else {
                 panic!(
@@ -296,13 +297,19 @@ impl HirRelationExpr {
                         body
                     })?
                 }
-                LetRec { bindings, body } => {
+                LetRec {
+                    max_iter,
+                    bindings,
+                    body,
+                } => {
+                    let num_bindings = bindings.len();
+
                     // We use the outer type with the HIR types to form MIR CTE types.
                     let outer_column_types = get_outer.typ().column_types;
 
                     // Rename and introduce all bindings.
-                    let mut shadowed_bindings = Vec::with_capacity(bindings.len());
-                    let mut mir_ids = Vec::with_capacity(bindings.len());
+                    let mut shadowed_bindings = Vec::with_capacity(num_bindings);
+                    let mut mir_ids = Vec::with_capacity(num_bindings);
                     for (_name, id, _value, typ) in bindings.iter() {
                         let mir_id = mz_expr::LocalId::new(id_gen.allocate_id());
                         mir_ids.push(mir_id);
@@ -323,7 +330,7 @@ impl HirRelationExpr {
                         shadowed_bindings.push((*id, shadowed));
                     }
 
-                    let mut mir_values = Vec::with_capacity(bindings.len());
+                    let mut mir_values = Vec::with_capacity(num_bindings);
                     for (_name, _id, value, _typ) in bindings.into_iter() {
                         mir_values.push(value.applied_to(
                             id_gen,
@@ -347,6 +354,7 @@ impl HirRelationExpr {
                     mz_expr::MirRelationExpr::LetRec {
                         ids: mir_ids,
                         values: mir_values,
+                        max_iters: repeat(max_iter).take(num_bindings).collect(),
                         body: Box::new(mir_body),
                     }
                 }
@@ -764,8 +772,9 @@ impl HirScalarExpr {
         subquery_map: &Option<&BTreeMap<HirScalarExpr, usize>>,
     ) -> Result<mz_expr::MirScalarExpr, PlanError> {
         maybe_grow(|| {
-            use self::HirScalarExpr::*;
             use mz_expr::MirScalarExpr as SS;
+
+            use HirScalarExpr::*;
 
             if let Some(subquery_map) = subquery_map {
                 if let Some(col) = subquery_map.get(&self) {
@@ -1454,8 +1463,9 @@ impl HirScalarExpr {
 
     /// Rewrites `self` into a `mz_expr::ScalarExpr`.
     pub fn lower_uncorrelated(self) -> Result<mz_expr::MirScalarExpr, PlanError> {
-        use self::HirScalarExpr::*;
         use mz_expr::MirScalarExpr as SS;
+
+        use HirScalarExpr::*;
 
         Ok(match self {
             Column(ColumnRef { level: 0, column }) => SS::Column(column),
@@ -1810,8 +1820,7 @@ pub(crate) fn derive_equijoin_cols(
     ra: usize,
     on: Vec<mz_expr::MirScalarExpr>,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
-    use mz_expr::BinaryFunc;
-    use mz_expr::VariadicFunc;
+    use mz_expr::{BinaryFunc, VariadicFunc};
     // TODO: Replace this predicate deconstruction with
     // `mz_expr::canonicalize::canonicalize_predicates`, which will also enable
     // treating select * from lhs left join rhs on lhs.id = rhs.id and true as

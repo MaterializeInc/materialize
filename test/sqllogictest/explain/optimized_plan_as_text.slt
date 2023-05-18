@@ -763,8 +763,13 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM bar;
 
 # Regression test for #19148: support mz_now() on select from indexed table
+# ---
+
 statement ok
-DROP TABLE IF EXISTS t CASCADE;
+DROP SCHEMA IF EXISTS public CASCADE;
+
+statement ok
+CREATE SCHEMA public;
 
 statement ok
 CREATE TABLE t(a TIMESTAMP);
@@ -776,3 +781,25 @@ CREATE DEFAULT INDEX ON t;
 # assert that the query doesn't fail.
 statement ok
 EXPLAIN SELECT * FROM t WHERE a < mz_now();
+
+# Regression test for #19177
+# ---
+
+statement ok
+DROP SCHEMA IF EXISTS public CASCADE;
+
+statement ok
+CREATE SCHEMA public;
+
+statement ok
+CREATE TABLE t1(x text);
+
+statement ok
+CREATE TABLE t2(x text);
+
+statement ok
+EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
+
+# Regression test for the join visitation part of #19177
+statement ok
+EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();

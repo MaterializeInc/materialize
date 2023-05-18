@@ -18,6 +18,10 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_ore::cast::CastFrom;
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
+use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
@@ -30,15 +34,8 @@ use timely::Container;
 use tracing::error;
 use uuid::Uuid;
 
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::replay::MzReplay;
-
-use crate::logging::{ComputeLog, LogVariant};
+use crate::logging::{ComputeLog, EventQueue, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
-
-use super::EventQueue;
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;

@@ -75,14 +75,13 @@
 
 #[cfg(test)]
 mod tests {
-    use proc_macro2::TokenTree;
-    use serde::{Deserialize, Serialize};
-    use serde_json::Value;
-
     use mz_lowertest::*;
     use mz_ore::cast::CastFrom;
     use mz_ore::collections::HashMap;
     use mz_ore::result::ResultExt;
+    use proc_macro2::TokenTree;
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
 
     #[derive(Debug, Deserialize, PartialEq, Serialize, MzReflect)]
     struct ZeroArg;

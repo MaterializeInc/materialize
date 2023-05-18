@@ -9,13 +9,10 @@
 
 //! Definition and helper structs for the [`NonNegative`] attribute.
 
-use mz_expr::Id;
-use mz_expr::MirRelationExpr;
+use mz_expr::{Id, MirRelationExpr};
 
-use super::subtree_size::SubtreeSize;
-use super::DerivedAttributes;
-use super::RequiredAttributes;
-use super::{Attribute, Env};
+use crate::attribute::subtree_size::SubtreeSize;
+use crate::attribute::{Attribute, DerivedAttributes, Env, RequiredAttributes};
 
 /// Traverses a [`MirRelationExpr`] tree and figures out whether for subtree
 /// the sum of all diffs up to a specific time for any record can be a

@@ -14,20 +14,20 @@
 use std::collections::BTreeSet;
 
 use differential_dataflow::lattice::Lattice;
-use timely::order::TotalOrder;
-use timely::progress::Timestamp;
-
 use mz_ore::now::EpochMillis;
 use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{Diff, TimestampManipulation};
 use mz_stash::{self, TypedCollection};
+use timely::order::TotalOrder;
+use timely::progress::Timestamp;
 
 use crate::client::{StorageCommand, StorageResponse};
-use crate::controller::{DurableCollectionMetadata, ProtoStorageCommand, ProtoStorageResponse};
-
-use super::{Controller, StorageController};
+use crate::controller::{
+    Controller, DurableCollectionMetadata, ProtoStorageCommand, ProtoStorageResponse,
+    StorageController,
+};
 
 pub(super) static SHARD_FINALIZATION: TypedCollection<ShardId, ()> =
     TypedCollection::new("storage-shards-to-finalize");

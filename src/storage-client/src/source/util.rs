@@ -9,6 +9,8 @@
 
 use std::rc::Rc;
 
+use mz_ore::collections::CollectionExt;
+use mz_repr::Timestamp;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -18,9 +20,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
-
-use mz_ore::collections::CollectionExt;
-use mz_repr::Timestamp;
 
 use crate::types::sources::SourceToken;
 

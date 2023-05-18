@@ -73,6 +73,7 @@ pub enum Statement<T: AstInfo> {
     AlterRole(AlterRoleStatement<T>),
     Discard(DiscardStatement),
     DropObjects(DropObjectsStatement),
+    DropOwned(DropOwnedStatement<T>),
     SetVariable(SetVariableStatement),
     ResetVariable(ResetVariableStatement),
     Show(ShowStatement<T>),
@@ -93,6 +94,7 @@ pub enum Statement<T: AstInfo> {
     RevokeRole(RevokeRoleStatement<T>),
     GrantPrivilege(GrantPrivilegeStatement<T>),
     RevokePrivilege(RevokePrivilegeStatement<T>),
+    ReassignOwned(ReassignOwnedStatement<T>),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -131,6 +133,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterRole(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
+            Statement::DropOwned(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
             Statement::ResetVariable(stmt) => f.write_node(stmt),
             Statement::Show(stmt) => f.write_node(stmt),
@@ -151,6 +154,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::RevokeRole(stmt) => f.write_node(stmt),
             Statement::GrantPrivilege(stmt) => f.write_node(stmt),
             Statement::RevokePrivilege(stmt) => f.write_node(stmt),
+            Statement::ReassignOwned(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -1674,7 +1678,7 @@ pub struct DropObjectsStatement {
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
     pub names: Vec<UnresolvedObjectName>,
     /// Whether `CASCADE` was specified. This will be `false` when
-    /// `RESTRICT` or no drop behavior at all was specified.
+    /// `RESTRICT` was specified.
     pub cascade: bool,
 }
 
@@ -1695,6 +1699,27 @@ impl AstDisplay for DropObjectsStatement {
     }
 }
 impl_display!(DropObjectsStatement);
+
+/// `DROP OWNED BY ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropOwnedStatement<T: AstInfo> {
+    /// The roles whose owned objects are being dropped.
+    pub role_names: Vec<T::RoleName>,
+    /// Whether `CASCADE` was specified. This will be `false` when
+    /// `RESTRICT` or no drop behavior at all was specified.
+    pub cascade: bool,
+}
+
+impl<T: AstInfo> AstDisplay for DropOwnedStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP OWNED BY ");
+        f.write_node(&display::comma_separated(&self.role_names));
+        if self.cascade {
+            f.write_str(" CASCADE");
+        }
+    }
+}
+impl_display_t!(DropOwnedStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct QualifiedReplica {
@@ -2957,3 +2982,22 @@ impl<T: AstInfo> AstDisplay for RevokePrivilegeStatement<T> {
     }
 }
 impl_display_t!(RevokePrivilegeStatement);
+
+/// `REASSIGN OWNED ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReassignOwnedStatement<T: AstInfo> {
+    /// The roles whose owned objects are being reassigned.
+    pub old_roles: Vec<T::RoleName>,
+    /// The new owner of the objects.
+    pub new_role: T::RoleName,
+}
+
+impl<T: AstInfo> AstDisplay for ReassignOwnedStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("REASSIGN OWNED BY ");
+        f.write_node(&display::comma_separated(&self.old_roles));
+        f.write_str(" TO ");
+        f.write_node(&self.new_role);
+    }
+}
+impl_display_t!(ReassignOwnedStatement);

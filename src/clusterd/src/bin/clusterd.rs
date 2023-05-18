@@ -81,9 +81,6 @@ use anyhow::Context;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
-use once_cell::sync::Lazy;
-use tracing::info;
-
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
@@ -96,13 +93,16 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::GrpcServer;
 use mz_service::secrets::SecretsReaderCliArgs;
+use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::instances::StorageInstanceContext;
+use once_cell::sync::Lazy;
+use tracing::info;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
@@ -139,6 +139,16 @@ struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
+
+    // === Storage options. ===
+    /// The URL for the Persist PubSub service.
+    #[clap(
+        long,
+        env = "PERSIST_PUBSUB_URL",
+        value_name = "http://HOST:PORT",
+        default_value = "http://localhost:6879"
+    )]
+    persist_pubsub_url: String,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -263,9 +273,21 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
     });
 
+    let pubsub_caller_id = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| args.tracing.log_prefix.clone())
+        .unwrap_or_default();
     let persist_clients = Arc::new(PersistClientCache::new(
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
+        |persist_cfg, metrics| {
+            let cfg = PersistPubSubClientConfig {
+                url: args.persist_pubsub_url,
+                caller_id: pubsub_caller_id,
+                persist_cfg: persist_cfg.clone(),
+            };
+            GrpcPubSubClient::connect(cfg, metrics)
+        },
     ));
 
     // Start storage server.

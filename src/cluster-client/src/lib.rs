@@ -78,3 +78,6 @@
 #![warn(missing_docs)]
 
 pub mod client;
+
+/// Identifier of a replica.
+pub type ReplicaId = u64;

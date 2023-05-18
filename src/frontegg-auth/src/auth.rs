@@ -12,9 +12,8 @@ use std::time::Duration;
 
 use derivative::Derivative;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use uuid::Uuid;
-
 use mz_ore::now::NowFn;
+use uuid::Uuid;
 
 use crate::{ApiTokenResponse, AppPassword, Client, Error};
 

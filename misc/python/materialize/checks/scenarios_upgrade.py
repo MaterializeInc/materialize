@@ -18,15 +18,12 @@ from materialize.checks.mzcompose_actions import (
     UseClusterdCompute,
 )
 from materialize.checks.scenarios import Scenario
-from materialize.util import MzVersion, released_materialize_versions
+from materialize.util import MzVersion
+from materialize.version_list import VersionsFromDocs
 
-released_versions = released_materialize_versions()
-
-# Usually, the latest patch version of the current release
-last_version = released_versions[0]
-
-# Usually, the last patch version of the previous release
-previous_version = released_versions[1]
+version_list = VersionsFromDocs()
+released_versions = version_list.all_versions()
+previous_version, last_version = version_list.minor_versions()[-2:]
 
 
 class UpgradeEntireMz(Scenario):
@@ -119,23 +116,23 @@ class UpgradeEntireMzFourVersions(Scenario):
     """Test upgrade X-4 -> X-3 -> X-2 -> X-1 -> X"""
 
     def base_version(self) -> MzVersion:
-        return released_versions[3]
+        return released_versions[-4]
 
     def actions(self) -> List[Action]:
         print(
-            f"Upgrading going through {released_versions[3]} -> {released_versions[2]} -> {released_versions[1]} -> {released_versions[0]}"
+            f"Upgrading going through {released_versions[-4]} -> {released_versions[-3]} -> {released_versions[-2]} -> {released_versions[-1]}"
         )
         return [
-            StartMz(tag=released_versions[3]),
+            StartMz(tag=released_versions[-4]),
             Initialize(self),
             KillMz(),
-            StartMz(tag=released_versions[2]),
+            StartMz(tag=released_versions[-3]),
             Manipulate(self, phase=1),
             KillMz(),
-            StartMz(tag=released_versions[1]),
+            StartMz(tag=released_versions[-2]),
             Manipulate(self, phase=2),
             KillMz(),
-            StartMz(tag=released_versions[0]),
+            StartMz(tag=released_versions[-1]),
             KillMz(),
             StartMz(tag=None),
             Validate(self),

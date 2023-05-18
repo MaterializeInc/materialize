@@ -14,7 +14,6 @@ use std::{fmt, iter};
 use itertools::Itertools;
 use mz_controller::clusters::ClusterId;
 use mz_expr::{CollectionPlan, MirRelationExpr};
-
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -29,11 +28,12 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, ExecutePlan,
-    ExplainPlan, FetchPlan, GrantPrivilegePlan, GrantRolePlan, InsertPlan, MutationKind, PeekPlan,
-    Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan, ResetVariablePlan,
-    RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan, SetVariablePlan, ShowCreatePlan,
-    ShowVariablePlan, SourceSinkClusterConfig, StartTransactionPlan, SubscribePlan,
+    CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegePlan, GrantRolePlan, InsertPlan,
+    MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
+    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan,
+    SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
+    StartTransactionPlan, SubscribePlan,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -61,8 +61,8 @@ pub enum UnauthorizedError {
     #[error("must be owner of {}", objects.iter().map(|(object_type, object_name)| format!("{object_type} {object_name}")).join(", "))]
     Ownership { objects: Vec<(ObjectType, String)> },
     /// Altering an owner requires membership of the new owner role.
-    #[error("must be a member of {}", role_name.to_string().quoted())]
-    AlterOwnerMembership { role_name: String },
+    #[error("must be a member of {}", role_names.iter().map(|role| role.quoted()).join(", "))]
+    RoleMembership { role_names: Vec<String> },
     /// The action requires one or more privileges.
     #[error("permission denied for {object_type} {object_name}")]
     Privilege {
@@ -99,7 +99,7 @@ impl UnauthorizedError {
                 INTROSPECTION_USER.name
             )),
             UnauthorizedError::Ownership { .. }
-            | UnauthorizedError::AlterOwnerMembership { .. }
+            | UnauthorizedError::RoleMembership { .. }
             | UnauthorizedError::Privilege { .. } => None,
         }
     }
@@ -169,15 +169,20 @@ pub fn check_plan(
     // Obtain all roles that the current session is a member of.
     let role_membership = catalog.collect_role_membership(role_id);
 
-    // Validate that the current role has the required membership to alter an object's owner.
-    if let Plan::AlterOwner(AlterOwnerPlan { new_owner, .. }) = plan {
-        if !role_membership.contains(new_owner) {
-            return Err(AdapterError::Unauthorized(
-                UnauthorizedError::AlterOwnerMembership {
-                    role_name: catalog.get_role(new_owner).name().to_string(),
-                },
-            ));
-        }
+    // Validate that the current session has the required role membership to execute the provided
+    // plan.
+    let required_membership: BTreeSet<_> = generate_required_role_membership(plan)
+        .into_iter()
+        .collect();
+    let unheld_membership: Vec<_> = required_membership.difference(&role_membership).collect();
+    if !unheld_membership.is_empty() {
+        let role_names = unheld_membership
+            .into_iter()
+            .map(|role_id| catalog.get_role(role_id).name().to_string())
+            .collect();
+        return Err(AdapterError::Unauthorized(
+            UnauthorizedError::RoleMembership { role_names },
+        ));
     }
 
     // Validate that the current session has the required attributes to execute the provided plan.
@@ -229,6 +234,80 @@ pub fn is_rbac_enabled_for_system(system_vars: &SystemVars) -> bool {
     // everyone. Users will still need to turn one of the non-LD flags on to enable RBAC.
     // The server flag allows users to turn RBAC on for everyone.
     ld_enabled && server_enabled
+}
+
+/// Generates the role membership required to execute a give plan.
+pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
+    match plan {
+        Plan::AlterOwner(AlterOwnerPlan { new_owner, .. }) => vec![*new_owner],
+        Plan::DropOwned(DropOwnedPlan { role_ids, .. }) => role_ids.clone(),
+        Plan::ReassignOwned(ReassignOwnedPlan {
+            old_roles,
+            new_role,
+            ..
+        }) => {
+            let mut roles = old_roles.clone();
+            roles.push(*new_role);
+            roles
+        }
+        Plan::CreateConnection(_)
+        | Plan::CreateDatabase(_)
+        | Plan::CreateSchema(_)
+        | Plan::CreateRole(_)
+        | Plan::CreateCluster(_)
+        | Plan::CreateClusterReplica(_)
+        | Plan::CreateSource(_)
+        | Plan::CreateSources(_)
+        | Plan::CreateSecret(_)
+        | Plan::CreateSink(_)
+        | Plan::CreateTable(_)
+        | Plan::CreateView(_)
+        | Plan::CreateMaterializedView(_)
+        | Plan::CreateIndex(_)
+        | Plan::CreateType(_)
+        | Plan::DiscardTemp
+        | Plan::DiscardAll
+        | Plan::DropObjects(_)
+        | Plan::EmptyQuery
+        | Plan::ShowAllVariables
+        | Plan::ShowCreate(_)
+        | Plan::ShowVariable(_)
+        | Plan::SetVariable(_)
+        | Plan::ResetVariable(_)
+        | Plan::StartTransaction(_)
+        | Plan::CommitTransaction(_)
+        | Plan::AbortTransaction(_)
+        | Plan::Peek(_)
+        | Plan::Subscribe(_)
+        | Plan::CopyFrom(_)
+        | Plan::CopyRows(_)
+        | Plan::Explain(_)
+        | Plan::Insert(_)
+        | Plan::AlterNoop(_)
+        | Plan::AlterIndexSetOptions(_)
+        | Plan::AlterIndexResetOptions(_)
+        | Plan::AlterSink(_)
+        | Plan::AlterSource(_)
+        | Plan::AlterItemRename(_)
+        | Plan::AlterSecret(_)
+        | Plan::AlterSystemSet(_)
+        | Plan::AlterSystemReset(_)
+        | Plan::AlterSystemResetAll(_)
+        | Plan::AlterRole(_)
+        | Plan::Declare(_)
+        | Plan::Fetch(_)
+        | Plan::Close(_)
+        | Plan::ReadThenWrite(_)
+        | Plan::Prepare(_)
+        | Plan::Execute(_)
+        | Plan::Deallocate(_)
+        | Plan::Raise(_)
+        | Plan::RotateKeys(_)
+        | Plan::GrantRole(_)
+        | Plan::RevokeRole(_)
+        | Plan::GrantPrivilege(_)
+        | Plan::RevokePrivilege(_) => Vec::new(),
+    }
 }
 
 /// Generates the attributes required to execute a given plan.
@@ -284,6 +363,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
@@ -320,7 +400,8 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::Raise(_)
         | Plan::RotateKeys(_)
         | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_) => Vec::new(),
+        | Plan::RevokePrivilege(_)
+        | Plan::ReassignOwned(_) => Vec::new(),
     }
 }
 
@@ -469,7 +550,9 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::Deallocate(_)
         | Plan::Raise(_)
         | Plan::GrantRole(_)
-        | Plan::RevokeRole(_) => Vec::new(),
+        | Plan::RevokeRole(_)
+        | Plan::DropOwned(_)
+        | Plan::ReassignOwned(_) => Vec::new(),
         Plan::CreateIndex(plan) => vec![ObjectId::Item(plan.index.on)],
         Plan::CreateView(CreateViewPlan { replace, .. })
         | Plan::CreateMaterializedView(CreateMaterializedViewPlan { replace, .. }) => replace
@@ -558,6 +641,9 @@ fn generate_required_privileges(
     depends_on: &Vec<GlobalId>,
     role_id: RoleId,
 ) -> Vec<(ObjectId, AclMode, RoleId)> {
+    // When adding a new plan, make sure that the plan struct is fully expanded. This helps ensure
+    // that when someone adds a field to a plan they get a compiler error and must consider any
+    // required changes to privileges.
     match plan {
         Plan::CreateConnection(CreateConnectionPlan {
             name,
@@ -1062,6 +1148,16 @@ fn generate_required_privileges(
             role_id: _,
             member_ids: _,
             grantor_id: _,
+        })
+        | Plan::DropOwned(DropOwnedPlan {
+            role_ids: _,
+            drop_ids: _,
+            revokes: _,
+        })
+        | Plan::ReassignOwned(ReassignOwnedPlan {
+            old_roles: _,
+            new_role: _,
+            reassign_ids: _,
         }) => Vec::new(),
     }
 }
@@ -1202,7 +1298,7 @@ fn check_object_privileges(
             .expect("only object types with privileges will generate required privileges");
         let role_privileges = role_membership
             .iter()
-            .filter_map(|role_id| object_privileges.get(role_id))
+            .filter_map(|role_id| object_privileges.0.get(role_id))
             .flat_map(|mz_acl_items| mz_acl_items.iter())
             .map(|mz_acl_item| mz_acl_item.acl_mode)
             .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));

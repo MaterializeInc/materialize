@@ -20,13 +20,6 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, MutexGuard};
-use tracing::{info, trace, warn};
-use uuid::Uuid;
-
 use mz_audit_log::{
     EventDetails, EventType, FullNameV1, IdFullNameV1, ObjectType, VersionedEvent,
     VersionedStorageUsage,
@@ -35,22 +28,27 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::protocol::command::ComputeParameters;
-use mz_controller::clusters::ClusterRole;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation,
-    ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
+    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaLocation, ProcessId,
+    ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
+    UnmanagedReplicaLocation,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn, NOW_ZERO};
 use mz_ore::soft_assert;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::explain::ExprHumanizer;
+use mz_repr::namespaces::{
+    INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+};
 use mz_repr::role_id::RoleId;
-use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
@@ -58,8 +56,8 @@ use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogRole, CatalogSchema,
-    CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference, PrivilegeMap,
-    RoleAttributes, SessionCatalog, TypeReference,
+    CatalogType, CatalogTypeDetails, EnvironmentId, IdReference, NameReference, RoleAttributes,
+    SessionCatalog, TypeReference,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -75,7 +73,7 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
-    OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
+    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarError, VarInput, CONFIG_HAS_SYNCED_ONCE,
 };
 use mz_sql::{plan, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
@@ -90,24 +88,25 @@ use mz_storage_client::types::sinks::{
 };
 use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnvelope, Timeline};
 use mz_transform::Optimizer;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use tokio::sync::MutexGuard;
+use tracing::{info, trace, warn};
+use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
-    BUILTIN_PREFIXES, INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA,
-    MZ_INTROSPECTION_CLUSTER, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BuiltinCluster, BuiltinLog, BuiltinRole, BuiltinSource, BuiltinTable, BuiltinType,
+    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
-pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
+use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend};
 use crate::coord::{TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
-
-use self::builtin::{BuiltinCluster, BuiltinSource};
 
 mod builtin_table_updates;
 mod config;
@@ -116,6 +115,10 @@ mod migrate;
 
 pub mod builtin;
 pub mod storage;
+
+pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
+pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 
@@ -149,7 +152,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 #[derive(Debug)]
 pub struct Catalog {
     state: CatalogState,
-    storage: Arc<Mutex<storage::Connection>>,
+    storage: Arc<tokio::sync::Mutex<storage::Connection>>,
     transient_revision: u64,
 }
 
@@ -344,7 +347,7 @@ impl CatalogState {
             for item_id in cluster.bound_objects() {
                 dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
             }
-            for replica_id in cluster.replicas().values() {
+            for replica_id in cluster.replica_ids().values() {
                 dependents.extend_from_slice(&self.cluster_replica_dependents(
                     cluster_id,
                     *replica_id,
@@ -394,7 +397,7 @@ impl CatalogState {
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
             let database = self.get_database(&database_id);
-            for schema_id in database.schemas().values() {
+            for schema_id in database.schema_ids().values() {
                 dependents.extend_from_slice(&self.schema_dependents(
                     ResolvedDatabaseSpecifier::Id(database_id),
                     SchemaSpecifier::Id(*schema_id),
@@ -425,7 +428,7 @@ impl CatalogState {
         if !seen.contains(&object_id) {
             seen.insert(object_id.clone());
             let schema = self.get_schema(&database_spec, &schema_spec, conn_id);
-            for item_id in schema.items().values() {
+            for item_id in schema.item_ids().values() {
                 dependents.extend_from_slice(&self.item_dependents(*item_id, seen));
             }
             dependents.push(object_id)
@@ -486,7 +489,11 @@ impl CatalogState {
         }
     }
 
-    fn ensure_no_unstable_uses(&self, item: &CatalogItem) -> Result<(), AdapterError> {
+    fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), AdapterError> {
+        if self.system_config().allow_unstable_dependencies() {
+            return Ok(());
+        }
+
         let unstable_dependencies: Vec<_> = item
             .uses()
             .iter()
@@ -534,6 +541,19 @@ impl CatalogState {
             database,
             schema,
             item: name.item.clone(),
+        }
+    }
+
+    fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
+        let database = match &name.database {
+            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+            ResolvedDatabaseSpecifier::Id(id) => {
+                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
+            }
+        };
+        FullSchemaName {
+            database,
+            schema: name.schema.clone(),
         }
     }
 
@@ -698,7 +718,8 @@ impl CatalogState {
         let plan = mz_sql::plan::plan(None, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer = Optimizer::logical_optimizer();
+                let optimizer =
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let optimized_expr = optimizer.optimize(view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -921,7 +942,7 @@ impl CatalogState {
                     custom_logical_compaction_window: None,
                 }),
                 MZ_SYSTEM_ROLE_ID,
-                PrivilegeMap::new(),
+                PrivilegeMap::default(),
             );
             log_indexes.insert(log.variant.clone(), index_id);
         }
@@ -1288,6 +1309,27 @@ impl CatalogState {
         Err(SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
+    pub fn resolve_search_path(
+        &self,
+        session: &Session,
+    ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        let database = self
+            .database_by_name
+            .get(session.vars().database())
+            .map(|id| id.clone());
+
+        session
+            .vars()
+            .search_path()
+            .iter()
+            .map(|schema| {
+                self.resolve_schema(database.as_ref(), None, schema.as_str(), session.conn_id())
+            })
+            .filter_map(|schema| schema.ok())
+            .map(|schema| (schema.name().database.clone(), schema.id().clone()))
+            .collect()
+    }
+
     pub fn resolve_cluster(&self, name: &str) -> Result<&Cluster, SqlCatalogError> {
         let id = self
             .clusters_by_name
@@ -1332,6 +1374,7 @@ impl CatalogState {
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
         conn_id: ConnectionId,
+        err_gen: fn(String) -> SqlCatalogError,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
         // schema. If no schema was specified, try to find the item in the connection's
@@ -1370,7 +1413,7 @@ impl CatalogState {
                 return Ok(&self.entry_by_id[id]);
             }
         }
-        Err(SqlCatalogError::UnknownItem(name.to_string()))
+        Err(err_gen(name.to_string()))
     }
 
     /// Resolves `name` to a non-function [`CatalogEntry`].
@@ -1387,6 +1430,7 @@ impl CatalogState {
             search_path,
             name,
             conn_id,
+            SqlCatalogError::UnknownItem,
         )
     }
 
@@ -1404,6 +1448,10 @@ impl CatalogState {
             search_path,
             name,
             conn_id,
+            |name| SqlCatalogError::UnknownFunction {
+                name,
+                alternative: None,
+            },
         )
     }
 
@@ -1611,6 +1659,7 @@ impl Database {
             .collect();
         let privileges_by_str: BTreeMap<String, _> = self
             .privileges
+            .0
             .iter()
             .map(|(key, value)| (key.to_string(), value))
             .collect();
@@ -1644,6 +1693,7 @@ impl Schema {
     fn debug_json(&self) -> serde_json::Value {
         let privileges_by_str: BTreeMap<String, _> = self
             .privileges
+            .0
             .iter()
             .map(|(key, value)| (key.to_string(), value))
             .collect();
@@ -2743,13 +2793,13 @@ impl Catalog {
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 default_storage_cluster_size: config.default_storage_cluster_size,
                 availability_zones: config.availability_zones,
-                system_configuration: SystemVars::default(),
+                system_configuration: SystemVars::new(config.active_connection_count),
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             },
             transient_revision: 0,
-            storage: Arc::new(Mutex::new(config.storage)),
+            storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
         };
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
@@ -3013,7 +3063,7 @@ impl Catalog {
                             name.clone(),
                             CatalogItem::Func(Func { inner: func.inner }),
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::new(),
+                            PrivilegeMap::default(),
                         );
                     }
 
@@ -3179,7 +3229,7 @@ impl Catalog {
                         name,
                         item,
                         MZ_SYSTEM_ROLE_ID,
-                        PrivilegeMap::new(),
+                        PrivilegeMap::default(),
                     );
                 }
                 Builtin::Log(_)
@@ -4118,6 +4168,7 @@ impl Catalog {
             },
         )
         .await?;
+        let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
@@ -4139,6 +4190,7 @@ impl Catalog {
             // when debugging, no reaping
             storage_usage_retention_period: None,
             connection_context: None,
+            active_connection_count,
         })
         .await?;
         Ok(catalog)
@@ -4149,20 +4201,11 @@ impl Catalog {
     }
 
     pub fn for_session_state<'a>(state: &'a CatalogState, session: &'a Session) -> ConnCatalog<'a> {
+        let search_path = state.resolve_search_path(session);
         let database = state
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
-        let search_path = session
-            .vars()
-            .search_path()
-            .iter()
-            .map(|schema| {
-                state.resolve_schema(database.as_ref(), None, schema.as_str(), session.conn_id())
-            })
-            .filter_map(|schema| schema.ok())
-            .map(|schema| (schema.name().database.clone(), schema.id().clone()))
-            .collect();
         ConnCatalog {
             state: Cow::Borrowed(state),
             conn_id: session.conn_id(),
@@ -4330,6 +4373,13 @@ impl Catalog {
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
+    }
+
+    pub fn resolve_search_path(
+        &self,
+        session: &Session,
+    ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        self.state.resolve_search_path(session)
     }
 
     /// Resolves `name` to a non-function [`CatalogEntry`].
@@ -5399,7 +5449,7 @@ impl Catalog {
                     item,
                     owner_id,
                 } => {
-                    state.ensure_no_unstable_uses(&item)?;
+                    state.check_unstable_dependencies(&item)?;
 
                     if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
                         let cluster_name = state.clusters_by_id[&id].name.clone();
@@ -5521,6 +5571,11 @@ impl Catalog {
                 Op::DropObject(id) => match id {
                     ObjectId::Database(id) => {
                         let database = &state.database_by_id[&id];
+                        if id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyDatabase(database.name().to_string()),
+                            )));
+                        }
                         tx.remove_database(&id)?;
                         builtin_table_updates.push(state.pack_database_update(database, -1));
                         state.add_to_audit_log(
@@ -5552,7 +5607,14 @@ impl Catalog {
                             ResolvedDatabaseSpecifier::Ambient => None,
                             ResolvedDatabaseSpecifier::Id(database_id) => Some(database_id),
                         };
-                        let schema_id = schema_spec.into();
+                        let schema_id: SchemaId = schema_spec.into();
+                        if schema_id.is_system() {
+                            let name = schema.name();
+                            let full_name = state.resolve_full_schema_name(name);
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlySystemSchema(full_name.to_string()),
+                            )));
+                        }
                         tx.remove_schema(&database_id, &schema_id)?;
                         builtin_table_updates.push(state.pack_schema_update(
                             &database_spec,
@@ -5612,7 +5674,7 @@ impl Catalog {
                     ObjectId::Cluster(id) => {
                         let cluster = state.get_cluster(id);
                         let name = &cluster.name;
-                        if is_reserved_name(name) {
+                        if id.is_system() {
                             return Err(AdapterError::Catalog(Error::new(
                                 ErrorKind::ReadOnlyCluster(name.clone()),
                             )));
@@ -5737,6 +5799,14 @@ impl Catalog {
                     }
                     ObjectId::Item(id) => {
                         let entry = state.get_entry(&id);
+                        if id.is_system() {
+                            let name = entry.name();
+                            let full_name = state
+                                .resolve_full_name(name, session.map(|session| session.conn_id()));
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyItem(full_name.to_string()),
+                            )));
+                        }
                         if !entry.item().is_temporary() {
                             tx.remove_item(id)?;
                         }
@@ -6395,7 +6465,7 @@ impl Catalog {
     }
 
     fn grant_object_privilege(privileges: &mut PrivilegeMap, privilege: MzAclItem) {
-        let grantee_privileges = privileges.entry(privilege.grantee).or_default();
+        let grantee_privileges = privileges.0.entry(privilege.grantee).or_default();
         if let Some(existing_privilege) = grantee_privileges
             .iter_mut()
             .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
@@ -6412,7 +6482,7 @@ impl Catalog {
     }
 
     fn revoke_object_privilege(privileges: &mut PrivilegeMap, privilege: MzAclItem) {
-        let grantee_privileges = privileges.entry(privilege.grantee).or_default();
+        let grantee_privileges = privileges.0.entry(privilege.grantee).or_default();
         if let Some(existing_privilege) = grantee_privileges
             .iter_mut()
             .find(|cur_privilege| cur_privilege.grantor == privilege.grantor)
@@ -6429,7 +6499,7 @@ impl Catalog {
         // Remove empty privileges
         grantee_privileges.retain(|privilege| !privilege.acl_mode.is_empty());
         if grantee_privileges.is_empty() {
-            privileges.remove(&privilege.grantee);
+            privileges.0.remove(&privilege.grantee);
         }
     }
 
@@ -6554,7 +6624,8 @@ impl Catalog {
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer = Optimizer::logical_optimizer();
+                let optimizer =
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let optimized_expr = optimizer.optimize(view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -6568,7 +6639,8 @@ impl Catalog {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
-                let optimizer = Optimizer::logical_optimizer();
+                let optimizer =
+                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let optimized_expr = optimizer.optimize(materialized_view.expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
                 CatalogItem::MaterializedView(MaterializedView {
@@ -6650,8 +6722,8 @@ impl Catalog {
     /// There are no guarantees about the format of the serialized state, except
     /// that the serialized state for two identical catalogs will compare
     /// identically.
-    pub fn dump(&self) -> String {
-        self.state.dump()
+    pub fn dump(&self) -> CatalogDump {
+        CatalogDump::new(self.state.dump())
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -6777,9 +6849,6 @@ impl Catalog {
     /// Return the current storage configuration, derived from the system configuration.
     pub fn storage_config(&self) -> StorageParameters {
         StorageParameters {
-            enable_multi_worker_storage_persist_sink: self
-                .system_config()
-                .enable_multi_worker_storage_persist_sink(),
             persist: self.persist_config(),
             pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
                 connect_timeout: Some(self.system_config().pg_replication_connect_timeout()),
@@ -6793,6 +6862,32 @@ impl Catalog {
             keep_n_source_status_history_entries: self
                 .system_config()
                 .keep_n_source_status_history_entries(),
+            upsert_rocksdb_tuning_config: {
+                match mz_rocksdb::RocksDBTuningParameters::from_parameters(
+                    self.system_config().upsert_rocksdb_compaction_style(),
+                    self.system_config()
+                        .upsert_rocksdb_optimize_compaction_memtable_budget(),
+                    self.system_config()
+                        .upsert_rocksdb_level_compaction_dynamic_level_bytes(),
+                    self.system_config()
+                        .upsert_rocksdb_universal_compaction_ratio(),
+                    self.system_config().upsert_rocksdb_parallelism(),
+                    self.system_config().upsert_rocksdb_compression_type(),
+                    self.system_config()
+                        .upsert_rocksdb_bottommost_compression_type(),
+                ) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to deserialize upsert_rocksdb parameters \
+                            into a `RocksDBTuningParameters`, \
+                            failing back to reasonable defaults: {}",
+                            e.display_with_causes()
+                        );
+                        mz_rocksdb::RocksDBTuningParameters::default()
+                    }
+                }
+            },
         }
     }
 
@@ -6814,6 +6909,8 @@ impl Catalog {
             stats_audit_percent: Some(config.persist_stats_audit_percent()),
             stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
             stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
+            pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
+            pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         }
     }
 
@@ -7161,46 +7258,11 @@ impl ConnCatalog<'_> {
     ) -> Result<&QualifiedItemName, SqlCatalogError> {
         self.resolve_item(name).map(|entry| entry.name())
     }
-
-    /// returns a `PartialItemName` with the minimum amount of qualifiers to unambiguously resolve
-    /// the object.
-    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
-        let database_id = match &qualified_name.qualifiers.database_spec {
-            ResolvedDatabaseSpecifier::Ambient => None,
-            ResolvedDatabaseSpecifier::Id(id)
-                if self.database.is_some() && self.database == Some(*id) =>
-            {
-                None
-            }
-            ResolvedDatabaseSpecifier::Id(id) => Some(id.clone()),
-        };
-
-        let schema_spec = if database_id.is_none()
-            && self.resolve_item_name(&PartialItemName {
-                database: None,
-                schema: None,
-                item: qualified_name.item.clone(),
-            }) == Ok(qualified_name)
-        {
-            None
-        } else {
-            // If `search_path` does not contain `full_name.schema`, the
-            // `PartialName` must contain it.
-            Some(qualified_name.qualifiers.schema_spec.clone())
-        };
-
-        let res = PartialItemName {
-            database: database_id.map(|id| self.get_database(&id).name().to_string()),
-            schema: schema_spec.map(|spec| {
-                self.get_schema(&qualified_name.qualifiers.database_spec, &spec)
-                    .name()
-                    .schema
-                    .clone()
-            }),
-            item: qualified_name.item.clone(),
-        };
-        assert_eq!(self.resolve_item_name(&res), Ok(qualified_name));
-        res
+    fn resolve_function_name(
+        &self,
+        name: &PartialItemName,
+    ) -> Result<&QualifiedItemName, SqlCatalogError> {
+        self.resolve_function(name).map(|entry| entry.name())
     }
 }
 
@@ -7330,6 +7392,16 @@ impl SessionCatalog for ConnCatalog<'_> {
             .expect("database doesn't exist")
     }
 
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn get_databases(&self) -> Vec<&dyn CatalogDatabase> {
+        self.state
+            .database_by_id
+            .values()
+            .map(|database| database as &dyn CatalogDatabase)
+            .collect()
+    }
+
     fn resolve_schema(
         &self,
         database_name: Option<&str>,
@@ -7360,6 +7432,22 @@ impl SessionCatalog for ConnCatalog<'_> {
     ) -> &dyn CatalogSchema {
         self.state
             .get_schema(database_spec, schema_spec, self.conn_id)
+    }
+
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn get_schemas(&self) -> Vec<&dyn CatalogSchema> {
+        self.get_databases()
+            .into_iter()
+            .flat_map(|database| database.schemas().into_iter())
+            .chain(
+                self.state
+                    .ambient_schemas_by_id
+                    .values()
+                    .chain(self.state.temporary_schemas.values())
+                    .map(|schema| schema as &dyn CatalogSchema),
+            )
+            .collect()
     }
 
     fn is_system_schema(&self, schema: &str) -> bool {
@@ -7453,12 +7541,30 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_entry(id)
     }
 
+    fn get_items(&self) -> Vec<&dyn mz_sql::catalog::CatalogItem> {
+        self.get_schemas()
+            .into_iter()
+            .flat_map(|schema| schema.item_ids().into_iter())
+            .map(|(_, global_id)| self.get_item(global_id))
+            .collect()
+    }
+
     fn item_exists(&self, name: &QualifiedItemName) -> bool {
         self.state.item_exists(name, self.conn_id)
     }
 
     fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster {
         &self.state.clusters_by_id[&id]
+    }
+
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn get_clusters(&self) -> Vec<&dyn mz_sql::catalog::CatalogCluster> {
+        self.state
+            .clusters_by_id
+            .values()
+            .map(|cluster| cluster as &dyn mz_sql::catalog::CatalogCluster)
+            .collect()
     }
 
     fn get_cluster_replica(
@@ -7470,6 +7576,13 @@ impl SessionCatalog for ConnCatalog<'_> {
         cluster.replica(replica_id)
     }
 
+    fn get_cluster_replicas(&self) -> Vec<&dyn mz_sql::catalog::CatalogClusterReplica> {
+        self.get_clusters()
+            .into_iter()
+            .flat_map(|cluster| cluster.replicas().into_iter())
+            .collect()
+    }
+
     fn find_available_name(&self, name: QualifiedItemName) -> QualifiedItemName {
         self.state.find_available_name(name, self.conn_id)
     }
@@ -7479,16 +7592,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
-        let database = match &name.database {
-            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
-            ResolvedDatabaseSpecifier::Id(id) => {
-                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
-            }
-        };
-        FullSchemaName {
-            database,
-            schema: name.schema.clone(),
-        }
+        self.state.resolve_full_schema_name(name)
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -7583,6 +7687,55 @@ impl SessionCatalog for ConnCatalog<'_> {
             }
         }
     }
+
+    /// Returns a [`PartialItemName`] with the minimum amount of qualifiers to unambiguously resolve
+    /// the object.
+    fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
+        let database_id = match &qualified_name.qualifiers.database_spec {
+            ResolvedDatabaseSpecifier::Ambient => None,
+            ResolvedDatabaseSpecifier::Id(id)
+                if self.database.is_some() && self.database == Some(*id) =>
+            {
+                None
+            }
+            ResolvedDatabaseSpecifier::Id(id) => Some(id.clone()),
+        };
+
+        let schema_spec = if database_id.is_none()
+            && self.resolve_item_name(&PartialItemName {
+                database: None,
+                schema: None,
+                item: qualified_name.item.clone(),
+            }) == Ok(qualified_name)
+            || self.resolve_function_name(&PartialItemName {
+                database: None,
+                schema: None,
+                item: qualified_name.item.clone(),
+            }) == Ok(qualified_name)
+        {
+            None
+        } else {
+            // If `search_path` does not contain `full_name.schema`, the
+            // `PartialName` must contain it.
+            Some(qualified_name.qualifiers.schema_spec.clone())
+        };
+
+        let res = PartialItemName {
+            database: database_id.map(|id| self.get_database(&id).name().to_string()),
+            schema: schema_spec.map(|spec| {
+                self.get_schema(&qualified_name.qualifiers.database_spec, &spec)
+                    .name()
+                    .schema
+                    .clone()
+            }),
+            item: qualified_name.item.clone(),
+        };
+        assert!(
+            self.resolve_item_name(&res) == Ok(qualified_name)
+                || self.resolve_function_name(&res) == Ok(qualified_name)
+        );
+        res
+    }
 }
 
 impl mz_sql::catalog::CatalogDatabase for Database {
@@ -7598,8 +7751,17 @@ impl mz_sql::catalog::CatalogDatabase for Database {
         !self.schemas_by_name.is_empty()
     }
 
-    fn schemas(&self) -> &BTreeMap<String, SchemaId> {
+    fn schema_ids(&self) -> &BTreeMap<String, SchemaId> {
         &self.schemas_by_name
+    }
+
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn schemas(&self) -> Vec<&dyn CatalogSchema> {
+        self.schemas_by_id
+            .values()
+            .map(|schema| schema as &dyn CatalogSchema)
+            .collect()
     }
 
     fn owner_id(&self) -> RoleId {
@@ -7628,7 +7790,7 @@ impl mz_sql::catalog::CatalogSchema for Schema {
         !self.items.is_empty()
     }
 
-    fn items(&self) -> &BTreeMap<String, GlobalId> {
+    fn item_ids(&self) -> &BTreeMap<String, GlobalId> {
         &self.items
     }
 
@@ -7688,8 +7850,17 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         &self.bound_objects
     }
 
-    fn replicas(&self) -> &BTreeMap<String, ReplicaId> {
+    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId> {
         &self.replica_id_by_name
+    }
+
+    // `as` is ok to use to cast to a trait object.
+    #[allow(clippy::as_conversions)]
+    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica> {
+        self.replicas_by_id
+            .values()
+            .map(|replica| replica as &dyn CatalogClusterReplica)
+            .collect()
     }
 
     fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica {
@@ -7821,21 +7992,20 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use std::iter;
 
+    use itertools::Itertools;
     use mz_controller::clusters::ClusterId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
-    use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+    use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
-    use mz_sql::catalog::{CatalogDatabase, PrivilegeMap, SessionCatalog};
-    use mz_sql::names;
+    use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
     use mz_sql::names::{
-        DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
+        self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
@@ -8012,7 +8182,11 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("pg_catalog"), false)
+                .set(
+                    "search_path",
+                    VarInput::Flat(mz_repr::namespaces::PG_CATALOG_SCHEMA),
+                    false,
+                )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -8039,7 +8213,11 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("mz_catalog"), false)
+                .set(
+                    "search_path",
+                    VarInput::Flat(mz_repr::namespaces::MZ_CATALOG_SCHEMA),
+                    false,
+                )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -8066,7 +8244,11 @@ mod tests {
             let mut session = Session::dummy();
             session
                 .vars_mut()
-                .set("search_path", VarInput::Flat("mz_temp"), false)
+                .set(
+                    "search_path",
+                    VarInput::Flat(mz_repr::namespaces::MZ_TEMP_SCHEMA),
+                    false,
+                )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
             assert_ne!(
@@ -8842,8 +9024,8 @@ mod tests {
         let other_role = RoleId::User(3);
 
         // older owner exists as grantor.
-        let mut privileges = PrivilegeMap::new();
-        privileges.insert(
+        let mut privileges = PrivilegeMap::default();
+        privileges.0.insert(
             other_role,
             vec![
                 MzAclItem {
@@ -8859,19 +9041,22 @@ mod tests {
             ],
         );
         Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
-        assert_eq!(1, privileges.len());
+        assert_eq!(1, privileges.0.len());
         assert_eq!(
             &vec![MzAclItem {
                 grantee: other_role,
                 grantor: new_owner,
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
-            privileges.get(&other_role).expect("other_role is grantee")
+            privileges
+                .0
+                .get(&other_role)
+                .expect("other_role is grantee")
         );
 
         // older owner exists as grantee.
-        let mut privileges = PrivilegeMap::new();
-        privileges.insert(
+        let mut privileges = PrivilegeMap::default();
+        privileges.0.insert(
             old_owner,
             vec![MzAclItem {
                 grantee: old_owner,
@@ -8879,7 +9064,7 @@ mod tests {
                 acl_mode: AclMode::UPDATE,
             }],
         );
-        privileges.insert(
+        privileges.0.insert(
             new_owner,
             vec![MzAclItem {
                 grantee: new_owner,
@@ -8888,19 +9073,19 @@ mod tests {
             }],
         );
         Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
-        assert_eq!(1, privileges.len());
+        assert_eq!(1, privileges.0.len());
         assert_eq!(
             &vec![MzAclItem {
                 grantee: new_owner,
                 grantor: other_role,
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
-            privileges.get(&new_owner).expect("new_owner is grantee")
+            privileges.0.get(&new_owner).expect("new_owner is grantee")
         );
 
         // older owner exists as grantee and grantor.
-        let mut privileges = PrivilegeMap::new();
-        privileges.insert(
+        let mut privileges = PrivilegeMap::default();
+        privileges.0.insert(
             old_owner,
             vec![MzAclItem {
                 grantee: old_owner,
@@ -8908,7 +9093,7 @@ mod tests {
                 acl_mode: AclMode::UPDATE,
             }],
         );
-        privileges.insert(
+        privileges.0.insert(
             new_owner,
             vec![MzAclItem {
                 grantee: new_owner,
@@ -8917,14 +9102,14 @@ mod tests {
             }],
         );
         Catalog::update_privilege_owners(&mut privileges, old_owner, new_owner);
-        assert_eq!(1, privileges.len());
+        assert_eq!(1, privileges.0.len());
         assert_eq!(
             &vec![MzAclItem {
                 grantee: new_owner,
                 grantor: new_owner,
                 acl_mode: AclMode::SELECT.union(AclMode::UPDATE)
             }],
-            privileges.get(&new_owner).expect("new_owner is grantee")
+            privileges.0.get(&new_owner).expect("new_owner is grantee")
         );
     }
 

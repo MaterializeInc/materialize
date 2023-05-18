@@ -16,13 +16,12 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use tokio::sync::Mutex;
-
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tokio::sync::Mutex;
 
 use crate::maelstrom::api::{ErrorCode, MaelstromError};
 use crate::maelstrom::node::Handle;

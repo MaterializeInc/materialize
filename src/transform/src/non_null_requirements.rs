@@ -24,10 +24,11 @@
 //! Null arguments*.
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::TransformArgs;
 use itertools::{zip_eq, Either, Itertools};
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+
+use crate::TransformArgs;
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -115,7 +116,12 @@ impl NonNullRequirements {
                     self.action(value, columns, gets)?;
                     Ok(())
                 }
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    body,
+                    max_iters: _,
+                } => {
                     // Determine the recursive IDs in this LetRec binding.
                     let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
 

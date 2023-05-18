@@ -74,7 +74,6 @@
 
 use byteorder::{NetworkEndian, WriteBytesExt};
 use criterion::{black_box, Criterion, Throughput};
-
 use mz_avro::types::Value as AvroValue;
 use mz_interchange::avro::{parse_schema, Decoder};
 use mz_ore::cast::CastFrom;

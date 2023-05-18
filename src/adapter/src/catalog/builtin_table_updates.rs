@@ -11,7 +11,6 @@ use std::net::Ipv4Addr;
 
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
-
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_compute_client::controller::NewReplicaId;
 use mz_controller::clusters::{
@@ -24,13 +23,11 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::mz_acl_item::MzAclItem;
+use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, PrivilegeMap, TypeCategory,
-};
+use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -50,13 +47,12 @@ use crate::catalog::builtin::{
     MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error, ErrorKind, Func, Index,
-    MaterializedView, Sink, StorageSinkConnectionState, Type, View, SYSTEM_CONN_ID,
+    AwsPrincipalContext, CatalogItem, CatalogState, Connection, DataSourceDesc, Database, Error,
+    ErrorKind, Func, Index, MaterializedView, Sink, StorageSinkConnectionState, Type, View,
+    SYSTEM_CONN_ID,
 };
 use crate::session::Session;
 use crate::subscribe::ActiveSubscribe;
-
-use super::AwsPrincipalContext;
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -626,7 +622,7 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let create_sql = mz_sql::parse::parse(&view.create_sql)
-            .expect("create_sql cannot be invalid")
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", view.create_sql))
             .into_element();
         let query = match create_sql {
             Statement::CreateView(stmt) => stmt.definition.query,
@@ -665,7 +661,7 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let create_sql = mz_sql::parse::parse(&mview.create_sql)
-            .expect("create_sql cannot be invalid")
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", mview.create_sql))
             .into_element();
         let query = match create_sql {
             Statement::CreateMaterializedView(stmt) => stmt.query,
@@ -756,7 +752,7 @@ impl CatalogState {
         let mut updates = vec![];
 
         let key_sqls = match mz_sql::parse::parse(&index.create_sql)
-            .expect("create_sql cannot be invalid")
+            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", index.create_sql))
             .into_element()
         {
             Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => {
@@ -793,7 +789,7 @@ impl CatalogState {
             let key_sql = key_sqls
                 .get(i)
                 .expect("missing sql information for index key")
-                .to_string();
+                .to_ast_string();
             let (field_number, expression) = match key {
                 MirScalarExpr::Column(col) => {
                     (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)

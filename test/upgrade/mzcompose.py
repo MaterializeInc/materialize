@@ -25,10 +25,11 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
-from materialize.util import MzVersion, released_materialize_versions
+from materialize.util import MzVersion
+from materialize.version_list import VersionsFromDocs
 
-# All released Materialize versions, in order from most to least recent.
-all_versions = released_materialize_versions()
+version_list = VersionsFromDocs()
+all_versions = version_list.all_versions()
 
 mz_options: Dict[MzVersion, str] = {}
 
@@ -71,25 +72,8 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Test upgrades from various versions."""
+    """Test upgrades from previous versions."""
 
-    parser.add_argument(
-        "--min-version",
-        metavar="VERSION",
-        type=MzVersion.parse,
-        default=MzVersion.parse("0.39.0"),
-        help="the minimum version to test from",
-    )
-    parser.add_argument(
-        "--most-recent",
-        metavar="N",
-        # Usually, the 2 most-recent versions will be:
-        # - the previous patch version of the current release
-        # - the last patch version of the previous release
-        default=2,
-        type=int,
-        help="limit testing to the N most recent versions",
-    )
     parser.add_argument(
         "--tests",
         choices=["all", "non-ssl", "ssl"],
@@ -101,10 +85,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    tested_versions = [v for v in all_versions if v >= args.min_version]
-    if args.most_recent is not None:
-        tested_versions = tested_versions[: args.most_recent]
-    tested_versions.reverse()
+    tested_versions = version_list.minor_versions()[-2:]
 
     if args.tests in ["all", "non-ssl"]:
         for version in tested_versions:
@@ -131,7 +112,7 @@ def test_upgrade_from_version(
     filter: str,
     style: str = "",
 ) -> None:
-    print(f"===>>> Testing upgrade from Materialize {from_version} to current_source.")
+    print(f"+++ Testing upgrade from Materialize {from_version} to current_source.")
 
     # If we are testing vX.Y.Z, the glob should include all patch versions 0 to Z
     prior_patch_versions = []
@@ -203,6 +184,7 @@ def test_upgrade_from_version(
             "testdrive",
             "--no-reset",
             f"--var=upgrade-from-version={from_version}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
             temp_dir,
             seed,
             f"check-{style}from-{version_glob}-{filter}.td",

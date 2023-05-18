@@ -20,22 +20,21 @@
 //!    pairs on the same line or as lowercase `$key` fields on indented lines.
 //! 5. A single non-recursive parameter can be written just as `$val`.
 
-use std::{collections::BTreeMap, fmt, ops::Deref};
+use std::collections::BTreeMap;
+use std::fmt;
+use std::ops::Deref;
 
+use itertools::{izip, Itertools};
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::str::{bracketed, separated, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
 
-use crate::plan::{
-    join::{
-        delta_join::{DeltaPathPlan, DeltaStagePlan},
-        linear_join::LinearStagePlan,
-        DeltaJoinPlan, JoinClosure, LinearJoinPlan,
-    },
-    reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan},
-    AvailableCollections, Plan,
-};
+use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
+use crate::plan::join::linear_join::LinearStagePlan;
+use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
+use crate::plan::reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan};
+use crate::plan::{AvailableCollections, Plan};
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     fn fmt_text(
@@ -129,16 +128,29 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     Ok(())
                 })?;
             }
-            LetRec { ids, values, body } => {
-                let bindings = ids.iter().zip(values).collect::<Vec<_>>();
+            LetRec {
+                ids,
+                values,
+                max_iters,
+                body,
+            } => {
+                let bindings = izip!(ids.iter(), values, max_iters).collect_vec();
                 let head = body.as_ref();
 
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value) in bindings.iter().rev() {
-                        writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                    for (id, value, max_iter) in bindings.iter().rev() {
+                        if let Some(max_iter) = max_iter {
+                            writeln!(
+                                f,
+                                "{}cte [iteration_limit={}] {} =",
+                                ctx.indent, max_iter, *id
+                            )?;
+                        } else {
+                            writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        }
                         ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())

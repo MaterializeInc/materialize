@@ -25,13 +25,11 @@ use std::hash::Hash;
 
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-
 use mz_compute_client::controller::ComputeInstanceId;
-
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::controller::ReadPolicy;
+use timely::progress::frontier::MutableAntichain;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};

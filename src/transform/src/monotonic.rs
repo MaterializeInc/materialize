@@ -8,11 +8,12 @@
 // by the Apache License, Version 2.0.
 
 //! Analysis to identify monotonic collections, especially TopK inputs.
+use std::collections::BTreeSet;
+
 use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::GlobalId;
-use std::collections::BTreeSet;
 
 /// A struct that holds a recursive function that determines if a
 /// relation is monotonic, and applies any optimizations along the way.
@@ -116,7 +117,12 @@ impl MonotonicFlag {
                     }
                     result
                 }
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    max_iters: _,
+                    body,
+                } => {
                     for id in ids.iter() {
                         if locals.contains(id) {
                             panic!("Shadowing of identifier: {:?}", id);
@@ -132,6 +138,8 @@ impl MonotonicFlag {
                     // assume all bindings were monotonic, and iteratively remove
                     // any that are determined to be non-monotonic; only once this
                     // concludes can we apply any transformations, however.
+                    // Don't forget to handle `max_iters` when changing to the
+                    // optimistic approach!
                     let mut added = true;
                     while added {
                         added = false;

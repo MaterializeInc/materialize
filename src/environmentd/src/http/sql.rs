@@ -19,11 +19,6 @@ use axum::Json;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
-use serde::{Deserialize, Serialize};
-use tokio::time;
-use tracing::warn;
-use tungstenite::protocol::frame::coding::CloseCode;
-
 use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
 use mz_adapter::{
     AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient,
@@ -36,10 +31,12 @@ use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
+use serde::{Deserialize, Serialize};
+use tokio::time;
+use tracing::warn;
+use tungstenite::protocol::frame::coding::CloseCode;
 
-use crate::http::{AuthedClient, MAX_REQUEST_SIZE};
-
-use super::{init_ws, WsState};
+use crate::http::{init_ws, AuthedClient, WsState, MAX_REQUEST_SIZE};
 
 pub async fn handle_sql(
     mut client: AuthedClient,
@@ -760,7 +757,10 @@ async fn execute_stmt<S: ResultSender>(
         .map(|portal| portal.desc.clone())
         .expect("unnamed portal should be present");
 
-    let res = match client.execute(EMPTY_PORTAL.into()).await {
+    let res = match client
+        .execute(EMPTY_PORTAL.into(), futures::future::pending())
+        .await
+    {
         Ok(res) => res,
         Err(e) => {
             return Ok(SqlResult::err(client, e).into());
@@ -796,11 +796,13 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::DiscardedTemp
         | ExecuteResponse::DiscardedAll
         | ExecuteResponse::DroppedObject(_)
+        | ExecuteResponse::DroppedOwned
         | ExecuteResponse::EmptyQuery
         | ExecuteResponse::GrantedPrivilege
         | ExecuteResponse::GrantedRole
         | ExecuteResponse::Inserted(_)
         | ExecuteResponse::Raised
+        | ExecuteResponse::ReassignOwned
         | ExecuteResponse::RevokedPrivilege
         | ExecuteResponse::RevokedRole
         | ExecuteResponse::SetVariable { .. }

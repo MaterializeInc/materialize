@@ -15,16 +15,15 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-
 use mz_expr::func;
 use mz_ore::collections::CollectionExt;
 use mz_pgrepr::oid;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
+use once_cell::sync::Lazy;
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
-use crate::names::{self, PartialItemName};
+use crate::names::{self, ResolvedItemName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
@@ -39,7 +38,7 @@ use crate::plan::typeconv::{self, CastContext};
 #[derive(Clone, Copy, Debug)]
 pub enum FuncSpec<'a> {
     /// A function name.
-    Func(&'a PartialItemName),
+    Func(&'a ResolvedItemName),
     /// An operator name.
     Op(&'a str),
 }
@@ -961,9 +960,13 @@ where
         if candidates == 0 {
             match spec {
                 FuncSpec::Func(name) => PlanError::UnknownFunction {
-                    name: name.to_string(),
+                    name: ecx
+                        .qcx
+                        .scx
+                        .humanize_resolved_name(name)
+                        .expect("resolved to object")
+                        .to_string(),
                     arg_types,
-                    alternative_hint: None,
                 },
                 FuncSpec::Op(name) => PlanError::UnknownOperator {
                     name: name.to_string(),
@@ -973,7 +976,12 @@ where
         } else {
             match spec {
                 FuncSpec::Func(name) => PlanError::IndistinctFunction {
-                    name: name.to_string(),
+                    name: ecx
+                        .qcx
+                        .scx
+                        .humanize_resolved_name(name)
+                        .expect("resolved to object")
+                        .to_string(),
                     arg_types,
                 },
                 FuncSpec::Op(name) => PlanError::IndistinctOperator {
@@ -1785,6 +1793,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, Bool) => Operation::binary(|_ecx, name, missing_ok| {
                 current_settings(name, missing_ok)
             }) => ScalarType::String, 3294;
+        },
+        "current_timestamp" => Scalar {
+            params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, oid::FUNC_CURRENT_TIMESTAMP_OID;
         },
         "current_user" => Scalar {
             params!() => UnmaterializableFunc::CurrentUser => String, 745;
@@ -2890,9 +2901,6 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "concat_agg" => Aggregate {
             params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")) => String, oid::FUNC_CONCAT_AGG_OID;
-        },
-        "current_timestamp" => Scalar {
-            params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, oid::FUNC_CURRENT_TIMESTAMP_OID;
         },
         "list_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {

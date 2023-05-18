@@ -43,3 +43,7 @@ DROP DATABASE my_db RESTRICT;
 ```sql
 DROP DATABASE IF EXISTS my_db;
 ```
+
+## Related pages
+
+- [DROP OWNED](../drop-owned)

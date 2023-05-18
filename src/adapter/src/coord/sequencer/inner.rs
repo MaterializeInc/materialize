@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
 use std::time::Duration;
@@ -16,11 +17,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use maplit::btreeset;
-use rand::seq::SliceRandom;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
-use tracing::{event, warn, Level};
-
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
@@ -38,16 +34,16 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_ore::vec::VecExt;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
-    CatalogTypeDetails, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogRole, CatalogSchema, CatalogTypeDetails, SessionCatalog,
 };
-use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
 use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
@@ -56,22 +52,25 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan, GrantRolePlan,
-    IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig, PeekPlan, Plan,
-    QueryWhen, ReadThenWritePlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, SourceSinkClusterConfig, SubscribeFrom,
-    SubscribePlan, VariableValue, View,
+    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan,
+    GrantRolePlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig,
+    PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
+    RevokePrivilegePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
 };
-use mz_sql::session::vars::Var;
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, OwnedVarInput, Var, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 use mz_transform::Optimizer;
+use rand::seq::SliceRandom;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
+use tracing::{event, warn, Level};
 
 use crate::catalog::{
     self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
@@ -95,12 +94,13 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
+use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{
     send_immediate_rows, viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt,
 };
-use crate::{guard_write_critical_section, rbac, PeekResponseUnary, TimestampExplanation};
+use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
 /// Attempts to execute an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
@@ -114,6 +114,12 @@ macro_rules! return_if_err {
 }
 
 pub(super) use return_if_err;
+
+struct DropOps {
+    ops: Vec<catalog::Op>,
+    dropped_active_db: bool,
+    dropped_active_cluster: bool,
+}
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1409,82 +1415,12 @@ impl Coordinator {
         session: &mut Session,
         plan: DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = Vec::new();
-        let mut dropped_active_db = false;
-        let mut dropped_active_cluster = false;
+        let DropOps {
+            ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        } = self.sequence_drop_common(session, plan.drop_ids)?;
 
-        let mut dropped_roles: BTreeMap<_, _> = plan
-            .drop_ids
-            .iter()
-            .filter_map(|id| match id {
-                ObjectId::Role(role_id) => Some(role_id),
-                _ => None,
-            })
-            .map(|id| {
-                let name = self.catalog().get_role(id).name();
-                (*id, name)
-            })
-            .collect();
-        for role_id in dropped_roles.keys() {
-            self.catalog().ensure_not_reserved_role(role_id)?;
-        }
-        self.validate_dropped_role_ownership(&dropped_roles)?;
-        // If any role is a member of a dropped role, then we must revoke that membership.
-        let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
-        for role in self.catalog().user_roles() {
-            for dropped_role_id in
-                dropped_role_ids.intersection(&role.membership.map.keys().collect())
-            {
-                ops.push(catalog::Op::RevokeRole {
-                    role_id: **dropped_role_id,
-                    member_id: role.id(),
-                    grantor_id: *role
-                        .membership
-                        .map
-                        .get(*dropped_role_id)
-                        .expect("included in keys above"),
-                })
-            }
-        }
-
-        for id in &plan.drop_ids {
-            match id {
-                ObjectId::Database(id) => {
-                    let name = self.catalog().get_database(id).name();
-                    if name == session.vars().database() {
-                        dropped_active_db = true;
-                    }
-                }
-                ObjectId::Cluster(id) => {
-                    if let Some(active_id) = self
-                        .catalog()
-                        .active_cluster(session)
-                        .ok()
-                        .map(|cluster| cluster.id())
-                    {
-                        if id == &active_id {
-                            dropped_active_cluster = true;
-                        }
-                    }
-                }
-                ObjectId::Role(id) => {
-                    let role = self.catalog().get_role(id);
-                    let name = role.name();
-                    dropped_roles.insert(*id, name);
-                    // We must revoke all role memberships that the dropped roles belongs to.
-                    for (group_id, grantor_id) in &role.membership.map {
-                        ops.push(catalog::Op::RevokeRole {
-                            role_id: *group_id,
-                            member_id: *id,
-                            grantor_id: *grantor_id,
-                        });
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        ops.extend(plan.drop_ids.into_iter().map(catalog::Op::DropObject));
         self.catalog_transact(Some(session), ops).await?;
 
         fail::fail_point!("after_sequencer_drop_replica");
@@ -1507,7 +1443,7 @@ impl Coordinator {
         dropped_roles: &BTreeMap<RoleId, &str>,
     ) -> Result<(), AdapterError> {
         fn privilege_check(
-            privileges: &BTreeMap<RoleId, Vec<MzAclItem>>,
+            privileges: &PrivilegeMap,
             dropped_roles: &BTreeMap<RoleId, &str>,
             dependent_objects: &mut BTreeMap<String, Vec<String>>,
             object_type: ObjectType,
@@ -1515,7 +1451,7 @@ impl Coordinator {
             catalog: &Catalog,
         ) {
             let object_type = object_type.to_string().to_lowercase();
-            for (_, privileges) in privileges {
+            for (_, privileges) in &privileges.0 {
                 for privilege in privileges {
                     if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
                         let grantor_name = catalog.get_role(&privilege.grantor).name();
@@ -1624,6 +1560,155 @@ impl Coordinator {
         }
     }
 
+    pub(super) async fn sequence_drop_owned(
+        &mut self,
+        session: &mut Session,
+        plan: DropOwnedPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        for role_id in &plan.role_ids {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
+
+        let mut revokes = plan.revokes;
+
+        // Make sure this stays in sync with the beginning of `rbac::check_plan`.
+        let session_catalog = self.catalog().for_session(session);
+        if is_rbac_enabled_for_session(session_catalog.system_vars(), session)
+            && !session.is_superuser()
+        {
+            // Obtain all roles that the current session is a member of.
+            let role_membership = session_catalog.collect_role_membership(session.role_id());
+            let invalid_revokes: BTreeSet<_> = revokes
+                .drain_filter_swapping(|(_, privilege)| {
+                    !role_membership.contains(&privilege.grantor)
+                })
+                .map(|(object_id, _)| object_id)
+                .collect();
+            for invalid_revoke in invalid_revokes {
+                let name = session_catalog.get_object_name(&invalid_revoke);
+                session.add_notice(AdapterNotice::CannotRevoke { name });
+            }
+        }
+
+        let mut ops: Vec<_> = revokes
+            .into_iter()
+            .map(|(object_id, privilege)| catalog::Op::UpdatePrivilege {
+                object_id,
+                privilege,
+                variant: UpdatePrivilegeVariant::Revoke,
+            })
+            .collect();
+
+        let DropOps {
+            ops: drop_ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        } = self.sequence_drop_common(session, plan.drop_ids)?;
+        ops.extend(drop_ops);
+
+        self.catalog_transact(Some(session), ops).await?;
+
+        if dropped_active_db {
+            session.add_notice(AdapterNotice::DroppedActiveDatabase {
+                name: session.vars().database().to_string(),
+            });
+        }
+        if dropped_active_cluster {
+            session.add_notice(AdapterNotice::DroppedActiveCluster {
+                name: session.vars().cluster().to_string(),
+            });
+        }
+        Ok(ExecuteResponse::DroppedOwned)
+    }
+
+    fn sequence_drop_common(
+        &self,
+        session: &mut Session,
+        ids: Vec<ObjectId>,
+    ) -> Result<DropOps, AdapterError> {
+        let mut ops = Vec::new();
+        let mut dropped_active_db = false;
+        let mut dropped_active_cluster = false;
+
+        let mut dropped_roles: BTreeMap<_, _> = ids
+            .iter()
+            .filter_map(|id| match id {
+                ObjectId::Role(role_id) => Some(role_id),
+                _ => None,
+            })
+            .map(|id| {
+                let name = self.catalog().get_role(id).name();
+                (*id, name)
+            })
+            .collect();
+        for role_id in dropped_roles.keys() {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
+        self.validate_dropped_role_ownership(&dropped_roles)?;
+        // If any role is a member of a dropped role, then we must revoke that membership.
+        let dropped_role_ids: BTreeSet<_> = dropped_roles.keys().collect();
+        for role in self.catalog().user_roles() {
+            for dropped_role_id in
+                dropped_role_ids.intersection(&role.membership.map.keys().collect())
+            {
+                ops.push(catalog::Op::RevokeRole {
+                    role_id: **dropped_role_id,
+                    member_id: role.id(),
+                    grantor_id: *role
+                        .membership
+                        .map
+                        .get(*dropped_role_id)
+                        .expect("included in keys above"),
+                })
+            }
+        }
+
+        for id in &ids {
+            match id {
+                ObjectId::Database(id) => {
+                    let name = self.catalog().get_database(id).name();
+                    if name == session.vars().database() {
+                        dropped_active_db = true;
+                    }
+                }
+                ObjectId::Cluster(id) => {
+                    if let Some(active_id) = self
+                        .catalog()
+                        .active_cluster(session)
+                        .ok()
+                        .map(|cluster| cluster.id())
+                    {
+                        if id == &active_id {
+                            dropped_active_cluster = true;
+                        }
+                    }
+                }
+                ObjectId::Role(id) => {
+                    let role = self.catalog().get_role(id);
+                    let name = role.name();
+                    dropped_roles.insert(*id, name);
+                    // We must revoke all role memberships that the dropped roles belongs to.
+                    for (group_id, grantor_id) in &role.membership.map {
+                        ops.push(catalog::Op::RevokeRole {
+                            role_id: *group_id,
+                            member_id: *id,
+                            grantor_id: *grantor_id,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        ops.extend(ids.into_iter().map(catalog::Op::DropObject));
+
+        Ok(DropOps {
+            ops,
+            dropped_active_db,
+            dropped_active_cluster,
+        })
+    }
+
     pub(super) fn sequence_show_all_variables(
         &mut self,
         session: &Session,
@@ -1646,6 +1731,33 @@ impl Coordinator {
         session: &Session,
         plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if &plan.name == SCHEMA_ALIAS {
+            let schemas = self.catalog.resolve_search_path(session);
+            let schema = schemas.first();
+            return match schema {
+                Some((database_spec, schema_spec)) => {
+                    let schema_name = &self
+                        .catalog
+                        .get_schema(database_spec, schema_spec, session.conn_id())
+                        .name()
+                        .schema;
+                    let row = Row::pack_slice(&[Datum::String(schema_name)]);
+                    Ok(send_immediate_rows(vec![row]))
+                }
+                None => {
+                    session.add_notice(AdapterNotice::NoResolvableSearchPathSchema {
+                        search_path: session
+                            .vars()
+                            .search_path()
+                            .into_iter()
+                            .map(|schema| schema.to_string())
+                            .collect(),
+                    });
+                    Ok(send_immediate_rows(vec![Row::pack_slice(&[Datum::Null])]))
+                }
+            };
+        }
+
         let variable = session
             .vars()
             .get(&plan.name)
@@ -1653,6 +1765,23 @@ impl Coordinator {
 
         if variable.visible(session.user()) && (variable.safe() || self.catalog().unsafe_mode()) {
             let row = Row::pack_slice(&[Datum::String(&variable.value())]);
+            if variable.name() == DATABASE_VAR_NAME
+                && matches!(
+                    self.catalog().resolve_database(&variable.value()),
+                    Err(CatalogError::UnknownDatabase(_))
+                )
+            {
+                let name = variable.value();
+                session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
+            } else if variable.name() == CLUSTER_VAR_NAME
+                && matches!(
+                    self.catalog().resolve_cluster(&variable.value()),
+                    Err(CatalogError::UnknownCluster(_))
+                )
+            {
+                let name = variable.value();
+                session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
+            }
             Ok(send_immediate_rows(vec![row]))
         } else {
             Err(AdapterError::VarError(VarError::UnknownParameter(
@@ -2595,7 +2724,6 @@ impl Coordinator {
         plan: ExplainPlan,
         target_cluster: TargetCluster,
     ) -> Result<ExecuteResponse, AdapterError> {
-        use mz_compute_client::plan::Plan;
         use mz_repr::explain::trace_plan;
         use ExplainStage::*;
 
@@ -2696,8 +2824,20 @@ impl Coordinator {
             })?;
 
             let mut dataflow = DataflowDesc::new("explanation".to_string());
-            self.dataflow_builder(cluster_id)
-                .import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
+            let mut builder = self.dataflow_builder(cluster_id);
+            builder.import_view_into_dataflow(&explainee_id, &optimized_plan, &mut dataflow)?;
+
+            // Resolve all unmaterializable function calls except mz_now(), because we don't yet have a
+            // timestamp.
+            let style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::Deferred,
+                session,
+            };
+            let state = self.catalog().state();
+            dataflow.visit_children(
+                |r| prep_relation_expr(state, r, style),
+                |s| prep_scalar_expr(state, s, style),
+            )?;
 
             // Execute the `optimize/global` stage.
             catch_unwind(no_errors, "global", || {
@@ -2740,15 +2880,22 @@ impl Coordinator {
                 _ => None,
             };
 
+            if matches!(explainee, Explainee::Query) {
+                // We have the opportunity to name an `until` frontier that will prevent work we needn't perform.
+                // By default, `until` will be `Antichain::new()`, which prevents no updates and is safe.
+                if let Some(as_of) = dataflow.as_of.as_ref() {
+                    if !as_of.is_empty() {
+                        if let Some(next) = as_of.as_option().and_then(|as_of| as_of.checked_add(1))
+                        {
+                            dataflow.until = timely::progress::Antichain::from_elem(next);
+                        }
+                    }
+                }
+            }
+
             // Execute the `optimize/finalize_dataflow` stage.
             let dataflow_plan = catch_unwind(no_errors, "finalize_dataflow", || {
-                Plan::<mz_repr::Timestamp>::finalize_dataflow(
-                    dataflow,
-                    self.catalog()
-                        .system_config()
-                        .enable_monotonic_oneshot_selects(),
-                )
-                .map_err(AdapterError::Internal)
+                self.finalize_dataflow(dataflow, cluster_id)
             })?;
 
             // Trace the resulting plan for the top-level `optimize` path.
@@ -3207,7 +3354,11 @@ impl Coordinator {
                 mz_sql::plan::plan_copy_from(session.pcx(), &conn_catalog, id, columns, rows)
                     .err_into()
                     .and_then(|values| values.lower().err_into())
-                    .and_then(|values| Optimizer::logical_optimizer().optimize(values).err_into())
+                    .and_then(|values| {
+                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
+                            .optimize(values)
+                            .err_into()
+                    })
                     .and_then(|values| {
                         // Copied rows must always be constants.
                         Self::sequence_insert_constant(
@@ -3399,9 +3550,7 @@ impl Coordinator {
                                     Ok(diffs)
                                 }(rows)
                             }
-                            PeekResponseUnary::Canceled => {
-                                Err(AdapterError::Unstructured(anyhow!("execution canceled")))
-                            }
+                            PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))
                             }
@@ -3888,6 +4037,7 @@ impl Coordinator {
         let mut ops = Vec::with_capacity(grantees.len());
         for grantee in grantees {
             let existing_privilege = privileges
+                .0
                 .get(&grantee)
                 .and_then(|privileges| {
                     privileges
@@ -4072,6 +4222,32 @@ impl Coordinator {
         self.catalog_transact(Some(session), ops)
             .await
             .map(|_| ExecuteResponse::AlteredObject(object_type))
+    }
+
+    pub(super) async fn sequence_reassign_owned(
+        &mut self,
+        session: &mut Session,
+        ReassignOwnedPlan {
+            old_roles,
+            new_role,
+            reassign_ids,
+        }: ReassignOwnedPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        for role_id in old_roles.iter().chain(iter::once(&new_role)) {
+            self.catalog().ensure_not_reserved_role(role_id)?;
+        }
+
+        let ops = reassign_ids
+            .into_iter()
+            .map(|id| Op::UpdateOwner {
+                id,
+                new_owner: new_role,
+            })
+            .collect();
+
+        self.catalog_transact(Some(session), ops)
+            .await
+            .map(|_| ExecuteResponse::ReassignOwned)
     }
 
     /// Generates the catalog operations to create a linked cluster for the

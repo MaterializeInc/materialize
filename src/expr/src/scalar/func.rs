@@ -9,11 +9,9 @@
 
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
-use std::fmt;
-use std::iter;
 use std::ops::{BitOrAssign, Deref};
-use std::str;
 use std::str::FromStr;
+use std::{fmt, iter, str};
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
@@ -23,14 +21,6 @@ use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
-use num::traits::CheckedNeg;
-use proptest::{prelude::*, strategy::*};
-use proptest_derive::Arbitrary;
-use regex::RegexBuilder;
-use serde::{Deserialize, Serialize};
-use sha1::Sha1;
-use sha2::{Sha224, Sha256, Sha384, Sha512};
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::fmt::FormatBuffer;
@@ -44,12 +34,22 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::range::{self, Range, RangeBound, RangeOps};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::chrono::any_naive_datetime;
+use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
+use num::traits::CheckedNeg;
+use proptest::prelude::*;
+use proptest::strategy::*;
+use proptest_derive::Arbitrary;
+use regex::RegexBuilder;
+use serde::{Deserialize, Serialize};
+use sha1::Sha1;
+use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::{
@@ -64,8 +64,6 @@ mod format;
 pub(crate) mod impls;
 
 pub use impls::*;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
-use mz_repr::role_id::RoleId;
 
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
@@ -7124,9 +7122,8 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
 #[cfg(test)]
 mod test {
     use chrono::prelude::*;
-    use proptest::prelude::*;
-
     use mz_proto::protobuf_roundtrip;
+    use proptest::prelude::*;
 
     use super::*;
 

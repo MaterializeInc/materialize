@@ -20,9 +20,8 @@ use chrono::{
     DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc,
 };
 use chrono_tz::{Tz, TZ_VARIANTS};
-use proptest::prelude::Strategy;
-
 use mz_proto::{RustType, TryFromProtoError};
+use proptest::prelude::Strategy;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.chrono.rs"));
 
@@ -156,10 +155,10 @@ pub fn any_timezone() -> impl Strategy<Value = Tz> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     use super::*;
-    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]

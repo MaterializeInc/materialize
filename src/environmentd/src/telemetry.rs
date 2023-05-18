@@ -77,16 +77,15 @@
 // environment in real time:
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
-use serde_json::json;
-use tokio::time::{self, Duration};
-use tracing::warn;
-
 use mz_adapter::telemetry::SegmentClientExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_sql::catalog::EnvironmentId;
+use serde_json::json;
+use tokio::time::{self, Duration};
+use tracing::warn;
 
 /// How frequently to send a summary to Segment.
 const REPORT_INTERVAL: Duration = Duration::from_secs(3600);

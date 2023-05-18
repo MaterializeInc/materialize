@@ -14,11 +14,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use fail::fail_point;
-use serde_json::json;
-use timely::progress::Antichain;
-use tracing::Level;
-use tracing::{event, warn};
-
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::{ClusterId, ReplicaId, ReplicaLocation};
@@ -39,20 +34,22 @@ use mz_storage_client::controller::{
 };
 use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
 use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
+use serde_json::json;
+use timely::progress::Antichain;
+use tracing::{event, warn, Level};
 
 use crate::catalog::{
     CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
     TransactionResult, SYSTEM_CONN_ID,
 };
 use crate::client::ConnectionId;
+use crate::coord::read_policy::SINCE_GRANULARITY;
+use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterError, AdapterNotice};
-
-use super::read_policy::SINCE_GRANULARITY;
-use super::timeline::{TimelineContext, TimelineState};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {

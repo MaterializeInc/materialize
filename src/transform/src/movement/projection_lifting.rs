@@ -14,10 +14,11 @@
 use std::collections::BTreeMap;
 use std::mem;
 
-use crate::TransformArgs;
 use itertools::zip_eq;
 use mz_expr::{Id, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+
+use crate::TransformArgs;
 
 /// Hoist projections through operators.
 #[derive(Debug)]
@@ -96,7 +97,12 @@ impl ProjectionLifting {
                     gets.remove(&id);
                     Ok(())
                 }
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    max_iters: _,
+                    body,
+                } => {
                     let recursive_ids = MirRelationExpr::recursive_ids(ids, values)?;
 
                     for (local_id, value) in zip_eq(ids.iter(), values.iter_mut()) {

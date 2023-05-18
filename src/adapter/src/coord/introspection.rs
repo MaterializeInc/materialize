@@ -24,16 +24,12 @@ use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{Plan, SubscribeFrom};
 use smallvec::SmallVec;
 
+use crate::catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE};
 use crate::catalog::Catalog;
-use crate::notice::AdapterNotice;
-use crate::rbac;
-use crate::session::Session;
-
 use crate::coord::TargetCluster;
-use crate::{
-    catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_INTROSPECTION_ROLE},
-    AdapterError,
-};
+use crate::notice::AdapterNotice;
+use crate::session::Session;
+use crate::{rbac, AdapterError};
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
@@ -63,6 +59,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
@@ -100,7 +97,8 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
         | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_) => return TargetCluster::Active,
+        | Plan::RevokePrivilege(_)
+        | Plan::ReassignOwned(_) => return TargetCluster::Active,
     };
 
     // Bail if the user has disabled it via the SessionVar.
@@ -263,6 +261,7 @@ pub fn user_privilege_hack(
         | Plan::DiscardTemp
         | Plan::DiscardAll
         | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterIndexSetOptions(_)
@@ -283,7 +282,8 @@ pub fn user_privilege_hack(
         | Plan::RevokeRole(_)
         | Plan::GrantPrivilege(_)
         | Plan::RevokePrivilege(_)
-        | Plan::CopyRows(_) => {
+        | Plan::CopyRows(_)
+        | Plan::ReassignOwned(_) => {
             return Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::MzIntrospection {
                     action: plan.name().to_string(),

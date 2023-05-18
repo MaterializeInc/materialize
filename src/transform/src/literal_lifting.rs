@@ -23,7 +23,6 @@
 use std::collections::BTreeMap;
 
 use itertools::{zip_eq, Itertools};
-
 use mz_expr::visit::Visit;
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
@@ -267,7 +266,12 @@ impl LiteralLifting {
                     gets.remove(&id);
                     result
                 }
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    max_iters: _,
+                    body,
+                } => {
                     let recursive_ids = MirRelationExpr::recursive_ids(ids, values)?;
 
                     // Extend the context with empty `literals` vectors for all
@@ -292,7 +296,7 @@ impl LiteralLifting {
                             }
                         } else {
                             // Literals lifted from a non-recursive binding can
-                            // propagete to its call sites.
+                            // propagate to its call sites.
                             let prior = gets.insert(Id::Local(*local_id), literals);
                             assert!(!prior.is_some());
                         }

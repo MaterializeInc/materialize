@@ -17,11 +17,10 @@
 //! controller methods return bespoke error types that serve as documentation for the failure modes
 //! of each method and make it easy for callers to ensure that all possible errors are handled.
 
+use mz_repr::GlobalId;
 use thiserror::Error;
 
-use mz_repr::GlobalId;
-
-use super::{instance, ComputeInstanceId, ReplicaId};
+use crate::controller::{instance, ComputeInstanceId, ReplicaId};
 
 /// Error returned in response to a reference to an unknown compute instance.
 #[derive(Error, Debug)]

@@ -13,33 +13,30 @@
 //! representation via a call to lower().
 
 use std::collections::BTreeMap;
-use std::fmt;
-use std::mem;
+use std::num::NonZeroU64;
+use std::{fmt, mem};
 
 use itertools::Itertools;
-use mz_expr::visit::Visit;
-use mz_expr::visit::VisitChildren;
-use mz_ore::stack::RecursionLimitError;
-use serde::{Deserialize, Serialize};
-
 use mz_expr::func;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
-use mz_ore::collections::CollectionExt;
-use mz_ore::stack;
-use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::*;
-
-use crate::plan::error::PlanError;
-use crate::plan::query::ExprContext;
-use crate::plan::typeconv::{self, CastContext};
-use crate::plan::Params;
-
+use mz_expr::visit::{Visit, VisitChildren};
 // these happen to be unchanged at the moment, but there might be additions later
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
     WindowFrameBound, WindowFrameUnits,
 };
+use mz_ore::collections::CollectionExt;
+use mz_ore::stack;
+use mz_ore::stack::RecursionLimitError;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::*;
+use serde::{Deserialize, Serialize};
+
+use crate::plan::error::PlanError;
+use crate::plan::query::ExprContext;
+use crate::plan::typeconv::{self, CastContext};
+use crate::plan::Params;
 
 #[allow(missing_debug_implementations)]
 pub struct Hir;
@@ -103,6 +100,9 @@ pub enum HirRelationExpr {
     },
     /// Mutually recursive CTE
     LetRec {
+        /// Maximum number of iterations to evaluate. We don't throw an error when reaching this
+        /// limit. Instead, we simply use the current contents of each Id as the final result.
+        max_iter: Option<NonZeroU64>,
         /// List of bindings all of which are in scope of each other.
         bindings: Vec<(String, mz_expr::LocalId, HirRelationExpr, RelationType)>,
         /// Result of the AST node.
@@ -1337,7 +1337,11 @@ impl HirRelationExpr {
                 f(value, depth)?;
                 f(body, depth)?;
             }
-            HirRelationExpr::LetRec { bindings, body } => {
+            HirRelationExpr::LetRec {
+                max_iter: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter() {
                     f(value, depth)?;
                 }
@@ -1420,7 +1424,11 @@ impl HirRelationExpr {
                 f(value, depth)?;
                 f(body, depth)?;
             }
-            HirRelationExpr::LetRec { bindings, body } => {
+            HirRelationExpr::LetRec {
+                max_iter: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter_mut() {
                     f(value, depth)?;
                 }
@@ -1680,7 +1688,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value);
                 f(body);
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                max_iter: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter() {
                     f(value);
                 }
@@ -1763,7 +1775,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value);
                 f(body);
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                max_iter: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter_mut() {
                     f(value);
                 }
@@ -1846,7 +1862,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value)?;
                 f(body)?;
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                max_iter: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter() {
                     f(value)?;
                 }
@@ -1930,7 +1950,11 @@ impl VisitChildren<Self> for HirRelationExpr {
                 f(value)?;
                 f(body)?;
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                max_iter: _,
+                bindings,
+                body,
+            } => {
                 for (_, _, value, _) in bindings.iter_mut() {
                     f(value)?;
                 }
@@ -2004,6 +2028,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
+                max_iter: _,
                 bindings: _,
                 body: _,
             }
@@ -2075,6 +2100,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
+                max_iter: _,
                 bindings: _,
                 body: _,
             }
@@ -2147,6 +2173,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
+                max_iter: _,
                 bindings: _,
                 body: _,
             }
@@ -2220,6 +2247,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 body: _,
             }
             | LetRec {
+                max_iter: _,
                 bindings: _,
                 body: _,
             }

@@ -22,6 +22,7 @@ from scenarios import *  # noqa: F401 F403
 from scenarios import Scenario
 from scenarios_concurrency import *  # noqa: F401 F403
 from scenarios_optbench import *  # noqa: F401 F403
+from scenarios_scale import *  # noqa: F401 F403
 from scenarios_subscribe import *  # noqa: F401 F403
 
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
@@ -50,7 +51,7 @@ from materialize.mzcompose.services import (
     Testdrive,
     Zookeeper,
 )
-from materialize.util import released_materialize_versions
+from materialize.version_list import VersionsFromDocs
 
 #
 # Global feature benchmark thresholds and termination conditions
@@ -178,7 +179,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--other-tag",
         metavar="TAG",
         type=str,
-        default=os.getenv("OTHER_TAG", str(released_materialize_versions()[0])),
+        default=os.getenv("OTHER_TAG", str(VersionsFromDocs().all_versions()[-1])),
         help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used.",
     )
 

@@ -381,9 +381,10 @@ mod test {
     use prometheus::core::{AtomicI64, AtomicU64};
     use prometheus::IntGaugeVec;
 
-    use super::super::{IntCounterVec, MetricsRegistry};
-    use super::*;
     use crate::metric;
+    use crate::metrics::{IntCounterVec, MetricsRegistry};
+
+    use super::*;
 
     #[test]
     fn dropping_counters() {

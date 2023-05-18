@@ -42,19 +42,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
 use itertools::Itertools;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::capture::capture::Capture;
-use timely::dataflow::operators::capture::Event;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Enter, Leave, Map, Partition};
-use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
-use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::{info, trace, warn};
-
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -79,6 +66,18 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::capture::capture::Capture;
+use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Enter, Leave, Map, Partition};
+use timely::dataflow::scopes::Child;
+use timely::dataflow::{Scope, Stream};
+use timely::progress::frontier::MutableAntichain;
+use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tracing::{info, trace, warn};
 
 use crate::healthcheck::write_to_persist;
 use crate::internal_control::InternalStorageCommand;

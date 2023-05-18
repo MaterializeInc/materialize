@@ -93,13 +93,10 @@ use std::io::Cursor;
 use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveDateTime};
+use mz_avro::error::Error as AvroError;
 use mz_avro::schema::resolve_schemas;
-use mz_avro::{
-    error::Error as AvroError,
-    from_avro_datum, to_avro_datum,
-    types::{DecimalValue, Value},
-    Schema, ValidationError,
-};
+use mz_avro::types::{DecimalValue, Value};
+use mz_avro::{from_avro_datum, to_avro_datum, Schema, ValidationError};
 use once_cell::sync::Lazy;
 
 static SCHEMAS_TO_VALIDATE: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {

@@ -17,13 +17,8 @@ use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
-use tracing::{error, warn};
-
 use mz_cluster_client::client::ClusterReplicaLocation;
+pub use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 use mz_compute_client::controller::{
     ComputeInstanceId, ComputeReplicaConfig, ComputeReplicaLogging,
 };
@@ -37,10 +32,13 @@ use mz_ore::halt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp;
+use tracing::{error, warn};
 
 use crate::Controller;
-
-pub use mz_compute_client::controller::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS as DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS;
 
 /// Identifies a cluster.
 pub type ClusterId = ComputeInstanceId;
@@ -58,7 +56,7 @@ pub struct ClusterConfig {
 pub type ClusterStatus = mz_orchestrator::ServiceStatus;
 
 /// Identifies a cluster replica.
-pub type ReplicaId = mz_compute_client::controller::ReplicaId;
+pub type ReplicaId = mz_cluster_client::ReplicaId;
 
 /// Configures a cluster replica.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -392,9 +390,8 @@ where
         self.deprovision_replica(cluster_id, replica_id).await?;
         self.metrics_tasks.remove(&replica_id);
 
-        // Storage does not support active-active replication and so does not
-        // have an API for dropping replicas.
         self.active_compute().drop_replica(cluster_id, replica_id)?;
+        self.storage.drop_replica(cluster_id, replica_id);
         Ok(())
     }
 
@@ -475,6 +472,7 @@ where
             ClusterRole::System => "system",
             ClusterRole::User => "user",
         };
+        let persist_pubsub_url = self.persist_pubsub_url.clone();
         let service = self
             .orchestrator
             .ensure_service(
@@ -495,6 +493,7 @@ where
                             format!("--internal-http-listen-addr={}", assigned["internal-http"]),
                             format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
+                            format!("--persist-pubsub-url={}", persist_pubsub_url),
                         ]
                     },
                     ports: vec![

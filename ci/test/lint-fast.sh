@@ -28,10 +28,11 @@ ci_try cargo hakari manage-deps --dry-run
 ci_try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
 
-if [[ "$BUILDKITE_PULL_REQUEST" != "false" ]]; then
+if [[ "${BUILDKITE_PULL_REQUEST:-true}" != "false" ]]; then
   fetch_pr_target_branch
 
   ci_collapsed_heading "Lint protobuf"
+  # exceptions can be defined in src/buf.yaml
   COMMON_ANCESTOR="$(get_common_ancestor_commit_of_pr_and_target)"
   ci_try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src"
 fi

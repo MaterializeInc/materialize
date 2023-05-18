@@ -12,14 +12,13 @@
 use std::collections::BTreeMap;
 
 use itertools::{zip_eq, Itertools};
-
 use mz_expr::visit::Visit;
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{func, EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc, RECURSION_LIMIT};
+use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
-use mz_repr::{ColumnType, RelationType, ScalarType};
-use mz_repr::{Datum, Row};
+use mz_repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 
 use crate::{TransformArgs, TransformError};
 
@@ -111,7 +110,12 @@ impl ColumnKnowledge {
                     }
                     Ok(body_knowledge)
                 }
-                MirRelationExpr::LetRec { ids, values, body } => {
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    max_iters,
+                    body,
+                } => {
                     // Set knowledge[i][j] = DatumKnowledge::bottom() for each
                     // column j and CTE i. This corresponds to the normal
                     // evaluation semantics where each recursive CTE is
@@ -124,9 +128,9 @@ impl ColumnKnowledge {
                     }
 
                     // Sum up the arity of all ids in the enclosing LetRec node.
-                    let let_rec_arity = ids.iter().fold(0_usize, |acc, id| {
+                    let let_rec_arity = ids.iter().fold(0, |acc, id| {
                         let id = mz_expr::Id::Local(id.clone());
-                        acc + knowledge[&id].len()
+                        acc + u64::cast_from(knowledge[&id].len())
                     });
 
                     // Sequentially union knowledge[i][j] with the result of
@@ -137,15 +141,19 @@ impl ColumnKnowledge {
                     // 2. No fixpoint was found after `max_iterations`. If this
                     //    is the case reset the knowledge vectors for all
                     //    recursive CTEs to DatumKnowledge::top().
+                    // 3. We reach the user-specified iteration limit of any of the bindings.
+                    //    In this case, we also give up similarly to 2., because we don't want to
+                    //    complicate things with handling different limits per binding.
+                    let min_max_iter = max_iters.into_iter().filter_map(|md| *md).min();
                     let max_iterations = 100;
                     let mut curr_iteration = 0;
                     loop {
-                        // TODO(#16800): This should respect the soft and hard max
-                        // iteration counts that will be enforced when actually
-                        // evaluating the loop.
-
-                        // Check for condition (2).
-                        if curr_iteration >= max_iterations {
+                        // Check for conditions (2) and (3).
+                        if curr_iteration >= max_iterations
+                            || min_max_iter
+                                .map(|min_max_iter| curr_iteration >= min_max_iter.get())
+                                .unwrap_or(false)
+                        {
                             if curr_iteration > 3 * let_rec_arity {
                                 soft_panic_or_log!(
                                     "LetRec loop in ColumnKnowledge has not converged in 3 * |{}|",

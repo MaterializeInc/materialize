@@ -15,18 +15,20 @@ use std::num::NonZeroI64;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
-use thiserror::Error;
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use timely::PartialOrder;
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
+use thiserror::Error;
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::PartialOrder;
+use uuid::Uuid;
 
+use crate::controller::error::CollectionMissing;
+use crate::controller::replica::{Replica, ReplicaConfig};
+use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
@@ -36,10 +38,6 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
 use crate::types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use crate::types::sources::SourceInstanceDesc;
-
-use super::error::CollectionMissing;
-use super::replica::{Replica, ReplicaConfig};
-use super::{CollectionState, ComputeControllerResponse, ReplicaId};
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]

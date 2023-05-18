@@ -99,6 +99,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     make \
     openssh-client \
     pkg-config \
+    postgresql-client-14 \
     python3 \
     python3-dev \
     python3-pip \

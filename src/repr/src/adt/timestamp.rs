@@ -12,19 +12,16 @@
 use std::fmt::Display;
 use std::ops::Sub;
 
-use ::chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Utc};
-use ::chrono::{Datelike, NaiveDate};
+use ::chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use mz_ore::cast::CastFrom;
+use mz_proto::{RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
-use mz_ore::cast::CastFrom;
-use mz_proto::{RustType, TryFromProtoError};
-
+use crate::adt::numeric::DecimalLike;
 use crate::chrono::ProtoNaiveDateTime;
 use crate::Datum;
-
-use super::numeric::DecimalLike;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.date.rs"));
 

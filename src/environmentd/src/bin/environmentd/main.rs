@@ -78,18 +78,13 @@
 //! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
 //! on port 6876.
 
-use std::cmp;
-use std::env;
 use std::ffi::CStr;
-use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use std::{cmp, env, iter, process, thread};
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -97,14 +92,6 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use once_cell::sync::Lazy;
-use opentelemetry::trace::TraceContextExt;
-use prometheus::IntGauge;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-use url::Url;
-use uuid::Uuid;
-
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
@@ -125,14 +112,25 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::task::RuntimeExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::{
+    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
+};
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use opentelemetry::trace::TraceContextExt;
+use prometheus::IntGauge;
+use tracing::{error, info, Instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+use url::Url;
+use uuid::Uuid;
 
 mod sys;
 
@@ -213,6 +211,18 @@ pub struct Args {
         default_value = "127.0.0.1:6878"
     )]
     internal_http_listen_addr: SocketAddr,
+    /// The address on which to listen for Persist PubSub connections.
+    ///
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose the listen address
+    /// to the public internet or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR",
+        default_value = "127.0.0.1:6879"
+    )]
+    internal_persist_pubsub_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -403,6 +413,15 @@ pub struct Args {
     /// The PostgreSQL URL for the storage stash.
     #[clap(long, env = "STORAGE_STASH_URL", value_name = "POSTGRES_URL")]
     storage_stash_url: String,
+    /// The Persist PubSub URL.
+    ///
+    /// This URL is passed to `clusterd` for discovery of the Persist PubSub service.
+    #[clap(
+        long,
+        env = "PERSIST_PUBSUB_URL",
+        default_value = "http://localhost:6879"
+    )]
+    persist_pubsub_url: String,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -546,7 +565,7 @@ fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args) {
-        eprintln!("environmentd: {}", err.display_with_causes());
+        eprintln!("environmentd: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
 }
@@ -734,13 +753,42 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
-    let persist_clients = PersistClientCache::new(
-        PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
-        &metrics_registry,
+
+    let persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
+    let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
+    let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+
+    let _server = runtime.spawn_named(
+        || "persist::rpc::server",
+        async move {
+            info!(
+                "listening for Persist PubSub connections on {}",
+                args.internal_persist_pubsub_listen_addr
+            );
+            // Intentionally do not bubble up errors here, we don't want to take
+            // down environmentd if there are any issues with the pubsub server.
+            let res = persist_pubsub_server
+                .serve(args.internal_persist_pubsub_listen_addr)
+                .await;
+            error!("Persist Pubsub server exited {:?}", res);
+        }
+        .instrument(tracing::info_span!("persist::rpc::server")),
     );
+
+    let persist_clients = {
+        // PersistClientCache may spawn tasks, so run within a tokio runtime context
+        let _tokio_guard = runtime.enter();
+        PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
+            let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                persist_pubsub_client.sender,
+                metrics,
+            ));
+            PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
+        })
+    };
+
     let persist_clients = Arc::new(persist_clients);
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
-
     let controller = ControllerConfig {
         build_info: &mz_environmentd::BUILD_INFO,
         orchestrator,
@@ -755,7 +803,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
-        scratch_directory: args.orchestrator_process_scratch_directory,
+        scratch_directory_enabled: args.orchestrator_process_scratch_directory.is_some(),
+        persist_pubsub_url: args.persist_pubsub_url,
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
@@ -848,6 +897,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     println!(
         " Internal HTTP address: {}",
         server.internal_http_local_addr()
+    );
+    println!(
+        " Internal Persist PubSub address: {}",
+        args.internal_persist_pubsub_listen_addr
     );
 
     println!(" Root trace ID: {id}");

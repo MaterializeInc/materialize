@@ -32,8 +32,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{query, with_options};
-use crate::plan::{Params, Plan, PlanContext, PlanKind};
+use crate::plan::{query, with_options, Params, Plan, PlanContext, PlanKind};
 use crate::session::vars::SystemVars;
 
 pub(crate) mod ddl;
@@ -141,10 +140,12 @@ pub fn describe(
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
+        Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
         Statement::GrantRole(stmt) => ddl::describe_grant_role(&scx, stmt)?,
         Statement::RevokeRole(stmt) => ddl::describe_revoke_role(&scx, stmt)?,
         Statement::GrantPrivilege(stmt) => ddl::describe_grant_privilege(&scx, stmt)?,
         Statement::RevokePrivilege(stmt) => ddl::describe_revoke_privilege(&scx, stmt)?,
+        Statement::ReassignOwned(stmt) => ddl::describe_reassign_owned(&scx, stmt)?,
 
         // `SHOW` statements.
         Statement::Show(ShowStatement::ShowColumns(stmt)) => {
@@ -276,10 +277,12 @@ pub fn plan(
             ddl::plan_create_materialized_view(scx, stmt, params)
         }
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
+        Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
         Statement::GrantRole(stmt) => ddl::plan_grant_role(scx, stmt),
         Statement::RevokeRole(stmt) => ddl::plan_revoke_role(scx, stmt),
         Statement::GrantPrivilege(stmt) => ddl::plan_grant_privilege(scx, stmt),
         Statement::RevokePrivilege(stmt) => ddl::plan_revoke_privilege(scx, stmt),
+        Statement::ReassignOwned(stmt) => ddl::plan_reassign_owned(scx, stmt),
 
         // DML statements.
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
@@ -504,7 +507,9 @@ impl<'a> StatementContext<'a> {
     pub fn allocate_temporary_full_name(&self, name: PartialItemName) -> FullItemName {
         FullItemName {
             database: RawDatabaseSpecifier::Ambient,
-            schema: name.schema.unwrap_or_else(|| "mz_temp".to_owned()),
+            schema: name
+                .schema
+                .unwrap_or_else(|| mz_repr::namespaces::MZ_TEMP_SCHEMA.to_owned()),
             item: name.item,
         }
     }
@@ -902,5 +907,36 @@ impl<'a> StatementContext<'a> {
 
     pub fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {
         self.catalog.get_owner_id(id)
+    }
+
+    pub fn humanize_resolved_name(
+        &self,
+        name: &ResolvedItemName,
+    ) -> Result<PartialItemName, PlanError> {
+        let item = self.get_item_by_resolved_name(name)?;
+        Ok(self.catalog.minimal_qualification(item.name()))
+    }
+
+    /// WARNING! This style of name resolution assumes the referred-to objects exists (i.e. panics
+    /// if objects do not exist) so should never be used to handle user input.
+    pub fn dangerous_resolve_name(&self, name: Vec<&str>) -> ResolvedItemName {
+        tracing::trace!("dangerous_resolve_name {:?}", name);
+        let name = UnresolvedItemName::qualified(&name);
+        let entry = match self.resolve_item(RawItemName::Name(name.clone())) {
+            Ok(entry) => entry,
+            Err(_) => self
+                .resolve_function(name.clone())
+                .expect("name referred to an existing object"),
+        };
+
+        let partial = normalize::unresolved_item_name(name).unwrap();
+        let full_name = self.allocate_full_name(partial).unwrap();
+
+        ResolvedItemName::Item {
+            id: entry.id(),
+            qualifiers: entry.name().qualifiers.clone(),
+            full_name,
+            print_id: true,
+        }
     }
 }

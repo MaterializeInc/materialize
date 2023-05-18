@@ -80,12 +80,6 @@ use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, Benchm
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist_client::cache::StateCache;
-use mz_persist_client::metrics::Metrics;
-use tempfile::TempDir;
-use timely::progress::{Antichain, Timestamp};
-use tokio::runtime::Runtime;
-
 use mz_persist::file::{FileBlob, FileBlobConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
@@ -93,10 +87,16 @@ use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::s3::{S3Blob, S3BlobConfig};
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
+use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::metrics::Metrics;
+use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistClient;
 use mz_persist_types::Codec64;
+use tempfile::TempDir;
+use timely::progress::{Antichain, Timestamp};
+use tokio::runtime::Runtime;
 
 // The "plumbing" and "porcelain" names are from git [1]. Our "plumbing"
 // benchmarks are ones that are low-level, fundamental pieces of code like
@@ -173,7 +173,12 @@ fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     let consensus = Arc::new(MemConsensus::default());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let shared_states = Arc::new(StateCache::new(Arc::clone(&metrics)));
+    let pubsub_sender = PubSubClientConnection::noop().sender;
+    let shared_states = Arc::new(StateCache::new(
+        &cfg,
+        Arc::clone(&metrics),
+        Arc::clone(&pubsub_sender),
+    ));
     PersistClient::new(
         cfg,
         blob,
@@ -181,6 +186,7 @@ fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
         metrics,
         cpu_heavy_runtime,
         shared_states,
+        pubsub_sender,
     )
 }
 
@@ -199,7 +205,12 @@ async fn create_file_pg_client(
     let consensus = Arc::clone(&postgres_consensus);
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let shared_states = Arc::new(StateCache::new(Arc::clone(&metrics)));
+    let pubsub_sender = PubSubClientConnection::noop().sender;
+    let shared_states = Arc::new(StateCache::new(
+        &cfg,
+        Arc::clone(&metrics),
+        Arc::clone(&pubsub_sender),
+    ));
     let client = PersistClient::new(
         cfg,
         blob,
@@ -207,6 +218,7 @@ async fn create_file_pg_client(
         metrics,
         cpu_heavy_runtime,
         shared_states,
+        pubsub_sender,
     )?;
     Ok(Some((postgres_consensus, client, dir)))
 }
@@ -228,7 +240,12 @@ async fn create_s3_pg_client(
     let consensus = Arc::clone(&postgres_consensus);
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-    let shared_states = Arc::new(StateCache::new(Arc::clone(&metrics)));
+    let pubsub_sender = PubSubClientConnection::noop().sender;
+    let shared_states = Arc::new(StateCache::new(
+        &cfg,
+        Arc::clone(&metrics),
+        Arc::clone(&pubsub_sender),
+    ));
     let client = PersistClient::new(
         cfg,
         blob,
@@ -236,6 +253,7 @@ async fn create_s3_pg_client(
         metrics,
         cpu_heavy_runtime,
         shared_states,
+        pubsub_sender,
     )?;
     Ok(Some((postgres_consensus, client)))
 }

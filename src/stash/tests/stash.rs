@@ -73,26 +73,25 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::Infallible,
-    time::Duration,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::time::Duration;
 
 use futures::Future;
+use mz_ore::assert_contains;
+use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task::spawn;
+use mz_stash::{
+    Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
+    INSERT_BATCH_SPLIT_SIZE,
+};
 use postgres_openssl::MakeTlsConnector;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::Config;
-
-use mz_ore::{assert_contains, collections::CollectionExt, metrics::MetricsRegistry, task::spawn};
-
-use mz_stash::{
-    Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
-    INSERT_BATCH_SPLIT_SIZE,
-};
 
 pub static C1: TypedCollection<i64, i64> = TypedCollection::new("c1");
 pub static C2: TypedCollection<i64, i64> = TypedCollection::new("c2");

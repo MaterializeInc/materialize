@@ -37,12 +37,6 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::{future, FutureExt};
-use serde::{Deserialize, Serialize};
-use timely::progress::frontier::{AntichainRef, MutableAntichain};
-use timely::progress::{Antichain, Timestamp};
-use tracing::warn;
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_expr::RowSetFinishing;
@@ -52,21 +46,25 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 use mz_storage_client::types::instances::StorageInstanceId;
+use serde::{Deserialize, Serialize};
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
+use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
+use uuid::Uuid;
 
+use crate::controller::error::{
+    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
+    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+    SubscribeTargetError,
+};
+use crate::controller::instance::{ActiveInstance, Instance};
+use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 use crate::types::dataflows::DataflowDescription;
-
-use self::error::{
-    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
-    SubscribeTargetError,
-};
-use self::instance::{ActiveInstance, Instance};
-use self::replica::ReplicaConfig;
 
 mod instance;
 mod replica;
@@ -77,7 +75,7 @@ pub mod error;
 pub type ComputeInstanceId = StorageInstanceId;
 
 /// Identifier of a replica.
-pub type ReplicaId = u64;
+pub type ReplicaId = mz_cluster_client::ReplicaId;
 
 /// Identifier of a replica.
 // TODO(#18377): Replace `ReplicaId` with this type.

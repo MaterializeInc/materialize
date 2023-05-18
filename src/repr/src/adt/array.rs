@@ -11,14 +11,12 @@
 
 use std::cmp::Ordering;
 use std::error::Error;
-use std::fmt;
-use std::mem;
-
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
+use std::{fmt, mem};
 
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::row::DatumList;
 
@@ -217,10 +215,10 @@ impl RustType<ProtoInvalidArrayError> for InvalidArrayError {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     use super::*;
-    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #[test]

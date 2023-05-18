@@ -11,7 +11,7 @@
 
 use std::fmt::Debug;
 use std::future::Future;
-use std::ops::{ControlFlow, ControlFlow::Continue};
+use std::ops::ControlFlow::{self, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -19,18 +19,17 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
+use mz_ore::error::ErrorExt;
+#[allow(unused_imports)] // False positive.
+use mz_ore::fmt::FormatBuffer;
 use mz_ore::task::spawn;
+use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
+use mz_persist::retry::Retry;
+use mz_persist_types::{Codec, Codec64, Opaque};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, trace_span, warn, Instrument};
-
-use mz_ore::error::ErrorExt;
-#[allow(unused_imports)] // False positive.
-use mz_ore::fmt::FormatBuffer;
-use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
-use mz_persist::retry::Retry;
-use mz_persist_types::{Codec, Codec64, Opaque};
 
 use crate::cache::StateCache;
 use crate::critical::CriticalReaderId;
@@ -50,6 +49,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
 use crate::read::LeasedReaderId;
+use crate::rpc::PubSubSender;
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -79,9 +79,18 @@ where
         shard_id: ShardId,
         metrics: Arc<Metrics>,
         state_versions: Arc<StateVersions>,
-        shared_states: &StateCache,
+        shared_states: Arc<StateCache>,
+        pubsub_sender: Arc<dyn PubSubSender>,
     ) -> Result<Self, Box<CodecMismatch>> {
-        let applier = Applier::new(cfg, shard_id, metrics, state_versions, shared_states).await?;
+        let applier = Applier::new(
+            cfg,
+            shard_id,
+            metrics,
+            state_versions,
+            shared_states,
+            pubsub_sender,
+        )
+        .await?;
         Ok(Machine { applier })
     }
 
@@ -672,20 +681,6 @@ where
         as_of: &Antichain<T>,
     ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
         let start = Instant::now();
-        let seqno = match self.applier.snapshot(as_of) {
-            Ok(x) => return Ok(x),
-            Err(SnapshotErr::AsOfNotYetAvailable(seqno, _upper)) => seqno,
-            Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
-                return Err(Since(since))
-            }
-        };
-
-        // Our state might just be out of date. Fetch the newest state
-        // immediately and try again.
-        //
-        // TODO: Once we have state pubsub, we probably want to remove this
-        // optimization and jump straight to watch+sleep.
-        self.applier.fetch_and_update_state(Some(seqno)).await;
         let (mut seqno, mut upper) = match self.applier.snapshot(as_of) {
             Ok(x) => return Ok(x),
             Err(SnapshotErr::AsOfNotYetAvailable(seqno, Upper(upper))) => (seqno, upper),
@@ -1076,6 +1071,7 @@ pub mod datadriven {
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::read::{Listen, ListenEvent};
+    use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistClient};
 
@@ -1115,7 +1111,8 @@ pub mod datadriven {
                 shard_id,
                 Arc::clone(&client.metrics),
                 Arc::clone(&state_versions),
-                &client.shared_states,
+                Arc::clone(&client.shared_states),
+                Arc::new(NoopPubSubSender),
             )
             .await
             .expect("codecs should match");

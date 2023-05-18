@@ -16,19 +16,16 @@ use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use itertools::Itertools;
-use timely::progress::{Antichain, Timestamp};
-use tokio::sync::mpsc::UnboundedSender;
-use tracing::Instrument;
-
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
+use timely::progress::{Antichain, Timestamp};
+use tokio::sync::mpsc::UnboundedSender;
+use tracing::Instrument;
 
-use crate::client::StorageResponse;
-use crate::client::{TimestamplessUpdate, Update};
-use crate::controller::PersistEpoch;
-use crate::controller::StorageError;
+use crate::client::{StorageResponse, TimestamplessUpdate, Update};
+use crate::controller::{PersistEpoch, StorageError};
 use crate::types::sources::SourceData;
 
 /// A wrapper that holds on to backing persist shards/collections that the

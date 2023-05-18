@@ -18,23 +18,23 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist::cfg::{BlobConfig, ConsensusConfig};
+use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
+use mz_persist_client::async_runtime::CpuHeavyRuntime;
 use mz_persist_client::cache::StateCache;
+use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::metrics::Metrics;
+use mz_persist_client::read::{Listen, ListenEvent};
+use mz_persist_client::rpc::PubSubClientConnection;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_client::{PersistClient, ShardId};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace};
-
-use mz_persist::cfg::{BlobConfig, ConsensusConfig};
-use mz_persist::location::{Blob, Consensus, ExternalError};
-use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
-use mz_persist_client::async_runtime::CpuHeavyRuntime;
-use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::read::{Listen, ListenEvent};
-use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, ShardId};
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
@@ -672,7 +672,12 @@ impl Service for TransactorService {
 
         // Wire up the TransactorService.
         let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
-        let shared_states = Arc::new(StateCache::new(Arc::clone(&metrics)));
+        let pubsub_sender = PubSubClientConnection::noop().sender;
+        let shared_states = Arc::new(StateCache::new(
+            &config,
+            Arc::clone(&metrics),
+            Arc::clone(&pubsub_sender),
+        ));
         let client = PersistClient::new(
             config,
             blob,
@@ -680,6 +685,7 @@ impl Service for TransactorService {
             metrics,
             cpu_heavy_runtime,
             shared_states,
+            pubsub_sender,
         )?;
         let transactor = Transactor::new(&client, handle.node_id(), shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));

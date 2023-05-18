@@ -9,21 +9,17 @@
 
 //! Derived attributes framework and definitions.
 
-use std::{collections::BTreeMap, marker::PhantomData};
+use std::collections::BTreeMap;
+use std::marker::PhantomData;
 
-use mz_ore::{
-    stack::RecursionLimitError,
-    str::{bracketed, separated},
-};
+use mz_expr::explain::ExplainContext;
+use mz_expr::visit::{Visit, Visitor};
+use mz_expr::{LocalId, MirRelationExpr};
+use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::{bracketed, separated};
 use mz_repr::explain::{AnnotatedPlan, Attributes, ExplainConfig};
 use num_traits::FromPrimitive;
 use typemap_rev::{TypeMap, TypeMapKey};
-
-use mz_expr::{
-    explain::ExplainContext,
-    visit::{Visit, Visitor},
-    LocalId, MirRelationExpr,
-};
 
 // Attributes should have shortened paths when exported.
 mod arity;

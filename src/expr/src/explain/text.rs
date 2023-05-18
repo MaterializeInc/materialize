@@ -19,8 +19,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{GlobalId, Row};
 
-use super::{ExplainMultiPlan, ExplainSinglePlan};
-use crate::explain::ExplainSource;
+use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource};
 use crate::{
     AggregateExpr, Id, JoinImplementation, JoinInputCharacteristics, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RowSetFinishing,
@@ -298,9 +297,26 @@ impl MirRelationExpr {
                     })?;
                 }
             }
-            LetRec { ids, values, body } => {
-                let bindings = ids.iter().zip(values.iter()).collect::<Vec<_>>();
+            LetRec {
+                ids,
+                values,
+                max_iters,
+                body,
+            } => {
+                assert_eq!(ids.len(), values.len());
+                assert_eq!(ids.len(), max_iters.len());
+                let bindings = itertools::izip!(ids.iter(), values.iter(), max_iters.iter())
+                    .collect::<Vec<_>>(); // CLion needs these explicit types
                 let head = body.as_ref();
+
+                // Determine whether all `max_iters` are the same number.
+                // If all of them are the same, then we print it on top of the block (or not print
+                // it at all if it's None). If there are differences, then we print them on the
+                // ctes.
+                let all_max_iters_same = max_iters
+                    .iter()
+                    .reduce(|first, i| if i == first { first } else { &None })
+                    .unwrap_or(&None);
 
                 if ctx.config.linear_chains {
                     unreachable!(); // We exclude this case in `as_explain_single_plan`.
@@ -308,10 +324,20 @@ impl MirRelationExpr {
                     write!(f, "{}Return", ctx.indent)?;
                     self.fmt_attributes(f, ctx)?;
                     ctx.indented(|ctx| head.fmt_text(f, ctx))?;
-                    writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
+                    write!(f, "{}With Mutually Recursive", ctx.indent)?;
+                    if let Some(max_iter) = all_max_iters_same {
+                        write!(f, " [iteration_limit={}]", max_iter)?;
+                    }
+                    writeln!(f)?;
                     ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter().rev() {
-                            writeln!(f, "{}cte {} =", ctx.indent, *id)?;
+                        for (id, value, max_iter) in bindings.iter().rev() {
+                            write!(f, "{}cte", ctx.indent)?;
+                            if all_max_iters_same.is_none() {
+                                if let Some(max_iter) = max_iter {
+                                    write!(f, " [iteration_limit={}]", max_iter)?;
+                                }
+                            }
+                            writeln!(f, " {} =", id)?;
                             ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                         }
                         Ok(())

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::halt;
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -24,8 +25,6 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::debug;
 use uuid::Uuid;
-
-use mz_ore::halt;
 
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, CodecMismatchT};
@@ -1225,9 +1224,9 @@ mod tests {
         );
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-    fn state_diff_migration_rollups() {
+    async fn state_diff_migration_rollups() {
         let r1_rollup = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
             encoded_size_bytes: None,

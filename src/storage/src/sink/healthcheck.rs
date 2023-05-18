@@ -12,13 +12,12 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use anyhow::Context;
-use tracing::trace;
-
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation, ShardId};
 use mz_repr::GlobalId;
 use mz_storage_client::healthcheck::MZ_SINK_STATUS_HISTORY_DESC;
+use tracing::trace;
 
 use crate::healthcheck::write_to_persist;
 
@@ -185,23 +184,23 @@ impl Display for SinkStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::time::Duration;
 
     use itertools::Itertools;
-    use once_cell::sync::Lazy;
-    use timely::progress::Antichain;
-
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::collections::CollectionExt;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_repr::Row;
     use mz_storage_client::types::sources::SourceData;
+    use once_cell::sync::Lazy;
+    use timely::progress::Antichain;
+
+    use super::*;
 
     // Test suite
     #[tokio::test(start_paused = true)]
@@ -467,6 +466,7 @@ mod tests {
         Arc::new(PersistClientCache::new(
             PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
         ))
     }
 

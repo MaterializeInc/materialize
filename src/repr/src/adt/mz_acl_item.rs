@@ -9,18 +9,20 @@
 
 //! A Materialize specific access control list abstract data type.
 
-use crate::role_id::RoleId;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::mem::size_of;
+use std::ops::BitOrAssign;
+use std::str::FromStr;
+
 use anyhow::{anyhow, Error};
 use bitflags::bitflags;
 use columnation::{CloneRegion, Columnation};
 use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::fmt;
-use std::mem::size_of;
-use std::ops::BitOrAssign;
-use std::str::FromStr;
+
+use crate::role_id::RoleId;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.mz_acl_item.rs"));
 
@@ -192,20 +194,23 @@ impl MzAclItem {
         RoleId::binary_size() + RoleId::binary_size() + size_of::<u64>()
     }
 
-    pub fn group_by_grantee(items: Vec<MzAclItem>) -> BTreeMap<RoleId, Vec<MzAclItem>> {
-        items
-            .into_iter()
-            .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
-                accum
-                    .entry(mz_acl_item.grantee)
-                    .or_default()
-                    .push(mz_acl_item);
-                accum
-            })
+    pub fn group_by_grantee(items: Vec<MzAclItem>) -> PrivilegeMap {
+        PrivilegeMap::new(
+            items
+                .into_iter()
+                .fold(BTreeMap::new(), |mut accum, mz_acl_item| {
+                    accum
+                        .entry(mz_acl_item.grantee)
+                        .or_default()
+                        .push(mz_acl_item);
+                    accum
+                }),
+        )
     }
 
-    pub fn flatten(items: &BTreeMap<RoleId, Vec<MzAclItem>>) -> Vec<MzAclItem> {
+    pub fn flatten(items: &PrivilegeMap) -> Vec<MzAclItem> {
         items
+            .0
             .values()
             .map(|items| items.into_iter())
             .flatten()
@@ -272,6 +277,28 @@ impl RustType<ProtoMzAclItem> for MzAclItem {
 
 impl Columnation for MzAclItem {
     type InnerRegion = CloneRegion<MzAclItem>;
+}
+
+/// Key is the role that granted the privilege, value is the privilege itself.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub struct PrivilegeMap(pub BTreeMap<RoleId, Vec<MzAclItem>>);
+
+impl PrivilegeMap {
+    pub fn new(privilege_map: BTreeMap<RoleId, Vec<MzAclItem>>) -> PrivilegeMap {
+        PrivilegeMap(privilege_map)
+    }
+
+    pub fn all_values(&self) -> impl Iterator<Item = &MzAclItem> {
+        self.0
+            .values()
+            .flat_map(|privileges| privileges.into_iter())
+    }
+}
+
+impl Default for PrivilegeMap {
+    fn default() -> PrivilegeMap {
+        PrivilegeMap::new(BTreeMap::new())
+    }
 }
 
 #[test]

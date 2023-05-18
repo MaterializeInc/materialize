@@ -82,18 +82,6 @@ use std::time::Duration;
 use std::{env, thread};
 
 use anyhow::anyhow;
-use once_cell::sync::Lazy;
-use postgres::error::DbError;
-use postgres::tls::{MakeTlsConnect, TlsConnect};
-use postgres::types::{FromSql, Type};
-use postgres::{NoTls, Socket};
-use regex::Regex;
-use tempfile::TempDir;
-use tokio::runtime::Runtime;
-use tokio_postgres::config::Host;
-use tokio_postgres::Client;
-use tower_http::cors::AllowOrigin;
-
 use mz_controller::ControllerConfig;
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
@@ -108,11 +96,25 @@ use mz_ore::tracing::{
 };
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use postgres::error::DbError;
+use postgres::tls::{MakeTlsConnect, TlsConnect};
+use postgres::types::{FromSql, Type};
+use postgres::{NoTls, Socket};
+use regex::Regex;
+use tempfile::TempDir;
+use tokio::net::TcpListener;
+use tokio::runtime::Runtime;
+use tokio_postgres::config::Host;
+use tokio_postgres::Client;
+use tokio_stream::wrappers::TcpListenerStream;
+use tower_http::cors::AllowOrigin;
 use tracing_subscriber::filter::Targets;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
@@ -296,7 +298,32 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     // Tune down the number of connections to make this all work a little easier
     // with local postgres.
     persist_cfg.consensus_connection_pool_max_size = 1;
-    let persist_clients = PersistClientCache::new(persist_cfg, &metrics_registry);
+
+    let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_cfg, &metrics_registry);
+    let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+    let persist_pubsub_tcp_listener = runtime
+        .block_on(TcpListener::bind(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+        )))
+        .expect("pubsub addr binding");
+    let persist_pubsub_server_port = persist_pubsub_tcp_listener
+        .local_addr()
+        .expect("pubsub addr has local addr")
+        .port();
+    let _persist_pubsub_server = {
+        let _tokio_guard = runtime.enter();
+        mz_ore::task::spawn(|| "persist_pubsub_server", async move {
+            persist_pubsub_server
+                .serve_with_stream(TcpListenerStream::new(persist_pubsub_tcp_listener))
+                .await
+                .expect("success")
+        });
+    };
+    let persist_clients = {
+        let _tokio_guard = runtime.enter();
+        PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client)
+    };
     let persist_clients = Arc::new(persist_clients);
     let postgres_factory = StashFactory::new(&metrics_registry);
     let secrets_controller = Arc::clone(&orchestrator);
@@ -345,7 +372,8 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             now: SYSTEM_TIME.clone(),
             postgres_factory,
             metrics_registry: metrics_registry.clone(),
-            scratch_directory: None,
+            scratch_directory_enabled: false,
+            persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
         },
         secrets_controller,
         cloud_resource_controller: None,
@@ -428,20 +456,20 @@ impl Server {
         config
     }
 
-    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
         T::Stream: Send,
         <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
     {
-        Ok(self.pg_config().connect(tls)?)
+        self.pg_config().connect(tls)
     }
 
     pub async fn connect_async<T>(
         &self,
         tls: T,
-    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), anyhow::Error>
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,

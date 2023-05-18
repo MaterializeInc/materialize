@@ -110,6 +110,7 @@ use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle};
+use crate::rpc::PubSubSender;
 use crate::write::{WriteHandle, WriterId};
 
 pub mod async_runtime;
@@ -127,14 +128,14 @@ pub mod fetch;
 pub mod internals_bench;
 pub mod metrics {
     //! Utilities related to metrics.
-    pub use crate::internal::metrics::encode_ts_metric;
-    pub use crate::internal::metrics::Metrics;
+    pub use crate::internal::metrics::{encode_ts_metric, Metrics};
 }
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
     pub mod shard_source;
 }
 pub mod read;
+pub mod rpc;
 pub mod stats;
 pub mod usage;
 pub mod write;
@@ -149,6 +150,7 @@ mod internal {
     pub mod maintenance;
     pub mod metrics;
     pub mod paths;
+    pub mod service;
     pub mod state;
     pub mod state_diff;
     pub mod state_versions;
@@ -253,6 +255,7 @@ pub struct PersistClient {
     metrics: Arc<Metrics>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
     shared_states: Arc<StateCache>,
+    pubsub_sender: Arc<dyn PubSubSender>,
 }
 
 impl PersistClient {
@@ -268,6 +271,7 @@ impl PersistClient {
         metrics: Arc<Metrics>,
         cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
         shared_states: Arc<StateCache>,
+        pubsub_sender: Arc<dyn PubSubSender>,
     ) -> Result<Self, ExternalError> {
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
@@ -278,6 +282,7 @@ impl PersistClient {
             metrics,
             cpu_heavy_runtime,
             shared_states,
+            pubsub_sender,
         })
     }
 
@@ -358,7 +363,8 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
-            &self.shared_states,
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -511,7 +517,8 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
-            &self.shared_states,
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());
@@ -564,7 +571,8 @@ impl PersistClient {
             shard_id,
             Arc::clone(&self.metrics),
             Arc::new(state_versions),
-            &self.shared_states,
+            Arc::clone(&self.shared_states),
+            Arc::clone(&self.pubsub_sender),
         )
         .await?;
         let gc = GarbageCollector::new(machine.clone());

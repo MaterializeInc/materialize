@@ -822,3 +822,32 @@ Explained Query:
           Get l2
 
 EOF
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/19179
+statement ok
+with
+  v1 as (
+    WITH
+            creates AS
+            (
+                SELECT
+                    details ->> 'logical_size' AS size,
+                    details ->> 'replica_id' AS replica_id,
+                    occurred_at
+                FROM mz_catalog.mz_audit_events
+                WHERE
+                    object_type = 'cluster-replica' AND event_type = 'create'
+            )
+        SELECT
+            mz_internal.mz_error_if_null(
+                    mz_cluster_replica_sizes.credits_per_hour, 'Replica of unknown size'
+                )
+                AS credits_per_hour
+        FROM
+            creates
+                LEFT JOIN
+                    mz_internal.mz_cluster_replica_sizes
+                    ON mz_cluster_replica_sizes.size = creates.size
+  )
+select * from v1
+WHERE credits_per_hour > credits_per_hour;
