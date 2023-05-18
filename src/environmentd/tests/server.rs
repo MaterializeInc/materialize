@@ -85,7 +85,6 @@ use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
-use futures::FutureExt;
 use http::StatusCode;
 use itertools::Itertools;
 use mz_environmentd::WebSocketResponse;
@@ -97,7 +96,6 @@ use mz_sql::session::user::SYSTEM_USER;
 use reqwest::blocking::Client;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use tokio::runtime::Runtime;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
@@ -268,7 +266,7 @@ fn test_http_sql() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default());
+        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
@@ -979,7 +977,7 @@ fn test_max_request_size() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default());
+        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1051,7 +1049,7 @@ fn test_max_statement_batch_size() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default());
+        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         ws.write_message(Message::Text(json.to_string())).unwrap();
@@ -1111,7 +1109,7 @@ fn test_ws_passes_options() {
         "application_name".to_string(),
         "billion_dollar_idea".to_string(),
     )]);
-    util::auth_with_ws(&mut ws, options);
+    util::auth_with_ws(&mut ws, options).unwrap();
 
     // Query to make sure we get back the correct session var, which should be
     // set from the options map we passed with the auth.
@@ -1154,7 +1152,7 @@ fn test_ws_notifies_for_bad_options() {
     .unwrap();
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     let options = BTreeMap::from([("bad_var_name".to_string(), "i_do_not_exist".to_string())]);
-    util::auth_with_ws(&mut ws, options);
+    util::auth_with_ws(&mut ws, options).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read_message().unwrap();
