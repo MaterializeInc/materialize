@@ -19,6 +19,7 @@ use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{Diff, TimestampManipulation};
+use mz_stash::objects::proto;
 use mz_stash::{self, TypedCollection};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
@@ -29,7 +30,7 @@ use crate::controller::{
     StorageController,
 };
 
-pub(super) static SHARD_FINALIZATION: TypedCollection<ShardId, ()> =
+pub(super) static SHARD_FINALIZATION: TypedCollection<proto::ShardId, ()> =
     TypedCollection::new("storage-shards-to-finalize");
 
 impl<T> Controller<T>
@@ -55,7 +56,7 @@ where
         SHARD_FINALIZATION
             .insert_without_overwrite(
                 &mut self.state.stash,
-                entries.into_iter().map(|key| (key, ())),
+                entries.into_iter().map(|key| (key.into_proto(), ())),
             )
             .await
             .expect("must be able to write to stash")
@@ -69,27 +70,42 @@ where
         &mut self,
         shards: BTreeSet<ShardId>,
     ) {
+        let proto_shards = shards
+            .into_iter()
+            .map(|s| RustType::into_proto(&s))
+            .collect();
         SHARD_FINALIZATION
-            .delete_keys(&mut self.state.stash, shards)
+            .delete_keys(&mut self.state.stash, proto_shards)
             .await
             .expect("must be able to write to stash")
     }
 
     pub(super) async fn reconcile_state_inner(&mut self) {
         // Convenience method for reading from a collection in parallel.
-        async fn tx_peek<'tx, K, V>(
+        async fn tx_peek<'tx, KP, VP, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
-            typed: &TypedCollection<K, V>,
+            typed: &TypedCollection<KP, VP>,
         ) -> Vec<(K, V, Diff)>
         where
-            K: mz_stash::Data,
-            V: mz_stash::Data,
+            KP: mz_stash::Data,
+            VP: mz_stash::Data,
+            K: RustType<KP>,
+            V: RustType<VP>,
         {
             let collection = tx
-                .collection::<K, V>(typed.name())
+                .collection::<KP, VP>(typed.name())
                 .await
                 .expect("named collection must exist");
-            tx.peek(collection).await.expect("peek succeeds")
+            tx.peek(collection)
+                .await
+                .expect("peek succeeds")
+                .into_iter()
+                .map(|(k, v, diff)| {
+                    let k = K::from_proto(k).expect("deserialization to succeed");
+                    let v = V::from_proto(v).expect("deserialization to succeed");
+                    (k, v, diff)
+                })
+                .collect()
         }
 
         // Get stash metadata.
@@ -122,7 +138,7 @@ where
         // Get all shard IDs
         let shard_finalization: BTreeSet<_> = shard_finalization
             .into_iter()
-            .map(|(id, _, diff)| {
+            .map(|(id, _, diff): (_, (), _)| {
                 assert_eq!(
                     diff, 1,
                     "expected SHARD_FINALIZATION to contain reconciled state"
@@ -170,8 +186,12 @@ where
             self.register_shards_for_finalization(shards_to_finalize)
                 .await;
 
+            let proto_ids_to_drop = ids_to_drop
+                .into_iter()
+                .map(|id| RustType::into_proto(&id))
+                .collect();
             super::METADATA_COLLECTION
-                .delete_keys(&mut self.state.stash, ids_to_drop)
+                .delete_keys(&mut self.state.stash, proto_ids_to_drop)
                 .await
                 .expect("stash operation must succeed");
         }
