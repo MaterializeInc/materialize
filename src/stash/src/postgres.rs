@@ -927,7 +927,7 @@ impl Stash {
 
         pub async fn run_upgrade(stash: &mut Stash) -> Result<u64, StashError> {
             stash
-                .with_transaction(|mut tx| {
+                .with_transaction(move |mut tx| {
                     async move {
                         let version = COLLECTION_CONFIG.version(&mut tx).await?;
 
