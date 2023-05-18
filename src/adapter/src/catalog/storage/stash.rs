@@ -18,43 +18,60 @@ use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{DatabaseId, SchemaId, PUBLIC_ROLE_NAME};
 use mz_stash::objects::{proto, RustType};
 use mz_stash::{StashError, Transaction, TypedCollection, STASH_VERSION};
+use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::builtin::{MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE};
-use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use crate::catalog::storage::{
+    BootstrapArgs, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, MZ_INTROSPECTION_ROLE_ID,
+    MZ_SYSTEM_ROLE_ID, REPLICA_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
+    SYSTEM_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+};
 use crate::rbac;
 
 /// The key used within the "config" collection where we store the Stash version.
 const USER_VERSION: &str = "user_version";
 
-const ROLES_COLLECTION: TypedCollection<proto::RoleKey, proto::RoleValue> =
+pub const SETTING_COLLECTION: TypedCollection<proto::SettingKey, proto::SettingValue> =
+    TypedCollection::new("setting");
+pub const SYSTEM_GID_MAPPING_COLLECTION: TypedCollection<
+    proto::GidMappingKey,
+    proto::GidMappingValue,
+> = TypedCollection::new("system_gid_mapping");
+pub const CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION: TypedCollection<
+    proto::ClusterIntrospectionSourceIndexKey,
+    proto::ClusterIntrospectionSourceIndexValue,
+> = TypedCollection::new("compute_introspection_source_index"); // historical name
+pub const ROLES_COLLECTION: TypedCollection<proto::RoleKey, proto::RoleValue> =
     TypedCollection::new("role");
-const DATABASES_COLLECTION: TypedCollection<proto::DatabaseKey, proto::DatabaseValue> =
+pub const DATABASES_COLLECTION: TypedCollection<proto::DatabaseKey, proto::DatabaseValue> =
     TypedCollection::new("database");
-const SCHEMAS_COLLECTION: TypedCollection<proto::SchemaKey, proto::SchemaValue> =
+pub const SCHEMAS_COLLECTION: TypedCollection<proto::SchemaKey, proto::SchemaValue> =
     TypedCollection::new("schema");
-const CLUSTER_COLLECTION: TypedCollection<proto::ClusterKey, proto::ClusterValue> =
+pub const ITEM_COLLECTION: TypedCollection<proto::ItemKey, proto::ItemValue> =
+    TypedCollection::new("item");
+pub const TIMESTAMP_COLLECTION: TypedCollection<proto::TimestampKey, proto::TimestampValue> =
+    TypedCollection::new("timestamp");
+pub const SYSTEM_CONFIGURATION_COLLECTION: TypedCollection<
+    proto::ServerConfigurationKey,
+    proto::ServerConfigurationValue,
+> = TypedCollection::new("system_configuration");
+pub const CLUSTER_COLLECTION: TypedCollection<proto::ClusterKey, proto::ClusterValue> =
     TypedCollection::new("compute_instance");
-const CLUSTER_REPLICA_COLLECTION: TypedCollection<
+pub const CLUSTER_REPLICA_COLLECTION: TypedCollection<
     proto::ClusterReplicaKey,
     proto::ClusterReplicaValue,
 > = TypedCollection::new("compute_replicas");
-const AUDIT_LOG_COLLECTION: TypedCollection<proto::AuditLogKey, ()> =
+pub const AUDIT_LOG_COLLECTION: TypedCollection<proto::AuditLogKey, ()> =
     TypedCollection::new("audit_log");
-const CONFIG_COLLETION: TypedCollection<proto::ConfigKey, proto::ConfigValue> =
+pub const CONFIG_COLLECTION: TypedCollection<proto::ConfigKey, proto::ConfigValue> =
     TypedCollection::new("config");
-const ID_ALLOCATOR_COLLECTION: TypedCollection<proto::IdAllocKey, proto::IdAllocValue> =
+pub const ID_ALLOCATOR_COLLECTION: TypedCollection<proto::IdAllocKey, proto::IdAllocValue> =
     TypedCollection::new("id_alloc");
+pub const STORAGE_USAGE_COLLECTION: TypedCollection<proto::StorageUsageKey, ()> =
+    TypedCollection::new("storage_usage");
 
 const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";
-const DATABASE_ID_ALLOC_KEY: &str = "database";
-const SCHEMA_ID_ALLOC_KEY: &str = "schema";
-const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
-const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
-const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
-const REPLICA_ID_ALLOC_KEY: &str = "replica";
-const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
-const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
 const DEFAULT_USER_CLUSTER_ID: ClusterId = ClusterId::User(1);
 const DEFAULT_USER_CLUSTER_NAME: &str = "default";
@@ -63,7 +80,7 @@ const DEFAULT_REPLICA_ID: u64 = 1;
 const DEFAULT_REPLICA_NAME: &str = "r1";
 
 const MATERIALIZE_DATABASE_ID_VAL: u64 = 1;
-const MATERIALIZE_DATABASE_ID: DatabaseId = DatabaseId::System(MATERIALIZE_DATABASE_ID_VAL);
+const MATERIALIZE_DATABASE_ID: DatabaseId = DatabaseId::User(MATERIALIZE_DATABASE_ID_VAL);
 
 const MZ_CATALOG_SCHEMA_ID: u64 = 1;
 const PG_CATALOG_SCHEMA_ID: u64 = 2;
@@ -71,35 +88,14 @@ const PUBLIC_SCHEMA_ID: u64 = 3;
 const MZ_INTERNAL_SCHEMA_ID: u64 = 4;
 const INFORMATION_SCHEMA_ID: u64 = 5;
 
-#[derive(Debug, Clone)]
-pub struct InitializeOptions {
-    default_cluster_replica_size: String,
-    default_availability_zone: String,
-    bootstrap_role: Option<String>,
-}
-
-impl InitializeOptions {
-    pub fn new(size: String, zone: String) -> Self {
-        InitializeOptions {
-            default_cluster_replica_size: size,
-            default_availability_zone: zone,
-            bootstrap_role: None,
-        }
-    }
-
-    pub fn with_role(mut self, bootstrap_role: String) -> Self {
-        self.bootstrap_role = Some(bootstrap_role);
-        self
-    }
-}
-
 /// Initializes the Stash with some default objects.
 ///
 /// Note: We should only use the latest types here from the `super::objects` module, we should
 /// __not__ use any versioned protos, e.g. `objects_v15`.
+#[tracing::instrument(level = "info", skip_all)]
 pub async fn initialize(
     tx: &mut Transaction<'_>,
-    options: InitializeOptions,
+    options: &BootstrapArgs,
     now: EpochMillis,
 ) -> Result<(), StashError> {
     // During initialization we need to allocate IDs for certain things. We'll track what IDs we've
@@ -108,6 +104,21 @@ pub async fn initialize(
 
     // Collect audit events so we can commit them once at the very end.
     let mut audit_events = vec![];
+
+    // First thing we need to do is persist the timestamp we're booting with.
+    TIMESTAMP_COLLECTION
+        .initialize(
+            tx,
+            vec![(
+                proto::TimestampKey {
+                    id: Timeline::EpochMilliseconds.to_string(),
+                },
+                proto::TimestampValue {
+                    ts: Some(proto::Timestamp { internal: now }),
+                },
+            )],
+        )
+        .await?;
 
     // If provided, generate a new Id and attributes for the bootstrap role.
     //
@@ -383,20 +394,7 @@ pub async fn initialize(
                 proto::ClusterReplicaValue {
                     cluster_id: Some(DEFAULT_USER_CLUSTER_ID.into_proto()),
                     name: DEFAULT_REPLICA_NAME.to_string(),
-                    config: Some(proto::ReplicaConfig {
-                        location: Some(proto::replica_config::Location::Managed(
-                            proto::replica_config::ManagedLocation {
-                                size: options.default_cluster_replica_size.clone(),
-                                availability_zone: options.default_availability_zone,
-                                az_user_specified: false,
-                            },
-                        )),
-                        logging: Some(proto::replica_config::Logging {
-                            log_logging: false,
-                            interval: Some(proto::Duration::from_secs(1)),
-                        }),
-                        idle_arrangement_merge_effort: None,
-                    }),
+                    config: Some(default_replica_config(options)),
                     owner_id: Some(MZ_SYSTEM_ROLE_ID.into_proto()),
                 },
             )],
@@ -411,7 +409,7 @@ pub async fn initialize(
                 cluser_name: "default".to_string(),
                 replica_name: "default".to_string(),
                 replica_id: Some(DEFAULT_REPLICA_ID.to_string().into()),
-                logical_size: options.default_cluster_replica_size,
+                logical_size: options.default_cluster_replica_size.to_string(),
             },
         ),
     ));
@@ -443,6 +441,7 @@ pub async fn initialize(
         )
         .await?;
 
+    // Record all of our used ids.
     ID_ALLOCATOR_COLLECTION
         .initialize(
             tx,
@@ -539,8 +538,20 @@ pub async fn initialize(
         )
         .await?;
 
+    // Initialize all other collections to be empty.
+    SETTING_COLLECTION.initialize(tx, vec![]).await?;
+    SYSTEM_GID_MAPPING_COLLECTION.initialize(tx, vec![]).await?;
+    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
+        .initialize(tx, vec![])
+        .await?;
+    ITEM_COLLECTION.initialize(tx, vec![]).await?;
+    SYSTEM_CONFIGURATION_COLLECTION
+        .initialize(tx, vec![])
+        .await?;
+    STORAGE_USAGE_COLLECTION.initialize(tx, vec![]).await?;
+
     // Set our initial version.
-    CONFIG_COLLETION
+    CONFIG_COLLECTION
         .initialize(
             tx,
             [(
@@ -555,6 +566,24 @@ pub async fn initialize(
         .await?;
 
     Ok(())
+}
+
+/// Defines the default config for a Cluster Replica.
+pub fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
+    proto::ReplicaConfig {
+        location: Some(proto::replica_config::Location::Managed(
+            proto::replica_config::ManagedLocation {
+                size: args.default_cluster_replica_size.to_string(),
+                availability_zone: args.default_availability_zone.to_string(),
+                az_user_specified: false,
+            },
+        )),
+        logging: Some(proto::replica_config::Logging {
+            log_logging: false,
+            interval: Some(proto::Duration::from_secs(1)),
+        }),
+        idle_arrangement_merge_effort: None,
+    }
 }
 
 /// A small struct which keeps track of what Ids we've used during initialization.
