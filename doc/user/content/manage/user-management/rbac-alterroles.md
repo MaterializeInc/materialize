@@ -98,7 +98,7 @@ inherited from another role.
 
    Your output should contain the role names and the updated attributes:
 
-   ```sql
+   ```nofmt 
    id|oid|name|inherit|create_role|create_db|create_cluster
    u9|22444|qa_role|t|f|f|f
    u8|20016|dev_role|t|t|f|f

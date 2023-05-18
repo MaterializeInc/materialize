@@ -45,14 +45,11 @@ to this table.
 
 1. Copy the `psql` command.
 
-    The app password will be displayed only once, so be sure to copy the password somewhere safe. If you forget your password, you can create a new one.
-
 ## Step 3. Create a new role
 
 1. Open a new terminal window, run the `psql` command, and enter your app password.
 
-    Now that you're logged in, you can create a new role in the `mz_roles`
-    table.
+1. Now that you're logged in, you can create a new role in the `mz_roles` table:
 
     ```sql
     CREATE ROLE dev_role;
@@ -97,8 +94,7 @@ to this table.
 
 ## Step 4. Create example objects
 
-Your `dev_role` has the default system-level permissions and needs object
-specific privileges. RBAC allows you to apply granular privileges to objects in the SQL hierarchy. Let's create some example objects in the system and determine what
+Your `dev_role` has the default system-level permissions and needs object-level privileges. RBAC allows you to apply granular privileges to objects in the SQL hierarchy. Let's create some example objects in the system and determine what
 privileges the role needs.
 
 1. In your `psql` terminal, create a new example cluster to avoid impacting
