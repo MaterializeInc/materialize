@@ -13,34 +13,30 @@
 //! representation via a call to lower().
 
 use std::collections::BTreeMap;
-use std::fmt;
-use std::mem;
 use std::num::NonZeroU64;
+use std::{fmt, mem};
 
 use itertools::Itertools;
-use mz_expr::visit::Visit;
-use mz_expr::visit::VisitChildren;
-use mz_ore::stack::RecursionLimitError;
-use serde::{Deserialize, Serialize};
-
 use mz_expr::func;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
-use mz_ore::collections::CollectionExt;
-use mz_ore::stack;
-use mz_repr::adt::array::ArrayDimension;
-use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::*;
-
-use crate::plan::error::PlanError;
-use crate::plan::query::ExprContext;
-use crate::plan::typeconv::{self, CastContext};
-use crate::plan::Params;
-
+use mz_expr::visit::{Visit, VisitChildren};
 // these happen to be unchanged at the moment, but there might be additions later
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
     WindowFrameBound, WindowFrameUnits,
 };
+use mz_ore::collections::CollectionExt;
+use mz_ore::stack;
+use mz_ore::stack::RecursionLimitError;
+use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::*;
+use serde::{Deserialize, Serialize};
+
+use crate::plan::error::PlanError;
+use crate::plan::query::ExprContext;
+use crate::plan::typeconv::{self, CastContext};
+use crate::plan::Params;
 
 #[allow(missing_debug_implementations)]
 pub struct Hir;

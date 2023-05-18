@@ -17,10 +17,6 @@ use std::fmt::Write;
 use std::iter;
 
 use itertools::Itertools;
-use prost::Message;
-use regex::Regex;
-use tracing::warn;
-
 use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
@@ -31,8 +27,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
-use mz_repr::strconv;
-use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterOwnerStatement, AlterRoleStatement, AlterSinkAction, AlterSinkStatement,
@@ -62,6 +57,9 @@ use mz_storage_client::types::sources::{
     ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
     TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
+use prost::Message;
+use regex::Regex;
+use tracing::warn;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{

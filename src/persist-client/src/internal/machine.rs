@@ -11,7 +11,7 @@
 
 use std::fmt::Debug;
 use std::future::Future;
-use std::ops::{ControlFlow, ControlFlow::Continue};
+use std::ops::ControlFlow::{self, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -19,18 +19,17 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
+use mz_ore::error::ErrorExt;
+#[allow(unused_imports)] // False positive.
+use mz_ore::fmt::FormatBuffer;
 use mz_ore::task::spawn;
+use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
+use mz_persist::retry::Retry;
+use mz_persist_types::{Codec, Codec64, Opaque};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, trace_span, warn, Instrument};
-
-use mz_ore::error::ErrorExt;
-#[allow(unused_imports)] // False positive.
-use mz_ore::fmt::FormatBuffer;
-use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
-use mz_persist::retry::Retry;
-use mz_persist_types::{Codec, Codec64, Opaque};
 
 use crate::cache::StateCache;
 use crate::critical::CriticalReaderId;
@@ -1273,6 +1272,7 @@ pub mod datadriven {
         let builder = BatchBuilderInternal::new(
             cfg,
             Arc::clone(&datadriven.client.metrics),
+            Arc::clone(&datadriven.machine.applier.shard_metrics),
             schemas.clone(),
             datadriven.client.metrics.user.clone(),
             lower,
@@ -1333,6 +1333,7 @@ pub mod datadriven {
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
                 datadriven.client.metrics.as_ref(),
+                datadriven.machine.applier.shard_metrics.as_ref(),
                 &datadriven.client.metrics.read.batch_fetcher,
                 &part.key,
                 &batch.desc,
@@ -1440,6 +1441,7 @@ pub mod datadriven {
             CompactConfig::from(&cfg),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.metrics),
+            Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.cpu_heavy_runtime),
             req,
             writer_id,
@@ -1491,6 +1493,7 @@ pub mod datadriven {
                     &datadriven.shard_id,
                     datadriven.client.blob.as_ref(),
                     datadriven.client.metrics.as_ref(),
+                    datadriven.machine.applier.shard_metrics.as_ref(),
                     &datadriven.client.metrics.read.batch_fetcher,
                     &part.key,
                     &batch.desc,

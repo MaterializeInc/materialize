@@ -8,11 +8,12 @@
 // by the Apache License, Version 2.0.
 
 //! Analysis to identify monotonic collections, especially TopK inputs.
+use std::collections::BTreeSet;
+
 use mz_expr::visit::VisitChildren;
 use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::GlobalId;
-use std::collections::BTreeSet;
 
 /// A struct that holds a recursive function that determines if a
 /// relation is monotonic, and applies any optimizations along the way.

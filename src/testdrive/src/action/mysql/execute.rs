@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::{anyhow, Context};
-
 use mysql_async::prelude::Query;
 
 use crate::action::{ControlFlow, State};

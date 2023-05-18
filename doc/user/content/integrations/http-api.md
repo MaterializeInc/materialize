@@ -127,7 +127,7 @@ an array of the following:
 Result | JSON value
 ---------------------|------------
 Rows | `{"rows": <2D array of JSON-ified results>, "col_names": <array of text>, "notices": <array of notices>}`
-Error | `{"error": <Error string from execution>, "notices": <array of notices>}`
+Error | `{"error": <Error object from execution>, "notices": <array of notices>}`
 Ok | `{"ok": <tag>, "notices": <array of notices>}`
 
 Each committed statement returns exactly one of these values; e.g. in the case
@@ -170,6 +170,15 @@ type SqlRequest = Simple | Extended;
 interface Notice {
 	message: string;
 	severity: string;
+	detail?: string;
+	hint?: string;
+}
+
+interface Error {
+	message: string;
+	code: string;
+	detail?: string;
+	hint?: string;
 }
 
 type SqlResult =
@@ -182,7 +191,7 @@ type SqlResult =
 	ok: string;
 	notices: Notice[];
 } | {
-	error: string;
+	error: Error;
 	notices: Notice[];
 };
 ```

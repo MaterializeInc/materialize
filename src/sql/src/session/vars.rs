@@ -17,10 +17,6 @@ use std::time::Duration;
 
 use const_format::concatcp;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use serde::Serialize;
-use uncased::UncasedStr;
-
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
 use mz_ore::cast::CastFrom;
@@ -28,6 +24,9 @@ use mz_ore::str::StrExt;
 use mz_persist_client::cfg::PersistConfig;
 use mz_repr::adt::numeric::Numeric;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use uncased::UncasedStr;
 
 use crate::ast::Ident;
 use crate::session::user::{ExternalUserMetadata, User, SYSTEM_USER};
@@ -533,16 +532,51 @@ const ENABLE_UPSERT_SOURCE_DISK: ServerVar<bool> = ServerVar {
 
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
 mod upsert_rocksdb {
+    use std::str::FromStr;
+
+    use mz_rocksdb::tuning::{CompactionStyle, CompressionType};
+
     use super::*;
-    pub static UPSERT_ROCKSDB_COMPACTION_STYLE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+
+    impl Value for CompactionStyle {
+        fn type_name() -> String {
+            "rocksdb_compaction_style".to_string()
+        }
+
+        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+            let s = extract_single_value(input)?;
+            CompactionStyle::from_str(s).map_err(|_| ())
+        }
+
+        fn format(&self) -> String {
+            self.to_string()
+        }
+    }
+
+    impl Value for CompressionType {
+        fn type_name() -> String {
+            "rocksdb_compression_type".to_string()
+        }
+
+        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+            let s = extract_single_value(input)?;
+            CompressionType::from_str(s).map_err(|_| ())
+        }
+
+        fn format(&self) -> String {
+            self.to_string()
+        }
+    }
+
+    pub static UPSERT_ROCKSDB_COMPACTION_STYLE: ServerVar<CompactionStyle> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compaction_style"),
-        value: &*mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE_STR,
+        value: &mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
         safe: true,
-    });
+    };
     pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
         value: &mz_rocksdb::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
@@ -579,25 +613,24 @@ mod upsert_rocksdb {
         internal: true,
         safe: true,
     };
-    pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+    pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compression_type"),
-        value: &*mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE_STR,
+        value: &mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
         safe: true,
-    });
-    pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: Lazy<ServerVar<String>> =
-        Lazy::new(|| ServerVar {
-            name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
-            value: &*mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE_STR,
-            description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+    };
+    pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
+        value: &mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb::tuning` module. \
                   Only takes effect on source restart (Materialize).",
-            internal: true,
-            safe: true,
-        });
+        internal: true,
+        safe: true,
+    };
 }
 
 /// Controls the connect_timeout setting when connecting to PG via replication.
@@ -660,6 +693,20 @@ const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("crdb_connect_timeout"),
     value: &PersistConfig::DEFAULT_CRDB_CONNECT_TIMEOUT,
     description: "The time to connect to CockroachDB before timing out and retrying.",
+    internal: true,
+    safe: true,
+};
+
+/// Controls the TCP user timeout to Cockroach.
+///
+/// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_tcp_user_timeout`].
+const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("crdb_tcp_user_timeout"),
+    value: &PersistConfig::DEFAULT_CRDB_TCP_USER_TIMEOUT,
+    description:
+        "The TCP timeout for connections to CockroachDB. Specifies the amount of time that \
+        transmitted data may remain unacknowledged before the TCP connection is forcibly \
+        closed.",
     internal: true,
     safe: true,
 };
@@ -1666,6 +1713,7 @@ impl SystemVars {
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
+            .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
@@ -1959,8 +2007,8 @@ impl SystemVars {
         *self.expect_value(&ENABLE_UPSERT_SOURCE_DISK)
     }
 
-    pub fn upsert_rocksdb_compaction_style(&self) -> &str {
-        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
+    pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb::tuning::CompactionStyle {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
     }
 
     pub fn upsert_rocksdb_optimize_compaction_memtable_budget(&self) -> usize {
@@ -1979,12 +2027,14 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
     }
 
-    pub fn upsert_rocksdb_compression_type(&self) -> &str {
-        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
+    pub fn upsert_rocksdb_compression_type(&self) -> mz_rocksdb::tuning::CompressionType {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
     }
 
-    pub fn upsert_rocksdb_bottommost_compression_type(&self) -> &str {
-        &*self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
+    pub fn upsert_rocksdb_bottommost_compression_type(
+        &self,
+    ) -> mz_rocksdb::tuning::CompressionType {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
@@ -2040,6 +2090,11 @@ impl SystemVars {
     /// Returns the `crdb_connect_timeout` configuration parameter.
     pub fn crdb_connect_timeout(&self) -> Duration {
         *self.expect_value(&CRDB_CONNECT_TIMEOUT)
+    }
+
+    /// Returns the `crdb_tcp_user_timeout` configuration parameter.
+    pub fn crdb_tcp_user_timeout(&self) -> Duration {
+        *self.expect_value(&CRDB_TCP_USER_TIMEOUT)
     }
 
     /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
@@ -2182,7 +2237,7 @@ pub trait Var: fmt::Debug {
     fn description(&self) -> &'static str;
 
     /// Returns the name of the type of this variable.
-    fn type_name(&self) -> &'static str;
+    fn type_name(&self) -> String;
 
     /// Indicates wither the [`Var`] is visible for the given [`User`].
     ///
@@ -2260,8 +2315,8 @@ where
         self.description
     }
 
-    fn type_name(&self) -> &'static str {
-        V::TYPE_NAME
+    fn type_name(&self) -> String {
+        V::type_name()
     }
 
     fn visible(&self, user: &User) -> bool {
@@ -2348,8 +2403,8 @@ where
         self.parent.description()
     }
 
-    fn type_name(&self) -> &'static str {
-        V::TYPE_NAME
+    fn type_name(&self) -> String {
+        V::type_name()
     }
 
     fn visible(&self, user: &User) -> bool {
@@ -2510,8 +2565,8 @@ where
         self.parent.description()
     }
 
-    fn type_name(&self) -> &'static str {
-        V::TYPE_NAME
+    fn type_name(&self) -> String {
+        V::type_name()
     }
 
     fn visible(&self, user: &User) -> bool {
@@ -2536,8 +2591,8 @@ impl Var for BuildInfo {
         "Shows the Materialize server version (Materialize)."
     }
 
-    fn type_name(&self) -> &'static str {
-        str::TYPE_NAME
+    fn type_name(&self) -> String {
+        str::type_name()
     }
 
     fn visible(&self, _: &User) -> bool {
@@ -2562,8 +2617,8 @@ impl Var for User {
         "Reports whether the current session is a superuser (PostgreSQL)."
     }
 
-    fn type_name(&self) -> &'static str {
-        bool::TYPE_NAME
+    fn type_name(&self) -> String {
+        bool::type_name()
     }
 
     fn visible(&self, _: &User) -> bool {
@@ -2578,7 +2633,7 @@ impl Var for User {
 /// A value that can be stored in a session or server variable.
 pub trait Value: ToOwned + Send + Sync {
     /// The name of the value type.
-    const TYPE_NAME: &'static str;
+    fn type_name() -> String;
     /// Parses a value of this type from a [`VarInput`].
     fn parse(input: VarInput) -> Result<Self::Owned, ()>;
     /// Formats this value as a flattened string.
@@ -2597,7 +2652,9 @@ fn extract_single_value(input: VarInput) -> Result<&str, ()> {
 }
 
 impl Value for bool {
-    const TYPE_NAME: &'static str = "boolean";
+    fn type_name() -> String {
+        "boolean".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self, ()> {
         let s = extract_single_value(input)?;
@@ -2617,7 +2674,9 @@ impl Value for bool {
 }
 
 impl Value for i32 {
-    const TYPE_NAME: &'static str = "integer";
+    fn type_name() -> String {
+        "integer".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<i32, ()> {
         let s = extract_single_value(input)?;
@@ -2630,7 +2689,9 @@ impl Value for i32 {
 }
 
 impl Value for u32 {
-    const TYPE_NAME: &'static str = "unsigned integer";
+    fn type_name() -> String {
+        "unsigned integer".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<u32, ()> {
         let s = extract_single_value(input)?;
@@ -2643,7 +2704,9 @@ impl Value for u32 {
 }
 
 impl Value for mz_repr::Timestamp {
-    const TYPE_NAME: &'static str = "mz-timestamp";
+    fn type_name() -> String {
+        "mz-timestamp".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<mz_repr::Timestamp, ()> {
         let s = extract_single_value(input)?;
@@ -2656,7 +2719,9 @@ impl Value for mz_repr::Timestamp {
 }
 
 impl Value for usize {
-    const TYPE_NAME: &'static str = "unsigned integer";
+    fn type_name() -> String {
+        "unsigned integer".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<usize, ()> {
         let s = extract_single_value(input)?;
@@ -2669,7 +2734,9 @@ impl Value for usize {
 }
 
 impl Value for Numeric {
-    const TYPE_NAME: &'static str = "numeric";
+    fn type_name() -> String {
+        "numeric".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
@@ -2699,7 +2766,9 @@ const SEC_TO_DAY: u64 = 60u64 * 60 * 24;
 const MICRO_TO_MILLI: u32 = 1000u32;
 
 impl Value for Duration {
-    const TYPE_NAME: &'static str = "duration";
+    fn type_name() -> String {
+        "duration".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Duration, ()> {
         let s = extract_single_value(input)?;
@@ -2828,7 +2897,9 @@ fn test_value_duration() {
 }
 
 impl Value for str {
-    const TYPE_NAME: &'static str = "string";
+    fn type_name() -> String {
+        "string".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<String, ()> {
         let s = extract_single_value(input)?;
@@ -2842,7 +2913,9 @@ impl Value for str {
 
 // The same as the above impl, but works in `SystemVar`s.
 impl Value for String {
-    const TYPE_NAME: &'static str = "string";
+    fn type_name() -> String {
+        "string".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<String, ()> {
         let s = extract_single_value(input)?;
@@ -2855,7 +2928,9 @@ impl Value for String {
 }
 
 impl Value for Vec<String> {
-    const TYPE_NAME: &'static str = "string list";
+    fn type_name() -> String {
+        "string list".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Vec<String>, ()> {
         match input {
@@ -2880,7 +2955,9 @@ impl Value for Vec<String> {
 }
 
 impl Value for Vec<Ident> {
-    const TYPE_NAME: &'static str = "identifier list";
+    fn type_name() -> String {
+        "identifier list".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Vec<Ident>, ()> {
         let holder;
@@ -2901,52 +2978,20 @@ impl Value for Vec<Ident> {
     }
 }
 
-impl Value for Option<String> {
-    const TYPE_NAME: &'static str = "optional string";
+// Implement `Value` for `Option<V>` for any owned `V`.
+impl<V> Value for Option<V>
+where
+    V: Value + Clone + ToOwned<Owned = V>,
+{
+    fn type_name() -> String {
+        format!("optional {}", V::type_name())
+    }
 
-    fn parse(input: VarInput) -> Result<Option<String>, ()> {
+    fn parse(input: VarInput) -> Result<Option<V>, ()> {
         let s = extract_single_value(input)?;
         match s {
             "" => Ok(None),
-            _ => Ok(Some(s.to_string())),
-        }
-    }
-
-    fn format(&self) -> String {
-        match self {
-            Some(s) => s.format(),
-            None => "".into(),
-        }
-    }
-}
-
-impl Value for Option<mz_repr::Timestamp> {
-    const TYPE_NAME: &'static str = "optional unsigned integer";
-
-    fn parse(input: VarInput) -> Result<Option<mz_repr::Timestamp>, ()> {
-        let s = extract_single_value(input)?;
-        match s {
-            "" => Ok(None),
-            _ => <mz_repr::Timestamp as Value>::parse(VarInput::Flat(s)).map(Some),
-        }
-    }
-
-    fn format(&self) -> String {
-        match self {
-            Some(s) => s.format(),
-            None => "".into(),
-        }
-    }
-}
-
-impl Value for Option<i32> {
-    const TYPE_NAME: &'static str = "optional signed integer";
-
-    fn parse(input: VarInput) -> Result<Option<i32>, ()> {
-        let s = extract_single_value(input)?;
-        match s {
-            "" => Ok(None),
-            _ => <i32 as Value>::parse(VarInput::Flat(s)).map(Some),
+            _ => <V as Value>::parse(VarInput::Flat(s)).map(Some),
         }
     }
 
@@ -3032,7 +3077,9 @@ impl ClientSeverity {
 }
 
 impl Value for ClientSeverity {
-    const TYPE_NAME: &'static str = "string";
+    fn type_name() -> String {
+        "string".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
@@ -3092,7 +3139,9 @@ impl TimeZone {
 }
 
 impl Value for TimeZone {
-    const TYPE_NAME: &'static str = "string";
+    fn type_name() -> String {
+        "string".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
@@ -3145,7 +3194,9 @@ impl IsolationLevel {
 }
 
 impl Value for IsolationLevel {
-    const TYPE_NAME: &'static str = "string";
+    fn type_name() -> String {
+        "string".to_string()
+    }
 
     fn parse(input: VarInput) -> Result<Self::Owned, ()> {
         let s = extract_single_value(input)?;
@@ -3216,6 +3267,7 @@ fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
+        || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()

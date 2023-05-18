@@ -13,10 +13,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::bail;
+use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(
     env!("OUT_DIR"),

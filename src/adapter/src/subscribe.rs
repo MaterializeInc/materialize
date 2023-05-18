@@ -14,17 +14,16 @@ use std::collections::BTreeSet;
 use std::iter;
 
 use itertools::Itertools;
-use mz_expr::compare_columns;
-use mz_ore::now::EpochMillis;
-use mz_sql::plan::SubscribeOutput;
-use timely::progress::Antichain;
-use tokio::sync::mpsc;
-
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_controller::clusters::ClusterId;
+use mz_expr::compare_columns;
+use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_sql::plan::SubscribeOutput;
 use mz_sql::session::user::User;
+use timely::progress::Antichain;
+use tokio::sync::mpsc;
 
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;

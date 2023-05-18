@@ -9,10 +9,9 @@
 
 //! Telemetry utilities.
 
+use mz_sql::catalog::EnvironmentId;
 use serde_json::json;
 use uuid::Uuid;
-
-use mz_sql::catalog::EnvironmentId;
 
 /// Extension trait for [`mz_segment::Client`].
 pub trait SegmentClientExt {

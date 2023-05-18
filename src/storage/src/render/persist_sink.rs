@@ -96,17 +96,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::AsCollection;
-use differential_dataflow::{lattice::Lattice, Collection, Hashable};
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use either::Either;
-use serde::{Deserialize, Serialize};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tracing::trace;
-
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::Batch;
@@ -119,6 +111,13 @@ use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use serde::{Deserialize, Serialize};
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
+use tracing::trace;
 
 use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;

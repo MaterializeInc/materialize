@@ -26,18 +26,14 @@
 //!       if wrong, record the error
 
 use std::collections::BTreeMap;
-use std::env;
 use std::error::Error;
-use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::ops;
 use std::path::Path;
-use std::str;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
+use std::{env, fmt, ops, str, thread};
 
 use anyhow::{anyhow, bail};
 use bytes::BytesMut;
@@ -45,20 +41,6 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
-use once_cell::sync::Lazy;
-use postgres_protocol::types;
-use regex::Regex;
-use tempfile::TempDir;
-use tokio::runtime::Runtime;
-use tokio::sync::oneshot;
-use tokio_postgres::types::FromSql;
-use tokio_postgres::types::Kind as PgKind;
-use tokio_postgres::types::Type as PgType;
-use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
-use tower_http::cors::AllowOrigin;
-use tracing::{error, info};
-use uuid::Uuid;
-
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::cast::ReinterpretCast;
@@ -81,12 +63,22 @@ use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{Expr, Raw, ShowStatement, Statement};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql_parser::{
-    ast::{display::AstDisplay, CreateIndexStatement, RawItemName, Statement as AstStatement},
-    parser,
-};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{CreateIndexStatement, RawItemName, Statement as AstStatement};
+use mz_sql_parser::parser;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use postgres_protocol::types;
+use regex::Regex;
+use tempfile::TempDir;
+use tokio::runtime::Runtime;
+use tokio::sync::oneshot;
+use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
+use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
+use tower_http::cors::AllowOrigin;
+use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::util;

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use timely::progress::Antichain;
 
-use super::command::{ComputeCommand, ComputeParameters, Peek};
+use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek};
 
 #[derive(Debug)]
 pub struct ComputeCommandHistory<T = mz_repr::Timestamp> {

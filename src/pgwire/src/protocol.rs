@@ -7,24 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
-use std::iter;
-use std::mem;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::{cmp, iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
-use postgres::error::SqlState;
-use tokio::io::{self, AsyncRead, AsyncWrite};
-use tokio::select;
-use tokio::time::{self, Duration, Instant};
-use tracing::{debug, warn, Instrument};
-
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
 };
@@ -34,13 +25,17 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::GlobalId;
-use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
 use mz_sql::session::vars::{ConnectionCounter, VarInput};
+use postgres::error::SqlState;
+use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::select;
+use tokio::time::{self, Duration, Instant};
+use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
 use crate::message::{

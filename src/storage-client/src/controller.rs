@@ -31,16 +31,6 @@ use bytes::BufMut;
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
-use prost::Message;
-use serde::{Deserialize, Serialize};
-use timely::order::{PartialOrder, TotalOrder};
-use timely::progress::frontier::{AntichainRef, MutableAntichain};
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio_stream::StreamMap;
-use tracing::{debug, info};
-
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_ore::metrics::MetricsRegistry;
@@ -55,6 +45,15 @@ use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashError, StashFactory, TypedCollection};
+use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
+use prost::Message;
+use serde::{Deserialize, Serialize};
+use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tokio_stream::StreamMap;
+use tracing::{debug, info};
 
 use crate::client::{
     CreateSinkCommand, CreateSourceCommand, ProtoStorageCommand, ProtoStorageResponse,

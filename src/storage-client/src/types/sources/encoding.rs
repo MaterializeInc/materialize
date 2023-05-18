@@ -10,14 +10,13 @@
 //! Types and traits related to the *decoding* of data for sources.
 
 use anyhow::Context;
-use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_interchange::{avro, protobuf};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::{ColumnType, RelationDesc, ScalarType};
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::types::connections::CsrConnection;
 

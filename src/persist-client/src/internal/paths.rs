@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_persist::location::SeqNo;
-use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::str::FromStr;
+
+use mz_persist::location::SeqNo;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::internal::encoding::parse_id;

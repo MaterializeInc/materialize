@@ -73,26 +73,25 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::Infallible,
-    time::Duration,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::time::Duration;
 
 use futures::Future;
+use mz_ore::assert_contains;
+use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task::spawn;
+use mz_stash::{
+    Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
+    INSERT_BATCH_SPLIT_SIZE,
+};
 use postgres_openssl::MakeTlsConnector;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::Config;
-
-use mz_ore::{assert_contains, collections::CollectionExt, metrics::MetricsRegistry, task::spawn};
-
-use mz_stash::{
-    Stash, StashCollection, StashError, StashFactory, TableTransaction, Timestamp, TypedCollection,
-    INSERT_BATCH_SPLIT_SIZE,
-};
 
 pub static C1: TypedCollection<i64, i64> = TypedCollection::new("c1");
 pub static C2: TypedCollection<i64, i64> = TypedCollection::new("c2");
@@ -315,7 +314,7 @@ async fn test_stash_postgres() {
         assert_eq!(rows, BTreeMap::from([(S2 { a: 1, b: Some(3) }, 2)]));
     }
 
-    // Test large update batches.
+    // Test batches with a large serialized size.
     {
         static S: TypedCollection<i64, String> = TypedCollection::new("s");
         let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
@@ -334,6 +333,16 @@ async fn test_stash_postgres() {
             .await
             .unwrap();
         assert_eq!(S.iter(&mut stash).await.unwrap().len(), 2);
+    }
+    // Test batches with a large number of individual updates.
+    {
+        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
+        let col = stash.collection::<i64, i64>("c1").await.unwrap();
+        let mut batch = col.make_batch(&mut stash).await.unwrap();
+        for i in 0..500_000 {
+            col.append_to_batch(&mut batch, &i, &(i + 1), 1);
+        }
+        stash.append(vec![batch]).await.unwrap();
     }
     // Test readonly.
     {

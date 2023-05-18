@@ -89,11 +89,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-use rand::seq::SliceRandom;
-use tokio::sync::oneshot;
-use tower_http::cors::AllowOrigin;
-
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterBackend, SystemParameterFrontend};
@@ -111,6 +106,10 @@ use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::types::connections::ConnectionContext;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rand::seq::SliceRandom;
+use tokio::sync::oneshot;
+use tower_http::cors::AllowOrigin;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 use crate::server::ListenerHandle;

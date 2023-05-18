@@ -59,12 +59,7 @@ macro_rules! emit_boot_diagnostics {
 // Implementation for the `emit_boot_event` macro.
 #[doc(hidden)]
 pub mod r#private {
-    pub use os_info;
-    pub use sysinfo;
-    pub use tracing;
-
-    pub use mz_build_info;
-    pub use mz_ore;
+    pub use {mz_build_info, mz_ore, os_info, sysinfo, tracing};
 
     // NOTE(benesch): this module contains a lot of complexity just to detect
     // the cgroup memory limit. Is it worth now that we're cloud native? It was
@@ -242,8 +237,9 @@ pub mod r#private {
 
         #[cfg(test)]
         mod tests {
-            use super::{CgroupEntry, MountInfo};
             use std::path::PathBuf;
+
+            use super::{CgroupEntry, MountInfo};
 
             #[test]
             fn test_cgroup_from_line() {

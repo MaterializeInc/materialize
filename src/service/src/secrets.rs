@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::ArgEnum;
-
 use mz_orchestrator_kubernetes::secrets::KubernetesSecretsReader;
 use mz_orchestrator_process::secrets::ProcessSecretsReader;
 use mz_secrets::SecretsReader;

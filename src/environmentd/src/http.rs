@@ -33,7 +33,13 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
+use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
+use mz_ore::cast::u64_to_usize;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
+use mz_ore::tracing::TracingHandle;
+use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{VarInput, ConnectionCounter};
 use openssl::ssl::{Ssl, SslContext};
 use serde::Deserialize;
@@ -45,23 +51,16 @@ use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
-use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
-use mz_ore::cast::u64_to_usize;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::TracingHandle;
-use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
-
 use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;
-
-pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 mod catalog;
 mod memory;
 mod probe;
 mod root;
 mod sql;
+
+pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);

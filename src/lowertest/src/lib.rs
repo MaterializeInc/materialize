@@ -79,13 +79,12 @@
 
 use std::collections::BTreeMap;
 
+pub use mz_lowertest_derive::MzReflect;
+use mz_ore::result::ResultExt;
+use mz_ore::str::{separated, StrExt};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-
-use mz_ore::{result::ResultExt, str::separated, str::StrExt};
-
-pub use mz_lowertest_derive::MzReflect;
 
 /* #region Parts of the public interface related to collecting information
 about the fields of structs and enums. */

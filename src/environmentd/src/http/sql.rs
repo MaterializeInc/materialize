@@ -19,14 +19,10 @@ use axum::Json;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
-use serde::{Deserialize, Serialize};
-use tokio::time;
-use tracing::warn;
-use tungstenite::protocol::frame::coding::CloseCode;
-
 use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
 use mz_adapter::{
-    AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient,
+    AdapterError, AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary,
+    SessionClient,
 };
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::ToJson;
@@ -36,10 +32,13 @@ use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
+use serde::{Deserialize, Serialize};
+use tokio::time;
+use tokio_postgres::error::SqlState;
+use tracing::warn;
+use tungstenite::protocol::frame::coding::CloseCode;
 
-use crate::http::{AuthedClient, MAX_REQUEST_SIZE};
-
-use super::{init_ws, WsState};
+use crate::http::{init_ws, AuthedClient, WsState, MAX_REQUEST_SIZE};
 
 pub async fn handle_sql(
     mut client: AuthedClient,
@@ -144,7 +143,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         // Figure out if we need to send an error, any notices, but always the ready message.
         let err = match run_ws_request(req, &mut client, &mut ws).await {
             Ok(()) => None,
-            Err(err) => Some(WebSocketResponse::Error(err.to_string())),
+            Err(err) => Some(WebSocketResponse::Error(err.into())),
         };
 
         // After running our request, there are several messages we need to send in a
@@ -210,6 +209,8 @@ async fn forward_notices(
             severity: Severity::for_adapter_notice(&notice)
                 .as_str()
                 .to_lowercase(),
+            detail: notice.detail(),
+            hint: notice.hint(),
         })
     });
 
@@ -293,8 +294,7 @@ pub enum SqlResult {
     },
     /// The query returned an error.
     Err {
-        /// The error message.
-        error: String,
+        error: SqlError,
         // Any notices generated during execution of the query.
         notices: Vec<Notice>,
     },
@@ -315,9 +315,9 @@ impl SqlResult {
         }
     }
 
-    fn err(client: &mut SessionClient, msg: impl std::fmt::Display) -> SqlResult {
+    fn err(client: &mut SessionClient, error: impl Into<SqlError>) -> SqlResult {
         SqlResult::Err {
-            error: msg.to_string(),
+            error: error.into(),
             notices: make_notices(client),
         }
     }
@@ -331,6 +331,51 @@ impl SqlResult {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct SqlError {
+    pub message: String,
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+impl From<AdapterError> for SqlError {
+    fn from(err: AdapterError) -> Self {
+        SqlError {
+            message: err.to_string(),
+            // TODO: Move codes out of pgwire so they can be shared here.
+            code: SqlState::INTERNAL_ERROR.code().to_string(),
+            detail: err.detail(),
+            hint: err.hint(),
+        }
+    }
+}
+
+impl From<String> for SqlError {
+    fn from(message: String) -> Self {
+        SqlError {
+            message,
+            code: SqlState::INTERNAL_ERROR.code().to_string(),
+            detail: None,
+            hint: None,
+        }
+    }
+}
+
+impl From<&str> for SqlError {
+    fn from(value: &str) -> Self {
+        SqlError::from(value.to_string())
+    }
+}
+
+impl From<anyhow::Error> for SqlError {
+    fn from(value: anyhow::Error) -> Self {
+        SqlError::from(value.to_string())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum WebSocketResponse {
     ReadyForQuery(String),
@@ -338,13 +383,17 @@ pub enum WebSocketResponse {
     Rows(Vec<String>),
     Row(Vec<serde_json::Value>),
     CommandComplete(String),
-    Error(String),
+    Error(SqlError),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Notice {
     message: String,
     severity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 impl Notice {
@@ -469,7 +518,7 @@ impl ResultSender for WebSocket {
                             }
                         }
                         Some(PeekResponseUnary::Error(err)) => {
-                            break (true, vec![WebSocketResponse::Error(err)])
+                            break (true, vec![WebSocketResponse::Error(err.into())])
                         }
                         Some(PeekResponseUnary::Canceled) => {
                             break (
@@ -870,6 +919,8 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
             severity: Severity::for_adapter_notice(&notice)
                 .as_str()
                 .to_lowercase(),
+            detail: notice.detail(),
+            hint: notice.hint(),
         })
         .collect()
 }

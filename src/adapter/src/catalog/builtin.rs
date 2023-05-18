@@ -24,9 +24,6 @@
 
 use std::hash::Hash;
 
-use once_cell::sync::Lazy;
-use serde::Serialize;
-
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -42,6 +39,8 @@ use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql_parser::ast::ObjectType;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC};
+use once_cell::sync::Lazy;
+use serde::Serialize;
 
 use crate::catalog::storage::{MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use crate::catalog::DEFAULT_CLUSTER_REPLICA_NAME;
@@ -3845,14 +3844,13 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::env;
 
-    use tokio_postgres::NoTls;
-
     use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
     use mz_sql::catalog::{CatalogSchema, SessionCatalog};
     use mz_sql::func::OP_IMPLS;
     use mz_sql::names::{PartialItemName, ResolvedDatabaseSpecifier};
+    use tokio_postgres::NoTls;
 
     use crate::catalog::{Catalog, CatalogItem, SYSTEM_CONN_ID};
 

@@ -19,16 +19,15 @@ use anyhow::anyhow;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::Description;
-use mz_persist_types::codec_impls::TodoSchema;
-use prost::Message;
-
 use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
+use prost::Message;
 use serde_json::json;
 
 use crate::async_runtime::CpuHeavyRuntime;

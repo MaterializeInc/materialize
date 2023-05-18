@@ -128,8 +128,7 @@ pub mod fetch;
 pub mod internals_bench;
 pub mod metrics {
     //! Utilities related to metrics.
-    pub use crate::internal::metrics::encode_ts_metric;
-    pub use crate::internal::metrics::Metrics;
+    pub use crate::internal::metrics::{encode_ts_metric, Metrics};
 }
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
@@ -442,6 +441,7 @@ impl PersistClient {
         let fetcher = BatchFetcher {
             blob: Arc::clone(&self.blob),
             metrics: Arc::clone(&self.metrics),
+            shard_metrics,
             shard_id,
             schemas,
             _phantom: PhantomData,

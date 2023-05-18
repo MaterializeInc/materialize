@@ -22,10 +22,9 @@
 
 use std::time::Duration;
 
+use mz_frontegg_auth::AppPassword;
 use once_cell::sync::Lazy;
 use reqwest::Url;
-
-use mz_frontegg_auth::AppPassword;
 
 use crate::client::Client;
 

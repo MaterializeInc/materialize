@@ -11,13 +11,12 @@ use std::error::Error;
 use std::fmt::Display;
 
 use bytes::BufMut;
-use prost::Message;
-use serde::{Deserialize, Serialize};
-use tracing::warn;
-
 use mz_expr::{EvalError, PartitionId};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use prost::Message;
+use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 include!(concat!(
     env!("OUT_DIR"),

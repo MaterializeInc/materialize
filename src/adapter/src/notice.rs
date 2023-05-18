@@ -10,7 +10,6 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
-
 use mz_controller::clusters::ClusterStatus;
 use mz_orchestrator::{NotReadyReason, ServiceStatus};
 use mz_ore::str::StrExt;

@@ -16,11 +16,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
-use mz_sql::session::hint::ApplicationNameHint;
-use tokio::sync::{mpsc, oneshot, watch};
-use tracing::error;
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
@@ -29,7 +24,11 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, INTROSPECTION_USER};
+use tokio::sync::{mpsc, oneshot, watch};
+use tracing::error;
+use uuid::Uuid;
 
 use crate::command::{
     Canceled, CatalogDump, Command, ExecuteResponse, GetVariablesResponse, Response,

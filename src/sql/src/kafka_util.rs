@@ -13,18 +13,17 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::bail;
-use mz_ore::error::ErrorExt;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::{Offset, TopicPartitionList};
-use tokio::time::Duration;
-
 use mz_kafka_util::client::{
     BrokerRewritingClientContext, MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
 };
+use mz_ore::error::ErrorExt;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
 use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::{Offset, TopicPartitionList};
+use tokio::time::Duration;
 
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;

@@ -9,11 +9,10 @@
 
 //! This module implements the client's functions for interacting with the Frontegg passwords API.
 
+use mz_frontegg_auth::AppPassword as AuthAppPassword;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use mz_frontegg_auth::AppPassword as AuthAppPassword;
 
 use crate::client::Client;
 use crate::error::Error;

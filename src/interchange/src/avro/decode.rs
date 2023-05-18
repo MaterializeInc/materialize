@@ -7,28 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::Context;
-use mz_ore::error::ErrorExt;
-use mz_repr::adt::date::Date;
-use mz_repr::adt::timestamp::CheckedTimestamp;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::rc::Rc;
 
-use ordered_float::OrderedFloat;
-use tracing::trace;
-use uuid::Uuid;
-
+use anyhow::Context;
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::{
     define_unexpected, give_value, AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess,
     AvroRead, AvroRecordAccess, GeneralDeserializer, StatefulAvroDecodable, ValueDecoder,
     ValueOrReader,
 };
+use mz_ore::error::ErrorExt;
+use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Row, RowPacker};
+use ordered_float::OrderedFloat;
+use tracing::trace;
+use uuid::Uuid;
 
 use crate::avro::ConfluentAvroResolver;
 

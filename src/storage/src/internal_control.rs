@@ -8,16 +8,15 @@
 
 use std::time::Instant;
 
+use mz_repr::{GlobalId, Row};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_client::types::sources::IngestionDescription;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::progress::Antichain;
 use timely::synchronization::Sequencer;
 use timely::worker::Worker as TimelyWorker;
-
-use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_client::types::sources::IngestionDescription;
 
 /// Storage instance configuration parameters that can affect
 /// dataflow rendering, and as such must be applied to

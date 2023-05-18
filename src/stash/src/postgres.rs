@@ -15,23 +15,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
-use futures::future::{self, BoxFuture};
-use futures::future::{FutureExt, TryFutureExt};
+use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
+use mz_ore::metric;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::retry::Retry;
 use postgres_openssl::MakeTlsConnector;
 use prometheus::{IntCounter, IntCounterVec};
 use rand::Rng;
-
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, Statement};
 use tracing::{error, event, info, warn, Level};
-
-use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::retry::Retry;
 
 use crate::{
     AppendBatch, Data, Diff, Id, InternalStashError, StashCollection, StashError, Timestamp,

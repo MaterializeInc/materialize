@@ -14,15 +14,12 @@ use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
 use itertools::Itertools;
-use mz_repr::adt::timestamp::TimestampError;
-use smallvec::SmallVec;
-use tokio::sync::oneshot;
-
 use mz_compute_client::controller::error as compute_error;
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
 use mz_repr::role_id::RoleId;
 use mz_repr::NotNullViolation;
@@ -30,6 +27,8 @@ use mz_sql::plan::PlanError;
 use mz_sql::session::vars::VarError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
+use smallvec::SmallVec;
+use tokio::sync::oneshot;
 
 use crate::{catalog, rbac};
 

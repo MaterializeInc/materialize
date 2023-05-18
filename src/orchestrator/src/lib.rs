@@ -83,10 +83,9 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures_core::stream::BoxStream;
+use mz_ore::cast::CastFrom;
 use serde::de::Unexpected;
 use serde::{Deserialize, Deserializer, Serialize};
-
-use mz_ore::cast::CastFrom;
 
 /// An orchestrator manages services.
 ///

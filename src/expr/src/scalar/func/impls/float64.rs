@@ -10,16 +10,16 @@
 use std::fmt;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use mz_repr::adt::timestamp::CheckedTimestamp;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{strconv, ColumnType, ScalarType};
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::EagerUnaryFunc;
-use crate::{scalar::DomainLimit, EvalError};
+use crate::scalar::DomainLimit;
+use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "-"]

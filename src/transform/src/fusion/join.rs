@@ -21,10 +21,11 @@
 //! a collection act as the identity operator on collections. Once removed,
 //! we may find joins with zero or one input, which can be further simplified.
 
-use crate::{TransformArgs, TransformError};
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_repr::RelationType;
+
+use crate::{TransformArgs, TransformError};
 
 /// Fuses multiple `Join` operators into one `Join` operator.
 ///

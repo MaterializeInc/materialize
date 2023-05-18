@@ -35,10 +35,8 @@ use crate::schema::{
     SchemaPieceOrNamed,
 };
 use crate::types::{Scalar, Value};
-use crate::{
-    util::{safe_len, zag_i32, zag_i64, TsUnit},
-    TrivialDecoder, ValueDecoder,
-};
+use crate::util::{safe_len, zag_i32, zag_i64, TsUnit};
+use crate::{TrivialDecoder, ValueDecoder};
 
 pub trait StatefulAvroDecodable: Sized {
     type Decoder: AvroDecode<Out = Self>;
@@ -728,13 +726,15 @@ pub trait AvroDecode: Sized {
 
 pub mod public_decoders {
 
-    use super::{AvroDecodable, AvroMapAccess, StatefulAvroDecodable};
+    use std::collections::BTreeMap;
+
     use crate::error::{DecodeError, Error as AvroError};
     use crate::types::{DecimalValue, Scalar, Value};
     use crate::{
         AvroArrayAccess, AvroDecode, AvroDeserializer, AvroRead, AvroRecordAccess, ValueOrReader,
     };
-    use std::collections::BTreeMap;
+
+    use super::{AvroDecodable, AvroMapAccess, StatefulAvroDecodable};
 
     macro_rules! define_simple_decoder {
         ($name:ident, $out:ty, $($scalar_branch:ident);*) => {

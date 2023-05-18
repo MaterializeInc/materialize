@@ -42,6 +42,7 @@
 //! ```
 
 use std::fmt;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use prometheus::core::{
@@ -51,12 +52,10 @@ use prometheus::core::{
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, Registry};
 
-pub use prometheus::Opts as PrometheusOpts;
-
 mod delete_on_drop;
 
 pub use delete_on_drop::*;
-use std::fmt::{Debug, Formatter};
+pub use prometheus::Opts as PrometheusOpts;
 
 /// Define a metric for use in materialize.
 #[macro_export]

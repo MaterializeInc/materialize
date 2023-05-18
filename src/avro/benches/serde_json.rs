@@ -26,8 +26,9 @@
 #![feature(test)]
 extern crate test;
 
-use serde_json::Value;
 use std::collections::BTreeMap;
+
+use serde_json::Value;
 
 fn make_big_json_record() -> Value {
     let mut address = BTreeMap::new();
