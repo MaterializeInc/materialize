@@ -78,12 +78,6 @@ use derivative::Derivative;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
-use tokio::runtime::Handle as TokioHandle;
-use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, span, warn, Instrument, Level};
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::controller::ComputeInstanceId;
@@ -117,6 +111,11 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
+use tokio::runtime::Handle as TokioHandle;
+use tokio::select;
+use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
+use tracing::{info, span, warn, Instrument, Level};
+use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
@@ -416,6 +415,7 @@ pub struct Config {
     pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection,
     pub unsafe_mode: bool,
+    pub all_features: bool,
     pub build_info: &'static BuildInfo,
     pub environment_id: EnvironmentId,
     pub metrics_registry: MetricsRegistry,
@@ -1448,6 +1448,7 @@ pub async fn serve(
         dataflow_client,
         storage,
         unsafe_mode,
+        all_features,
         build_info,
         environment_id,
         metrics_registry,
@@ -1509,6 +1510,7 @@ pub async fn serve(
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
+            all_features,
             build_info,
             environment_id,
             now: now.clone(),

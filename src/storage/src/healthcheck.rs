@@ -13,12 +13,11 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::NowFn;
-use mz_persist_types::codec_impls::UnitSchema;
-use timely::progress::Antichain;
-
 use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_client::types::sources::SourceData;
+use timely::progress::Antichain;
 
 pub async fn write_to_persist(
     collection_id: GlobalId,

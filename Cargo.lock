@@ -3942,7 +3942,6 @@ dependencies = [
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
- "mz-persist-types",
  "mz-pgrepr",
  "mz-proto",
  "mz-repr",
@@ -4664,6 +4663,7 @@ dependencies = [
  "tokio",
  "tonic-build",
  "tracing",
+ "uncased",
  "workspace-hack",
 ]
 
@@ -4888,16 +4888,21 @@ name = "mz-stash"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bitflags",
+ "bytes",
  "criterion",
  "differential-dataflow",
  "fail",
  "futures",
+ "itertools",
  "md-5",
  "mz-ore",
  "mz-postgres-util",
  "once_cell",
  "postgres-openssl",
  "prometheus",
+ "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -4908,6 +4913,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

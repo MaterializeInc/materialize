@@ -80,11 +80,6 @@
 // END LINT CONFIG
 
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
-use secrets::SecretCommand;
-use serde::Deserialize;
-use utils::{ascii_validator, new_client};
-
 use mz::api::{
     disable_region_environment, enable_region_environment, get_provider_by_region_name,
     get_provider_region_environment, get_region_environment, list_cloud_providers, list_regions,
@@ -94,13 +89,18 @@ use mz::configuration::{Configuration, Endpoint, WEB_DOCS_URL};
 use mz::vault::Vault;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::CliConfig;
+use once_cell::sync::Lazy;
+use secrets::SecretCommand;
+use serde::Deserialize;
+use utils::{ascii_validator, new_client};
 
 use crate::login::{generate_api_token, login_with_browser, login_with_console};
 use crate::password::list_passwords;
 use crate::region::{print_environment_status, print_region_enabled};
 use crate::shell::{check_environment_health, shell};
 use crate::utils::run_loading_spinner;
-use clap_clippy_hack::*;
+
+use self::clap_clippy_hack::*;
 
 mod login;
 mod password;

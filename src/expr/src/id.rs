@@ -11,12 +11,11 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::Error;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.id.rs"));
 
@@ -201,9 +200,10 @@ impl RustType<ProtoPartitionId> for PartitionId {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
 
     proptest! {
         #[test]

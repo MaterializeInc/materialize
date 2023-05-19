@@ -17,11 +17,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use maplit::btreeset;
-use rand::seq::SliceRandom;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
-use tracing::{event, warn, Level};
-
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
@@ -46,10 +41,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName, ObjectType};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItemType, CatalogSchema,
-    CatalogTypeDetails, SessionCatalog,
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
+    CatalogRole, CatalogSchema, CatalogTypeDetails, SessionCatalog,
 };
-use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogRole};
 use mz_sql::names::{ObjectId, QualifiedItemName};
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
@@ -65,15 +59,18 @@ use mz_sql::plan::{
     SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
 };
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, VarError, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    ENABLE_RBAC_CHECKS, TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
-use mz_sql::session::vars::{Var, SCHEMA_ALIAS};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport};
 use mz_transform::Optimizer;
+use rand::seq::SliceRandom;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
+use tracing::{event, warn, Level};
 
 use crate::catalog::{
     self, Catalog, CatalogItem, Cluster, Connection, DataSourceDesc, Op, SerializedReplicaLocation,
@@ -97,12 +94,13 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
+use crate::rbac::{self, is_rbac_enabled_for_session};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{
     send_immediate_rows, viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt,
 };
-use crate::{guard_write_critical_section, rbac, PeekResponseUnary, TimestampExplanation};
+use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
 /// Attempts to execute an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
@@ -115,7 +113,6 @@ macro_rules! return_if_err {
     };
 }
 
-use crate::rbac::is_rbac_enabled_for_session;
 pub(super) use return_if_err;
 
 struct DropOps {
@@ -1763,34 +1760,32 @@ impl Coordinator {
 
         let variable = session
             .vars()
-            .get(&plan.name)
+            .get(Some(self.catalog().system_config()), &plan.name)
             .or_else(|_| self.catalog().system_config().get(&plan.name))?;
 
-        if variable.visible(session.user()) && (variable.safe() || self.catalog().unsafe_mode()) {
-            let row = Row::pack_slice(&[Datum::String(&variable.value())]);
-            if variable.name() == DATABASE_VAR_NAME
-                && matches!(
-                    self.catalog().resolve_database(&variable.value()),
-                    Err(CatalogError::UnknownDatabase(_))
-                )
-            {
-                let name = variable.value();
-                session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
-            } else if variable.name() == CLUSTER_VAR_NAME
-                && matches!(
-                    self.catalog().resolve_cluster(&variable.value()),
-                    Err(CatalogError::UnknownCluster(_))
-                )
-            {
-                let name = variable.value();
-                session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
-            }
-            Ok(send_immediate_rows(vec![row]))
-        } else {
-            Err(AdapterError::VarError(VarError::UnknownParameter(
-                plan.name,
-            )))
+        // In lieu of plumbing the user to all system config functions, just check that the var is
+        // visible.
+        variable.visible(session.user(), Some(self.catalog().system_config()))?;
+
+        let row = Row::pack_slice(&[Datum::String(&variable.value())]);
+        if variable.name() == DATABASE_VAR_NAME
+            && matches!(
+                self.catalog().resolve_database(&variable.value()),
+                Err(CatalogError::UnknownDatabase(_))
+            )
+        {
+            let name = variable.value();
+            session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
+        } else if variable.name() == CLUSTER_VAR_NAME
+            && matches!(
+                self.catalog().resolve_cluster(&variable.value()),
+                Err(CatalogError::UnknownCluster(_))
+            )
+        {
+            let name = variable.value();
+            session.add_notice(AdapterNotice::ClusterDoesNotExist { name });
         }
+        Ok(send_immediate_rows(vec![row]))
     }
 
     pub(super) fn sequence_set_variable(
@@ -1805,14 +1800,14 @@ impl Coordinator {
             VariableValue::Values(values) => Some(values),
         };
 
-        let var = vars.get(&name)?;
-        if !var.safe() {
-            self.catalog().require_unsafe_mode(var.name())?;
-        }
-
         match values {
             Some(values) => {
-                vars.set(&name, VarInput::SqlSet(&values), local)?;
+                vars.set(
+                    Some(self.catalog().system_config()),
+                    &name,
+                    VarInput::SqlSet(&values),
+                    local,
+                )?;
 
                 // Database or cluster value does not correspond to a catalog item.
                 if name.as_str() == DATABASE_VAR_NAME
@@ -1843,7 +1838,7 @@ impl Coordinator {
                     }
                 }
             }
-            None => vars.reset(&name, local)?,
+            None => vars.reset(Some(self.catalog().system_config()), &name, local)?,
         }
 
         Ok(ExecuteResponse::SetVariable { name, reset: false })
@@ -1854,13 +1849,10 @@ impl Coordinator {
         session: &mut Session,
         plan: ResetVariablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let vars = session.vars_mut();
         let name = plan.name;
-        let var = vars.get(&name)?;
-        if !var.safe() {
-            self.catalog().require_unsafe_mode(var.name())?;
-        }
-        session.vars_mut().reset(&name, false)?;
+        session
+            .vars_mut()
+            .reset(Some(self.catalog().system_config()), &name, false)?;
         Ok(ExecuteResponse::SetVariable { name, reset: true })
     }
 
@@ -3553,9 +3545,7 @@ impl Coordinator {
                                     Ok(diffs)
                                 }(rows)
                             }
-                            PeekResponseUnary::Canceled => {
-                                Err(AdapterError::Unstructured(anyhow!("execution canceled")))
-                            }
+                            PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))
                             }
@@ -3944,7 +3934,16 @@ impl Coordinator {
         if session.user().is_system_user()
             || (var_name == Some(ENABLE_RBAC_CHECKS.name()) && session.is_superuser())
         {
-            Ok(())
+            match var_name {
+                Some(name) => {
+                    // In lieu of plumbing the user to all system config functions, just check that the var is
+                    // visible.
+                    let var = self.catalog().system_config().get(name)?;
+                    var.visible(session.user(), Some(self.catalog().system_config()))?;
+                    Ok(())
+                }
+                None => Ok(()),
+            }
         } else if var_name == Some(ENABLE_RBAC_CHECKS.name()) {
             Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::Superuser {
@@ -4384,7 +4383,7 @@ impl Coordinator {
     }
 
     fn default_linked_cluster_size(&self) -> Result<String, AdapterError> {
-        if !self.catalog().config().unsafe_mode {
+        if !self.catalog().system_config().allow_unsafe() {
             let mut entries = self
                 .catalog()
                 .cluster_replica_sizes()

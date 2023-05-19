@@ -19,16 +19,13 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
-use mz_sql::plan::PlanKind;
-use tokio::sync::oneshot;
-use tokio::sync::watch;
-
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{FetchDirection, ObjectType, Raw, Statement};
-use mz_sql::plan::ExecuteTimeout;
+use mz_sql::plan::{ExecuteTimeout, PlanKind};
 use mz_sql::session::vars::Var;
+use tokio::sync::{oneshot, watch};
 
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;

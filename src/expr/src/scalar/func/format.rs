@@ -17,9 +17,8 @@ use std::fmt;
 
 use aho_corasick::AhoCorasickBuilder;
 use enum_iterator::Sequence;
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-
 use mz_ore::cast::CastFrom;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use crate::scalar::func::TimestampLike;
 

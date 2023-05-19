@@ -81,17 +81,22 @@
 
 use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use axum::response::IntoResponse;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use itertools::Itertools;
+use mz_adapter::{TimestampContext, TimestampExplanation};
+use mz_ore::assert_contains;
+use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::retry::{Retry, RetryResult};
+use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_repr::Timestamp;
+use mz_sql::session::user::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 use mz_storage_client::types::sources::Timeline;
 use postgres::Row;
 use regex::Regex;
@@ -100,14 +105,6 @@ use timely::order::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::error::{DbError, SqlState};
 use tracing::{debug, info};
-
-use mz_adapter::{TimestampContext, TimestampExplanation};
-use mz_ore::assert_contains;
-use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
-use mz_ore::retry::{Retry, RetryResult};
-use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
-use mz_repr::Timestamp;
-use mz_sql::session::user::{INTERNAL_USER_NAMES, INTROSPECTION_USER, SYSTEM_USER};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, Server, KAFKA_ADDRS};
 
@@ -507,6 +504,8 @@ fn test_subscribe_basic() {
     let server = util::start_server(config).unwrap();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
+
+    server.enable_feature_flags(&["enable_index_options", "enable_logical_compaction_window"]);
 
     client_writes
         .batch_execute("CREATE TABLE t (data text)")
@@ -2694,6 +2693,8 @@ fn test_dont_drop_sinks_twice() {
 fn test_timelines_persist_after_failed_transaction() {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
+
+    server.enable_feature_flags(&["enable_create_source_denylist_with_options"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 

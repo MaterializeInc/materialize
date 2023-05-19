@@ -25,6 +25,7 @@ message ProtoPersistParameters {
     optional bool stats_filter_enabled = 7;
     optional bool pubsub_client_enabled = 10;
     optional bool pubsub_push_diff_enabled = 11;
+    mz_proto.ProtoDuration consensus_tcp_user_timeout = 12;
 }
 
 message ProtoRetryParameters {

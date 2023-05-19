@@ -14,14 +14,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
-use tokio::sync::OwnedMutexGuard;
-use tracing::warn;
-
 use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_storage_client::client::Update;
+use tokio::sync::OwnedMutexGuard;
+use tracing::warn;
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::timeline::WriteTimestamp;

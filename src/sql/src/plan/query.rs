@@ -35,14 +35,10 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
-
-use std::iter;
-use std::mem;
 use std::num::NonZeroU64;
+use std::{iter, mem};
 
 use itertools::Itertools;
-use uuid::Uuid;
-
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
@@ -66,6 +62,7 @@ use mz_sql_parser::ast::{
     SubscriptPosition, TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedItemName,
     UpdateStatement, Value, Values, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
+use uuid::Uuid;
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
@@ -80,14 +77,12 @@ use crate::plan::expr::{
 };
 use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
-use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidIterationLimit;
-use crate::plan::{transform_ast, PlanContext, ShowCreatePlan};
-use crate::plan::{Params, QueryWhen};
-
-use super::statement::show;
+use crate::plan::{transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan};
+use crate::session::vars::{self, FeatureFlag};
 
 #[derive(Debug)]
 pub struct PlannedQuery<E> {
@@ -1198,7 +1193,8 @@ pub fn plan_ctes(
             }
         }
         CteBlock::MutuallyRecursive(MutRecBlock { options: _, ctes }) => {
-            qcx.scx.require_with_mutually_recursive()?;
+            qcx.scx
+                .require_feature_flag(&vars::ENABLE_WITH_MUTUALLY_RECURSIVE)?;
 
             // Insert column types into `qcx.ctes` first for recursive bindings.
             for cte in ctes.iter() {
@@ -5401,8 +5397,8 @@ impl<'a> ExprContext<'a> {
         self.qcx.derived_context(scope, self.relation_type.clone())
     }
 
-    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), PlanError> {
-        self.qcx.scx.require_unsafe_mode(feature_name)
+    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
+        self.qcx.scx.require_feature_flag(flag)
     }
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {

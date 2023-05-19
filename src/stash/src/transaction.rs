@@ -7,28 +7,28 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{
-    cmp,
-    collections::{btree_map::Entry, BTreeMap},
-    sync::{Arc, Mutex},
-};
+use std::cmp;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use futures::{
     future::{self, try_join, try_join3, try_join_all, BoxFuture},
     TryFutureExt,
 };
-use mz_ore::collections::CollectionExt;
+use mz_ore::{cast::CastFrom, collections::CollectionExt};
 use serde_json::Value;
-use timely::{progress::Antichain, PartialOrder};
+use timely::progress::Antichain;
+use timely::PartialOrder;
 use tokio::sync::mpsc;
-use tokio_postgres::{types::ToSql, Client};
+use tokio_postgres::types::ToSql;
+use tokio_postgres::Client;
 use tracing::info;
 
+use crate::postgres::{ConsolidateRequest, CountedStatements};
 use crate::{
-    consolidate_kv, consolidate_updates_kv,
-    postgres::{ConsolidateRequest, CountedStatements},
-    AntichainFormatter, AppendBatch, Data, Diff, Id, InternalStashError, Stash, StashCollection,
-    StashError, Timestamp,
+    consolidate_kv, consolidate_updates_kv, AntichainFormatter, AppendBatch, Data, Diff, Id,
+    InternalStashError, Stash, StashCollection, StashError, Timestamp,
 };
 
 // The limit AFTER which to split an update batch (that is, we will ship an update that
@@ -41,6 +41,11 @@ use crate::{
 // things that contribute to the total pgwire message size, having a 14MiB headspace
 // seems safe here.
 pub const INSERT_BATCH_SPLIT_SIZE: usize = 2 * 1024 * 1024;
+
+/// [`tokio_postgres`] has a maximum number of arguments it supports when executing a query. This
+/// is the limit at which to split a batch to make sure we don't try to include too many elements
+/// in any one update.
+pub const MAX_INSERT_ARGUMENTS: u16 = u16::MAX / 4;
 
 impl Stash {
     pub async fn with_transaction<F, T>(&mut self, f: F) -> Result<T, StashError>
@@ -773,6 +778,9 @@ impl<'a> Transaction<'a> {
                     args.push(diff);
                     batch_size += 1;
                     if estimated_json_size > INSERT_BATCH_SPLIT_SIZE {
+                        break;
+                    }
+                    if args.len() > CastFrom::cast_from(MAX_INSERT_ARGUMENTS) {
                         break;
                     }
                 }

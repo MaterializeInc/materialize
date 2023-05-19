@@ -10,11 +10,7 @@ menu:
 of other roles, as well as inherit all the attributes and privileges of those
 roles. This membership can also be revoked.
 
-{{< warning >}}
-Currently, roles have limited functionality in Materialize. This is part of the
-work to enable **Role-based access control** (RBAC) in a future release {{% gh 11579 %}}.
-{{< /warning >}}
-
+{{< alpha />}}
 
 ## Syntax
 

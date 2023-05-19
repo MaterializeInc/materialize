@@ -9,11 +9,10 @@
 
 //! Configuration parameter types.
 
-use serde::{Deserialize, Serialize};
-
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use serde::{Deserialize, Serialize};
 
 include!(concat!(
     env!("OUT_DIR"),

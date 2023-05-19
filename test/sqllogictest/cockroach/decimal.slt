@@ -19,6 +19,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 # The following tests have results equivalent to Postgres (differences
 # in string representation and number of decimals returned, but otherwise
 # the same). These do not pass using the inf package. The inf package

@@ -20,13 +20,6 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::Future;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use tokio::sync::MutexGuard;
-use tracing::{info, trace, warn};
-use uuid::Uuid;
-
 use mz_audit_log::{
     EventDetails, EventType, FullNameV1, IdFullNameV1, ObjectType, VersionedEvent,
     VersionedStorageUsage,
@@ -35,10 +28,10 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::protocol::command::ComputeParameters;
-use mz_controller::clusters::ClusterRole;
 use mz_controller::clusters::{
-    ClusterEvent, ClusterId, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaAllocation,
-    ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging, UnmanagedReplicaLocation,
+    ClusterEvent, ClusterId, ClusterRole, ClusterStatus, ManagedReplicaLocation, ProcessId,
+    ReplicaAllocation, ReplicaConfig, ReplicaId, ReplicaLocation, ReplicaLogging,
+    UnmanagedReplicaLocation,
 };
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::cast::CastFrom;
@@ -50,11 +43,12 @@ use mz_ore::soft_assert;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{explain::ExprHumanizer, Diff, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
@@ -74,8 +68,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, PlanError, SourceSinkClusterConfig as PlanStorageClusterConfig,
-    StatementDesc,
+    Plan, PlanContext, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
@@ -94,14 +87,17 @@ use mz_storage_client::types::sinks::{
 };
 use mz_storage_client::types::sources::{SourceConnection, SourceDesc, SourceEnvelope, Timeline};
 use mz_transform::Optimizer;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use tokio::sync::MutexGuard;
+use tracing::{info, trace, warn};
+use uuid::Uuid;
 
 use crate::catalog::builtin::{
-    Builtin, BuiltinLog, BuiltinRole, BuiltinTable, BuiltinType, Fingerprint, BUILTINS,
-    BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
+    Builtin, BuiltinCluster, BuiltinLog, BuiltinRole, BuiltinSource, BuiltinTable, BuiltinType,
+    Fingerprint, BUILTINS, BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
-pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 use crate::catalog::storage::{BootstrapArgs, Transaction, MZ_SYSTEM_ROLE_ID};
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
@@ -111,8 +107,6 @@ use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::{index_sql, ResultExt};
 use crate::{rbac, AdapterError, ExecuteResponse, DUMMY_AVAILABILITY_ZONE};
 
-use self::builtin::{BuiltinCluster, BuiltinSource};
-
 mod builtin_table_updates;
 mod config;
 mod error;
@@ -120,6 +114,10 @@ mod migrate;
 
 pub mod builtin;
 pub mod storage;
+
+pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
+pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 
 pub const SYSTEM_CONN_ID: ConnectionId = 0;
 
@@ -213,7 +211,6 @@ impl CatalogState {
                 nonce: Default::default(),
                 environment_id: EnvironmentId::for_tests(),
                 session_id: Default::default(),
-                unsafe_mode: Default::default(),
                 build_info: &DUMMY_BUILD_INFO,
                 timestamp_interval: Default::default(),
                 now: NOW_ZERO.clone(),
@@ -491,7 +488,7 @@ impl CatalogState {
     }
 
     fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), AdapterError> {
-        if self.system_config().allow_unstable_dependencies() {
+        if self.system_config().enable_unstable_dependencies() {
             return Ok(());
         }
 
@@ -711,7 +708,12 @@ impl CatalogState {
             role_id: MZ_SYSTEM_ROLE_ID,
             prepared_statements: None,
         };
-        enable_features_required_for_catalog_open(&mut session_catalog);
+
+        // Enable catalog features that might be required during planning in
+        // [Catalog::open]. Existing catalog items might have been created while a
+        // specific feature flag turned on, so we need to ensure that this is also the
+        // case during catalog rehydration in order to avoid panics.
+        session_catalog.system_vars_mut().enable_all_feature_flags();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -1260,10 +1262,6 @@ impl CatalogState {
         &self.config
     }
 
-    pub fn unsafe_mode(&self) -> bool {
-        self.config.unsafe_mode
-    }
-
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
         match self.database_by_name.get(database_name) {
             Some(id) => Ok(&self.database_by_id[id]),
@@ -1461,16 +1459,6 @@ impl CatalogState {
         &self.system_configuration
     }
 
-    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        if !self.config.unsafe_mode {
-            Err(AdapterError::PlanError(PlanError::RequiresUnsafe {
-                feature: feature_name.to_string(),
-            }))
-        } else {
-            Ok(())
-        }
-    }
-
     /// Serializes the catalog's in-memory state.
     ///
     /// There are no guarantees about the format of the serialized state, except
@@ -1535,11 +1523,14 @@ impl CatalogState {
         details: EventDetails,
     ) -> Result<(), Error> {
         let user = session.map(|session| session.user().name.to_string());
-        let occurred_at = match (
-            self.unsafe_mode(),
-            self.system_configuration.mock_audit_event_timestamp(),
-        ) {
-            (true, Some(ts)) => ts.into(),
+
+        // unsafe_mock_audit_event_timestamp can only be set to Some when running in unsafe mode.
+
+        let occurred_at = match self
+            .system_configuration
+            .unsafe_mock_audit_event_timestamp()
+        {
+            Some(ts) => ts.into(),
             _ => oracle_write_ts.into(),
         };
         let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
@@ -2783,7 +2774,6 @@ impl Catalog {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
                     nonce: rand::random(),
-                    unsafe_mode: config.unsafe_mode,
                     environment_id: config.environment_id,
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -2794,7 +2784,14 @@ impl Catalog {
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 default_storage_cluster_size: config.default_storage_cluster_size,
                 availability_zones: config.availability_zones,
-                system_configuration: SystemVars::new(config.active_connection_count),
+                system_configuration: {
+                    let mut s = SystemVars::new(config.active_connection_count)
+                        .set_unsafe(config.unsafe_mode);
+                    if config.all_features {
+                        s.enable_all_feature_flags_by_default();
+                    }
+                    s
+                },
                 egress_ips: config.egress_ips,
                 aws_principal_context: config.aws_principal_context,
                 aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
@@ -4174,6 +4171,7 @@ impl Catalog {
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
+            all_features: false,
             build_info: &DUMMY_BUILD_INFO,
             environment_id: EnvironmentId::for_tests(),
             now,
@@ -6268,17 +6266,10 @@ impl Catalog {
                 Op::UpdateSystemConfiguration { name, value } => {
                     state.insert_system_configuration(&name, value.borrow())?;
                     let var = state.get_system_configuration(&name)?;
-                    if !var.safe() {
-                        state.require_unsafe_mode(var.name())?;
-                    }
                     tx.upsert_system_config(&name, var.value())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
-                    let var = state.get_system_configuration(&name)?;
-                    if !var.safe() {
-                        state.require_unsafe_mode(var.name())?;
-                    }
                     tx.remove_system_config(&name);
                 }
                 Op::ResetAllSystemConfiguration => {
@@ -6576,7 +6567,11 @@ impl Catalog {
         custom_logical_compaction_window: Option<Duration>,
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
-        enable_features_required_for_catalog_open(&mut session_catalog);
+        // Enable catalog features that might be required during planning in
+        // [Catalog::open]. Existing catalog items might have been created while a
+        // specific feature flag turned on, so we need to ensure that this is also the
+        // case during catalog rehydration in order to avoid panics.
+        session_catalog.system_vars_mut().enable_all_feature_flags();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
         let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -6829,14 +6824,6 @@ impl Catalog {
         self.state.system_config()
     }
 
-    pub fn unsafe_mode(&self) -> bool {
-        self.config().unsafe_mode
-    }
-
-    pub fn require_unsafe_mode(&self, feature_name: &'static str) -> Result<(), AdapterError> {
-        self.state.require_unsafe_mode(feature_name)
-    }
-
     /// Return the current compute configuration, derived from the system configuration.
     pub fn compute_config(&self) -> ComputeParameters {
         let config = self.system_config();
@@ -6898,6 +6885,7 @@ impl Catalog {
             blob_target_size: Some(config.persist_blob_target_size()),
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
             consensus_connect_timeout: Some(config.crdb_connect_timeout()),
+            consensus_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
             sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
             storage_sink_minimum_batch_updates: Some(
                 config.storage_persist_sink_minimum_batch_updates(),
@@ -6981,26 +6969,6 @@ pub fn is_reserved_role_name(name: &str) -> bool {
 
 pub fn is_public_role(name: &str) -> bool {
     name == &*PUBLIC_ROLE_NAME
-}
-
-/// Enable catalog features that might be required during planning in
-/// [Catalog::open]. Existing catalog items might have been created while a
-/// specific feature flag turned on, so we need to ensure that this is also the
-/// case during catalog rehydration in order to avoid panics.
-fn enable_features_required_for_catalog_open(session_catalog: &mut ConnCatalog) {
-    if !session_catalog
-        .system_vars()
-        .enable_with_mutually_recursive()
-    {
-        session_catalog
-            .system_vars_mut()
-            .set_enable_with_mutually_recursive(true);
-    }
-    if !session_catalog.system_vars().enable_format_json() {
-        session_catalog
-            .system_vars_mut()
-            .set_enable_format_json(true);
-    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -7993,10 +7961,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use std::iter;
 
+    use itertools::Itertools;
     use mz_controller::clusters::ClusterId;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_ore::collections::CollectionExt;
@@ -8005,9 +7973,8 @@ mod tests {
     use mz_repr::role_id::RoleId;
     use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
-    use mz_sql::names;
     use mz_sql::names::{
-        DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
+        self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
         ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
     };
     use mz_sql::plan::StatementContext;
@@ -8185,6 +8152,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
+                    None,
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::PG_CATALOG_SCHEMA),
                     false,
@@ -8216,6 +8184,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
+                    None,
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::MZ_CATALOG_SCHEMA),
                     false,
@@ -8247,6 +8216,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
+                    None,
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::MZ_TEMP_SCHEMA),
                     false,

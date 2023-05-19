@@ -18,3 +18,9 @@ impl proto::Duration {
         proto::Duration { secs, nanos: 0 }
     }
 }
+
+impl From<String> for proto::StringWrapper {
+    fn from(value: String) -> Self {
+        proto::StringWrapper { inner: value }
+    }
+}

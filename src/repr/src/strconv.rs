@@ -34,6 +34,12 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, 
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use mz_lowertest::MzReflect;
+use mz_ore::cast::ReinterpretCast;
+use mz_ore::error::ErrorExt;
+use mz_ore::fmt::FormatBuffer;
+use mz_ore::lex::LexBuf;
+use mz_ore::str::StrExt;
+use mz_proto::{RustType, TryFromProtoError};
 use num_traits::Float as NumFloat;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -41,13 +47,6 @@ use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use mz_ore::cast::ReinterpretCast;
-use mz_ore::error::ErrorExt;
-use mz_ore::fmt::FormatBuffer;
-use mz_ore::lex::LexBuf;
-use mz_ore::str::StrExt;
-use mz_proto::{RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::date::Date;
@@ -1837,9 +1836,10 @@ impl RustType<ProtoParseHexError> for ParseHexError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
 
     proptest! {
         #[test]

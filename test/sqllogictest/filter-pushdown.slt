@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_mfp_pushdown_explain = true
+----
+COMPLETE 0
+
 # Verify filter pushdown information for various temporal filters.
 # For straightforward temporal filters like these, every column mentioned in the filter
 # should be present in the pushdown list.

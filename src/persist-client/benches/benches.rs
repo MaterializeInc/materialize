@@ -80,12 +80,6 @@ use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, Benchm
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist_client::cache::StateCache;
-use mz_persist_client::metrics::Metrics;
-use tempfile::TempDir;
-use timely::progress::{Antichain, Timestamp};
-use tokio::runtime::Runtime;
-
 use mz_persist::file::{FileBlob, FileBlobConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
@@ -93,11 +87,16 @@ use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::s3::{S3Blob, S3BlobConfig};
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::async_runtime::CpuHeavyRuntime;
+use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::metrics::Metrics;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistClient;
 use mz_persist_types::Codec64;
+use tempfile::TempDir;
+use timely::progress::{Antichain, Timestamp};
+use tokio::runtime::Runtime;
 
 // The "plumbing" and "porcelain" names are from git [1]. Our "plumbing"
 // benchmarks are ones that are low-level, fundamental pieces of code like

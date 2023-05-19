@@ -15,8 +15,7 @@ use mz_expr::explain::ExplainMultiPlan;
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
 use crate::coord::peek::FastPathPlan;
-
-use super::{ExplainContext, Explainable};
+use crate::explain::{ExplainContext, Explainable};
 
 impl<'a> Explain<'a> for Explainable<'a, FastPathPlan> {
     type Context = ExplainContext<'a>;

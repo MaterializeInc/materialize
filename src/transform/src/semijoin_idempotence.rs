@@ -27,12 +27,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::TransformArgs;
+use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
-use mz_expr::Id;
-use mz_expr::JoinInputMapper;
-use mz_expr::MirRelationExpr;
-use mz_expr::MirScalarExpr;
+use crate::TransformArgs;
 
 /// Remove redundant semijoin operators
 #[derive(Debug)]

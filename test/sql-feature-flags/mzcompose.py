@@ -81,11 +81,31 @@ def query_ok(query: str) -> str:
 
 
 def alter_system_set(name: str, value: str) -> str:
-    """Generate a TD command that atlers a system parameter."""
+    """Generate a TD command that sets a system parameter."""
     return dedent(
         f"""
         $ postgres-execute connection=mz_system
         ALTER SYSTEM SET {name} = '{value}';
+        """
+    ).strip()
+
+
+def alter_system_reset(name: str) -> str:
+    """Generate a TD command that resets a system parameter."""
+    return dedent(
+        f"""
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM RESET {name};
+        """
+    ).strip()
+
+
+def alter_system_reset_all() -> str:
+    """Generate a TD command that reset all system parameters."""
+    return dedent(
+        """
+        $ postgres-execute connection=mz_system
+        ALTER SYSTEM RESET ALL;
         """
     ).strip()
 
@@ -139,6 +159,37 @@ class FeatureTestScenario:
         )
 
     @classmethod
+    def phase3(cls) -> str:
+        return "\n\n".join(
+            [
+                # Include the header.
+                header(f"{cls.__name__} (phase 3)", drop_schema=False),
+                # Because we have restarted, we need to ensure that we're getting
+                # the parameter's default value, which will be "on".
+                alter_system_reset(cls.feature_name()),
+                cls.initialize(),
+                # The feature is immediately turned on because it's a default parameter.
+                statement_ok(cls.create_item(ordinal=1)),
+                query_ok(cls.query_item(ordinal=1)),
+                # We can drop item #1.
+                statement_ok(cls.drop_item(ordinal=1)),
+            ]
+        )
+
+    @classmethod
+    def reset_all(cls) -> str:
+        return "\n\n".join(
+            [
+                cls.initialize(),
+                # The feature is immediately turned on because it's a default parameter.
+                statement_ok(cls.create_item(ordinal=1)),
+                query_ok(cls.query_item(ordinal=1)),
+                # We can drop item #1.
+                statement_ok(cls.drop_item(ordinal=1)),
+            ]
+        )
+
+    @classmethod
     def feature_name(cls) -> str:
         """The name of the feature flag under test."""
         assert False, "feature_name() must be overriden"
@@ -176,7 +227,7 @@ class WithMutuallyRecursive(FeatureTestScenario):
 
     @classmethod
     def feature_error(cls) -> str:
-        return "`WITH MUTUALLY RECURSIVE` syntax is not enabled"
+        return "WITH MUTUALLY RECURSIVE is not supported"
 
     @classmethod
     def create_item(cls, ordinal: int) -> str:
@@ -205,7 +256,7 @@ class FormatJson(FeatureTestScenario):
 
     @classmethod
     def feature_error(cls) -> str:
-        return "`FORMAT JSON` is not enabled"
+        return "FORMAT JSON is not supported"
 
     @classmethod
     def initialize(cls) -> str:
@@ -263,6 +314,57 @@ def run_test(c: Composition, args: argparse.Namespace) -> None:
             prefix=f"{scenario.__name__}-phase2-",
         ) as tmp:
             tmp.write(scenario.phase2())
+            tmp.flush()
+            c.exec("testdrive", os.path.basename(tmp.name))
+
+        materialized = Materialized(
+            unsafe_mode=False,
+            additional_system_parameter_defaults=[
+                "{}=on".format(scenario.feature_name()),
+            ],
+        )
+
+        with c.override(materialized):
+            c.stop("materialized")
+            c.up("materialized")
+
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=c.path,
+                prefix=f"{scenario.__name__}-phase3-",
+            ) as tmp:
+                tmp.write(scenario.phase3())
+                tmp.flush()
+                c.exec("testdrive", os.path.basename(tmp.name))
+
+    # Dedicated test for ALTER SYSTEM RESET ALL
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=c.path,
+        prefix="phase-reset-all-",
+    ) as tmp:
+        tmp_buf = [header("(phase reset-all)", drop_schema=False)]
+        for scenario in scenarios:
+            # Turn all features off.
+            tmp_buf.append(alter_system_set(scenario.feature_name(), "off"))
+
+        # Run ALTER SYSTEM RESET ALL
+        tmp_buf.append(alter_system_reset_all())
+        for scenario in scenarios:
+            # Write each scenarios reset all data
+            tmp_buf.append(scenario.reset_all())
+
+        # Create MZ config with all features set on by default
+        materialized = Materialized(
+            unsafe_mode=False,
+            additional_system_parameter_defaults=list(
+                map(lambda scenario: "{}=on".format(scenario.feature_name()), scenarios)
+            ),
+        )
+        with c.override(materialized):
+            c.stop("materialized")
+            c.up("materialized")
+            tmp.write("\n\n".join(tmp_buf))
             tmp.flush()
             c.exec("testdrive", os.path.basename(tmp.name))
 

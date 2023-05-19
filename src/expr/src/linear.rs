@@ -9,13 +9,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{Datum, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Row};
-
-use self::proto_map_filter_project::ProtoPredicate;
+use crate::linear::proto_map_filter_project::ProtoPredicate;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
@@ -1426,13 +1425,11 @@ pub mod plan {
     use std::collections::BTreeMap;
     use std::iter;
 
+    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+    use mz_repr::{Datum, Diff, Row, RowArena};
     use proptest::prelude::*;
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
-
-    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-    use mz_repr::stats::PersistSourceDataStats;
-    use mz_repr::{Datum, Diff, Row, RowArena};
 
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
@@ -1882,147 +1879,15 @@ pub mod plan {
                 || self.upper_bounds.iter().any(|e| e.could_error())
         }
     }
-
-    /// Logic for turning an [MfpPlan] into filters that can confidently skip
-    /// fetching an entire persist part based on aggregate statistics (e.g.
-    /// min/max) about the data contained in it.
-    #[derive(Debug)]
-    pub struct MfpPushdown {
-        // TODO(mfp): Probably some preprocessing we could do to make
-        // `should_fetch` calls more efficient.
-        mfp: MfpPlan,
-    }
-
-    impl MfpPushdown {
-        /// Returns a new [MfpPushdown] for the given [MfpPlan] and support
-        /// info.
-        pub fn new(
-            mfp: &MfpPlan,
-            // TODO: timestamp/as_of and until.
-        ) -> Self {
-            MfpPushdown { mfp: mfp.clone() }
-        }
-
-        /// Returns `false` if a chunk of data with the given statistics would
-        /// entirely be filtered out by this MFP once fetched.
-        ///
-        /// Returns `true` if we don't know.
-        pub fn should_fetch<S: PersistSourceDataStats>(&self, stats: &S) -> bool {
-            for (support, predicate) in self.mfp.mfp.predicates.iter() {
-                if self.mfp.mfp.input_arity < *support {
-                    // We'd need the result of map to evaluate this predicate.
-                    continue;
-                }
-                match self.provably_not_in_part(stats, predicate) {
-                    // The predicates are ANDed, so if any of them are provably
-                    // not in the part, we can confidently skip fetching it.
-                    Some(true) => return false,
-                    // TODO: There's probably some useful distinctions we could
-                    // pass back to persist for tracking: e.g. part definitely
-                    // is not needed vs part definitely might be needed vs we
-                    // don't know because some stats were missing vs we don't
-                    // know because the code doesn't yet handle some expression.
-                    Some(false) | None => continue,
-                }
-            }
-            // TODO: Do the same for self.map.{lower,upper}_bounds.
-            true
-        }
-
-        fn provably_not_in_part<S: PersistSourceDataStats>(
-            &self,
-            stats: &S,
-            expr: &MirScalarExpr,
-        ) -> Option<bool> {
-            let arena = RowArena::default();
-            // TODO: This is entirely just a placeholder impl so that we can get
-            // at least one query to work end-to-end. The real structure would
-            // certainly look different than this.
-            //
-            // It works by sniffing out expressions that (at a high level) look
-            // like `some_col {<,<=,>=,>} constant`. For `<`, if we substitute
-            // the minimal value in the part and if `some_col_min < constant` is
-            // _false_, then we know nothing else in the part would be true and
-            // we can skip fetching it. Analogous logic holds for the other
-            // comparisons, but with the max substituted for `{>=,>}`. It's
-            // possible that `any_expr_eq_literal` would be a useful building
-            // block here.
-            //
-            // The full generalization probably requires being able to reason
-            // about the range of outputs of functions given a restricted input
-            // domain, but... that seems hard? There's probably some nice middle
-            // ground.
-            if let MirScalarExpr::CallBinary { func, expr1, expr2 } = expr {
-                let col_idx = Self::one_column_reference(expr1)?;
-                // Should the `col_min` and `col_max` methods instead take
-                // indexes? That would allow us to remove the RelationDesc from
-                // MfpPushdown.
-                let min_or_max = match func {
-                    BinaryFunc::Lt | BinaryFunc::Lte => stats.col_min(col_idx, &arena)?,
-                    BinaryFunc::Gt | BinaryFunc::Gte => stats.col_max(col_idx, &arena)?,
-                    _ => return None,
-                };
-                if !Self::zero_column_references(expr2)? {
-                    return None;
-                }
-                let mut datums = Vec::with_capacity(self.mfp.mfp.input_arity);
-                while datums.len() < col_idx {
-                    datums.push(Datum::Null);
-                }
-                datums.push(min_or_max);
-                while datums.len() < self.mfp.mfp.input_arity {
-                    datums.push(Datum::Null);
-                }
-                match expr.eval(datums.as_slice(), &arena) {
-                    Ok(Datum::False) => return Some(true),
-                    _ => return Some(false),
-                }
-            }
-            None
-        }
-
-        fn zero_column_references(expr: &MirScalarExpr) -> Option<bool> {
-            match expr {
-                MirScalarExpr::Literal(..) => Some(true),
-                _ => None,
-            }
-        }
-
-        fn one_column_reference(expr: &MirScalarExpr) -> Option<usize> {
-            match expr {
-                MirScalarExpr::Column(idx) => Some(*idx),
-                MirScalarExpr::CallUnary {
-                    // `invert_casts_on_expr_eq_literal_inner` has a similar
-                    // logic for equalities instead of inequalities. It relies
-                    // on the inverse and preserves_uniqueness function
-                    // annotations, so it works for all those sneaky implicit
-                    // casts, and even for some other unary functions.
-                    //
-                    // Unfortunately, it can't be applied here out of the box,
-                    // because some inverse functions might flip the > to <. For
-                    // example, we have an inverse for integer negation
-                    // (itself), and a flip would happen if we apply this
-                    // inverse. But maybe we could adapt the code: we could
-                    // introduce an additional function annotation besides
-                    // preserves_uniqueness to mark an inverse function safe for
-                    // applying on both sides of an inequality.
-                    func:
-                        UnaryFunc::CastUint64ToNumeric(..)
-                        | UnaryFunc::CastUint64ToMzTimestamp(..)
-                        | UnaryFunc::CastTimestampToMzTimestamp(..),
-                    expr,
-                } => Self::one_column_reference(expr),
-                _ => None,
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::plan::*;
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use crate::linear::plan::*;
+
+    use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

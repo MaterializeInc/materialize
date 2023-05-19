@@ -15,12 +15,6 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Context};
 use md5::{Digest, Md5};
-use postgres_array::Array;
-use regex::Regex;
-use tokio_postgres::error::DbError;
-use tokio_postgres::row::Row;
-use tokio_postgres::types::{FromSql, Type};
-
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
@@ -28,6 +22,11 @@ use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8};
 use mz_repr::adt::range::Range;
 use mz_sql::ast::ExplainStage;
 use mz_sql_parser::ast::{Raw, Statement};
+use postgres_array::Array;
+use regex::Regex;
+use tokio_postgres::error::DbError;
+use tokio_postgres::row::Row;
+use tokio_postgres::types::{FromSql, Type};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};

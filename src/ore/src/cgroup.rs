@@ -174,8 +174,9 @@ pub fn detect_memory_limit() -> Option<MemoryLimit> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CgroupEntry, Mountinfo};
     use std::path::PathBuf;
+
+    use super::{CgroupEntry, Mountinfo};
 
     #[test]
     fn test_cgroup_from_line() {

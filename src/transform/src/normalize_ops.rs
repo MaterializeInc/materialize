@@ -9,7 +9,8 @@
 
 //! Normalize the structure of various operators.
 
-use mz_expr::{visit::Visit, MirRelationExpr};
+use mz_expr::visit::Visit;
+use mz_expr::MirRelationExpr;
 
 use crate::{all, TransformArgs};
 

@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::iter::Peekable;
 use std::marker::PhantomData;
-use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
+use std::ops::ControlFlow::{self, Break, Continue};
 use std::ops::{Deref, DerefMut};
 use std::slice;
 use std::sync::Arc;
@@ -1136,18 +1136,18 @@ where
         self.collections.trace.upper()
     }
 
-    pub fn batch_part_count(&self) -> usize {
-        self.collections.trace.num_batch_parts()
-    }
-
-    pub fn num_updates(&self) -> usize {
-        self.collections.trace.num_updates()
+    pub fn spine_batch_count(&self) -> usize {
+        self.collections.trace.num_spine_batches()
     }
 
     pub fn size_metrics(&self) -> StateSizeMetrics {
         let mut ret = StateSizeMetrics::default();
         self.map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
+                ret.hollow_batch_count += 1;
+                ret.batch_part_count += x.parts.len();
+                ret.num_updates += x.len;
+
                 let mut batch_size = 0;
                 for x in x.parts.iter() {
                     batch_size += x.encoded_size_bytes;
@@ -1336,6 +1336,9 @@ where
 
 #[derive(Debug, Default)]
 pub struct StateSizeMetrics {
+    pub hollow_batch_count: usize,
+    pub batch_part_count: usize,
+    pub num_updates: usize,
     pub largest_batch_bytes: usize,
     pub state_batches_bytes: usize,
     pub state_rollups_bytes: usize,
@@ -1369,9 +1372,9 @@ mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
 
-    use super::*;
-
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
+
+    use super::*;
 
     fn hollow<T: Timestamp>(lower: T, upper: T, keys: &[&str], len: usize) -> HollowBatch<T> {
         HollowBatch {

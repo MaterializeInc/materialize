@@ -20,13 +20,6 @@ use std::iter;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use proptest::prelude::{any, Arbitrary};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
-use serde::{Deserialize, Serialize};
-use timely::progress::frontier::{Antichain, MutableAntichain};
-use timely::PartialOrder;
-use tonic::{Request, Status, Streaming};
-
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -34,6 +27,12 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use mz_timely_util::progress::any_antichain;
+use proptest::prelude::{any, Arbitrary};
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
+use serde::{Deserialize, Serialize};
+use timely::progress::frontier::{Antichain, MutableAntichain};
+use timely::PartialOrder;
+use tonic::{Request, Status, Streaming};
 
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::controller::CollectionMetadata;
@@ -378,8 +377,9 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
+        use proto_storage_response::Kind::*;
         use proto_storage_response::{
-            Kind::*, ProtoDroppedIds, ProtoSinkStatisticsUpdate, ProtoSourceStatisticsUpdate,
+            ProtoDroppedIds, ProtoSinkStatisticsUpdate, ProtoSourceStatisticsUpdate,
             ProtoStatisticsUpdates,
         };
         ProtoStorageResponse {
@@ -422,7 +422,8 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     }
 
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
-        use proto_storage_response::{Kind::*, ProtoDroppedIds};
+        use proto_storage_response::Kind::*;
+        use proto_storage_response::ProtoDroppedIds;
         match proto.kind {
             Some(DroppedIds(ProtoDroppedIds { ids })) => {
                 Ok(StorageResponse::DroppedIds(ids.into_rust()?))

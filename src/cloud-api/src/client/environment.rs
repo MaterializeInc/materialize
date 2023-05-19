@@ -18,7 +18,9 @@
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
-use super::{cloud_provider::CloudProvider, region::Region, Client, Error};
+use crate::client::cloud_provider::CloudProvider;
+use crate::client::region::Region;
+use crate::client::{Client, Error};
 
 /// An environment is represented in this structure
 #[derive(Debug, Deserialize, Clone)]

@@ -10,8 +10,6 @@
 use std::collections::BTreeMap;
 
 use itertools::Itertools;
-use postgres::error::SqlState;
-
 use mz_adapter::session::TransactionCode;
 use mz_adapter::{AdapterError, AdapterNotice, StartupMessage};
 use mz_expr::EvalError;
@@ -19,6 +17,7 @@ use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 use mz_sql::ast::NoticeSeverity;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::{ClientSeverity as AdapterClientSeverity, VarError};
+use postgres::error::SqlState;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -348,6 +347,7 @@ impl ErrorResponse {
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
+            AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
                 SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT
             }
@@ -392,6 +392,8 @@ impl ErrorResponse {
                 VarError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
                 VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
                 VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
+                VarError::RequiresUnsafeMode { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                VarError::RequiresFeatureFlag { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             },
         };
         ErrorResponse {

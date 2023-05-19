@@ -10,7 +10,6 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-
 use mz_ccsr::{SchemaReference, SchemaType};
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;

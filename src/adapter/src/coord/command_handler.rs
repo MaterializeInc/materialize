@@ -12,11 +12,6 @@
 
 use std::sync::Arc;
 
-use opentelemetry::trace::TraceContextExt;
-use tokio::sync::{oneshot, watch};
-use tracing::Instrument;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -30,6 +25,10 @@ use mz_sql::plan::{
     TransactionType,
 };
 use mz_sql::session::vars::{EndTransactionAction, OwnedVarInput};
+use opentelemetry::trace::TraceContextExt;
+use tokio::sync::{oneshot, watch};
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::client::ConnectionId;
 use crate::command::{
@@ -130,21 +129,33 @@ impl Coordinator {
             }
 
             Command::GetSystemVars { session, tx } => {
-                let vars = GetVariablesResponse::new(self.catalog.system_config().iter());
+                let vars =
+                    GetVariablesResponse::new(self.catalog.system_config().iter().filter(|var| {
+                        var.visible(session.user(), Some(self.catalog.system_config()))
+                            .is_ok()
+                    }));
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
                 tx.send(Ok(vars), session);
             }
 
             Command::SetSystemVars { vars, session, tx } => {
-                let ops = vars
-                    .into_iter()
-                    .map(|(name, value)| catalog::Op::UpdateSystemConfiguration {
+                let mut ops = Vec::with_capacity(vars.len());
+                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+
+                for (name, value) in vars {
+                    if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
+                        var.visible(session.user(), Some(self.catalog.system_config()))
+                    }) {
+                        return tx.send(Err(e.into()), session);
+                    }
+
+                    ops.push(catalog::Op::UpdateSystemConfiguration {
                         name,
                         value: OwnedVarInput::Flat(value),
-                    })
-                    .collect();
+                    });
+                }
+
                 let result = self.catalog_transact(Some(&session), ops).await;
-                let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
                 tx.send(result, session);
             }
 

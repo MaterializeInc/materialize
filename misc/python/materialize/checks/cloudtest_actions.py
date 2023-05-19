@@ -12,7 +12,7 @@ from typing import Optional
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
-from materialize.util import MzVersion, released_materialize_versions
+from materialize.util import MzVersion
 
 
 class ReplaceEnvironmentdStatefulSet(Action):
@@ -38,7 +38,7 @@ class ReplaceEnvironmentdStatefulSet(Action):
         e.current_mz_version = (
             MzVersion.parse_mz(self.new_tag)
             if self.new_tag
-            else released_materialize_versions()[0]
+            else MzVersion.parse_cargo()
         )
 
     def join(self, e: Executor) -> None:

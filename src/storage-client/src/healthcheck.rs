@@ -8,9 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use once_cell::sync::Lazy;
-
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
+use once_cell::sync::Lazy;
 
 pub fn pack_status_row(
     collection_id: GlobalId,

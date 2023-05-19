@@ -76,14 +76,11 @@
 use std::env;
 
 use hyper::server::conn::AddrIncoming;
-use hyper::service;
-use hyper::Server;
-use hyper::StatusCode;
-use hyper::{Body, Response};
-use mz_ccsr::SchemaReference;
+use hyper::{service, Body, Response, Server, StatusCode};
+use mz_ccsr::{
+    Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaReference, SchemaType,
+};
 use once_cell::sync::Lazy;
-
-use mz_ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
 
 pub static SCHEMA_REGISTRY_URL: Lazy<reqwest::Url> =
     Lazy::new(|| match env::var("SCHEMA_REGISTRY_URL") {

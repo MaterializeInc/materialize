@@ -22,14 +22,13 @@
 use std::time::{Duration, SystemTime};
 
 use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use mz_frontegg_auth::{AppPassword, Claims};
 use reqwest::{Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
-
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use mz_frontegg_auth::{AppPassword, Claims};
 
 use crate::config::{ClientBuilder, ClientConfig};
 use crate::error::{ApiError, Error};
@@ -225,7 +224,7 @@ impl Client {
 
         let token_data = decode::<Claims>(
             &token,
-            &DecodingKey::from_jwk(&jwk).map_err(|_| Error::ConvertingJwks)?,
+            &DecodingKey::from_jwk(jwk).map_err(|_| Error::ConvertingJwks)?,
             &Validation::new(Algorithm::RS256),
         )
         .map_err(|_| Error::DecodingClaims)?;

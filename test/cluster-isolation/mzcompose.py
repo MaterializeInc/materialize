@@ -50,7 +50,7 @@ disruptions = [
         disruption=lambda c: c.testdrive(
             """
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET allow_unstable_dependencies = true;
+ALTER SYSTEM SET enable_unstable_dependencies = true;
 
 > SET cluster=cluster1
 
@@ -229,6 +229,12 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
         c.sql(
             """

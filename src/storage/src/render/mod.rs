@@ -200,15 +200,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use timely::communication::Allocate;
-use timely::dataflow::Scope;
-use timely::progress::Antichain;
-use timely::worker::Worker as TimelyWorker;
-
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_client::types::sources::IngestionDescription;
+use timely::communication::Allocate;
+use timely::dataflow::Scope;
+use timely::progress::Antichain;
+use timely::worker::Worker as TimelyWorker;
 
 use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;

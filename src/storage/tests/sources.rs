@@ -78,7 +78,8 @@
 use std::collections::BTreeMap;
 
 use mz_storage::source::testscript::ScriptCommand;
-use mz_storage_client::types::sources::{encoding::SourceDataEncoding, SourceEnvelope};
+use mz_storage_client::types::sources::encoding::SourceDataEncoding;
+use mz_storage_client::types::sources::SourceEnvelope;
 
 mod setup;
 

@@ -14,12 +14,11 @@
 // limitations under the License.
 
 use std::error::Error;
-use std::fmt;
-use std::io;
 use std::net::SocketAddr as InetSocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{ready, Context, Poll};
+use std::{fmt, io};
 
 use async_trait::async_trait;
 use hyper::server::accept::Accept;

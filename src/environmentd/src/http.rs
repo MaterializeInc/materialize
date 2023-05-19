@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -33,8 +33,14 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
+use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
+use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
+use mz_ore::cast::u64_to_usize;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
-use mz_sql::session::vars::VarInput;
+use mz_ore::tracing::TracingHandle;
+use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
 use serde::Deserialize;
 use thiserror::Error;
@@ -45,23 +51,16 @@ use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
-use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
-use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
-use mz_ore::cast::u64_to_usize;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::TracingHandle;
-use mz_sql::session::user::{ExternalUserMetadata, User, HTTP_DEFAULT_USER, SYSTEM_USER};
-
 use crate::server::{ConnectionHandler, Server};
 use crate::BUILD_INFO;
-
-pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 mod catalog;
 mod memory;
 mod probe;
 mod root;
 mod sql;
+
+pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
@@ -72,6 +71,7 @@ pub struct HttpConfig {
     pub frontegg: Option<FronteggAuthentication>,
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +90,7 @@ pub enum TlsMode {
 pub struct WsState {
     frontegg: Arc<Option<FronteggAuthentication>>,
     adapter_client: mz_adapter::Client,
+    active_connection_count: SharedConnectionCounter,
 }
 
 #[derive(Debug)]
@@ -105,6 +106,7 @@ impl HttpServer {
             frontegg,
             adapter_client,
             allowed_origin,
+            active_connection_count,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_mode = tls.as_ref().map(|tls| tls.mode).unwrap_or(TlsMode::Disable);
@@ -122,6 +124,7 @@ impl HttpServer {
                 async move { http_auth(req, next, tls_mode, &base_frontegg).await }
             }))
             .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(Arc::clone(&active_connection_count)))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -140,6 +143,7 @@ impl HttpServer {
             .with_state(WsState {
                 frontegg,
                 adapter_client,
+                active_connection_count,
             });
         let router = Router::new().merge(base_router).merge(ws_router);
         HttpServer { tls, router }
@@ -182,6 +186,7 @@ pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
     pub tracing_handle: TracingHandle,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 pub struct InternalHttpServer {
@@ -194,6 +199,7 @@ impl InternalHttpServer {
             metrics_registry,
             tracing_handle,
             adapter_client_rx,
+            active_connection_count,
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
         let router = base_router(BaseRouterConfig { profiling: true })
@@ -242,7 +248,9 @@ impl InternalHttpServer {
             )
             .layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
             .layer(Extension(AuthedUser(SYSTEM_USER.clone())))
-            .layer(Extension(adapter_client_rx.shared()));
+            .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(active_connection_count));
+
         InternalHttpServer { router }
     }
 }
@@ -262,6 +270,8 @@ impl Server for InternalHttpServer {
 
 type Delayed<T> = Shared<oneshot::Receiver<T>>;
 
+type SharedConnectionCounter = Arc<Mutex<ConnectionCounter>>;
+
 #[derive(Clone)]
 enum ConnProtocol {
     Http,
@@ -271,15 +281,26 @@ enum ConnProtocol {
 #[derive(Clone, Debug)]
 struct AuthedUser(User);
 
-pub struct AuthedClient(pub SessionClient);
+pub struct AuthedClient {
+    pub client: SessionClient,
+    pub drop_connection: Option<DropConnection>,
+}
 
 impl AuthedClient {
-    async fn new(adapter_client: &Client, user: AuthedUser) -> Result<Self, AdapterError> {
+    async fn new(
+        adapter_client: &Client,
+        user: AuthedUser,
+        active_connection_count: SharedConnectionCounter,
+    ) -> Result<Self, AdapterError> {
         let AuthedUser(user) = user;
+        let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
         let adapter_client = adapter_client.new_conn()?;
         let session = adapter_client.new_session(user);
         let (adapter_client, _) = adapter_client.startup(session).await?;
-        Ok(AuthedClient(adapter_client))
+        Ok(AuthedClient {
+            client: adapter_client,
+            drop_connection,
+        })
     }
 }
 
@@ -315,12 +336,17 @@ where
                 "adapter client missing".into(),
             )
         })?;
-        let mut client = AuthedClient::new(&adapter_client, user.clone())
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let active_connection_count = req.extensions.get::<SharedConnectionCounter>().unwrap();
+        let mut client = AuthedClient::new(
+            &adapter_client,
+            user.clone(),
+            Arc::clone(active_connection_count),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         // Apply options that were provided in query params.
-        let session = client.0.session();
+        let session = client.client.session();
         let maybe_options = if params.options.is_empty() {
             // It's possible 'options' simply wasn't provided, we don't want that to
             // count as a failure to deserialize
@@ -332,7 +358,10 @@ where
         if let Ok(options) = maybe_options {
             for (key, val) in options {
                 const LOCAL: bool = false;
-                if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+                if let Err(err) = session
+                    .vars_mut()
+                    .set(None, &key, VarInput::Flat(&val), LOCAL)
+                {
                     session.add_notice(AdapterNotice::BadStartupSetting {
                         name: key.to_string(),
                         reason: err.to_string(),
@@ -440,6 +469,7 @@ async fn init_ws(
     WsState {
         frontegg,
         adapter_client,
+        active_connection_count,
     }: &WsState,
     ws: &mut WebSocket,
 ) -> Result<AuthedClient, anyhow::Error> {
@@ -486,13 +516,18 @@ async fn init_ws(
         anyhow::bail!("unexpected")
     };
     let user = auth(frontegg, creds).await?;
-    let mut client = AuthedClient::new(adapter_client, user).await?;
+
+    let mut client =
+        AuthedClient::new(adapter_client, user, Arc::clone(active_connection_count)).await?;
 
     // Assign any options we got from our WebSocket startup.
-    let session = client.0.session();
+    let session = client.client.session();
     for (key, val) in options {
         const LOCAL: bool = false;
-        if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+        if let Err(err) = session
+            .vars_mut()
+            .set(None, &key, VarInput::Flat(&val), LOCAL)
+        {
             session.add_notice(AdapterNotice::BadStartupSetting {
                 name: key,
                 reason: err.to_string(),

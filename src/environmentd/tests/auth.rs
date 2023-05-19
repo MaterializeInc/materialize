@@ -83,8 +83,7 @@ use std::io::{Read, Write};
 use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -96,6 +95,17 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Request, Response, Server, StatusCode, Uri};
 use hyper_openssl::HttpsConnector;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_frontegg_auth::{
+    ApiTokenArgs, ApiTokenResponse, Authentication as FronteggAuthentication,
+    AuthenticationConfig as FronteggConfig, Claims, RefreshToken, REFRESH_SUFFIX,
+};
+use mz_ore::assert_contains;
+use mz_ore::now::{NowFn, SYSTEM_TIME};
+use mz_ore::retry::Retry;
+use mz_ore::task::RuntimeExt;
+use mz_sql::names::PUBLIC_ROLE_NAME;
+use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
 use openssl::hash::MessageDigest;
@@ -116,19 +126,6 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 use uuid::Uuid;
-
-use mz_environmentd::{WebSocketAuth, WebSocketResponse};
-use mz_frontegg_auth::{
-    ApiTokenArgs, ApiTokenResponse, Authentication as FronteggAuthentication,
-    AuthenticationConfig as FronteggConfig, Claims, RefreshToken, REFRESH_SUFFIX,
-};
-use mz_ore::assert_contains;
-use mz_ore::now::NowFn;
-use mz_ore::now::SYSTEM_TIME;
-use mz_ore::retry::Retry;
-use mz_ore::task::RuntimeExt;
-use mz_sql::names::PUBLIC_ROLE_NAME;
-use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 
 pub mod util;
 

@@ -14,15 +14,12 @@ use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
 use itertools::Itertools;
-use mz_repr::adt::timestamp::TimestampError;
-use smallvec::SmallVec;
-use tokio::sync::oneshot;
-
 use mz_compute_client::controller::error as compute_error;
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
 use mz_repr::role_id::RoleId;
 use mz_repr::NotNullViolation;
@@ -30,6 +27,8 @@ use mz_sql::plan::PlanError;
 use mz_sql::session::vars::VarError;
 use mz_storage_client::controller::StorageError;
 use mz_transform::TransformError;
+use smallvec::SmallVec;
+use tokio::sync::oneshot;
 
 use crate::{catalog, rbac};
 
@@ -139,6 +138,8 @@ pub enum AdapterError {
     ///
     /// Note this differs slightly from PG's implementation/semantics.
     StatementTimeout,
+    /// The user canceled the query
+    Canceled,
     /// An idle session in a transaction has timed out.
     IdleInTransactionSessionTimeout,
     /// An error occurred in a SQL catalog operation.
@@ -424,6 +425,9 @@ impl fmt::Display for AdapterError {
             AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")
             }
+            AdapterError::Canceled => {
+                write!(f, "canceling statement due to user request")
+            }
             AdapterError::IdleInTransactionSessionTimeout => {
                 write!(
                     f,
@@ -646,6 +650,22 @@ impl From<VarError> for AdapterError {
 impl From<rbac::UnauthorizedError> for AdapterError {
     fn from(e: rbac::UnauthorizedError) -> Self {
         AdapterError::Unauthorized(e)
+    }
+}
+
+impl From<mz_sql::session::vars::ConnectionError> for AdapterError {
+    fn from(value: mz_sql::session::vars::ConnectionError) -> Self {
+        match value {
+            mz_sql::session::vars::ConnectionError::TooManyConnections { current, limit } => {
+                AdapterError::ResourceExhaustion {
+                    resource_type: "connection".into(),
+                    limit_name: "max_connections".into(),
+                    desired: (current + 1).to_string(),
+                    limit: limit.to_string(),
+                    current: current.to_string(),
+                }
+            }
+        }
     }
 }
 

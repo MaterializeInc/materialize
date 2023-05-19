@@ -29,14 +29,15 @@
 //!    .to_owned();
 //! ```
 
-use std::{fmt::Display, str::FromStr};
+use std::fmt::Display;
+use std::str::FromStr;
 
-use crate::error::Error;
-
-use super::Client;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::client::Client;
+use crate::error::Error;
 
 /// Holds all the information related to a cloud provider and a particular region.
 #[derive(Debug, Deserialize, Clone)]

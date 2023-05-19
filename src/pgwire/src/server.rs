@@ -14,14 +14,13 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use mz_frontegg_auth::Authentication as FronteggAuthentication;
+use mz_ore::netio::AsyncReady;
+use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
 use tracing::trace;
-
-use mz_frontegg_auth::Authentication as FronteggAuthentication;
-use mz_ore::netio::AsyncReady;
-use mz_sql::session::vars::ConnectionCounter;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::message::FrontendStartupMessage;
@@ -108,11 +107,8 @@ impl Server {
         let internal = self.internal;
         let metrics = self.metrics.clone();
         let active_connection_count = Arc::clone(&self.active_connection_count);
-        let active_connection_count2 = Arc::clone(&self.active_connection_count);
         async move {
-            let mut incremented_connection_count = false;
             let result = (|| {
-                let incremented_connection_count = &mut incremented_connection_count;
                 async move {
                     let mut adapter_client = adapter_client?;
                     let conn_id = adapter_client.conn_id();
@@ -141,7 +137,6 @@ impl Server {
                                     params,
                                     frontegg: frontegg.as_ref(),
                                     internal,
-                                    incremented_connection_count,
                                     active_connection_count,
                                 })
                                 .await?;
@@ -188,11 +183,6 @@ impl Server {
                 }
             })()
             .await;
-            if incremented_connection_count {
-                let mut connections = active_connection_count2.lock().expect("poisoned lock");
-                assert_ne!(0, connections.current);
-                connections.current -= 1;
-            }
             let status = match result {
                 Ok(()) => "success",
                 Err(_) => "error",

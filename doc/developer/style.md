@@ -285,7 +285,7 @@ the line where the panic occurred. This is especially useful for debugging flaky
 
 #### Prefer structured errors over strings
 
-**Common case:** Use [`thiserror`] to define stuctured errors instead of using
+**Common case:** Use [`thiserror`] to define structured errors instead of using
 strings as errors. Meaning, you should _not_ use `anyhow!("this is my error")`.
 When your error wraps other errors or contain other errors as the underlying
 cause or source, you should make sure to tag them with `#[from]` or
@@ -314,6 +314,51 @@ make that explicit. We have the `ResultExt` and `ErrorExt` traits that provide
 `display_with_causes`/`to_string_with_causes` (for errors), that do this for
 you.
 
+### Imports
+
+There are unfortunately no good ways of enforcing a consistent import style in
+CI. In particular, most of the import formatting features of [rustfmt] are
+unstable and will presumably remain so for some time.
+
+In absence of opinionated auto-formatting, we instead use an import style that
+is compatible with rust-analyzer's [auto import] feature. The intention is to
+reduce the friction experienced during normal development as much as possible. A
+match between the code editor's auto import style and our preferred code style
+also makes it less likely that incorrectly formatted imports end up in PRs.
+
+You should follow these rules for formatting imports in Rust:
+
+* Group imports in the following order:
+  ```rust
+  // `std`/`core` imports
+  use std::collections::{BTreeMap, BTreeSet};
+  use std::iter::repeat;
+
+  // imports from external crates (including `mz_` crates)
+  use itertools::Itertools;
+  use mz_ore::collections::CollectionExt;
+  use tracing::info;
+
+  // `crate` imports
+  use crate::util::{index_sql, ResultExt};
+  use crate::{AdapterError, ExecuteResponse};
+  ```
+* Merge imports from the same module into a single `use` statement.
+* Do *not* merge imports from different modules.
+* Use absolute paths for crate-level imports, i.e. `crate::` rather than
+  `super::` or `self::`.
+  * Note that there are cases where readability is significantly improved by
+    ignoring this rule, the most prominent one being the use of `use super::*;`
+    to make the code under test available inside a `tests` submodule.
+
+#### rust-analyzer Configuration
+
+rust-analyzer's [auto import] feature can be configured to adhere to the above
+rules by setting the following options:
+
+* `imports.granularity.group` = `module`
+* `imports.prefix` = `crate`
+
 
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [rustfmt]: https://github.com/rust-lang/rustfmt
@@ -325,3 +370,4 @@ you.
 [`tokio-console`]: /doc/developer/guide-tokio-console.md
 [`thiserror`]: https://github.com/dtolnay/thiserror
 [`Error`]: https://doc.rust-lang.org/stable/std/error/trait.Error.html
+[auto import]: https://rust-analyzer.github.io/manual.html#auto-import

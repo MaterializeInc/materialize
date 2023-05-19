@@ -14,11 +14,7 @@ Privileges are cumulative: revoking a privilege from `PUBLIC` does not mean all
 roles have lost that privilege, if certain roles were explicitly granted that
 privilege.
 
-{{< warning >}}
-Currently, privileges have limited functionality in Materialize. This is part of the
-work to enable **Role-based access control** (RBAC) in a future release {{% gh 11579 %}}.
-{{< /warning >}}
-
+{{< alpha />}}
 
 ## Syntax
 

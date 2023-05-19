@@ -89,11 +89,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-use rand::seq::SliceRandom;
-use tokio::sync::oneshot;
-use tower_http::cors::AllowOrigin;
-
 use mz_adapter::catalog::storage::BootstrapArgs;
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterBackend, SystemParameterFrontend};
@@ -111,6 +106,10 @@ use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::types::connections::ConnectionContext;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rand::seq::SliceRandom;
+use tokio::sync::oneshot;
+use tower_http::cors::AllowOrigin;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 use crate::server::ListenerHandle;
@@ -127,8 +126,12 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 #[derive(Debug, Clone)]
 pub struct Config {
     // === Special modes. ===
-    /// Whether to permit usage of unsafe features.
+    /// Whether to permit usage of unsafe features. This is never meant to run
+    /// in production.
     pub unsafe_mode: bool,
+    /// Whether the environmentd is running on a local dev machine. This is
+    /// never meant to run in production or CI.
+    pub all_features: bool,
 
     // === Connection options. ===
     /// The IP address and port to listen for pgwire connections on.
@@ -267,6 +270,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     };
 
+    let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0)));
+
     // Initialize network listeners.
     //
     // We do this as early as possible during initialization so that the OS will
@@ -290,6 +295,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             metrics_registry: config.metrics_registry.clone(),
             tracing_handle: config.tracing_handle,
             adapter_client_rx: internal_http_adapter_client_rx,
+            active_connection_count: Arc::clone(&active_connection_count),
         });
         server::serve(internal_http_conns, internal_http_server)
     });
@@ -365,14 +371,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         None
     };
 
-    let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0)));
-
     // Initialize adapter.
     let segment_client = config.segment_api_key.map(mz_segment::Client::new);
     let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
         dataflow_client: controller,
         storage: adapter_storage,
         unsafe_mode: config.unsafe_mode,
+        all_features: config.all_features,
         build_info: &BUILD_INFO,
         environment_id: config.environment_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
@@ -444,6 +449,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             frontegg: config.frontegg.clone(),
             adapter_client: adapter_client.clone(),
             allowed_origin: config.cors_allowed_origin,
+            active_connection_count: Arc::clone(&active_connection_count),
         });
         server::serve(http_conns, http_server)
     });

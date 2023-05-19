@@ -12,10 +12,9 @@
 use std::collections::BTreeMap;
 use std::mem;
 
-use once_cell::sync::Lazy;
-
 use mz_expr::VariadicFunc;
 use mz_repr::{ColumnType, RelationType, ScalarType};
+use once_cell::sync::Lazy;
 
 use crate::plan::expr::{AbstractExpr, AggregateFunc, HirRelationExpr, HirScalarExpr};
 

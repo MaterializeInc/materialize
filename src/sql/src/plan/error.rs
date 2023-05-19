@@ -9,11 +9,9 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::fmt;
-use std::io;
-use std::num::ParseIntError;
-use std::num::TryFromIntError;
+use std::num::{ParseIntError, TryFromIntError};
 use std::sync::Arc;
+use std::{fmt, io};
 
 use itertools::Itertools;
 use mz_expr::EvalError;
@@ -25,18 +23,16 @@ use mz_repr::adt::char::InvalidCharLengthError;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::strconv;
-use mz_repr::ColumnName;
-use mz_repr::GlobalId;
+use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{MutRecBlockOptionName, ObjectType, Privilege, UnresolvedItemName};
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
-use crate::names::PartialItemName;
-use crate::names::ResolvedItemName;
+use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
+use crate::session::vars::VarError;
 
 #[derive(Clone, Debug)]
 pub enum PlanError {
@@ -49,12 +45,6 @@ pub enum PlanError {
     NeverSupported {
         feature: String,
         documentation_link: String,
-    },
-    RequiresUnsafe {
-        feature: String,
-    },
-    RequiresVarOrUnsafe {
-        feature: String,
     },
     UnknownColumn {
         table: Option<PartialItemName>,
@@ -182,6 +172,7 @@ pub enum PlanError {
     InvalidKeysInSubscribeEnvelopeDebezium,
     InvalidOrderByInSubscribeWithinTimestampOrderBy,
     FromValueRequiresParen,
+    VarError(VarError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -200,12 +191,7 @@ impl PlanError {
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidProtobufSchema { cause } => Some(cause.to_string_with_causes()),
             Self::InvalidOptionValue { err, .. } => err.detail(),
-            Self::RequiresUnsafe { .. } => {
-                Some("The requested feature is used only for internal development and testing of Materialize.".into())
-            }
-            Self::RequiresVarOrUnsafe { .. } => {
-                Some("The requested feature is not currently enabled on this account.".into())
-            }
+            Self::VarError(e) => e.detail(),
             _ => None,
         }
     }
@@ -279,6 +265,7 @@ impl PlanError {
                 Some("All order bys must be output columns.".into())
             }
             Self::Catalog(e) => e.hint(),
+            Self::VarError(e) => e.hint(),
             _ => None,
         }
     }
@@ -296,14 +283,6 @@ impl fmt::Display for PlanError {
             }
             Self::NeverSupported { feature, documentation_link: documentation_path } => {
                 write!(f, "{feature} is not supported, for more information consult the documentation at https://materialize.com/docs/{documentation_path}",)?;
-                Ok(())
-            }
-            Self::RequiresUnsafe { feature} => {
-                write!(f, "{feature} is not supported",)?;
-                Ok(())
-            }
-            Self::RequiresVarOrUnsafe { feature} => {
-                write!(f, "{feature} is not enabled",)?;
                 Ok(())
             }
             Self::UnknownColumn { table, column } => write!(
@@ -473,6 +452,7 @@ impl fmt::Display for PlanError {
             Self::FromValueRequiresParen => f.write_str(
                 "VALUES expression in FROM clause must be surrounded by parentheses"
             ),
+            Self::VarError(e) => e.fmt(f),
         }
     }
 }
@@ -549,6 +529,12 @@ impl From<ParserError> for PlanError {
 impl From<PostgresError> for PlanError {
     fn from(e: PostgresError) -> PlanError {
         PlanError::PostgresConnectionErr { cause: Arc::new(e) }
+    }
+}
+
+impl From<VarError> for PlanError {
+    fn from(e: VarError) -> Self {
+        PlanError::VarError(e)
     }
 }
 

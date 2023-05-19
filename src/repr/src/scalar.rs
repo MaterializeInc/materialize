@@ -20,15 +20,14 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
+use mz_lowertest::MzReflect;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::Union;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use mz_lowertest::MzReflect;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::{Array, ArrayDimension};
 use crate::adt::char::{Char, CharLength};
@@ -41,12 +40,11 @@ use crate::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::timestamp::{CheckedTimestamp, TimestampError};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::row::DatumNested;
-use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena};
-
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
 use crate::role_id::RoleId;
+use crate::row::DatumNested;
+use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena};
 
 /// A single value.
 ///
@@ -3279,8 +3277,9 @@ fn verify_base_eq_record_nullability() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use super::*;
 
     proptest! {
        #[test]

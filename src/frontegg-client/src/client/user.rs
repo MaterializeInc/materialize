@@ -13,11 +13,10 @@
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
+use crate::client::role::Role;
 use crate::client::Client;
 use crate::error::Error;
 use crate::parse::{Empty, Paginated};
-
-use super::role::Role;
 
 const USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v3"];
 const CREATE_USERS_PATH: [&str; 5] = ["frontegg", "identity", "resources", "users", "v2"];

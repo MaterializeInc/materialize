@@ -13,9 +13,7 @@ use std::sync::Arc;
 
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metric;
-use mz_ore::metrics::DeleteOnDropHistogram;
-use mz_ore::metrics::HistogramVecExt;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{DeleteOnDropHistogram, HistogramVecExt, MetricsRegistry};
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_service::codec::StatsCollector;
 

@@ -7,40 +7,35 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
-use std::iter;
-use std::mem;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::{cmp, iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
-use postgres::error::SqlState;
-use tokio::io::{self, AsyncRead, AsyncWrite};
-use tokio::select;
-use tokio::time::{self, Duration, Instant};
-use tracing::{debug, warn, Instrument};
-
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, TransactionStatus,
 };
-use mz_adapter::{AdapterError, AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
+use mz_adapter::{AdapterNotice, ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::{Authentication as FronteggAuthentication, Claims};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::GlobalId;
-use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::user::{ExternalUserMetadata, User, INTERNAL_USER_NAMES};
-use mz_sql::session::vars::{ConnectionCounter, VarInput};
+use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
+use postgres::error::SqlState;
+use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::select;
+use tokio::time::{self, Duration, Instant};
+use tracing::{debug, warn, Instrument};
 
 use crate::codec::FramedConn;
 use crate::message::{
@@ -85,9 +80,6 @@ pub struct RunParams<'a, A> {
     /// Whether this is an internal server that permits access to restricted
     /// system resources.
     pub internal: bool,
-    /// During handling the query, did we increment the connection count. Used
-    /// during connection teardown to determine if we need to decrement the count.
-    pub incremented_connection_count: &'a mut bool,
     /// Global connection limit and count
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
@@ -111,7 +103,6 @@ pub async fn run<'a, A>(
         mut params,
         frontegg,
         internal,
-        incremented_connection_count,
         active_connection_count,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
@@ -240,7 +231,10 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) = session.vars_mut().set(&key, VarInput::Flat(&val), LOCAL) {
+            if let Err(err) = session
+                .vars_mut()
+                .set(None, &key, VarInput::Flat(&val), LOCAL)
+            {
                 session.add_notice(AdapterNotice::BadStartupSetting {
                     name: key,
                     reason: err.to_string(),
@@ -252,29 +246,14 @@ where
         .vars_mut()
         .end_transaction(EndTransactionAction::Commit);
 
-    if !session.user().is_internal() && !session.user().is_external_admin() {
-        let result = {
-            let mut connections = active_connection_count.lock().expect("lock poisoned");
-            if connections.current >= connections.limit {
-                Err(AdapterError::ResourceExhaustion {
-                    limit_name: "max_connections".into(),
-                    resource_type: "connection".into(),
-                    desired: (connections.current + 1).to_string(),
-                    limit: connections.limit.to_string(),
-                    current: connections.current.to_string(),
-                })
-            } else {
-                connections.current += 1;
-                *incremented_connection_count = true;
-                Ok(())
-            }
-        };
-        if let Err(e) = result {
+    let _guard = match DropConnection::new_connection(session.user(), active_connection_count) {
+        Ok(drop_connection) => drop_connection,
+        Err(e) => {
             return conn
-                .send(ErrorResponse::from_adapter_error(Severity::Fatal, e))
-                .await;
+                .send(ErrorResponse::from_adapter_error(Severity::Fatal, e.into()))
+                .await
         }
-    }
+    };
 
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in session.vars().notify_set() {
@@ -622,7 +601,11 @@ where
             }
         }
 
-        let result = match self.adapter_client.execute(EMPTY_PORTAL.to_string()).await {
+        let result = match self
+            .adapter_client
+            .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed())
+            .await
+        {
             Ok(response) => {
                 self.send_pending_notices().await?;
                 self.send_execute_response(
@@ -972,7 +955,11 @@ where
                     // Postgres).
                     self.start_transaction(Some(1));
 
-                    match self.adapter_client.execute(portal_name.clone()).await {
+                    match self
+                        .adapter_client
+                        .execute(portal_name.clone(), self.conn.wait_closed())
+                        .await
+                    {
                         Ok(response) => {
                             self.send_pending_notices().await?;
                             self.send_execute_response(
