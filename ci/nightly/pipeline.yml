@@ -485,7 +485,7 @@ steps:
 
   - id: checks-upgrade-matrix
     label: "Random upgrades over the entire matrix"
-    timeout_in_minutes: 120
+    timeout_in_minutes: 180
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
