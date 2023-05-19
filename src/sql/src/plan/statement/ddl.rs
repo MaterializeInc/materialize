@@ -396,18 +396,25 @@ pub fn plan_create_source(
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
-    const ALLOWED_WITH_OPTIONS: &[CreateSourceOptionName] = &[CreateSourceOptionName::Size];
+    let mut allowed_with_options = vec![CreateSourceOptionName::Size];
+
+    if scx
+        .require_feature_flag(&vars::ENABLE_UPSERT_SOURCE_DISK)
+        .is_ok()
+    {
+        allowed_with_options.push(CreateSourceOptionName::Disk);
+    }
 
     if let Some(op) = with_options
         .iter()
-        .find(|op| !ALLOWED_WITH_OPTIONS.contains(&op.name))
+        .find(|op| !allowed_with_options.contains(&op.name))
     {
         scx.require_feature_flag_w_dynamic_desc(
             &vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS,
             format!("CREATE SOURCE...WITH ({}..)", op.name.to_ast_string()),
             format!(
                 "permitted options are {}",
-                comma_separated(ALLOWED_WITH_OPTIONS)
+                comma_separated(&allowed_with_options)
             ),
         )?;
     }
