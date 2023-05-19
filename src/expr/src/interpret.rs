@@ -373,7 +373,13 @@ impl<'a> ResultSpec<'a> {
             // Since we only care about whether / not an error is possible, and not the specific
             // error, create an arbitrary error here.
             // NOTE! This assumes that functions do not discriminate on the type of the error.
-            result_map(Err(EvalError::Internal(String::new())))
+            let map_err = result_map(Err(EvalError::Internal(String::new())));
+            let raise_err = ResultSpec::fails();
+            // SQL has a very loose notion of evaluation order: https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-EXPRESS-EVAL
+            // Here, we account for the possibility that the expression is evaluated strictly,
+            // raising the error, or that it's evaluated lazily by the result_map function
+            // (which may return a non-error result even when given an error as input).
+            raise_err.union(map_err)
         } else {
             ResultSpec::nothing()
         };
