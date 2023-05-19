@@ -15,6 +15,7 @@
 //! [`Client`] struct provides methods for interacting with various admin APIs,
 //! such as creating and managing users, or listing passwords.
 //!
+use std::sync::Arc;
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
@@ -29,7 +30,7 @@ pub static DEFAULT_ENDPOINT: Lazy<Url> =
 /// Configures the required parameters of a [`Client`].
 pub struct ClientConfig {
     /// The authorization client to get the authorization token.
-    pub auth_client: mz_frontegg_client::client::Client,
+    pub auth_client: Arc<mz_frontegg_client::client::Client>,
 }
 
 /// A builder for a [`Client`].

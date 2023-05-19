@@ -15,6 +15,7 @@
 //!
 //! The [`Client`] requires an [`mz_frontegg_client::client::Client`] as a parameter. The
 //! Frontegg client is used to request and manage the access token.
+use std::sync::Arc;
 
 use reqwest::{Method, RequestBuilder, Url};
 use serde::de::DeserializeOwned;
@@ -26,7 +27,7 @@ use crate::error::{ApiError, Error};
 /// Represents the structure for the client.
 pub struct Client {
     pub(crate) inner: reqwest::Client,
-    pub(crate) auth_client: mz_frontegg_client::client::Client,
+    pub(crate) auth_client: Arc<mz_frontegg_client::client::Client>,
     pub(crate) endpoint: Url,
 }
 
