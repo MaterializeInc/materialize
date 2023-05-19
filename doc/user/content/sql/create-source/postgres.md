@@ -13,7 +13,7 @@ aliases:
 ---
 
 {{< warning >}}
-Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/).
+Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the integration guide for your PostgreSQL service: [Amazon RDS](/ingest-data/postgres-amazon-rds/), [Amazon Aurora](/ingest-data/postgres-amazon-aurora/), [Azure DB](/ingest-data/postgres-azure-db/), [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/), [Self-hosted](/ingest-data/postgres-self-hosted/).
 {{< /warning >}}
 
 {{% create-source/intro %}}
@@ -54,7 +54,7 @@ Field                                | Value     | Description
 
 This source uses PostgreSQL's native replication protocol to continually ingest changes resulting from `INSERT`, `UPDATE` and `DELETE` operations in the upstream database — a process also known as _change data capture_.
 
-For this reason, you must configure the upstream PostgreSQL database to support logical replication before creating a source in Materialize. Follow the step-by-step instructions in the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/) to get logical replication set up.
+For this reason, you must configure the upstream PostgreSQL database to support logical replication before creating a source in Materialize. Follow the step-by-step instructions in relevant integration guide to get logical replication set up: [Amazon RDS](/ingest-data/postgres-amazon-rds/), [Amazon Aurora](/ingest-data/postgres-amazon-aurora/), [Azure DB](/ingest-data/postgres-azure-db/), [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/), [Self-hosted](/ingest-data/postgres-self-hosted/).
 
 #### Creating a source
 
@@ -156,7 +156,7 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ##### Schema changes
 
-Materialize does not support changes to schemas for existing publications, and will set the source into an error state if a breaking DDL change is detected upstream. To handle schema changes, you need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
+{{% postgres-direct/postgres-schema-changes %}}
 
 ##### Supported types
 
@@ -177,7 +177,7 @@ DELETE FROM t;
 ## Examples
 
 {{< warning >}}
-Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/).
+Before creating a PostgreSQL source, you must set up logical replication in the upstream database. For step-by-step instructions, see the integration guide for your PostgreSQL service: [Amazon RDS](/ingest-data/postgres-amazon-rds/), [Amazon Aurora](/ingest-data/postgres-amazon-aurora/), [Azure DB](/ingest-data/postgres-azure-db/), [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/), [Self-hosted](/ingest-data/postgres-self-hosted/).
 {{< /warning >}}
 
 ### Creating a connection
@@ -313,7 +313,12 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-- [PostgreSQL CDC guide](/connect-sources/cdc-postgres-direct/)
+- PostgreSQL integration guides:
+  - [Amazon RDS](/ingest-data/postgres-amazon-rds/)
+  - [Amazon Aurora](/ingest-data/postgres-amazon-aurora/)
+  - [Azure DB](/ingest-data/postgres-azure-db/)
+  - [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/)
+  - [Self-hosted](/ingest-data/postgres-self-hosted/)
 
 [`enum`]: https://www.postgresql.org/docs/current/datatype-enum.html
 [`money`]: https://www.postgresql.org/docs/current/datatype-money.html

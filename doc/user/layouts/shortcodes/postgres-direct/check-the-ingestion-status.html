@@ -1,0 +1,57 @@
+Before it starts consuming the replication stream, Materialize takes a snapshot of the relevant tables in your publication. Until this snapshot is complete, Materialize won't have the same view of your data as your PostgreSQL database.
+
+In this step, you'll first verify that the source is running and then check the status of the snapshotting process.
+
+1. Back in the `psql` shell connected to Materialize, use the [`mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses) table to check the overall status of your source:
+
+    ```sql
+    WITH
+      source_id AS
+      (SELECT id FROM mz_objects WHERE name = 'mz_source')
+    SELECT *
+    FROM
+      mz_internal.mz_source_statuses
+        JOIN
+          (
+            SELECT referenced_object_id
+            FROM mz_internal.mz_object_dependencies
+            WHERE
+              object_id = (SELECT id FROM source_id)
+            UNION SELECT id FROM source_id
+          )
+          AS sources
+        ON mz_source_statuses.id = sources.referenced_object_id;
+    ```
+
+    For each `subsource`, make sure the `status` is `running`. If you see `stalled` or `failed`, there's likely a configuration issue for you to fix. Check the `error` field for details and fix the issue before moving on. Also, if the `status` of any subsource is `starting` for more than a few minutes, [contact our team](/support/).
+
+2. Once the source is running, use the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics) table to check the status of the initial snapshot.
+
+    ```sql
+    WITH
+      source_id AS
+      (SELECT id FROM mz_objects WHERE name = 'mz_source')
+    SELECT bool_and(snapshot_committed) AS snapshot_committed
+    FROM
+      mz_internal.mz_source_statistics
+        JOIN
+          (
+            SELECT referenced_object_id
+            FROM mz_internal.mz_object_dependencies
+            WHERE
+              object_id = (SELECT id FROM source_id)
+            UNION SELECT id FROM source_id
+          )
+          AS sources
+        ON mz_source_statistics.id = sources.referenced_object_id;
+    ```
+    <p></p>
+
+    ```nofmt
+     snapshot_committed
+    --------------------
+     t
+    (1 row)
+    ```
+
+    Once `snapshot_commited` is `t`, move on to the next step. Snapshotting can take between a few minutes to several hours, depending on the size of your dataset and the size of the cluster replica you chose for your `ingest_postgres` cluster.
