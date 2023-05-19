@@ -126,6 +126,8 @@ pub enum TryFromProtoError {
     GlobError(globset::Error),
     /// Failed to parse a serialized URL
     InvalidUrl(url::ParseError),
+    /// Failed to parse bitflags.
+    InvalidBitFlags(String),
 }
 
 impl TryFromProtoError {
@@ -214,6 +216,7 @@ impl std::fmt::Display for TryFromProtoError {
             InvalidUri(error) => error.fmt(f),
             GlobError(error) => error.fmt(f),
             InvalidUrl(error) => error.fmt(f),
+            InvalidBitFlags(error) => error.fmt(f),
         }
     }
 }
@@ -245,6 +248,7 @@ impl std::error::Error for TryFromProtoError {
             InvalidUri(error) => Some(error),
             GlobError(error) => Some(error),
             InvalidUrl(error) => Some(error),
+            InvalidBitFlags(_) => None,
         }
     }
 }

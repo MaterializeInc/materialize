@@ -664,6 +664,40 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
     }
 }
 
+impl RustType<mz_stash::objects::proto::DurableCollectionMetadata> for DurableCollectionMetadata {
+    fn into_proto(&self) -> mz_stash::objects::proto::DurableCollectionMetadata {
+        mz_stash::objects::proto::DurableCollectionMetadata {
+            remap_shard: self
+                .remap_shard
+                .map(|id| mz_stash::objects::proto::ShardId {
+                    id: id.into_proto(),
+                }),
+            data_shard: Some(mz_stash::objects::proto::ShardId {
+                id: self.data_shard.into_proto(),
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: mz_stash::objects::proto::DurableCollectionMetadata,
+    ) -> Result<Self, TryFromProtoError> {
+        let remap_shard = proto
+            .remap_shard
+            .map(|shard| ShardId::from_proto(shard.id))
+            .transpose()?;
+        let data_shard = proto
+            .data_shard
+            .ok_or_else(|| {
+                TryFromProtoError::missing_field("DurableCollectionMetadata::data_shard")
+            })
+            .and_then(|shard| ShardId::from_proto(shard.id))?;
+        Ok(DurableCollectionMetadata {
+            remap_shard,
+            data_shard,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DurableExportMetadata<T> {
     pub initial_as_of: SinkAsOf<T>,
@@ -701,9 +735,30 @@ impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Tim
     }
 }
 
+impl RustType<mz_stash::objects::proto::DurableExportMetadata>
+    for DurableExportMetadata<mz_repr::Timestamp>
+{
+    fn into_proto(&self) -> mz_stash::objects::proto::DurableExportMetadata {
+        mz_stash::objects::proto::DurableExportMetadata {
+            initial_as_of: Some(self.initial_as_of.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: mz_stash::objects::proto::DurableExportMetadata,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(DurableExportMetadata {
+            initial_as_of: proto
+                .initial_as_of
+                .into_rust_if_some("DurableExportMetadata::initial_as_of")?,
+        })
+    }
+}
+
 impl DurableExportMetadata<mz_repr::Timestamp> {
     pub fn encode<B: BufMut>(&self, buf: &mut B) {
-        self.into_proto()
+        let persisted: ProtoDurableExportMetadata = self.into_proto();
+        persisted
             .encode(buf)
             .expect("no required fields means no initialization errors");
     }

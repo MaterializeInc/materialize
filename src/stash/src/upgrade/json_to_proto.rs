@@ -13,7 +13,6 @@ use std::num::NonZeroI64;
 use std::time::Duration;
 
 use anyhow::Context;
-use bytes::Bytes;
 use fail::fail_point;
 use futures::Future;
 use mz_ore::cast::CastFrom;
@@ -350,7 +349,7 @@ async fn migrate_collections(
                 .context("migrating storage-export-metadata-u64")?;
             }
             COLLECTION_STORAGE_SHARD_FINALIZATION => {
-                migrate_collection::<ShardId, (), objects_v15::ShardId, ()>(client, id, epoch)
+                migrate_collection::<ShardId, (), String, ()>(client, id, epoch)
                     .await
                     .context("migrating storage-shards-to-finalize")?;
             }
@@ -1363,8 +1362,10 @@ impl From<MzAclItem> for objects_v15::MzAclItem {
 impl From<DurableCollectionMetadata> for objects_v15::DurableCollectionMetadata {
     fn from(json: DurableCollectionMetadata) -> Self {
         objects_v15::DurableCollectionMetadata {
-            remap_shard: json.remap_shard.map(objects_v15::ShardId::from),
-            data_shard: Some(json.data_shard.into()),
+            remap_shard: json.remap_shard.map(|id| objects_v15::StringWrapper {
+                inner: id.to_string(),
+            }),
+            data_shard: json.data_shard.to_string(),
         }
     }
 }
@@ -1382,14 +1383,6 @@ impl From<SinkAsOf> for objects_v15::SinkAsOf {
         objects_v15::SinkAsOf {
             frontier: Some(json.frontier.into()),
             strict: json.strict,
-        }
-    }
-}
-
-impl From<ShardId> for objects_v15::ShardId {
-    fn from(json: ShardId) -> Self {
-        objects_v15::ShardId {
-            id: Bytes::from(json.0.to_vec()),
         }
     }
 }

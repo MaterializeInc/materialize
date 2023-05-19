@@ -36,6 +36,7 @@ mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-rocksdb = { path = "../rocksdb" }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 paste = "1.0"
 protobuf-native = "0.2.1"
