@@ -290,6 +290,18 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
     ));
 
+    // Basic check that the `--scratch-directory` has been setup.
+    // Otherwise, rocksdb instances will erroneously create the directory
+    // on the root drive.
+    if let Some(scratch_directory) = &args.scratch_directory {
+        if !scratch_directory.is_dir() {
+            anyhow::bail!(
+                "scratch directory {} does not exist, or is not a directory",
+                scratch_directory.display()
+            );
+        }
+    }
+
     // Start storage server.
     let (_storage_server, storage_client) = mz_storage::serve(
         mz_cluster::server::ClusterConfig {

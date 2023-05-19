@@ -84,10 +84,11 @@ use clap::ArgEnum;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource, ObjectFieldSelector,
-    PersistentVolumeClaim, PersistentVolumeClaimSpec, Pod, PodAffinityTerm, PodAntiAffinity,
-    PodSpec, PodTemplateSpec, ResourceRequirements, Secret, Service as K8sService, ServicePort,
-    ServiceSpec, VolumeMount,
+    Affinity, Container, ContainerPort, ContainerState, EnvVar, EnvVarSource,
+    EphemeralVolumeSource, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimSpec,
+    PersistentVolumeClaimTemplate, Pod, PodAffinityTerm, PodAntiAffinity, PodSpec, PodTemplateSpec,
+    ResourceRequirements, Secret, Service as K8sService, ServicePort, ServiceSpec, Volume,
+    VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
@@ -134,6 +135,9 @@ pub struct KubernetesOrchestratorConfig {
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// Whether to use code coverage mode or not. Always false for production.
     pub coverage: bool,
+    /// Whether to create a ephemeral volume in each pod, using the configured
+    /// `StorageClass`.
+    pub ephemeral_volume_storage_class: Option<String>,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -585,6 +589,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             "--secrets-reader-kubernetes-context={}",
             self.config.context
         ));
+        if self.config.ephemeral_volume_storage_class.is_some() {
+            args.push("--scratch-directory=/scratch-directory".into());
+        }
 
         let anti_affinity = anti_affinity
             .map(|label_selectors| -> Result<_, anyhow::Error> {
@@ -697,10 +704,51 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
-        let volume_mounts = if self.config.coverage {
-            Some(vec![VolumeMount {
+        let mut volume_mounts = vec![];
+
+        if self.config.coverage {
+            volume_mounts.push(VolumeMount {
                 name: "coverage".to_string(),
                 mount_path: "/coverage".to_string(),
+                ..Default::default()
+            })
+        }
+
+        let volumes = if let Some(ephemeral_volume_storage_class) =
+            &self.config.ephemeral_volume_storage_class
+        {
+            volume_mounts.push(VolumeMount {
+                name: "scratch-volume".to_string(),
+                mount_path: "/scratch-directory".to_string(),
+                ..Default::default()
+            });
+
+            Some(vec![Volume {
+                name: "scratch-volume".to_string(),
+                ephemeral: Some(EphemeralVolumeSource {
+                    volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                        metadata: Some(ObjectMeta {
+                            labels: Some(BTreeMap::from([(
+                                "materialize.cloud/skip-admission-webhook".to_string(),
+                                "true".to_string(),
+                            )])),
+                            ..Default::default()
+                        }),
+                        spec: PersistentVolumeClaimSpec {
+                            access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                            storage_class_name: Some(ephemeral_volume_storage_class.to_string()),
+                            resources: Some(ResourceRequirements {
+                                requests: Some(BTreeMap::from([(
+                                    "storage".to_string(),
+                                    Quantity("35Gi".to_string()),
+                                )])),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                    }),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }])
         } else {
@@ -759,10 +807,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         limits: Some(limits.clone()),
                         requests: Some(limits),
                     }),
-                    volume_mounts,
+                    volume_mounts: if !volume_mounts.is_empty() {
+                        Some(volume_mounts)
+                    } else {
+                        None
+                    },
                     env,
                     ..Default::default()
                 }],
+                volumes,
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
                 service_account: self.config.service_account.clone(),

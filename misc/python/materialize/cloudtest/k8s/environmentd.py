@@ -149,6 +149,8 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             f"--persist-blob-url=s3://minio:minio123@persist/persist?endpoint={s3_endpoint}&region=minio",
             "--orchestrator=kubernetes",
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
+            # Kind sets up a basic local-file storage class based on Rancher, named `standard`
+            "--orchestrator-kubernetes-ephemeral-volume-class=standard",
             "--persist-consensus-url=postgres://root@cockroach.default:26257?options=--search_path=consensus",
             "--adapter-stash-url=postgres://root@cockroach.default:26257?options=--search_path=adapter",
             "--storage-stash-url=postgres://root@cockroach.default:26257?options=--search_path=storage",
