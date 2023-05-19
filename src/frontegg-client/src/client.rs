@@ -219,16 +219,15 @@ impl Client {
     /// Verifies the JWT signature using a JWK from the well-known endpoint and
     /// returns the user claims.
     pub async fn claims(&self) -> Result<Claims, Error> {
-        let jwks = self.get_jwks().await?;
-        let jwk = jwks.keys.first().expect("Error validating signature JWK.");
+        let jwks = self.get_jwks().await.map_err(|_| Error::FetchingJwks)?;
+        let jwk = jwks.keys.first().ok_or_else(|| Error::EmptyJwks)?;
         let token = self.auth().await?;
 
         let token_data = decode::<Claims>(
             &token,
-            &DecodingKey::from_jwk(&jwk).unwrap(),
+            &DecodingKey::from_jwk(&jwk).map_err(|_| Error::ConvertingJwks)?,
             &Validation::new(Algorithm::RS256),
-        )
-        .unwrap();
+        ).map_err(|_| Error::DecodingClaims)?;
 
         Ok(token_data.claims)
     }

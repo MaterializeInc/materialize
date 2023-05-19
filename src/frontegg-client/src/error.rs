@@ -63,4 +63,18 @@ pub enum Error {
     /// An Frontegg API error from a request.
     #[error("frontegg error: api: {0}")]
     Api(#[from] ApiError),
+    /// An error indicating that the JWK set contains no keys.
+    #[error("JWK set contained no keys.")]
+    EmptyJwks,
+    /// An error thrown after trying to fetch the JWKS from well-known endpoint.
+    #[error("Error fetching JWKS.")]
+    FetchingJwks,
+    /// An error thrown after trying to build a [jsonwebtoken::DecodingKey] using JWKS
+    #[error("Converting JWK into decoding key.")]
+    ConvertingJwks,
+    /// An error indicating that the claims are invalid, acoording to the structure
+    /// or keys provided. If the error persists,
+    /// check if the token claims matches [mz_frontegg_auth::auth::Claims]
+    #[error("Decoding JWT claims.")]
+    DecodingClaims,
 }
