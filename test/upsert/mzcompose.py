@@ -10,6 +10,7 @@
 # This mzcompose currently tests `UPSERT` sources with `DISK` configured.
 # TODO(guswynn): move ALL upsert-related tests into this directory.
 
+import time
 from pathlib import Path
 
 from materialize import ci_util
@@ -50,6 +51,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for name in [
         "rehydration",
         "testdrive",
+        "failpoint",
     ]:
         with c.test_case(name):
             c.workflow(name)
@@ -178,3 +180,46 @@ def workflow_rehydration(c: Composition) -> None:
 
         c.run("testdrive", "rehydration/04-reset.td")
         c.kill("clusterd1")
+
+
+def workflow_failpoint(c: Composition) -> None:
+    """Test behaviour when upsert state errors"""
+
+    c.down(destroy_volumes=True)
+
+    dependencies = [
+        "materialized",
+        "zookeeper",
+        "kafka",
+    ]
+    with c.override(
+        Testdrive(no_reset=True, consistent_seed=True),
+    ):
+        print(f"Running failpoint workflow")
+
+        c.up(*dependencies)
+
+        for failpoint in [
+            "fail_state_multi_put",
+            "fail_state_multi_get",
+        ]:
+            for action in ["return", "panic"]:
+                run_one_failpoint(c, failpoint, action)
+
+
+def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
+    print(f">>> Running failpoint test for failpoint {failpoint} with action {action}")
+
+    c.up("materialized")
+
+    c.run(
+        "testdrive",
+        f"--var=failpoint={failpoint}",
+        f"--var=action={action}",
+        "failpoint/01-before.td",
+    )
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.run("testdrive", "failpoint/02-after.td")
+    c.rm("materialized", "testdrive", destroy_volumes=True)
