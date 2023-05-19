@@ -108,35 +108,6 @@ impl AllLiveDiffs {
         self.0.len()
     }
 }
-//
-// struct LiveDiffsIter<T> {
-//     live_diffs: Iter<'_, VersionedData>,
-//     cfg: PersistConfig,
-//     metrics: Arc<Metrics>,
-//     idx: usize,
-//     _phantom: PhantomData<T>,
-// }
-//
-// impl<T: Timestamp + Lattice + Codec64> Iterator for LiveDiffsIter<T> {
-//     type Item = StateDiff<T>;
-//
-//     fn next(&mut self) -> Option<Self::Item> {
-//         let data = self.live_diffs.0.iter()
-//
-//         if let Some(data) = data {
-//             let latest_diff = self
-//                 .metrics
-//                 .codecs
-//                 .state_diff
-//                 // Note: `latest_diff.data` is a `Bytes`, so cloning just increments a ref count
-//                 .decode(|| StateDiff::<T>::decode(&BUILD_INFO.semver_version(), data.data));
-//
-//             Some(latest_diff)
-//         } else {
-//             None
-//         }
-//     }
-// }
 
 #[derive(Debug, Clone)]
 pub struct EncodedRollup {
