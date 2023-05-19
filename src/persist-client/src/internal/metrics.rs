@@ -1104,6 +1104,7 @@ pub struct ShardsMetrics {
     spine_batch_count: mz_ore::metrics::UIntGaugeVec,
     batch_part_count: mz_ore::metrics::UIntGaugeVec,
     update_count: mz_ore::metrics::UIntGaugeVec,
+    rollup_count: mz_ore::metrics::UIntGaugeVec,
     largest_batch_size: mz_ore::metrics::UIntGaugeVec,
     seqnos_held: mz_ore::metrics::UIntGaugeVec,
     gc_seqno_held_parts: mz_ore::metrics::UIntGaugeVec,
@@ -1184,6 +1185,11 @@ impl ShardsMetrics {
             update_count: registry.register(metric!(
                 name: "mz_persist_shard_update_count",
                 help: "count of updates by shard",
+                var_labels: ["shard"],
+            )),
+            rollup_count: registry.register(metric!(
+                name: "mz_persist_shard_rollup_count",
+                help: "count of rollups by shard",
                 var_labels: ["shard"],
             )),
             largest_batch_size: registry.register(metric!(
@@ -1337,6 +1343,7 @@ pub struct ShardMetrics {
     pub spine_batch_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub batch_part_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub update_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub rollup_count: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub seqnos_held: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_seqno_held_parts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub gc_live_diffs: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1384,6 +1391,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             update_count: shards_metrics
                 .update_count
+                .get_delete_on_drop_gauge(vec![shard.clone()]),
+            rollup_count: shards_metrics
+                .rollup_count
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
             largest_batch_size: shards_metrics
                 .largest_batch_size
