@@ -897,7 +897,7 @@ impl Stash {
         Ok(version == committed_if_version)
     }
 
-    /// Returns whether or not this Stash is initialized. We consider a Stash to be initialized if
+    /// Returns whether this Stash is initialized. We consider a Stash to be initialized if
     /// it contains an entry in the [`COLLECTION_CONFIG`] with the key of [`USER_VERSION_KEY`].
     #[tracing::instrument(name = "stash::is_initialized", level = "debug", skip_all)]
     pub async fn is_initialized(&mut self) -> Result<bool, StashError> {

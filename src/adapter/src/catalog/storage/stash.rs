@@ -22,9 +22,10 @@ use mz_storage_client::types::sources::Timeline;
 
 use crate::catalog::builtin::{MZ_INTROSPECTION_ROLE, MZ_SYSTEM_ROLE};
 use crate::catalog::storage::{
-    BootstrapArgs, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, MZ_INTROSPECTION_ROLE_ID,
-    MZ_SYSTEM_ROLE_ID, REPLICA_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
-    SYSTEM_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    BootstrapArgs, RoleMembership, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY,
+    MZ_INTROSPECTION_ROLE_ID, MZ_SYSTEM_ROLE_ID, REPLICA_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
+    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::rbac;
 
@@ -124,8 +125,7 @@ pub async fn initialize(
     //
     // Note: Make sure we do this _after_ initializing the ID_ALLOCATOR_COLLECTION.
     let bootstrap_role = if let Some(role) = &options.bootstrap_role {
-        let user_id = id_allocator.allocate(USER_ID_ALLOC_KEY.to_string());
-        let role_id = RoleId::User(user_id);
+        let role_id = RoleId::User(id_allocator.allocate(USER_ROLE_ID_ALLOC_KEY.to_string()));
         let role_val = proto::RoleValue {
             name: role.to_string(),
             attributes: Some(
@@ -135,7 +135,7 @@ pub async fn initialize(
                     .with_create_role()
                     .into_proto(),
             ),
-            membership: Some(proto::RoleMembership::default()),
+            membership: Some(RoleMembership::new().into_proto()),
         };
 
         audit_events.push((
@@ -164,7 +164,7 @@ pub async fn initialize(
                     proto::RoleValue {
                         name: MZ_SYSTEM_ROLE.name.to_string(),
                         attributes: Some(MZ_SYSTEM_ROLE.attributes.clone().into_proto()),
-                        membership: Some(proto::RoleMembership::default()),
+                        membership: Some(RoleMembership::new().into_proto()),
                     },
                 ),
                 (
@@ -174,7 +174,7 @@ pub async fn initialize(
                     proto::RoleValue {
                         name: MZ_INTROSPECTION_ROLE.name.to_string(),
                         attributes: Some(MZ_INTROSPECTION_ROLE.attributes.clone().into_proto()),
-                        membership: Some(proto::RoleMembership::default()),
+                        membership: Some(RoleMembership::new().into_proto()),
                     },
                 ),
                 (
@@ -183,8 +183,8 @@ pub async fn initialize(
                     },
                     proto::RoleValue {
                         name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-                        attributes: Some(proto::RoleAttributes::default()),
-                        membership: Some(proto::RoleMembership::default()),
+                        attributes: Some(RoleAttributes::new().into_proto()),
+                        membership: Some(RoleMembership::new().into_proto()),
                     },
                 ),
             ]
@@ -290,7 +290,7 @@ pub async fn initialize(
     };
 
     let public_schema_key = proto::SchemaKey {
-        id: Some(SchemaId::System(PUBLIC_SCHEMA_ID).into_proto()),
+        id: Some(SchemaId::User(PUBLIC_SCHEMA_ID).into_proto()),
     };
     let public_schema =
         proto::SchemaValue {
@@ -413,8 +413,8 @@ pub async fn initialize(
         proto::audit_log_event_v1::Details::CreateClusterReplicaV1(
             proto::audit_log_event_v1::CreateClusterReplicaV1 {
                 cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
-                cluser_name: "default".to_string(),
-                replica_name: "default".to_string(),
+                cluser_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
+                replica_name: DEFAULT_REPLICA_NAME.to_string(),
                 replica_id: Some(DEFAULT_REPLICA_ID.to_string().into()),
                 logical_size: options.default_cluster_replica_size.to_string(),
             },

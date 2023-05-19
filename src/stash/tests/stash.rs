@@ -97,7 +97,7 @@ pub static C_SAVEPOINT: TypedCollection<i64, i64> = TypedCollection::new("c_save
 #[tokio::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_postgres() {
-    mz_ore::test::init_logging();
+    mz_ore::test::init_logging_default("debug");
 
     let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
     let factory = StashFactory::new(&MetricsRegistry::new());
@@ -477,9 +477,13 @@ where
     stash
         .with_transaction(move |tx| {
             Box::pin(async move {
-                tx.update_savepoint(orders.id, &[(("k3".into(), "v3".into()), 1, 1)], None)
-                    .await
-                    .unwrap();
+                tx.update_savepoint(
+                    orders.id,
+                    &[(("k3".to_string(), "v3".to_string()), 1, 1)],
+                    None,
+                )
+                .await
+                .unwrap();
                 tx.seal(orders.id, Antichain::from_elem(2), None)
                     .await
                     .unwrap();
@@ -554,12 +558,18 @@ where
             Box::pin(async move {
                 // Create an arrangement, write some data into it, then read it back.
                 let orders = tx.collection::<String, String>("orders").await.unwrap();
-                tx.update_savepoint(orders.id, &[(("widgets".into(), "1".into()), 1, 1)], None)
+                tx.update_savepoint(orders.id, &[(("widgets".to_string(), "1".to_string()), 1, 1)], None)
                     .await
                     .unwrap();
-                tx.update_savepoint(orders.id, &[(("wombats".into(), "2".into()), 1, 2)], None)
+                tx.update_savepoint(orders.id, &[(("wombats".to_string(), "2".to_string()), 1, 2)], None)
                     .await
                     .unwrap();
+
+                let collections = tx.collections().await;
+                tracing::info!("{collections:?}");
+                let data: Vec<_> = tx.iter_raw(orders.id).await.unwrap().collect();
+                tracing::info!("{data:?}");
+
                 // Move this before iter to better test the memory tx's iter_key.
                 assert_eq!(
                     tx.iter_key(orders, &"widgets".to_string()).await.unwrap(),
@@ -579,7 +589,7 @@ where
 
                 // Write to another arrangement and ensure the data stays separate.
                 let other = tx.collection::<String, String>("other").await.unwrap();
-                tx.update_savepoint(other.id, &[(("foo".into(), "bar".into()), 1, 1)], None)
+                tx.update_savepoint(other.id, &[(("foo".to_string(), "bar".to_string()), 1, 1)], None)
                     .await
                     .unwrap();
                 assert_eq!(
@@ -595,7 +605,7 @@ where
                 );
 
                 // Check that consolidation happens immediately...
-                tx.update_savepoint(orders.id, &[(("wombats".into(), "2".into()), 1, -1)], None)
+                tx.update_savepoint(orders.id, &[(("wombats".to_string(), "2".to_string()), 1, -1)], None)
                     .await
                     .unwrap();
                 assert_eq!(
@@ -607,7 +617,7 @@ where
                 );
 
                 // ...even when it results in a entry's removal.
-                tx.update_savepoint(orders.id, &[(("wombats".into(), "2".into()), 1, -1)], None)
+                tx.update_savepoint(orders.id, &[(("wombats".to_string(), "2".to_string()), 1, -1)], None)
                     .await
                     .unwrap();
                 assert_eq!(
@@ -619,9 +629,9 @@ where
                 tx.update_savepoint(
                     orders.id,
                     &[
-                        (("widgets".into(), "1".into()), 2, 1),
-                        (("widgets".into(), "1".into()), 3, 1),
-                        (("widgets".into(), "1".into()), 4, 1),
+                        (("widgets".to_string(), "1".to_string()), 2, 1),
+                        (("widgets".to_string(), "1".to_string()), 3, 1),
+                        (("widgets".to_string(), "1".to_string()), 4, 1),
                     ],
                     None,
                 )
@@ -684,7 +694,7 @@ where
                     "stash error: compact request {4} is greater than the current upper frontier {3}",
                 );
                 assert_eq!(
-                    tx.update_savepoint(orders.id, &[(("wodgets".into(), "1".into()), 2, 1)], None)
+                    tx.update_savepoint(orders.id, &[(("wodgets".to_string(), "1".to_string()), 2, 1)], None)
                         .await
                         .unwrap_err()
                         .to_string(),

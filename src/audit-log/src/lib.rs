@@ -1059,6 +1059,7 @@ mod tests {
 
     proptest! {
         #[test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_audit_log_roundtrips(event: VersionedEvent) {
             let proto = event.into_proto();
             let roundtrip = VersionedEvent::from_proto(proto).unwrap();
@@ -1067,6 +1068,7 @@ mod tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // slow
         fn proptest_storage_usage_roundtrips(usage: VersionedStorageUsage) {
             let proto = usage.into_proto();
             let roundtrip = VersionedStorageUsage::from_proto(proto).unwrap();
