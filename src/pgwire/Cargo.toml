@@ -7,27 +7,27 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-async-trait = "0.1.68"
-byteorder = "1.4.3"
-bytes = "1.3.0"
-bytesize = "1.1.0"
-futures = "0.3.25"
-itertools = "0.10.5"
-mz-adapter = { path = "../adapter" }
-mz-expr = { path = "../expr" }
-mz-frontegg-auth = { path = "../frontegg-auth" }
-mz-ore = { path = "../ore", features = ["tracing_"] }
-mz-pgcopy = { path = "../pgcopy" }
-mz-pgrepr = { path = "../pgrepr" }
-mz-repr = { path = "../repr" }
-mz-sql = { path = "../sql" }
-openssl = { version = "0.10.48", features = ["vendored"] }
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tokio = "1.24.2"
-tokio-openssl = "0.6.3"
-tokio-util = { version = "0.7.4", features = ["codec"] }
-tracing = "0.1.37"
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+byteorder = { workspace = true }
+bytes = { workspace = true }
+bytesize = { workspace = true }
+futures = { workspace = true }
+itertools = { workspace = true }
+mz-adapter = { workspace = true }
+mz-expr = { workspace = true }
+mz-frontegg-auth = { workspace = true }
+mz-ore = { workspace = true, features = ["tracing_"] }
+mz-pgcopy = { workspace = true }
+mz-pgrepr = { workspace = true }
+mz-repr = { workspace = true }
+mz-sql = { workspace = true }
+openssl = { workspace = true, features = ["vendored"] }
+postgres = { workspace = true }
+tokio = { workspace = true }
+tokio-openssl = { workspace = true }
+tokio-util = { workspace = true, features = ["codec"] }
+tracing = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

@@ -7,22 +7,22 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
-axum = { version = "0.6.7", features = ["headers"] }
-headers = "0.3.8"
-http = "0.2.8"
-hyper = { version = "0.14.23", features = ["http1", "server"] }
-include_dir = "0.7.3"
-mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
-prometheus = { version = "0.13.3", default-features = false }
-serde = "1.0.152"
-serde_json = { version = "1.0.89" }
-tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread"] }
-tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "retry", "timeout", "util"] }
-tower-http = { version = "0.3.5", features = ["auth", "cors", "map-response-body", "trace", "util"] }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
+anyhow = { workspace = true }
+askama = { workspace = true, default-features = false, features = ["config", "serde-json"] }
+axum = { workspace = true, features = ["headers"] }
+headers = { workspace = true }
+http = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+include_dir = { workspace = true }
+mz-ore = { workspace = true, default-features = false, features = ["metrics", "tracing_"] }
+prometheus = { workspace = true, default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tower = { workspace = true, features = ["balance", "buffer", "filter", "limit", "retry", "timeout", "util"] }
+tower-http = { workspace = true, features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]

@@ -7,16 +7,16 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures-util = "0.3.25"
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-serde = { version = "1.0.152", features = ["derive"] }
-mz-ore = { path = "../ore", features = ["tracing_"] }
-polonius-the-crab = "0.3.1"
+differential-dataflow = { workspace = true }
+futures-util = { workspace = true }
+mz-ore = { workspace = true, features = ["tracing_"] }
+num-traits = { workspace = true }
+polonius-the-crab = { workspace = true }
+proptest = { workspace = true, default-features = false, features = ["std"]}
+serde = { workspace = true, features = ["derive"] }
+timely = { workspace = true, default-features = false, features = ["bincode"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread", "time"] }
-num-traits = "0.2"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

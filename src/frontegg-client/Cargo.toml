@@ -7,17 +7,17 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-jsonwebtoken = "8.2.0"
-mz-frontegg-auth = { path = "../frontegg-auth" }
-mz-ore = { path = "../ore", features = ["network"] }
-reqwest = { version = "0.11.13", features = ["json"] }
-serde = { version = "1.0.152", features = ["derive"] }
-once_cell = "1.16.0"
-thiserror = "1.0.37"
-tokio = { version = "1.24.2", features = ["macros"] }
-serde_json = "1.0.89"
-uuid = { version = "1.2.2", features = ["serde"] }
-url = "2.3.1"
+jsonwebtoken = { workspace = true }
+mz-frontegg-auth = { workspace = true }
+mz-ore = { workspace = true, features = ["network"] }
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+once_cell = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+url = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

@@ -7,15 +7,15 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-libc = "0.2.138"
-mz-ore = { path = "../ore", default-features = false }
+libc = { workspace = true }
+mz-ore = { workspace = true, default-features = false }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-tempfile = "3.2.0"
+tempfile = { workspace = true }
 
 [build-dependencies]
-cc = "1.0.78"
+cc = { workspace = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

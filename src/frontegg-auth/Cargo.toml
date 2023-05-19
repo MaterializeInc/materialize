@@ -7,17 +7,17 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-base64 = "0.13.1"
-derivative = "2.2.0"
-jsonwebtoken = "8.2.0"
-mz-ore = { path = "../ore", features = ["network"] }
-reqwest = { version = "0.11.13", features = ["json"] }
-serde = { version = "1.0.152", features = ["derive"] }
-thiserror = "1.0.37"
-tokio = { version = "1.24.2", features = ["macros"] }
-tracing = "0.1.37"
-uuid = { version = "1.2.2", features = ["serde"] }
+anyhow = { workspace = true }
+base64 = { workspace = true }
+derivative = { workspace = true }
+jsonwebtoken = { workspace = true }
+mz-ore = { workspace = true, features = ["network"] }
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

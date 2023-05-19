@@ -10,9 +10,9 @@ publish = false
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0.47"
-quote = "1.0.23"
-syn = { version = "1.0.107", features = ["extra-traits", "printing"] }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["extra-traits", "printing"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

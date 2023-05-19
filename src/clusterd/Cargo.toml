@@ -7,31 +7,31 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-axum = "0.6.7"
-clap = { version = "3.2.24", features = ["derive", "env"] }
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.25"
-mz-alloc = { path = "../alloc" }
-mz-build-info = { path = "../build-info" }
-mz-cloud-resources = { path = "../cloud-resources" }
-mz-compute = { path = "../compute" }
-mz-cluster = { path = "../cluster" }
-mz-compute-client = { path = "../compute-client" }
-mz-http-util = { path = "../http-util" }
-mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", features = ["async", "tracing_"] }
-mz-persist-client = { path = "../persist-client" }
-mz-pid-file = { path = "../pid-file" }
-mz-prof = { path = "../prof" }
-mz-service = { path = "../service" }
-mz-storage = { path = "../storage" }
-mz-storage-client = { path = "../storage-client" }
-mz-timely-util = { path = "../timely-util" }
-once_cell = { version = "1.16.0" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util"] }
-tracing = "0.1.37"
+anyhow = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+fail = { workspace = true, features = ["failpoints"] }
+futures = { workspace = true }
+mz-alloc = { workspace = true }
+mz-build-info = { workspace = true }
+mz-cloud-resources = { workspace = true }
+mz-compute = { workspace = true }
+mz-cluster = { workspace = true }
+mz-compute-client = { workspace = true }
+mz-http-util = { workspace = true }
+mz-orchestrator-tracing = { workspace = true }
+mz-ore = { workspace = true, features = ["async", "tracing_"] }
+mz-persist-client = { workspace = true }
+mz-pid-file = { workspace = true }
+mz-prof = { workspace = true }
+mz-service = { workspace = true }
+mz-storage = { workspace = true }
+mz-storage-client = { workspace = true }
+mz-timely-util = { workspace = true }
+once_cell = { workspace = true }
+timely = { workspace = true, default-features = false, features = ["bincode"] }
+tokio = { workspace = true, features = ["fs", "rt", "sync", "test-util"] }
+tracing = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [features]

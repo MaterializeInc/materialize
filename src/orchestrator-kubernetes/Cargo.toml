@@ -7,23 +7,23 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-async-trait = "0.1.68"
-chrono = { version = "0.4.23", default-features = false }
-clap = { version = "3.2.24", features = ["derive"] }
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.25"
-maplit = "1.0.2"
-mz-cloud-resources = { path = "../cloud-resources" }
-mz-orchestrator = { path = "../orchestrator" }
-mz-secrets = { path = "../secrets" }
-mz-repr = { path = "../repr" }
-k8s-openapi = { version = "0.16.0", features = ["v1_24"] }
-kube = { version = "0.77.0", features = ["runtime", "ws"] }
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.89"
-sha2 = "0.10.6"
-tracing = "0.1.37"
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true, default-features = false }
+clap = { workspace = true, features = ["derive"] }
+fail = { workspace = true, features = ["failpoints"] }
+futures = { workspace = true }
+maplit = { workspace = true }
+mz-cloud-resources = { workspace = true }
+mz-orchestrator = { workspace = true }
+mz-secrets = { workspace = true }
+mz-repr = { workspace = true }
+k8s-openapi = { workspace = true, features = ["v1_24"] }
+kube = { workspace = true, features = ["runtime", "ws"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

@@ -7,18 +7,18 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-aws-config = { version = "0.55", default-features = false, features = ["native-tls"] }
-aws-sdk-s3 = { version = "0.26", default-features = false, features = ["native-tls", "rt-tokio"] }
-bytefmt = "0.1.7"
-clap = { version = "3.2.24", features = ["derive"] }
-futures = "0.3.25"
-indicatif = "0.17.2"
-mz-aws-s3-util = { path = "../aws-s3-util" }
-mz-ore = { path = "../ore", features = ["cli"] }
-tokio = { version = "1.24.2", features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
-tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.16", default-features = false, features = ["env-filter", "fmt"] }
+anyhow = { workspace = true }
+aws-config = { workspace = true, default-features = false, features = ["native-tls"] }
+aws-sdk-s3 = { workspace = true, default-features = false, features = ["native-tls", "rt-tokio"] }
+bytefmt = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
+indicatif = { workspace = true }
+mz-aws-s3-util = { workspace = true }
+mz-ore = { workspace = true, features = ["cli"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, default-features = false, features = ["env-filter", "fmt"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

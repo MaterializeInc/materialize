@@ -7,28 +7,28 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-clap = { version = "3.2.24", features = ["derive"] }
-crossbeam = "0.8.2"
-mz-avro = { path = "../avro" }
-mz-ccsr = { path = "../ccsr" }
-mz-ore = { path = "../ore", features = ["cli", "network", "async"] }
-num_cpus = "1.14.0"
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-rand = "0.8.5"
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.89"
-tokio = { version = "1.24.2", features = ["macros", "sync"] }
-thiserror = "1.0.37"
-tracing = "0.1.37"
-url = "2.3.1"
+anyhow = { workspace = true }
+chrono = { workspace = true, default-features = false, features = ["std"] }
+clap = { workspace = true, features = ["derive"] }
+crossbeam = { workspace = true }
+mz-avro = { workspace = true }
+mz-ccsr = { workspace = true }
+mz-ore = { workspace = true, features = ["cli", "network", "async"] }
+num_cpus = { workspace = true }
+prost = { workspace = true, features = ["no-recursion-limit"] }
+rand = { workspace = true }
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "sync"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
-prost-build = "0.11.2"
-protobuf-src = "1.1.0"
+prost-build = { workspace = true }
+protobuf-src = { workspace = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

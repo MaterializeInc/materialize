@@ -7,21 +7,21 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-async-trait = "0.1.68"
-clap = { version = "3.2.24", features = ["env", "derive"] }
-futures-core = "0.3.21"
-http = "0.2.8"
-humantime = { version = "2.1.0", optional = true }
-mz-build-info = { path = "../build-info" }
-mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["tracing_", "cli"] }
-mz-repr = { path = "../repr", optional = true }
-mz-service = { path = "../service" }
-sentry-tracing = { version = "0.29.1" }
-tracing = { version = "0.1.37" }
-tracing-subscriber = { version = "0.3.16", default-features = false }
-opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"] }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+clap = { workspace = true, features = ["env", "derive"] }
+futures-core = { workspace = true }
+http = { workspace = true }
+humantime = { workspace = true, optional = true }
+mz-build-info = { workspace = true }
+mz-orchestrator = { workspace = true }
+mz-ore = { workspace = true, features = ["tracing_", "cli"] }
+mz-repr = { workspace = true, optional = true }
+mz-service = { workspace = true }
+sentry-tracing = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, default-features = false }
+opentelemetry = { workspace = true, features = ["rt-tokio", "trace"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [features]

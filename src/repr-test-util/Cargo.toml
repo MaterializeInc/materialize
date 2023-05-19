@@ -7,15 +7,15 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-chrono = { version = "0.4.23", default-features = false, features = ["serde", "std"] }
-mz-lowertest = { path = "../lowertest" }
-mz-ore = { path = "../ore" }
-mz-repr = { path = "../repr" }
-proc-macro2 = "1.0.47"
+chrono = { workspace = true, default-features = false, features = ["serde", "std"] }
+mz-lowertest = { workspace = true }
+mz-ore = { workspace = true }
+mz-repr = { workspace = true }
+proc-macro2 = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-datadriven = "0.6.0"
+datadriven = { workspace = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

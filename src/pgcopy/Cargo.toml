@@ -7,10 +7,10 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-bytes = "1.3.0"
-csv = "1.1.6"
-mz-pgrepr = { path = "../pgrepr" }
-mz-repr = { path = "../repr" }
+bytes = { workspace = true }
+csv = { workspace = true }
+mz-pgrepr = { workspace = true }
+mz-repr = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

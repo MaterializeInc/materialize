@@ -7,75 +7,75 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-bytes = "1.3.0"
-bytesize = "1.1.0"
-chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-const_format = "0.2.30"
-dec = "0.4.8"
-derivative = "2.2.0"
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-enum-kinds = "0.5.1"
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.25"
-hex = "0.4.3"
-itertools = "0.10.5"
-once_cell = "1.16.0"
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", default_features = false, features = ["hypertls"] }
-maplit = "1.0.2"
-mz-audit-log = { path = "../audit-log" }
-mz-build-info = { path = "../build-info" }
-mz-ccsr = { path = "../ccsr" }
-mz-compute-client = { path = "../compute-client" }
-mz-controller = { path = "../controller" }
-mz-expr = { path = "../expr" }
-mz-kafka-util = { path = "../kafka-util" }
-mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["chrono", "async", "tracing_"] }
-mz-persist-types = { path = "../persist-types" }
-mz-persist-client = { path = "../persist-client" }
-mz-pgcopy = { path = "../pgcopy" }
-mz-pgrepr = { path = "../pgrepr" }
-mz-postgres-util = { path = "../postgres-util" }
-mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
-mz-rocksdb = { path = "../rocksdb" }
-mz-secrets = { path = "../secrets" }
-mz-segment = { path = "../segment" }
-mz-sql = { path = "../sql" }
-mz-sql-parser = { path = "../sql-parser" }
-mz-ssh-util = { path = "../ssh-util" }
-mz-stash = { path = "../stash" }
-mz-storage-client = { path = "../storage-client" }
-mz-transform = { path = "../transform" }
-mz-cloud-resources = { path = "../cloud-resources" }
-opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"] }
-prometheus = { version = "0.13.3", default-features = false }
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-rand = "0.8.5"
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-regex = "1.7.0"
-reqwest = "0.11.13"
-semver = "1.0.16"
-serde = "1.0.152"
-serde_json = "1.0.89"
-smallvec = { version = "1.10.0", features = ["union"] }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.24.2", features = ["rt", "time"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tokio-stream = "0.1.11"
-tracing = "0.1.37"
-tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing.git", branch = "v0.1.x" }
-tracing-subscriber = "0.3.16"
-thiserror = "1.0.37"
-uncased = "0.9.7"
-uuid = { version = "1.2.2", features = ["v4"] }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+bytesize = { workspace = true }
+chrono = { workspace = true }
+const_format = { workspace = true }
+dec = { workspace = true }
+derivative = { workspace = true }
+differential-dataflow = { workspace = true }
+enum-kinds = { workspace = true }
+fail = { workspace = true, features = ["failpoints"] }
+futures = { workspace = true }
+hex = { workspace = true }
+itertools = { workspace = true }
+once_cell = { workspace = true }
+launchdarkly-server-sdk = { workspace = true, features = ["hypertls"] }
+maplit = { workspace = true }
+mz-audit-log = { workspace = true }
+mz-build-info = { workspace = true }
+mz-ccsr = { workspace = true }
+mz-compute-client = { workspace = true }
+mz-controller = { workspace = true }
+mz-expr = { workspace = true }
+mz-kafka-util = { workspace = true }
+mz-orchestrator = { workspace = true }
+mz-ore = { workspace = true }
+mz-persist-types = { workspace = true }
+mz-persist-client = { workspace = true }
+mz-pgcopy = { workspace = true }
+mz-pgrepr = { workspace = true }
+mz-postgres-util = { workspace = true }
+mz-proto = { workspace = true }
+mz-repr = { workspace = true }
+mz-rocksdb = { workspace = true }
+mz-secrets = { workspace = true }
+mz-segment = { workspace = true }
+mz-sql = { workspace = true }
+mz-sql-parser = { workspace = true }
+mz-ssh-util = { workspace = true }
+mz-stash = { workspace = true }
+mz-storage-client = { workspace = true }
+mz-transform = { workspace = true }
+mz-cloud-resources = { workspace = true }
+opentelemetry = { workspace = true, features = ["rt-tokio", "trace"] }
+prometheus = { workspace = true, default-features = false }
+prost = { workspace = true, features = ["no-recursion-limit"] }
+rand = { workspace = true }
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+regex = { workspace = true }
+reqwest = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smallvec = { workspace = true, features = ["union"] }
+timely = { workspace = true, default-features = false, features = ["bincode"] }
+tokio = { workspace = true, features = ["rt", "time"] }
+tokio-postgres = { workspace = true }
+tokio-stream = { workspace = true }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+uncased = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-criterion = { version = "0.4.0", features = ["async_tokio"] }
-datadriven = "0.6.0"
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
+criterion = { workspace = true, features = ["async_tokio"] }
+datadriven = { workspace = true }
+proptest = { workspace = true }
 
 [[bench]]
 name = "catalog"

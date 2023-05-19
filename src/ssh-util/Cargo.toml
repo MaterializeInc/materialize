@@ -7,20 +7,20 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = { version = "1.0.66" }
-mz-ore = { path = "../ore" }
-openssh = { version = "0.9.8", default-features = false, features = ["native-mux"] }
-openssh-mux-client = "0.15.5"
-openssl = { version = "0.10.48", features = ["vendored"] }
-rand = "0.8.5"
-scopeguard = "1.1.0"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = { version = "1.0.89" }
-ssh-key = { version = "0.4.3" }
-tempfile = "3.3.0"
-tokio = "1.24.2"
-tracing = "0.1.37"
-zeroize = { version = "1.5.7", features = ["serde"] }
+anyhow = { workspace = true }
+mz-ore = { workspace = true }
+openssh = { workspace = true, default-features = false, features = ["native-mux"] }
+openssh-mux-client = { workspace = true }
+openssl = { workspace = true, features = ["vendored"] }
+rand = { workspace = true }
+scopeguard = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+ssh-key = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+zeroize = { workspace = true, features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

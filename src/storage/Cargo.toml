@@ -11,86 +11,86 @@ name = "upsert_open_loop"
 bench = false
 
 [dependencies]
-anyhow = "1.0.66"
-async-stream = "0.3.3"
-async-trait = "0.1.68"
-bytesize = "1.1.0"
-chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-clap = { version = "3.2.24", features = ["derive", "env"] }
-crossbeam-channel = "0.5.8"
-csv-core = { version = "0.1.10" }
-dec = "0.4.8"
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-either = { version = "1.8.0", features = ["serde"] }
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.25"
-globset = { version = "0.4.9", features = ["serde1"] }
-http = "0.2.8"
-indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
-itertools = { version = "0.10.5" }
-maplit = "1.0.2"
-mz-avro = { path = "../avro", features = ["snappy"] }
-mz-aws-s3-util = { path = "../aws-s3-util" }
-mz-build-info = { path = "../build-info" }
-mz-ccsr = { path = "../ccsr" }
-mz-cloud-resources = { path = "../cloud-resources" }
-mz-expr = { path = "../expr" }
-mz-cluster = { path = "../cluster" }
-mz-interchange = { path = "../interchange" }
-mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["async", "tracing_", "chrono"] }
-mz-persist = { path = "../persist" }
-mz-persist-client = { path = "../persist-client" }
-mz-persist-types = { path = "../persist-types" }
-mz-pgcopy = { path = "../pgcopy" }
-mz-pid-file = { path = "../pid-file" }
-mz-postgres-util = { path = "../postgres-util" }
-mz-repr = { path = "../repr" }
-mz-rocksdb = { path = "../rocksdb" }
-mz-secrets = { path = "../secrets" }
-mz-service = { path = "../service" }
-mz-sql-parser = { path = "../sql-parser" }
-mz-storage-client = { path = "../storage-client" }
-mz-timely-util = { path = "../timely-util" }
-once_cell = { version = "1.16.0" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-prometheus = { version = "0.13.3", default-features = false }
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-rand = "0.8.5"
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-regex = { version = "1.7.0" }
-rocksdb = { version = "0.21.0", default-features = false, features = ["snappy"] }
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = { version = "1.0.89" }
-sha2 = "0.10.6"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
-tokio-stream = "0.1.11"
-tokio-util = { version = "0.7.4", features = ["io"] }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
-thiserror = { version = "1.0.37" }
-url = { version = "2.3.1", features = ["serde"] }
-uuid = { version = "1.2.2", features = ["serde", "v4"] }
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+bytesize = { workspace = true }
+chrono = { workspace = true, default-features = false, features = ["std"] }
+clap = { workspace = true, features = ["derive", "env"] }
+crossbeam-channel = { workspace = true }
+csv-core = { workspace = true }
+dec = { workspace = true }
+differential-dataflow = { workspace = true }
+either = { workspace = true, features = ["serde"] }
+fail = { workspace = true, features = ["failpoints"] }
+futures = { workspace = true }
+globset = { workspace = true, features = ["serde1"] }
+http = { workspace = true }
+indexmap = { workspace = true, default-features = false, features = ["std"] }
+itertools = { workspace = true }
+maplit = { workspace = true }
+mz-avro = { workspace = true, features = ["snappy"] }
+mz-aws-s3-util = { workspace = true }
+mz-build-info = { workspace = true }
+mz-ccsr = { workspace = true }
+mz-cloud-resources = { workspace = true }
+mz-expr = { workspace = true }
+mz-cluster = { workspace = true }
+mz-interchange = { workspace = true }
+mz-kafka-util = { workspace = true }
+mz-ore = { workspace = true, features = ["async", "tracing_", "chrono"] }
+mz-persist = { workspace = true }
+mz-persist-client = { workspace = true }
+mz-persist-types = { workspace = true }
+mz-pgcopy = { workspace = true }
+mz-pid-file = { workspace = true }
+mz-postgres-util = { workspace = true }
+mz-repr = { workspace = true }
+mz-rocksdb = { workspace = true }
+mz-secrets = { workspace = true }
+mz-service = { workspace = true }
+mz-sql-parser = { workspace = true }
+mz-storage-client = { workspace = true }
+mz-timely-util = { workspace = true }
+once_cell = { workspace = true }
+postgres-protocol = { workspace = true }
+prometheus = { workspace = true, default-features = false }
+prost = { workspace = true, features = ["no-recursion-limit"] }
+rand = { workspace = true }
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+regex = { workspace = true }
+rocksdb = { workspace = true, default-features = false, features = ["snappy"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+timely = { workspace = true, default-features = false, features = ["bincode"] }
+tokio = { workspace = true, features = ["fs", "rt", "sync", "test-util"] }
+tokio-postgres = { workspace = true, features = ["serde"] }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true, features = ["io"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
-protobuf-src = "1.1.0"
-tonic-build = "0.8.2"
+protobuf-src = { workspace = true }
+tonic-build = { workspace = true }
 
 [dev-dependencies]
-async-trait = "0.1.68"
-axum = { version = "0.6.7" }
-clap = { version = "3.2.24", features = ["derive", "env"] }
-datadriven = { version = "0.6.0", features = ["async"] }
-humantime = "2.1.0"
-mz-http-util = { path = "../http-util" }
-mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-itertools = "0.10.5"
-num_cpus = "1.14.0"
-tempfile = "3.2.0"
-tokio = { version = "1.24.2", features = ["test-util"] }
+async-trait = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+datadriven = { workspace = true, features = ["async"] }
+humantime = { workspace = true }
+mz-http-util = { workspace = true }
+mz-orchestrator-tracing = { workspace = true }
+itertools = { workspace = true }
+num_cpus = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

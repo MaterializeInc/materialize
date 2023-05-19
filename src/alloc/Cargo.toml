@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-mz-ore = { path = "../ore" }
+mz-ore = { workspace = true, features = ["metrics"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 # Disable jemalloc on macOS, as it is not well supported [0][1][2]. The issues
@@ -22,14 +22,14 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 # Furthermore, as of August 2022, some engineers are using profiling tools, e.g.
 # `heaptrack`, that only work with the system allocator.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-mz-prof = { path = "../prof" }
+mz-prof = { workspace = true }
 # According to jemalloc developers, `background_threads` should always be
 # enabled, except in "esoteric" situations that don't apply to Materialize
 # (namely, if the application relies on new threads not being created for
 # whatever reason).
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-tikv-jemallocator = { version = "0.5.0", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
+tikv-jemallocator = { workspace = true, features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
 
 [features]
 # Whether to enable the use of jemalloc on platforms that support it.

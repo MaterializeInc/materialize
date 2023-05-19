@@ -11,44 +11,44 @@ name = "postgres"
 harness = false
 
 [dependencies]
-anyhow = "1.0.66"
-bitflags = "1.3.2"
-bytes = "1.3.0"
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.25"
-itertools = "0.10.5"
-mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
-mz-postgres-util = { path = "../postgres-util" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
-prometheus = { version = "0.13.3", default-features = false }
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}
-prost = { version = "0.11.9", features = ["no-recursion-limit"] }
-rand = "0.8.5"
-serde = "1.0.152"
-serde_json = "1.0.89"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false }
-tokio = "1.24.2"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = [ "with-serde_json-1" ] }
-tracing = "0.1.37"
-uuid = "1.2.2"
+anyhow = { workspace = true }
+bitflags = { workspace = true }
+bytes = { workspace = true }
+differential-dataflow = { workspace = true }
+fail = { workspace = true, features = ["failpoints"] }
+futures = { workspace = true }
+itertools = { workspace = true }
+mz-ore = { workspace = true, features = ["metrics", "network", "async", "test"] }
+mz-postgres-util = { workspace = true }
+postgres-openssl = { workspace = true }
+prometheus = { workspace = true, default-features = false }
+proptest = { workspace = true, default-features = false, features = ["std"] }
+proptest-derive = { workspace = true, features = ["boxed_union"]}
+prost = { workspace = true, features = ["no-recursion-limit"] }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+timely = { workspace = true, default-features = false }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true, features = [ "with-serde_json-1" ] }
+tracing = { workspace = true }
+uuid = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
-anyhow = "1.0.66"
-criterion = { version = "0.4.0", features = ["async_tokio"] }
-mz-postgres-util = { path = "../postgres-util" }
-once_cell = "1.16.0"
-tokio = { version = "1.24.2", features = ["rt", "time"] }
+anyhow = { workspace = true }
+criterion = { workspace = true, features = ["async_tokio"] }
+mz-postgres-util = { workspace = true }
+once_cell = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time"] }
 
 [build-dependencies]
-anyhow = "1.0.66"
-md-5 = "0.10.5"
-protobuf-src = "1.1.0"
-prost-build = "0.11.9"
-serde = "1.0.152"
-serde_json = "1.0.89"
+anyhow = { workspace = true }
+md-5 = { workspace = true }
+protobuf-src = { workspace = true }
+prost-build = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

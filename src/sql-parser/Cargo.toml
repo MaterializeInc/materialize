@@ -8,27 +8,27 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-bytesize = "1.1.0"
-enum-kinds = "0.5.1"
-itertools = "0.10.5"
-mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
-phf = { version = "0.11.1", features = ["uncased"] }
-serde = { version = "1.0.152", features = ["derive"] }
-tracing = "0.1.37"
-uncased = "0.9.7"
+bytesize = { workspace = true }
+enum-kinds = { workspace = true }
+itertools = { workspace = true }
+mz-ore = { workspace = true, default-features = false, features = ["stack"] }
+phf = { workspace = true, features = ["uncased"] }
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }
+uncased = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-datadriven = "0.6.0"
-unicode-width = "0.1.10"
+datadriven = { workspace = true }
+unicode-width = { workspace = true }
 
 [build-dependencies]
-anyhow = "1.0.66"
-mz-ore = { path = "../ore", default-features = false }
-mz-walkabout = { path = "../walkabout", default-features = false }
-phf = { version = "0.11.1", features = ["uncased"] }
-phf_codegen = "0.11.1"
-uncased = "0.9.7"
+anyhow = { workspace = true }
+mz-ore = { workspace = true, default-features = false }
+mz-walkabout = { workspace = true, default-features = false }
+phf = { workspace = true, features = ["uncased"] }
+phf_codegen = { workspace = true }
+uncased = { workspace = true }
 
 [features]
 default = ["workspace-hack"]

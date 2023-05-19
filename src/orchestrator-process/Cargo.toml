@@ -7,27 +7,27 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-async-stream = "0.3.3"
-async-trait = "0.1.68"
-chrono = { version = "0.4.23", default_features = false, features = ["clock"] }
-futures = "0.3.25"
-hex = "0.4.3"
-itertools = "0.10.5"
-libc = "0.2.138"
-maplit = "1.0.2"
-mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["async"] }
-mz-pid-file = { path = "../pid-file" }
-mz-repr = { path = "../repr" }
-mz-secrets = { path = "../secrets" }
-serde = "1.0.147"
-serde_json = "1.0.89"
-scopeguard = "1.1.0"
-sha1 = "0.10.5"
-sysinfo = "0.27.2"
-tokio = { version = "1.24.2", features = [ "fs", "process", "time" ] }
-tracing = "0.1.37"
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true, default_features = false, features = ["clock"] }
+futures = { workspace = true }
+hex = { workspace = true }
+itertools = { workspace = true }
+libc = { workspace = true }
+maplit = { workspace = true }
+mz-orchestrator = { workspace = true }
+mz-ore = { workspace = true, features = ["async"] }
+mz-pid-file = { workspace = true }
+mz-repr = { workspace = true }
+mz-secrets = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+scopeguard = { workspace = true }
+sha1 = { workspace = true }
+sysinfo = { workspace = true }
+tokio = { workspace = true, features = [ "fs", "process", "time" ] }
+tracing = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

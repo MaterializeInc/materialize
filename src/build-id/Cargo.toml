@@ -12,9 +12,9 @@ authors = [
 repository = "https://github.com/MaterializeInc/materialize"
 
 [dependencies]
-anyhow = "1.0.66"
-libc = "0.2.138"
-mz-ore = { path = "../ore", features = ["async"] }
+anyhow = { workspace = true }
+libc = { workspace = true }
+mz-ore = { workspace = true, features = ["async"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

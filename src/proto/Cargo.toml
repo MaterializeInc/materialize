@@ -8,22 +8,22 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-globset = "0.4.9"
-http = "0.2.8"
-mz-ore = { path = "../ore", default-features = false }
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-regex = "1.7.0"
-serde_json = { version = "1.0.89", features = ["arbitrary_precision"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
-url = { version = "2.3.1", features = ["serde"] }
-uuid = "1.2.2"
+anyhow = { workspace = true }
+globset = { workspace = true }
+http = { workspace = true }
+mz-ore = { workspace = true, default-features = false }
+proptest = { workspace = true, default-features = false, features = ["std"] }
+prost = { workspace = true, features = ["no-recursion-limit"] }
+regex = { workspace = true }
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
+tokio-postgres = { workspace = true, optional = true }
+url = { workspace = true, features = ["serde"] }
+uuid = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
-prost-build = "0.11.2"
-protobuf-src = "1.1.0"
+prost-build = { workspace = true }
+protobuf-src = { workspace = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

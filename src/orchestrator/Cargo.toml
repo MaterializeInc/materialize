@@ -7,20 +7,20 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-async-trait = "0.1.68"
-bytesize = "1.1.0"
-chrono = { version = "0.4.23", default_features = false, features = ["serde"] }
-derivative = "2.2.0"
-futures-core = "0.3.21"
-mz-ore = { path = "../ore"}
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-serde = "1.0"
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bytesize = { workspace = true }
+chrono = { workspace = true, default_features = false, features = ["serde"] }
+derivative = { workspace = true }
+futures-core = { workspace = true }
+mz-ore = { workspace = true }
+prost = { workspace = true, features = ["no-recursion-limit"] }
+serde = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
-protobuf-src = "1.1.0"
-tonic-build = "0.8.0"
+protobuf-src = { workspace = true }
+tonic-build = { workspace = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

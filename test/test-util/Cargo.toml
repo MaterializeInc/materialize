@@ -7,15 +7,15 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-anyhow = "1.0.66"
-chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-mz-kafka-util = { path = "../../src/kafka-util" }
-mz-ore = { path = "../../src/ore", features = ["async"] }
-rand = "0.8.5"
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-tokio = "1.24.2"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tracing = "0.1.37"
+anyhow = { workspace = true }
+chrono = { workspace = true, default-features = false, features = ["std"] }
+mz-kafka-util = { workspace = true }
+mz-ore = { workspace = true, features = ["async"] }
+rand = { workspace = true }
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true }
+tracing = { workspace = true }
 workspace-hack = { version = "0.0.0", path = "../../src/workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
