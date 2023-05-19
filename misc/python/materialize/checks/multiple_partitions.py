@@ -12,6 +12,7 @@ from typing import List
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.util import MzVersion
 
 
 def schemas() -> str:
@@ -29,8 +30,12 @@ class MultiplePartitions(Check):
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_create_source_denylist_with_options = true
                 ALTER SYSTEM SET enable_kafka_config_denylist_options = true
-
-
+                """
+                if self.current_version >= MzVersion(0, 55, 0)
+                else ""
+            )
+            + dedent(
+                """
                 $ kafka-create-topic topic=multiple-partitions-topic
 
                 # ingest A-key entries
