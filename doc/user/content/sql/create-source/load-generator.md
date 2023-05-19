@@ -110,6 +110,63 @@ The organizations, users, and accounts are fixed at the time the source
 is created. Each tick interval, either a new auction is started, or a new bid
 is placed in the currently ongoing auction.
 
+### Marketing
+
+The marketing load generator simulates an marketing organization that is using a machine learning model to send coupons to potential leads. The marketing source will be automatically demuxed
+into multiple subsources when the `CREATE SOURCE` command is executed. This will
+create the following subsources:
+
+  * `customers` describes the customers that the marketing team may target.
+
+    Field     | Type       | Description
+    ----------|------------|------------
+    `id`      | [`bigint`] | A unique identifier for the customer.
+    `email`   | [`text`]   | A customers email.
+    `income`  | [`bigint`] | The customers income in pennies.
+
+  * `impressions` describes online ads that have been seen by a customer.
+
+    Field             | Type                         | Description
+    ------------------|------------------------------|------------
+    `id`              | [`bigint`]                   | A unique identifier for the impression.
+    `customer_id`     | [`bigint`]                   | The identifier of the customer that saw the ad. References `customers.id`.
+    `impression_time` | [`timestamp with time zone`] | The time the ad was seen.
+
+  * `clicks` describes clicks of ads.
+
+    Field             | Type                         | Description
+    ------------------|------------------------------|------------
+    `impression_id`   | [`bigint`]                   | The identifier of the impression that was clicked. References `impressions.id`.
+    `click_time`      | [`timestamp with time zone`] | The time at which the impression was clicked.
+
+  * `leads` describes a potential lead for a purchase.
+
+    Field               | Type                         | Description
+    --------------------|------------------------------|------------
+    `id`                | [`bigint`]                   | A unique identifier for the lead.
+    `customer_id`       | [`bigint`]                   | The identifier of the customer we'd like to convert. References `customers.id`.
+    `created_at`        | [`timestamp with time zone`] | The time the lead was created.
+    `converted_at`      | [`timestamp with time zone`] | The time the lead was converted.
+    `conversion_amount` | [`bigint`]                   | The amount the lead converted for in pennies.
+
+  * `coupons` describes coupons given to leads.
+
+    Field               | Type                         | Description
+    --------------------|------------------------------|------------
+    `id`                | [`bigint`]                   | A unique identifier for the coupon.
+    `lead_id`           | [`bigint`]                   | The identifier of the lead we're attempting to convert. References `leads.id`.
+    `created_at`        | [`timestamp with time zone`] | The time the coupon was created.
+    `amount`            | [`bigint`]                   | The amount the coupon is for in pennies.
+
+  * `conversion_predictions` describes the predictions made by a highly sophisticated machine learning model.
+
+    Field               | Type                         | Description
+    --------------------|------------------------------|------------
+    `lead_id`           | [`bigint`]                   | The identifier of the lead we're attempting to convert. References `leads.id`.
+    `experiement_bucket`| [`text`]                     | Whether the lead is a control or experiment.
+    `created_at`        | [`timestamp with time zone`] | The time the prediction was made.
+    `score`             | [`numeric`]                  | The predicted likelyhood the lead will convert.
+
 ### TPCH
 
 The TPCH load generator implements the [TPC-H benchmark specification](https://www.tpc.org/tpch/default5.asp).

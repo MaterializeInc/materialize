@@ -2095,6 +2095,7 @@ pub enum LoadGenerator {
         max_cardinality: Option<i64>,
     },
     Datums,
+    Marketing,
     Tpch {
         count_supplier: i64,
         count_part: i64,
@@ -2133,6 +2134,7 @@ impl LoadGenerator {
             LoadGenerator::Counter { .. } => DataEncodingInner::RowCodec(
                 RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false)),
             ),
+            LoadGenerator::Marketing => DataEncodingInner::RowCodec(RelationDesc::empty()),
             LoadGenerator::Tpch { .. } => DataEncodingInner::RowCodec(RelationDesc::empty()),
         }
     }
@@ -2189,6 +2191,62 @@ impl LoadGenerator {
                 ),
             ],
             LoadGenerator::Counter { max_cardinality: _ } => vec![],
+            LoadGenerator::Marketing => {
+                vec![
+                    (
+                        "customers",
+                        RelationDesc::empty()
+                            .with_column("id", ScalarType::Int64.nullable(false))
+                            .with_column("email", ScalarType::String.nullable(false))
+                            .with_column("income", ScalarType::Int64.nullable(false))
+                            .with_key(vec![0]),
+                    ),
+                    (
+                        "impressions",
+                        RelationDesc::empty()
+                            .with_column("id", ScalarType::Int64.nullable(false))
+                            .with_column("customer_id", ScalarType::Int64.nullable(false))
+                            .with_column("campaign_id", ScalarType::Int64.nullable(false))
+                            .with_column("impression_time", ScalarType::TimestampTz.nullable(false))
+                            .with_key(vec![0]),
+                    ),
+                    (
+                        "clicks",
+                        RelationDesc::empty()
+                            .with_column("impression_id", ScalarType::Int64.nullable(false))
+                            .with_column("click_time", ScalarType::TimestampTz.nullable(false))
+                            .without_keys(),
+                    ),
+                    (
+                        "leads",
+                        RelationDesc::empty()
+                            .with_column("id", ScalarType::Int64.nullable(false))
+                            .with_column("customer_id", ScalarType::Int64.nullable(false))
+                            .with_column("created_at", ScalarType::TimestampTz.nullable(false))
+                            .with_column("converted_at", ScalarType::TimestampTz.nullable(true))
+                            .with_column("conversion_amount", ScalarType::Int64.nullable(true))
+                            .with_key(vec![0]),
+                    ),
+                    (
+                        "coupons",
+                        RelationDesc::empty()
+                            .with_column("id", ScalarType::Int64.nullable(false))
+                            .with_column("lead_id", ScalarType::Int64.nullable(false))
+                            .with_column("created_at", ScalarType::TimestampTz.nullable(false))
+                            .with_column("amount", ScalarType::Int64.nullable(false))
+                            .with_key(vec![0]),
+                    ),
+                    (
+                        "conversion_predictions",
+                        RelationDesc::empty()
+                            .with_column("lead_id", ScalarType::Int64.nullable(false))
+                            .with_column("experiment_bucket", ScalarType::String.nullable(false))
+                            .with_column("predicted_at", ScalarType::TimestampTz.nullable(false))
+                            .with_column("score", ScalarType::Float64.nullable(false))
+                            .without_keys(),
+                    ),
+                ]
+            }
             LoadGenerator::Datums => vec![],
             LoadGenerator::Tpch { .. } => {
                 let identifier = ScalarType::Int64.nullable(false);
@@ -2310,6 +2368,7 @@ impl LoadGenerator {
                 max_cardinality: None,
             } => true,
             LoadGenerator::Counter { .. } => false,
+            LoadGenerator::Marketing => false,
             LoadGenerator::Datums => true,
             LoadGenerator::Tpch { .. } => false,
         }
@@ -2341,6 +2400,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                         max_cardinality: *max_cardinality,
                     })
                 }
+                LoadGenerator::Marketing => ProtoGenerator::Marketing(()),
                 LoadGenerator::Tpch {
                     count_supplier,
                     count_part,
@@ -2370,6 +2430,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                 ProtoGenerator::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
                     LoadGenerator::Counter { max_cardinality }
                 }
+                ProtoGenerator::Marketing(()) => LoadGenerator::Marketing,
                 ProtoGenerator::Tpch(ProtoTpchLoadGenerator {
                     count_supplier,
                     count_part,
