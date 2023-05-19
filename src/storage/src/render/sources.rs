@@ -197,6 +197,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     needed_tokens.push(source_token);
 
     let mut outputs = vec![];
+    let mut health_output = health;
     for (ok_source, err_source) in streams {
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
@@ -218,10 +219,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         outputs.push((ok, err));
 
         health_update.map(|h| {
-            health.concat(&h.leave());
+            health_output = health_output.concat(&h.leave());
         });
     }
-    (outputs, health, Rc::new(needed_tokens))
+    (outputs, health_output, Rc::new(needed_tokens))
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope
