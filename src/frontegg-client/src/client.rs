@@ -227,7 +227,8 @@ impl Client {
             &token,
             &DecodingKey::from_jwk(&jwk).map_err(|_| Error::ConvertingJwks)?,
             &Validation::new(Algorithm::RS256),
-        ).map_err(|_| Error::DecodingClaims)?;
+        )
+        .map_err(|_| Error::DecodingClaims)?;
 
         Ok(token_data.claims)
     }
