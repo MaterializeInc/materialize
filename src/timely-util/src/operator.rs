@@ -14,6 +14,7 @@ use std::rc::Weak;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
@@ -225,7 +226,7 @@ where
         D1: differential_dataflow::ExchangeData + Hashable,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice,
-        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Key = u8, Val = D1, Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch;
 }
 
@@ -522,12 +523,22 @@ where
     where
         D1: differential_dataflow::ExchangeData + Hashable,
         R: Semigroup + differential_dataflow::ExchangeData,
-        G::Timestamp: Lattice,
-        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        G::Timestamp: Lattice + Ord,
+        Tr: Trace + TraceReader<Key = u8, Val = D1, Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch,
     {
         if must_consolidate {
-            self.consolidate_named::<Tr>(name)
+            let hash_keyed = self.map(|d| {
+                let hash_key: u8 = u8::try_from(d.hashed().into() & 0xff).expect("must fit");
+                (hash_key, d)
+            });
+            use timely::dataflow::channels::pact::Exchange;
+            let exchange =
+                Exchange::new(|update: &((u8, D1), G::Timestamp, R)| (update.0).0.into());
+            let name = format!("Radix {}", name);
+            hash_keyed
+                .arrange_core::<_, Tr>(exchange, name.as_str())
+                .as_collection(|_k, v| v.clone())
         } else {
             self
         }

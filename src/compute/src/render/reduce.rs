@@ -935,7 +935,7 @@ where
 
                 (key, values)
             })
-            .consolidate_named_if::<RowKeySpine<_, _, _>>(
+            .consolidate_named_if::<RowSpine<_, _, _, _>>(
                 must_consolidate,
                 "Consolidated ReduceMonotonic input",
             );
