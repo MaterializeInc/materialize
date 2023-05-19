@@ -151,13 +151,8 @@ static LONG_VERSION: Lazy<String> = Lazy::new(|| {
 )]
 pub struct Args {
     // === Special modes. ===
-    /// Enable unsafe features.
-    ///
-    /// Unsafe features fall into two categories:
-    ///
-    ///   * In-development features that are not yet ready for production use.
-    ///   * Features useful for development and testing that would pose a
-    ///     legitimate security risk if used in Materialize Cloud.
+    /// Enable unsafe features. Unsafe features are those that should never run
+    /// in production but are appropriate for testing/local development.
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
 
