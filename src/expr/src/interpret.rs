@@ -1316,6 +1316,51 @@ mod tests {
     }
 
     #[test]
+    fn test_mfp() {
+        // Regression test for https://github.com/MaterializeInc/materialize/issues/19338
+        use MirScalarExpr::*;
+        let mfp = MapFilterProject {
+            expressions: vec![],
+            predicates: vec![
+                // Always fails on the known input range
+                (
+                    1,
+                    CallUnary {
+                        func: UnaryFunc::IsNull(IsNull),
+                        expr:
+                            Box::new(CallBinary {
+                                func: BinaryFunc::MulInt32,
+                                expr1: Box::new(Column(0)),
+                                expr2: Box::new(Column(0)),
+                            }),
+                    },
+                ),
+                // Always returns false on the known input range
+                (
+                    1,
+                    CallBinary {
+                        func: BinaryFunc::Eq,
+                        expr1: Box::new(Column(0)),
+                        expr2: Box::new(Literal(
+                            Ok(Row::pack_slice(&[Datum::Int32(1727694505)])),
+                            ScalarType::Int32.nullable(false),
+                        )),
+                    },
+                ),
+            ],
+            projection: vec![],
+            input_arity: 1,
+        };
+
+        let relation = RelationType::new(vec![ScalarType::Int32.nullable(true)]);
+        let arena = RowArena::new();
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(0, ResultSpec::value(Datum::Int32(-1294725158)));
+        let spec = interpreter.mfp_filter(&mfp);
+        assert!(spec.range.may_fail());
+    }
+
+    #[test]
     fn test_eval_range() {
         // Example inspired by the tumbling windows temporal filter in the docs
         let period_ms = MirScalarExpr::Literal(

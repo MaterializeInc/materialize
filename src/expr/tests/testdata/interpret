@@ -87,7 +87,7 @@ interpret
 ----
 may contain: ["00000" "20000" "2" "80000" <err>]
 
-# Regression test: `or` short circuits even when the first argument throws an error
+# Regression test: `or` may short circuit even when the first argument throws an error
 # Expression: ((((1 / 0) > 0) OR true))
 interpret
 []
@@ -95,4 +95,4 @@ interpret
 (call_variadic or [(call_binary gt (call_binary div_numeric (1 numeric) (0 numeric)) (0 numeric)) true])
 ["string" 300 true false null]
 ----
-may contain: [true]
+may contain: [true <err>]
