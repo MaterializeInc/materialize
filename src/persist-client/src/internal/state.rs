@@ -386,6 +386,32 @@ where
         Continue(applied)
     }
 
+    pub fn remove_rollups(
+        &mut self,
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
+        if remove_rollups.is_empty() || self.is_tombstone() {
+            return Break(NoOpStateTransition(vec![]));
+        }
+
+        let mut removed = vec![];
+        for (seqno, key) in remove_rollups {
+            let removed_key = self.rollups.remove(seqno);
+            debug_assert!(
+                removed_key.as_ref().map_or(true, |x| &x.key == key),
+                "{} vs {:?}",
+                key,
+                removed_key
+            );
+
+            if removed_key.is_some() {
+                removed.push(*seqno);
+            }
+        }
+
+        Continue(removed)
+    }
+
     pub fn register_leased_reader(
         &mut self,
         hostname: &str,

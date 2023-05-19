@@ -12,7 +12,6 @@
 #[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -38,7 +37,7 @@ use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId
 use crate::internal::state::HollowBatch;
 use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
-use crate::{Metrics, PersistConfig, ShardId, BUILD_INFO};
+use crate::{Metrics, PersistConfig, ShardId};
 
 /// A durable, truncatable log of versions of [State].
 ///
@@ -822,18 +821,6 @@ pub struct UntypedStateVersionsIter<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> UntypedStateVersionsIter<T> {
-    pub fn check_codecs<K: Codec, V: Codec, D: Codec64>(
-        self,
-    ) -> Result<TypedStateVersionsIter<K, V, T, D>, Box<CodecMismatch>> {
-        let state = self.state.check_codecs(&self.shard_id)?;
-        Ok(TypedStateVersionsIter::new(
-            self.cfg,
-            self.metrics,
-            state,
-            self.diffs,
-        ))
-    }
-
     pub(crate) fn check_ts_codec(self) -> Result<StateVersionsIter<T>, CodecMismatchT> {
         let key_codec = self.state.key_codec.clone();
         let val_codec = self.state.val_codec.clone();
@@ -892,11 +879,6 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
 
     pub fn len(&self) -> usize {
         self.diffs.len()
-    }
-
-    /// Returns the SeqNo of the next state returned by `next`.
-    pub fn peek_seqno(&self) -> Option<SeqNo> {
-        self.diffs.last().map(|x| x.seqno)
     }
 
     /// Advances first to some starting state (in practice, usually the first
@@ -963,58 +945,6 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
     }
 }
 
-/// An iterator over consecutive versions of [TypedState].
-pub struct TypedStateVersionsIter<K, V, T, D> {
-    cfg: PersistConfig,
-    metrics: Arc<Metrics>,
-    state: TypedState<K, V, T, D>,
-    diffs: Vec<VersionedData>,
-}
-
-impl<K, V, T: Timestamp + Lattice + Codec64, D> TypedStateVersionsIter<K, V, T, D> {
-    fn new(
-        cfg: PersistConfig,
-        metrics: Arc<Metrics>,
-        state: TypedState<K, V, T, D>,
-        // diffs is stored reversed so we can efficiently pop off the Vec.
-        mut diffs: Vec<VersionedData>,
-    ) -> Self {
-        assert!(diffs.first().map_or(true, |x| x.seqno == state.seqno));
-        diffs.reverse();
-        TypedStateVersionsIter {
-            cfg,
-            metrics,
-            state,
-            diffs,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.diffs.len()
-    }
-
-    /// Returns the SeqNo of the next state returned by `next`.
-    pub fn peek_seqno(&self) -> Option<SeqNo> {
-        self.diffs.last().map(|x| x.seqno)
-    }
-
-    pub fn next(&mut self) -> Option<&TypedState<K, V, T, D>> {
-        let diff = match self.diffs.pop() {
-            Some(x) => x,
-            None => return None,
-        };
-        let diff_seqno = diff.seqno;
-        self.state
-            .apply_encoded_diffs(&self.cfg, &self.metrics, std::iter::once(&diff));
-        assert_eq!(self.state.seqno, diff_seqno);
-        Some(&self.state)
-    }
-
-    pub fn state(&self) -> &TypedState<K, V, T, D> {
-        &self.state
-    }
-}
-
 /// This represents a diff, either directly or, in the case of the FromInitial
 /// variant, a diff from the initial state. (We could instead compute the diff
 /// from the initial state and replace this with only a `StateDiff<T>`, but don't
@@ -1026,14 +956,6 @@ pub enum InspectDiff<'a, T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
-    /// WIP
-    pub fn seqno(&self) -> SeqNo {
-        match self {
-            InspectDiff::FromInitial(x) => x.seqno,
-            InspectDiff::Diff(x) => x.seqno_to,
-        }
-    }
-
     /// A callback invoked for each blob added this state transition.
     ///
     /// Blob removals, along with all other diffs, are ignored.
@@ -1041,14 +963,6 @@ impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
         match self {
             InspectDiff::FromInitial(x) => x.map_blobs(f),
             InspectDiff::Diff(x) => x.map_blob_inserts(f),
-        }
-    }
-
-    /// A callback invoked for each blob removed in this state transition.
-    pub fn unreferenced_blob_fn<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, f: F) {
-        match self {
-            InspectDiff::FromInitial(_) => {}
-            InspectDiff::Diff(x) => x.map_blob_deletes(f),
         }
     }
 }

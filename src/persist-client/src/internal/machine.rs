@@ -139,6 +139,19 @@ where
         (applied_ever_true, maintenance)
     }
 
+    pub async fn remove_rollups(
+        &mut self,
+        remove_rollups: &[(SeqNo, PartialRollupKey)],
+    ) -> (Vec<SeqNo>, RoutineMaintenance) {
+        let metrics = Arc::clone(&self.applier.metrics);
+        let (_seqno, removed_rollup_seqnos, maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.add_and_remove_rollups, |_, _, state| {
+                state.remove_rollups(remove_rollups)
+            })
+            .await;
+        (removed_rollup_seqnos, maintenance)
+    }
+
     pub async fn register_leased_reader(
         &mut self,
         reader_id: &LeasedReaderId,
