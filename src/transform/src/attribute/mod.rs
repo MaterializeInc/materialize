@@ -92,7 +92,7 @@ impl<A: Attribute> Env<A> {
 }
 
 impl<A: Attribute> Env<A> {
-    /// Schedules exactly once environment maintenance task associated with the
+    /// Schedules exactly one environment maintenance task associated with the
     /// given `expr`.
     ///
     /// This should be:
@@ -127,7 +127,7 @@ impl<A: Attribute> Env<A> {
         let parent = self.env_tasks.pop();
         // This should always be a Done, as this is either the original value or
         // the terminal state of the state machine that should be reached after
-        // all children of the current node have been visited, and the should
+        // all children of the current node have been visited, which should
         // always be the case if handle_tasks is called from post_visit.
         assert!(parent.is_some() && parent.unwrap() == EnvTask::Done);
 
@@ -165,10 +165,12 @@ impl<A: Attribute> Env<A> {
                         EnvTask::Bind(unbound, bound)
                     }
                 }
-                // A Unbind state indicates that we are about to leave the Let or LetRec body.
+                // An Unbind state indicates that we are about to leave the Let or LetRec body.
                 EnvTask::Unbind(ids) => {
                     // Remove values associated with the given `ids`.
-                    self.env.retain(|id, _| !ids.contains(id));
+                    for id in ids {
+                        self.env.remove(&id);
+                    }
 
                     // Advance to a Done task indicating that there is nothing
                     // more to be done.
@@ -184,7 +186,8 @@ impl<A: Attribute> Env<A> {
 }
 
 /// Models an environment maintenance task that needs to be executed after
-/// visiting a [`MirRelationExpr`]. Each task is a finite state machine.
+/// visiting a [`MirRelationExpr`]. Each task is a state of a finite state
+/// machine.
 ///
 /// The [`Env::schedule_tasks`] hook installs exactly one such task for each
 /// subexpression, and the [`Env::handle_tasks`] hook removes it.
