@@ -207,6 +207,19 @@ where
             })
     }
 
+    /// WIP
+    pub fn greatest_rollup_lte_seqno(&self, seqno: SeqNo) -> Option<(SeqNo, PartialRollupKey)> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                state
+                    .collections
+                    .rollups
+                    .range(..=seqno)
+                    .last()
+                    .map(|(seqno, rollup)| (*seqno, rollup.key.to_owned()))
+            })
+    }
+
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {

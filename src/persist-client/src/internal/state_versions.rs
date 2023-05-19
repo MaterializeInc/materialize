@@ -12,6 +12,7 @@
 #[cfg(debug_assertions)]
 use std::collections::BTreeSet;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -37,7 +38,7 @@ use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId
 use crate::internal::state::HollowBatch;
 use crate::internal::state::{HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
-use crate::{Metrics, PersistConfig, ShardId};
+use crate::{Metrics, PersistConfig, ShardId, BUILD_INFO};
 
 /// A durable, truncatable log of versions of [State].
 ///
@@ -102,6 +103,41 @@ pub struct RecentLiveDiffs(pub Vec<VersionedData>);
 
 #[derive(Debug, Clone)]
 pub struct AllLiveDiffs(pub Vec<VersionedData>);
+
+impl AllLiveDiffs {
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+//
+// struct LiveDiffsIter<T> {
+//     live_diffs: Iter<'_, VersionedData>,
+//     cfg: PersistConfig,
+//     metrics: Arc<Metrics>,
+//     idx: usize,
+//     _phantom: PhantomData<T>,
+// }
+//
+// impl<T: Timestamp + Lattice + Codec64> Iterator for LiveDiffsIter<T> {
+//     type Item = StateDiff<T>;
+//
+//     fn next(&mut self) -> Option<Self::Item> {
+//         let data = self.live_diffs.0.iter()
+//
+//         if let Some(data) = data {
+//             let latest_diff = self
+//                 .metrics
+//                 .codecs
+//                 .state_diff
+//                 // Note: `latest_diff.data` is a `Bytes`, so cloning just increments a ref count
+//                 .decode(|| StateDiff::<T>::decode(&BUILD_INFO.semver_version(), data.data));
+//
+//             Some(latest_diff)
+//         } else {
+//             None
+//         }
+//     }
+// }
 
 #[derive(Debug, Clone)]
 pub struct EncodedRollup {
@@ -858,6 +894,11 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
         self.diffs.len()
     }
 
+    /// Returns the SeqNo of the next state returned by `next`.
+    pub fn peek_seqno(&self) -> Option<SeqNo> {
+        self.diffs.last().map(|x| x.seqno)
+    }
+
     /// Advances first to some starting state (in practice, usually the first
     /// live state), and then through each successive state, for as many diffs
     /// as this iterator was initialized with.
@@ -985,6 +1026,14 @@ pub enum InspectDiff<'a, T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
+    /// WIP
+    pub fn seqno(&self) -> SeqNo {
+        match self {
+            InspectDiff::FromInitial(x) => x.seqno,
+            InspectDiff::Diff(x) => x.seqno_to,
+        }
+    }
+
     /// A callback invoked for each blob added this state transition.
     ///
     /// Blob removals, along with all other diffs, are ignored.
@@ -992,6 +1041,14 @@ impl<T: Timestamp + Lattice + Codec64> InspectDiff<'_, T> {
         match self {
             InspectDiff::FromInitial(x) => x.map_blobs(f),
             InspectDiff::Diff(x) => x.map_blob_inserts(f),
+        }
+    }
+
+    /// A callback invoked for each blob removed in this state transition.
+    pub fn unreferenced_blob_fn<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, f: F) {
+        match self {
+            InspectDiff::FromInitial(_) => {}
+            InspectDiff::Diff(x) => x.map_blob_deletes(f),
         }
     }
 }

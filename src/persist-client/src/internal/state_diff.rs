@@ -195,6 +195,30 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         }
     }
 
+    pub(crate) fn map_blob_deletes<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
+        for spine_diff in self.spine.iter() {
+            match &spine_diff.val {
+                StateFieldValDiff::Insert(()) => {} // No-op
+                StateFieldValDiff::Update((), ()) => {
+                    // No-op. Logically, we've removed and reinserted the same
+                    // key. We don't see this in practice, so it could also
+                    // easily be a panic, if necessary.
+                }
+                StateFieldValDiff::Delete(()) => {
+                    f(HollowBlobRef::Batch(&spine_diff.key));
+                }
+            }
+        }
+        for rollups_diff in self.rollups.iter() {
+            match &rollups_diff.val {
+                StateFieldValDiff::Insert(x) | StateFieldValDiff::Update(_, x) => {}
+                StateFieldValDiff::Delete(x) => {
+                    f(HollowBlobRef::Rollup(x));
+                } // No-op
+            }
+        }
+    }
+
     #[cfg(any(test, debug_assertions))]
     #[allow(dead_code)]
     pub fn validate_roundtrip<K, V, D>(
