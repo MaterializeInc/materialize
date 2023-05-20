@@ -110,7 +110,7 @@ use mz_storage_client::controller::{
 };
 use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
-use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
+use mz_storage_client::types::sources::Timeline;
 use mz_transform::Optimizer;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -1006,44 +1006,15 @@ impl Coordinator {
         let mut collections_to_create = Vec::new();
 
         fn source_desc<T>(
-            id: GlobalId,
             source_status_collection_id: Option<GlobalId>,
             source: &Source,
         ) -> CollectionDescription<T> {
             let (data_source, status_collection_id) = match &source.data_source {
                 // Re-announce the source description.
-                DataSourceDesc::Ingestion(ingestion) => {
-                    let mut source_imports = BTreeMap::new();
-                    for source_import in &ingestion.source_imports {
-                        source_imports.insert(*source_import, ());
-                    }
-
-                    let mut source_exports = BTreeMap::new();
-                    // By convention the first output corresponds to the main source object
-                    let main_export = SourceExport {
-                        output_index: 0,
-                        storage_metadata: (),
-                    };
-                    source_exports.insert(id, main_export);
-                    for (subsource, output_index) in ingestion.subsource_exports.clone() {
-                        let export = SourceExport {
-                            output_index,
-                            storage_metadata: (),
-                        };
-                        source_exports.insert(subsource, export);
-                    }
-                    (
-                        DataSource::Ingestion(IngestionDescription {
-                            desc: ingestion.desc.clone(),
-                            ingestion_metadata: (),
-                            source_imports,
-                            source_exports,
-                            instance_id: ingestion.cluster_id,
-                            remap_collection_id: ingestion.remap_collection_id,
-                        }),
-                        source_status_collection_id,
-                    )
-                }
+                DataSourceDesc::Ingestion(ingestion) => (
+                    DataSource::Ingestion(ingestion.clone()),
+                    source_status_collection_id,
+                ),
                 // Subsources use source statuses.
                 DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                 DataSourceDesc::Progress => (DataSource::Progress, None),
@@ -1065,10 +1036,9 @@ impl Coordinator {
                 entries
                     .iter()
                     .filter_map(|entry| match entry.item() {
-                        CatalogItem::Source(source) => Some((
-                            entry.id(),
-                            source_desc(entry.id(), source_status_collection_id, source),
-                        )),
+                        CatalogItem::Source(source) => {
+                            Some((entry.id(), source_desc(source_status_collection_id, source)))
+                        }
                         CatalogItem::Table(table) => {
                             let collection_desc = table.desc.clone().into();
                             Some((entry.id(), collection_desc))
@@ -1097,10 +1067,8 @@ impl Coordinator {
                 // User sources can have dependencies, so do avoid them in the
                 // batch.
                 CatalogItem::Source(source) if entry.id().is_system() => {
-                    collections_to_create.push((
-                        entry.id(),
-                        source_desc(entry.id(), source_status_collection_id, source),
-                    ));
+                    collections_to_create
+                        .push((entry.id(), source_desc(source_status_collection_id, source)));
                 }
                 _ => {
                     // No collections to create.
@@ -1141,8 +1109,7 @@ impl Coordinator {
                 CatalogItem::Source(source) => {
                     // System sources were created above, add others here.
                     if !entry.id().is_system() {
-                        let source_desc =
-                            source_desc(entry.id(), source_status_collection_id, source);
+                        let source_desc = source_desc(source_status_collection_id, source);
                         self.controller
                             .storage
                             .create_collections(vec![(entry.id(), source_desc)])
