@@ -79,6 +79,12 @@ pub struct IngestionDescription<S = (), C = GenericSourceConnection> {
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
+    ///
+    /// This field includes the primary source's ID, which must be filtered out
+    /// to understand which exports are data-bearing subsources.
+    ///
+    /// Note that this does _not_ include the remap collection, which is tracked
+    /// in its own field.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
