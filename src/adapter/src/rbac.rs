@@ -1159,7 +1159,7 @@ fn generate_required_privileges(
         Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan { id, options: _ })
         | Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan { id, options: _ })
         | Plan::AlterSink(AlterSinkPlan { id, size: _ })
-        | Plan::AlterSource(AlterSourcePlan { id, size: _ })
+        | Plan::AlterSource(AlterSourcePlan { id, action: _ })
         | Plan::AlterItemRename(AlterItemRenamePlan {
             id,
             current_full_name: _,

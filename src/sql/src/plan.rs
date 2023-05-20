@@ -827,9 +827,14 @@ pub struct AlterSinkPlan {
 }
 
 #[derive(Debug)]
+pub enum AlterSourceAction {
+    Resize(AlterOptionParameter),
+}
+
+#[derive(Debug)]
 pub struct AlterSourcePlan {
     pub id: GlobalId,
-    pub size: AlterOptionParameter,
+    pub action: AlterSourceAction,
 }
 
 #[derive(Debug)]

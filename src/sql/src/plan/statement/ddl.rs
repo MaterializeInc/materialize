@@ -4569,32 +4569,26 @@ pub fn plan_alter_source(
     let id = entry.id();
 
     let mut size = AlterOptionParameter::Unchanged;
-    match action {
+    let action = match action {
         AlterSourceAction::SetOptions(options) => {
             let CreateSourceOptionExtracted {
-                seen: _,
+                seen,
                 size: size_opt,
-                timeline: timeline_opt,
-                timestamp_interval: timestamp_interval_opt,
-                ignore_keys: ignore_keys_opt,
-                disk: disk_opt,
+                ..
             } = CreateSourceOptionExtracted::try_from(options)?;
+
+            if let Some(option) = seen
+                .iter()
+                .find(|o| !matches!(o, CreateSourceOptionName::Size))
+            {
+                sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
+            }
 
             if let Some(value) = size_opt {
                 size = AlterOptionParameter::Set(value);
             }
-            if let Some(_) = timeline_opt {
-                sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
-            }
-            if let Some(_) = timestamp_interval_opt {
-                sql_bail!("Cannot modify the TIMESTAMP INTERVAL of a SOURCE.");
-            }
-            if let Some(_) = ignore_keys_opt {
-                sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
-            }
-            if let Some(_) = disk_opt {
-                sql_bail!("Cannot modify the DISK property of a SOURCE.");
-            }
+
+            crate::plan::AlterSourceAction::Resize(size)
         }
         AlterSourceAction::ResetOptions(reset) => {
             for name in reset {
@@ -4602,24 +4596,17 @@ pub fn plan_alter_source(
                     CreateSourceOptionName::Size => {
                         size = AlterOptionParameter::Reset;
                     }
-                    CreateSourceOptionName::Timeline => {
-                        sql_bail!("Cannot modify the TIMELINE of a SOURCE.");
-                    }
-                    CreateSourceOptionName::TimestampInterval => {
-                        sql_bail!("Cannot modify the TIMESTAMP INTERVAL of a SOURCE.");
-                    }
-                    CreateSourceOptionName::IgnoreKeys => {
-                        sql_bail!("Cannot modify the IGNORE KEYS property of a SOURCE.");
-                    }
-                    CreateSourceOptionName::Disk => {
-                        sql_bail!("Cannot modify the DISK property of a SOURCE.");
+                    o => {
+                        sql_bail!("Cannot modify the {} of a SOURCE.", o.to_ast_string());
                     }
                 }
             }
+
+            crate::plan::AlterSourceAction::Resize(size)
         }
     };
 
-    Ok(Plan::AlterSource(AlterSourcePlan { id, size }))
+    Ok(Plan::AlterSource(AlterSourcePlan { id, action }))
 }
 
 pub fn describe_alter_system_set(
