@@ -48,16 +48,16 @@ use mz_sql::names::{
 use mz_sql::plan::{
     AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterOptionParameter, AlterOwnerPlan, AlterRolePlan, AlterSecretPlan,
-    AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DropObjectsPlan,
-    DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan, GrantRolePlan, IndexOption,
-    InsertPlan, InspectShardPlan, MaterializedView, MutationKind, OptimizerConfig, Plan, QueryWhen,
-    ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
-    SelectPlan, SendDiffsPlan, SetTransactionPlan, SetVariablePlan, ShowVariablePlan,
-    SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege,
-    VariableValue, View,
+    AlterSinkPlan, AlterSourceAction, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSystemResetPlan, AlterSystemSetPlan, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan,
+    GrantRolePlan, IndexOption, InsertPlan, InspectShardPlan, MaterializedView, MutationKind,
+    OptimizerConfig, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
+    RevokePrivilegesPlan, RevokeRolePlan, SelectPlan, SendDiffsPlan, SetTransactionPlan,
+    SetVariablePlan, ShowVariablePlan, SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom,
+    SubscribePlan, UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -3575,7 +3575,7 @@ impl Coordinator {
     pub(super) async fn sequence_alter_source(
         &mut self,
         session: &Session,
-        AlterSourcePlan { id, size }: AlterSourcePlan,
+        AlterSourcePlan { id, action }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let source = self
             .catalog()
@@ -3590,16 +3590,21 @@ impl Coordinator {
                 coord_bail!("cannot ALTER this type of source");
             }
         }
-        let cluster_config = alter_storage_cluster_config(size);
-        if let Some(cluster_config) = cluster_config {
-            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
-            ops.push(catalog::Op::AlterSource {
-                id,
-                cluster_config: cluster_config.clone(),
-            });
-            self.catalog_transact(Some(session), ops).await?;
 
-            self.maybe_alter_linked_cluster(id).await;
+        match action {
+            AlterSourceAction::Resize(size) => {
+                let cluster_config = alter_storage_cluster_config(size);
+                if let Some(cluster_config) = cluster_config {
+                    let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
+                    ops.push(catalog::Op::AlterSource {
+                        id,
+                        cluster_config: cluster_config.clone(),
+                    });
+                    self.catalog_transact(Some(session), ops).await?;
+
+                    self.maybe_alter_linked_cluster(id).await;
+                }
+            }
         }
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
