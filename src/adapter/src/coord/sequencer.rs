@@ -339,7 +339,7 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::AlterSource(plan) => {
-                let result = self.sequence_alter_source(ctx.session(), plan).await;
+                let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
                 ctx.retire(result);
             }
             Plan::AlterSystemSet(plan) => {

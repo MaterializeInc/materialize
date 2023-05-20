@@ -38,12 +38,13 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError, CatalogItemType,
-    CatalogRole, CatalogSchema, CatalogTypeDetails, ErrorMessageObjectDescription, ObjectType,
-    SessionCatalog,
+    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
+    ErrorMessageObjectDescription, ObjectType, SessionCatalog,
 };
 use mz_sql::names::{
-    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier, SystemObjectId,
+    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedItemName, SchemaSpecifier,
+    SystemObjectId,
 };
 use mz_sql::plan::{
     AlterDefaultPrivilegesPlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
@@ -54,10 +55,10 @@ use mz_sql::plan::{
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan,
     GrantRolePlan, IndexOption, InsertPlan, InspectShardPlan, MaterializedView, MutationKind,
-    OptimizerConfig, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
-    RevokePrivilegesPlan, RevokeRolePlan, SelectPlan, SendDiffsPlan, SetTransactionPlan,
-    SetVariablePlan, ShowVariablePlan, SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom,
-    SubscribePlan, UpdatePrivilege, VariableValue, View,
+    OptimizerConfig, Params, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan,
+    ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, SelectPlan, SendDiffsPlan,
+    SetTransactionPlan, SetVariablePlan, ShowVariablePlan, SideEffectingFunc,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -65,6 +66,9 @@ use mz_sql::session::vars::{
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::TransactionMode;
+use mz_sql_parser::ast::{
+    CreateSourceSubsource, DeferredItemName, ReferencedSubsources, Statement,
+};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ReadPolicy, StorageError};
 use mz_storage_client::types::sinks::StorageSinkConnectionBuilder;
@@ -3574,22 +3578,20 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_source(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         AlterSourcePlan { id, action }: AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let source = self
-            .catalog()
-            .get_entry(&id)
-            .source()
-            .expect("known to be source");
-        match source.data_source {
-            DataSourceDesc::Ingestion(_) => (),
+        let cur_entry = self.catalog().get_entry(&id);
+        let cur_source = cur_entry.source().expect("known to be source");
+
+        let cur_ingestion = match &cur_source.data_source {
+            DataSourceDesc::Ingestion(ingestion) => ingestion,
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => {
                 coord_bail!("cannot ALTER this type of source");
             }
-        }
+        };
 
         match action {
             AlterSourceAction::Resize(size) => {
@@ -3604,6 +3606,175 @@ impl Coordinator {
 
                     self.maybe_alter_linked_cluster(id).await;
                 }
+            }
+            AlterSourceAction::DropSubsourceExports { to_drop } => {
+                mz_ore::soft_assert!(!to_drop.is_empty());
+
+                const ALTER_SOURCE: &str = "ALTER SOURCE...DROP TABLES";
+
+                // Stick this in a function so we can reuse it.
+                let create_sql_to_stmt_deps =
+                    |coord: &Coordinator, session: &Session, create_source_sql| {
+                        // Parse statement.
+                        let create_source_stmt = match mz_sql::parse::parse(create_source_sql)
+                            .expect("invalid create sql persisted to catalog")
+                            .into_element()
+                        {
+                            Statement::CreateSource(stmt) => stmt,
+                            _ => unreachable!("proved type is source"),
+                        };
+
+                        let catalog = coord.catalog().for_session(session);
+
+                        // Resolve items in statement
+                        mz_sql::names::resolve(&catalog, create_source_stmt)
+                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
+                    };
+
+                let (mut create_source_stmt, mut depends_on) =
+                    create_sql_to_stmt_deps(self, session, cur_entry.create_sql())?;
+
+                // Ensure that we are only dropping items on which we depend.
+                for t in &to_drop {
+                    // Remove dependency.
+                    let existed = depends_on.remove(t);
+                    if !existed {
+                        Err(AdapterError::internal(
+                            ALTER_SOURCE,
+                            format!("removed {t}, but {id} did not have dependency"),
+                        ))?;
+                    }
+                }
+
+                // We are doing a lot of unwrapping, so just make an error to reference; all of
+                // these invariants are guaranteed to be true because of how we plan subsources.
+                let purification_err =
+                    || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
+
+                let referenced_subsources = match create_source_stmt
+                    .referenced_subsources
+                    .as_mut()
+                    .ok_or(purification_err())?
+                {
+                    ReferencedSubsources::SubsetTables(ref mut s) => s,
+                    _ => return Err(purification_err()),
+                };
+
+                // Fixup referenced_subsources. We panic rather than return
+                // errors here because `retain` is an infallible operation and
+                // actually erroring here is both incredibly unlikely and
+                // recoverable (users can stop trying to drop subsources if it
+                // panics).
+                referenced_subsources.retain(|CreateSourceSubsource { subsource, .. }| {
+                    match subsource
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("{}", purification_err().to_string()))
+                    {
+                        DeferredItemName::Named(name) => match name {
+                            // Retain all sources which we still have a dependency on.
+                            ResolvedItemName::Item { id, .. } => depends_on.contains(id),
+                            _ => unreachable!("{}", purification_err()),
+                        },
+                        _ => unreachable!("{}", purification_err()),
+                    }
+                });
+
+                // Open a new catalog, which we will use to re-plan our
+                // statement with the desired subsources.
+                let mut catalog = self.catalog().for_system_session();
+                catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
+
+                // Re-define our source in terms of the amended statement
+                let plan = match mz_sql::plan::plan(
+                    None,
+                    &catalog,
+                    Statement::CreateSource(create_source_stmt),
+                    &Params::empty(),
+                )
+                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
+                {
+                    Plan::CreateSource(plan) => plan,
+                    _ => unreachable!("create source plan is only valid response"),
+                };
+
+                // Ensure we have actually removed the subsource from the source's dependency and
+                // did not in any other way alter the dependencies.
+                let (_, new_depends_on) =
+                    create_sql_to_stmt_deps(self, session, &plan.source.create_sql)?;
+
+                if let Some(id) = new_depends_on.iter().find(|id| to_drop.contains(id)) {
+                    Err(AdapterError::internal(
+                        ALTER_SOURCE,
+                        format!("failed to remove dropped ID {id} from dependencies"),
+                    ))?;
+                }
+
+                if new_depends_on != depends_on {
+                    Err(AdapterError::internal(
+                        ALTER_SOURCE,
+                        format!("expected depends on to be {depends_on:?}, but is actually {new_depends_on:?}"),
+                    ))?;
+                }
+
+                let source = catalog::Source::new(
+                    id,
+                    plan,
+                    // Use the same cluster ID.
+                    Some(cur_ingestion.instance_id),
+                    depends_on.into_iter().collect(),
+                    cur_source.custom_logical_compaction_window,
+                    cur_source.is_retained_metrics_object,
+                );
+
+                // Get new ingestion description for storage.
+                let ingestion = match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => ingestion.clone(),
+                    _ => unreachable!("already verified of type ingestion"),
+                };
+
+                self.controller
+                    .storage
+                    .check_alter_collection(id, ingestion.clone())
+                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+
+                // Do not drop this source, even though it's a dependency.
+                let primary_source = btreeset! {ObjectId::Item(id)};
+
+                // CASCADE
+                let drops = self.catalog().object_dependents_except(
+                    &to_drop.into_iter().map(ObjectId::Item).collect(),
+                    session.conn_id(),
+                    primary_source,
+                );
+
+                let DropOps {
+                    mut ops,
+                    dropped_active_db,
+                    dropped_active_cluster,
+                } = self.sequence_drop_common(session, drops)?;
+
+                assert!(
+                    !dropped_active_db && !dropped_active_cluster,
+                    "dropping subsources does not drop DBs or clusters"
+                );
+
+                // Redefine source.
+                ops.push(Op::UpdateItem {
+                    id,
+                    // Look this up again so we don't have to hold an immutable reference to the
+                    // entry for so long.
+                    name: self.catalog.get_entry(&id).name().clone(),
+                    to_item: CatalogItem::Source(source),
+                });
+
+                self.catalog_transact(Some(session), ops).await?;
+
+                // Commit the new ingestion to storage.
+                self.controller
+                    .storage
+                    .alter_collection(id, ingestion)
+                    .await
+                    .expect("altering collection after txn must succeed");
             }
         }
 
