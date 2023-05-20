@@ -3712,6 +3712,28 @@ fn plan_drop_item(
     name: UnresolvedItemName,
     cascade: bool,
 ) -> Result<Option<GlobalId>, PlanError> {
+    plan_drop_item_inner(scx, object_type, if_exists, name, cascade, false)
+}
+
+/// Like [`plan_drop_item`] but specialized for the case of dropping subsources
+/// in response to `ALTER SOURCE...DROP SUBSOURCE...`
+fn plan_drop_subsource(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: UnresolvedItemName,
+    cascade: bool,
+) -> Result<Option<GlobalId>, PlanError> {
+    plan_drop_item_inner(scx, ObjectType::Source, if_exists, name, cascade, true)
+}
+
+fn plan_drop_item_inner(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedItemName,
+    cascade: bool,
+    allow_dropping_subsources: bool,
+) -> Result<Option<GlobalId>, PlanError> {
     Ok(match resolve_item(scx, name, if_exists)? {
         Some(catalog_item) => {
             if catalog_item.id().is_system() {
@@ -3738,9 +3760,9 @@ fn plan_drop_item(
                 );
             }
 
-            // We currently prohibit dropping subsources entirely and instead rely on
-            // dropping their primary sources.
-            if item_type == CatalogItemType::Source {
+            // Check if object is subsource if drop command doesn't allow dropping them, e.g. ALTER
+            // SOURCE can drop subsources, but DROP SOURCE cannot.
+            if item_type == CatalogItemType::Source && !allow_dropping_subsources {
                 if let Some(source_id) = catalog_item
                     .used_by()
                     .iter()
