@@ -145,53 +145,26 @@ impl Coordinator {
             .collect::<BTreeMap<_, _>>();
 
         for (source_id, plan, depends_on) in plans {
+            let name = plan.name.clone();
             let source_oid = self.catalog_mut().allocate_oid()?;
-            let source = catalog::Source {
-                create_sql: plan.source.create_sql,
-                data_source: match plan.source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        let cluster_id = self
-                            .create_linked_cluster_ops(
-                                source_id,
-                                &plan.name,
-                                &plan.cluster_config,
-                                &mut ops,
-                                session,
-                            )
-                            .await?;
-                        DataSourceDesc::ingestion(source_id, ingestion, cluster_id)
-                    }
-                    mz_sql::plan::DataSourceDesc::Progress => {
-                        assert!(
-                            matches!(
-                                plan.cluster_config,
-                                mz_sql::plan::SourceSinkClusterConfig::Undefined
-                            ),
-                            "subsources must not have a host config defined"
-                        );
-                        DataSourceDesc::Progress
-                    }
-                    mz_sql::plan::DataSourceDesc::Source => {
-                        assert!(
-                            matches!(
-                                plan.cluster_config,
-                                mz_sql::plan::SourceSinkClusterConfig::Undefined
-                            ),
-                            "subsources must not have a host config defined"
-                        );
-                        DataSourceDesc::Source
-                    }
-                },
-                desc: plan.source.desc,
-                timeline: plan.timeline,
-                depends_on,
-                custom_logical_compaction_window: None,
-                is_retained_metrics_object: false,
+            let cluster_id = match plan.source.data_source {
+                mz_sql::plan::DataSourceDesc::Ingestion(_) => Some(
+                    self.create_linked_cluster_ops(
+                        source_id,
+                        &plan.name,
+                        &plan.cluster_config,
+                        &mut ops,
+                        session,
+                    )
+                    .await?,
+                ),
+                _ => None,
             };
+            let source = catalog::Source::new(source_id, plan, cluster_id, depends_on, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
-                name: plan.name.clone(),
+                name,
                 item: CatalogItem::Source(source.clone()),
                 owner_id: *session.current_role_id(),
             });

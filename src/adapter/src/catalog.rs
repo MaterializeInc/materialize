@@ -1993,6 +1993,67 @@ pub struct Source {
 }
 
 impl Source {
+    /// Creates a new `Source`.
+    ///
+    /// # Panics
+    /// - If an ingestion-based plan is not given a cluster_id.
+    /// - If a non-ingestion-based source has a defined cluster config in its plan.
+    /// - If a non-ingestion-based source is given a cluster_id.
+    pub fn new(
+        id: GlobalId,
+        plan: CreateSourcePlan,
+        cluster_id: Option<ClusterId>,
+        depends_on: Vec<GlobalId>,
+        custom_logical_compaction_window: Option<Duration>,
+        is_retained_metrics_object: bool,
+    ) -> Source {
+        Source {
+            create_sql: plan.source.create_sql,
+            data_source: match plan.source.data_source {
+                mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => DataSourceDesc::ingestion(
+                    id,
+                    ingestion,
+                    cluster_id.expect("ingestion-based sources must be given a cluster ID"),
+                ),
+                mz_sql::plan::DataSourceDesc::Progress => {
+                    assert!(
+                        matches!(
+                            plan.cluster_config,
+                            mz_sql::plan::SourceSinkClusterConfig::Undefined
+                        ) && cluster_id.is_none(),
+                        "subsources must not have a host config or cluster_id defined"
+                    );
+                    DataSourceDesc::Progress
+                }
+                mz_sql::plan::DataSourceDesc::Source => {
+                    assert!(
+                        matches!(
+                            plan.cluster_config,
+                            mz_sql::plan::SourceSinkClusterConfig::Undefined
+                        ) && cluster_id.is_none(),
+                        "subsources must not have a host config or cluster_id defined"
+                    );
+                    DataSourceDesc::Source
+                }
+            },
+            desc: plan.source.desc,
+            timeline: plan.timeline,
+            depends_on,
+            custom_logical_compaction_window,
+            is_retained_metrics_object,
+        }
+    }
+
+    /// Returns whether this source ingests data from an external source.
+    pub fn is_external(&self) -> bool {
+        match self.data_source {
+            DataSourceDesc::Ingestion(_) => true,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Source => false,
+        }
+    }
+
     /// Type of the source.
     pub fn source_type(&self) -> &str {
         match &self.data_source {
