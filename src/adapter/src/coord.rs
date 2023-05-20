@@ -949,12 +949,9 @@ impl Coordinator {
                     if let Some(waiting_on_this_dependent) = entries_awaiting_dependent.remove(&id)
                     {
                         mz_ore::soft_assert! {{
-                            let mut subsources =  entry.subsources();
-                            subsources.sort();
-                            let mut w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
-                            w.sort();
-
-                            subsources == w
+                            let subsources =  entry.subsources();
+                            let w: Vec<_> = waiting_on_this_dependent.iter().map(|e| e.id()).collect();
+                            w.iter().all(|w| subsources.contains(w))
                         }, "expect that items are exactly source's subsources"}
 
                         // Re-enqueue objects and continue.

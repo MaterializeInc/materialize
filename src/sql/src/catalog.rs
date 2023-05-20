@@ -649,7 +649,7 @@ pub trait CatalogItem {
     fn used_by(&self) -> &[GlobalId];
 
     /// If this catalog item is a source, it return the IDs of its subsources
-    fn subsources(&self) -> Vec<GlobalId>;
+    fn subsources(&self) -> BTreeSet<GlobalId>;
 
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
