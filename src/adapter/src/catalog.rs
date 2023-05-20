@@ -2054,8 +2054,7 @@ pub struct Ingestion {
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub cluster_id: ClusterId,
     /// The ID of this collection's remap/progress collection.
-    // MIGRATION: v0.44 This can be converted to a `GlobalId` in v0.46
-    pub remap_collection_id: Option<GlobalId>,
+    pub remap_collection_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2564,11 +2563,7 @@ impl CatalogEntry {
                     .subsource_exports
                     .keys()
                     .copied()
-                    .chain(std::iter::once(
-                        ingestion
-                            .remap_collection_id
-                            .expect("remap collection must named by this point"),
-                    ))
+                    .chain(std::iter::once(ingestion.remap_collection_id))
                     .collect(),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
