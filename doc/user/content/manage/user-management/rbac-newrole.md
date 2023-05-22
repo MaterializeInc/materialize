@@ -185,21 +185,20 @@ to a user in your Materialize organization.
 1. To review the permissions a role has, you can view the object data:
 
    ```sql
-   SELECT name, privileges::text FROM mz_tables WHERE name='dev_table';
+   SELECT name, privileges FROM mz_tables WHERE name='dev_table';
    ```
 
-   The output should return the owner, the level of permission, and the name of
-   the role on the table.
+   The output should return the owner object ID, the level of permission, and the object ID of the role on the table.
 
    ```nofmt
    name|privileges
-   t|{admin@mz.com=arwd/admin@mz.com,dev_role=arw/admin@mz.com}
+   dev_table|{u1=arwd/u1,u8=arw/u1}
    (1 row)
    ```
 
-   In this example, the administrator has append, read, write, and delete
-   privileges on the table. The `dev_role` has append, read, and write privileges,
-   which were assigned by the admin user.
+   In this example, object ID 'u1` has append, read, write, and delete
+   privileges on the table. Object ID `u8` is the `dev_role` and has append, read, and write privileges,
+   which were assigned by the `u1` user.
 
 
 ## Next steps
