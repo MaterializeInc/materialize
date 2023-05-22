@@ -8,7 +8,10 @@
 
 use std::fmt;
 use std::io;
+use std::time::Duration;
 
+use indicatif::ProgressBar;
+use indicatif::ProgressStyle;
 use mz_ore::option::OptionExt;
 
 use serde::{Deserialize, Serialize};
@@ -89,24 +92,23 @@ impl OutputFormatter {
         Ok(())
     }
 
-    // /// Outputs with tab
-    // pub fn output_tab<'a, I, R>(&self, rows: I) -> Result<(), Error>
-    // where
-    //     I: IntoIterator<Item = R>,
-    //     R: Deserialize<'a> + Serialize + Tabled,
-    // {
-    //     match self.output_format {
-    //         OutputFormat::Text => {
-    //             let table = Table::new(rows).with(Style::blank()).to_string();
-    //             println!("{table}");
-    //         }
-    //         OutputFormat::Json => self.output_table(rows),
-    //         OutputFormat::Csv => self.output_table(rows)
-    //     }
-    //     Ok(())
-    // }
+    /// Prints a loading spinner followed by a message, until finished.
+    pub fn loading_spinner(&self, message: &str) -> ProgressBar {
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.enable_steady_tick(Duration::from_millis(120));
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner} {msg}")
+                .expect("template known to be valid")
+                // For more spinners check out the cli-spinners project:
+                // https://github.com/sindresorhus/cli-spinners/blob/master/spinners.json
+                .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", ""]),
+        );
 
-    // TODO: add progress bar helper.
+        progress_bar.set_message(message.to_string());
+
+        progress_bar
+    }
 }
 
 /// An optional `str` that renders as `<unset>` when `None`.

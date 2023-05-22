@@ -26,6 +26,7 @@ use crate::config_file::ConfigFile;
 use crate::error::Error;
 use crate::sql_client::{Client as SqlClient, ClientConfig as SqlClientConfig};
 use crate::ui::{OutputFormat, OutputFormatter};
+use mz_cloud_api::client::cloud_provider::CloudProvider;
 use mz_cloud_api::client::environment::Environment;
 use mz_cloud_api::client::region::Region;
 use mz_cloud_api::client::Client as CloudClient;
@@ -194,6 +195,18 @@ impl RegionContext {
     /// Returns a SQL client connected to region associated with this context.
     pub fn sql_client(&self) -> &SqlClient {
         &self.context.sql_client
+    }
+
+    pub async fn get_cloud_provider(&self) -> Result<CloudProvider, Error> {
+        let client = &self.context.cloud_client;
+        let cloud_providers = client.list_cloud_providers().await?;
+        // TODO: Replace unwrap wih custom error
+        let provider = cloud_providers
+            .into_iter()
+            .find(|x| x.id == self.region_name)
+            .unwrap();
+
+        Ok(provider)
     }
 
     pub async fn get_region(&self) -> Result<Region, Error> {

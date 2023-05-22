@@ -34,7 +34,7 @@ pub async fn run(cx: &mut RegionContext, RunArgs { psql_args }: RunArgs) -> Resu
     let enviornment = cx.get_environment(region).await?;
     let email = claims.await?.email;
 
-    let _error = sql_client.shell(enviornment, email).args(psql_args).exec();
+    let _error = sql_client.shell(&enviornment, email).args(psql_args).exec();
 
     Ok(())
 }
@@ -42,7 +42,7 @@ pub async fn run(cx: &mut RegionContext, RunArgs { psql_args }: RunArgs) -> Resu
 /// Runs pg_isready to check if an environment is healthy
 pub(crate) async fn check_environment_health(
     cx: &mut RegionContext,
-    enviornment: Environment,
+    enviornment: &Environment,
 ) -> Result<bool, Error> {
     let sql_client = cx.sql_client();
     let claims = cx.admin_client().claims();

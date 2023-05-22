@@ -37,7 +37,7 @@ impl Client {
     }
 
     /// Build the PSQL url to connect into a environment
-    fn build_psql_url(&self, environment: Environment, email: String) -> Url {
+    fn build_psql_url(&self, environment: &Environment, email: String) -> Url {
         let mut url = Url::parse(&format!(
             "postgres://{}",
             environment.environmentd_pgwire_address
@@ -58,7 +58,7 @@ impl Client {
     }
 
     /// Returns a sql shell command associated with this context
-    pub fn shell(&self, environment: Environment, email: String) -> Command {
+    pub fn shell(&self, environment: &Environment, email: String) -> Command {
         let mut command = Command::new("psql");
         command
             .arg(self.build_psql_url(environment, email).as_str())
@@ -69,7 +69,7 @@ impl Client {
     }
 
     /// Runs pg_isready to check if an environment is healthy
-    pub fn is_ready(&self, environment: Environment, email: String) -> Command {
+    pub fn is_ready(&self, environment: &Environment, email: String) -> Command {
         let mut command = Command::new("pg_isready");
         command
             .arg("-q")
