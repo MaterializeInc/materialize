@@ -1350,11 +1350,9 @@ where
         ret
     }
 
-    pub fn need_rollup(&self, cfg: &PersistConfig) -> Option<SeqNo> {
+    pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
-        if self.seqno.0.saturating_sub(latest_rollup_seqno.0)
-            > u64::cast_from(cfg.dynamic.rollup_threshold())
-        {
+        if self.seqno.0.saturating_sub(latest_rollup_seqno.0) > u64::cast_from(threshold) {
             Some(self.seqno)
         } else {
             None
