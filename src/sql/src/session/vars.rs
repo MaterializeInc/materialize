@@ -820,6 +820,14 @@ const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::rollup_threshold`].
+const PERSIST_ROLLUP_THRESHOLD: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_rollup_threshold"),
+    value: &PersistConfig::DEFAULT_ROLLUP_THRESHOLD,
+    description: "The number of seqnos between rollups.",
+    internal: true,
+};
+
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
@@ -1658,6 +1666,7 @@ impl SystemVars {
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
             .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
+            .with_var(&PERSIST_ROLLUP_THRESHOLD)
             .with_var(&METRICS_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
@@ -2103,6 +2112,11 @@ impl SystemVars {
     /// Returns the `persist_pubsub_push_diff_enabled` configuration parameter.
     pub fn persist_pubsub_push_diff_enabled(&self) -> bool {
         *self.expect_value(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
+    }
+
+    /// Returns the `persist_rollup_threshold` configuration parameter.
+    pub fn persist_rollup_threshold(&self) -> usize {
+        *self.expect_value(&PERSIST_ROLLUP_THRESHOLD)
     }
 
     /// Returns the `metrics_retention` configuration parameter.

@@ -365,7 +365,7 @@ where
 
                 let maintenance = RoutineMaintenance {
                     garbage_collection,
-                    write_rollup: state.need_rollup(),
+                    write_rollup: state.need_rollup(cfg),
                 };
 
                 ApplyCmdResult::Committed((diff, state, work_ret, maintenance))
