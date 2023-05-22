@@ -31,6 +31,7 @@ Possible parameters are:
 * `--verbose`: print queries and details, otherwise only queries with warnings and errors will be printed
 * `--avoid-expressions-expecting-db-error`: try to avoid executing expressions likely producing a database error (e.g.,
 division by zero)
+* `--max-cols-per-query`: maximum number of columns per query
 
 ## Implementation
 

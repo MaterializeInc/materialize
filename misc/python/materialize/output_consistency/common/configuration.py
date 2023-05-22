@@ -13,7 +13,7 @@ class ConsistencyTestConfiguration:
         self,
         queries_per_tx: int = 20,
         use_autocommit: bool = True,
-        max_cols_per_query: int = 8,
+        max_cols_per_query: int = 20,
         random_seed: str = "0",
         split_and_retry_on_db_error: bool = True,
         dry_run: bool = False,

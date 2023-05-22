@@ -44,6 +44,7 @@ def run_output_consistency_tests(
         args.fail_fast,
         args.execute_setup,
         args.verbose,
+        args.max_cols_per_query,
         args.runtime_in_sec,
         args.max_iterations,
         args.avoid_expressions_expecting_db_error,
@@ -72,6 +73,7 @@ def parse_output_consistency_input_args(
         type=bool,
         action=argparse.BooleanOptionalAction,
     )
+    parser.add_argument("--max-cols-per-query", default=20, type=int)
     parser.add_argument("--runtime-in-sec", default=600, type=int)
     parser.add_argument("--max-iterations", default=100000, type=int)
     parser.add_argument(
@@ -91,6 +93,7 @@ def _run_output_consistency_tests_internal(
     fail_fast: bool,
     execute_setup: bool,
     verbose_output: bool,
+    max_cols_per_query: int,
     runtime_in_sec: int,
     max_iterations: int,
     avoid_expressions_expecting_db_error: bool,
@@ -101,6 +104,7 @@ def _run_output_consistency_tests_internal(
     config.fail_fast = fail_fast
     config.execute_setup = execute_setup
     config.verbose_output = verbose_output
+    config.max_cols_per_query = max_cols_per_query
     config.max_runtime_in_sec = runtime_in_sec
     config.max_iterations = max_iterations
     config.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
