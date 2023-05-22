@@ -20,39 +20,40 @@ class QueryGenerator:
 
     def __init__(self, config: ConsistencyTestConfiguration):
         self.config = config
-        self.current_expressions: List[Expression] = []
-        self.has_expression_expecting_error = True
+        # put all of these expressions into a single query
+        self.current_presumably_succeeding_expressions: List[Expression] = []
+        # put these expressions in separate queries
+        self.current_presumably_failing_expressions: List[Expression] = []
 
     def push_expression(self, expression: Expression) -> None:
-        self.current_expressions.append(expression)
-
         if expression.is_expect_error:
-            self.has_expression_expecting_error = True
+            self.current_presumably_failing_expressions.append(expression)
+        else:
+            self.current_presumably_succeeding_expressions.append(expression)
 
-    def can_consume_query(self) -> bool:
-        return len(self.current_expressions) > 0
+    def shall_consume_queries(self) -> bool:
+        return (
+            len(self.current_presumably_succeeding_expressions)
+            >= self.config.max_cols_per_query
+        )
 
-    def shall_consume_query(self) -> bool:
-        if not self.can_consume_query():
-            return False
+    def consume_queries(self) -> List[QueryTemplate]:
+        queries = []
 
-        if self.has_expression_expecting_error:
-            # create single-column queries when an error is expected
-            return True
+        if len(self.current_presumably_succeeding_expressions) > 0:
+            # one query for all presumably succeeding expressions
+            queries.append(
+                QueryTemplate(False, self.current_presumably_succeeding_expressions)
+            )
 
-        return len(self.current_expressions) >= self.config.max_cols_per_query
-
-    def consume_query(self) -> QueryTemplate:
-        if len(self.current_expressions) == 0:
-            raise RuntimeError("No expressions present")
-
-        query = QueryTemplate()
-        query.add_multiple_select_expressions(self.current_expressions)
+        for failing_expression in self.current_presumably_failing_expressions:
+            # one query for each failing expression
+            queries.append(QueryTemplate(True, [failing_expression]))
 
         self.reset_state()
 
-        return query
+        return queries
 
     def reset_state(self) -> None:
-        self.current_expressions = []
-        self.has_expression_expecting_error = False
+        self.current_presumably_succeeding_expressions = []
+        self.current_presumably_failing_expressions = []

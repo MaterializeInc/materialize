@@ -18,10 +18,13 @@ from materialize.output_consistency.query.query_format import QueryOutputFormat
 class QueryTemplate:
     """Query template as base for creating SQL for different evaluation strategies"""
 
-    def __init__(self, select_expressions: Optional[List[Expression]] = None) -> None:
+    def __init__(
+        self, expect_error: bool, select_expressions: Optional[List[Expression]] = None
+    ) -> None:
         if select_expressions is None:
             select_expressions = []
 
+        self.expect_error = expect_error
         self.select_expressions: List[Expression] = select_expressions
 
     def add_select_expression(self, expression: Expression) -> None:

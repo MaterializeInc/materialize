@@ -85,16 +85,13 @@ class ConsistencyTestRunner:
 
             self.query_generator.push_expression(expression)
 
-            if self.query_generator.shall_consume_query() or (
-                shall_abort_after_iteration and self.query_generator.can_consume_query()
+            if (
+                self.query_generator.shall_consume_queries()
+                or shall_abort_after_iteration
             ):
-                query = self.query_generator.consume_query()
-                success = self.execution_manager.execute_query(query, test_summary)
+                mismatch_occurred = self._consume_and_process_queries(test_summary)
 
-                if not success and self.config.fail_fast:
-                    print(
-                        "Ending test run because the first comparison mismatch has occurred (fail_fast mode)"
-                    )
+                if mismatch_occurred:
                     shall_abort_after_iteration = True
 
             expression_count += 1
@@ -105,6 +102,22 @@ class ConsistencyTestRunner:
         self.execution_manager.complete()
 
         return test_summary
+
+    def _consume_and_process_queries(
+        self, test_summary: ConsistencyTestSummary
+    ) -> bool:
+        queries = self.query_generator.consume_queries()
+
+        for query in queries:
+            success = self.execution_manager.execute_query(query, test_summary)
+
+            if not success and self.config.fail_fast:
+                print(
+                    "Ending test run because the first comparison mismatch has occurred (fail_fast mode)"
+                )
+                return True
+
+        return False
 
     def _shall_abort(self, iteration_count: int, end_time: datetime) -> bool:
         if iteration_count >= self.config.max_iterations:

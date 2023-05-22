@@ -195,8 +195,8 @@ class QueryExecutionManager:
         query1_args = original_query_template.select_expressions[arg_split_index:]
         query2_args = original_query_template.select_expressions[:arg_split_index]
 
-        new_query_template1 = QueryTemplate(query1_args)
-        new_query_template2 = QueryTemplate(query2_args)
+        new_query_template1 = QueryTemplate(False, query1_args)
+        new_query_template2 = QueryTemplate(False, query2_args)
         query_id_prefix = f"{query_id}."
 
         validation_outcomes = []
