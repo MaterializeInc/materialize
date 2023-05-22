@@ -12,6 +12,7 @@
 
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::client::Client;
 use crate::error::Error;
@@ -24,7 +25,7 @@ const ROLES_PATH: [&str; 5] = ["frontegg", "identity", "resources", "roles", "v2
 #[serde(rename_all = "camelCase")]
 pub struct Role {
     /// A unique identifier for the role.
-    pub id: String,
+    pub id: Uuid,
     /// The identifier of the vendor associated with the role.
     pub vendor_id: String,
     /// The optional identifier of the tenant associated with the role.
