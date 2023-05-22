@@ -51,16 +51,11 @@ class AlterIndex(Check):
         return [
             Testdrive(schema() + dedent(s))
             for s in [
-                (
-                    """
-                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                """
+                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_index_options = true
                 ALTER SYSTEM SET enable_logical_compaction_window = true
-                """
-                    if self.current_version >= MzVersion(0, 55, 0)
-                    else ""
-                )
-                + """
+
                 > INSERT INTO alter_index_table SELECT 'B' || generate_series FROM generate_series(1,10000);
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "B${kafka-ingest.iteration}"}
@@ -79,6 +74,10 @@ class AlterIndex(Check):
                 $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
                 ALTER INDEX alter_index_table_primary_idx OWNER TO materialize;
                 ALTER INDEX alter_index_source_primary_idx OWNER TO materialize;
+
+                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER SYSTEM SET enable_index_options = true
+                ALTER SYSTEM SET enable_logical_compaction_window = true
 
                 > INSERT INTO alter_index_table SELECT 'D' || generate_series FROM generate_series(1,10000);
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
