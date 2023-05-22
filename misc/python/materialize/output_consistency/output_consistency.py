@@ -105,8 +105,7 @@ def _run_output_consistency_tests_internal(
     config.max_iterations = max_iterations
     config.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
 
-    if config.verbose_output:
-        print_config(config)
+    print_config(config)
 
     evaluation_strategies = [
         DataFlowRenderingEvaluation(),
