@@ -98,16 +98,20 @@ def _run_output_consistency_tests_internal(
     max_iterations: int,
     avoid_expressions_expecting_db_error: bool,
 ) -> ConsistencyTestSummary:
-    config = ConsistencyTestConfiguration()
-    config.random_seed = random_seed
-    config.dry_run = dry_run
-    config.fail_fast = fail_fast
-    config.execute_setup = execute_setup
-    config.verbose_output = verbose_output
-    config.max_cols_per_query = max_cols_per_query
-    config.max_runtime_in_sec = runtime_in_sec
-    config.max_iterations = max_iterations
-    config.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
+    config = ConsistencyTestConfiguration(
+        random_seed=random_seed,
+        dry_run=dry_run,
+        fail_fast=fail_fast,
+        execute_setup=execute_setup,
+        verbose_output=verbose_output,
+        max_cols_per_query=max_cols_per_query,
+        max_runtime_in_sec=runtime_in_sec,
+        max_iterations=max_iterations,
+        avoid_expressions_expecting_db_error=avoid_expressions_expecting_db_error,
+        queries_per_tx=20,
+        use_autocommit=True,
+        split_and_retry_on_db_error=True,
+    )
 
     print_config(config)
 

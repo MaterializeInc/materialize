@@ -11,18 +11,18 @@
 class ConsistencyTestConfiguration:
     def __init__(
         self,
-        queries_per_tx: int = 20,
-        use_autocommit: bool = True,
-        max_cols_per_query: int = 20,
-        random_seed: str = "0",
-        split_and_retry_on_db_error: bool = True,
-        dry_run: bool = False,
-        fail_fast: bool = False,
-        execute_setup: bool = True,
-        verbose_output: bool = False,
-        max_runtime_in_sec: int = 600,
-        max_iterations: int = 100000,
-        avoid_expressions_expecting_db_error: bool = False,
+        queries_per_tx: int,
+        use_autocommit: bool,
+        max_cols_per_query: int,
+        random_seed: str,
+        split_and_retry_on_db_error: bool,
+        dry_run: bool,
+        fail_fast: bool,
+        execute_setup: bool,
+        verbose_output: bool,
+        max_runtime_in_sec: int,
+        max_iterations: int,
+        avoid_expressions_expecting_db_error: bool,
     ):
         self.queries_per_tx = queries_per_tx
         self.use_autocommit = use_autocommit
