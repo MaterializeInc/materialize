@@ -100,7 +100,7 @@ pub enum EndTransactionAction {
 }
 
 /// Errors that can occur when working with [`Var`]s
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum VarError {
     /// The specified session parameter is constrained to a finite set of
     /// values.
@@ -290,9 +290,9 @@ const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     internal: false,
 };
 
-const FAILPOINTS: ServerVar<str> = ServerVar {
+const FAILPOINTS: ServerVar<Failpoints> = ServerVar {
     name: UncasedStr::new("failpoints"),
-    value: "",
+    value: &Failpoints(Ok(())),
     description: "Allows failpoints to be dynamically activated.",
     internal: false,
 };
@@ -1124,7 +1124,7 @@ pub struct SessionVars {
     database: SessionVar<str>,
     date_style: &'static ServerVar<Vec<String>>,
     extra_float_digits: SessionVar<i32>,
-    failpoints: ServerVar<str>,
+    failpoints: SessionVar<Failpoints>,
     integer_datetimes: ServerVar<bool>,
     interval_style: ServerVar<str>,
     search_path: SessionVar<Vec<Ident>>,
@@ -1158,7 +1158,7 @@ impl SessionVars {
             database: SessionVar::new(&DATABASE),
             date_style: &DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
-            failpoints: FAILPOINTS,
+            failpoints: SessionVar::new(&FAILPOINTS),
             integer_datetimes: INTEGER_DATETIMES,
             interval_style: INTERVAL_STYLE,
             search_path: SessionVar::new(&SEARCH_PATH),
@@ -1386,34 +1386,16 @@ impl SessionVars {
         } else if name == EXTRA_FLOAT_DIGITS.name {
             self.extra_float_digits.set(input, local)
         } else if name == FAILPOINTS.name {
-            let values = input.to_vec();
-            for mut cfg in values.iter().map(|v| v.trim().split(';')).flatten() {
-                cfg = cfg.trim();
-                if cfg.is_empty() {
-                    continue;
-                }
-                let mut splits = cfg.splitn(2, '=');
-                let failpoint = splits
-                    .next()
-                    .ok_or_else(|| VarError::InvalidParameterValue {
-                        parameter: (&FAILPOINTS).into(),
-                        values: input.to_vec(),
-                        reason: "missing failpoint name".into(),
-                    })?;
-                let action = splits
-                    .next()
-                    .ok_or_else(|| VarError::InvalidParameterValue {
-                        parameter: (&FAILPOINTS).into(),
-                        values: input.to_vec(),
-                        reason: "missing failpoint action".into(),
-                    })?;
-                fail::cfg(failpoint, action).map_err(|e| VarError::InvalidParameterValue {
-                    parameter: (&FAILPOINTS).into(),
-                    values: input.to_vec(),
-                    reason: e,
-                })?;
-            }
-            Ok(())
+            self.failpoints
+                .set(input, local)
+                .expect("failpoint setting always succeeds; errors are passed in OK valued");
+
+            let Failpoints(v) = self.failpoints.value();
+            let r = v.clone();
+            self.failpoints
+                .set(VarInput::Flat(""), local)
+                .expect("empty string always a valid failpoint");
+            r
         } else if name == INTEGER_DATETIMES.name {
             Err(VarError::ReadOnlyParameter(INTEGER_DATETIMES.name()))
         } else if name == INTERVAL_STYLE.name {
@@ -3189,6 +3171,60 @@ where
             Some(s) => s.format(),
             None => "".into(),
         }
+    }
+}
+
+// This unorthodox design lets us escape complex errors from value parsing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Failpoints(Result<(), VarError>);
+
+impl Value for Failpoints {
+    fn type_name() -> String {
+        "failpoints config".to_string()
+    }
+
+    fn parse(input: VarInput) -> Result<Failpoints, ()> {
+        let values = input.to_vec();
+        for mut cfg in values.iter().map(|v| v.trim().split(';')).flatten() {
+            let mut parse_config = || -> Result<(), VarError> {
+                cfg = cfg.trim();
+                if cfg.is_empty() {
+                    return Ok(());
+                }
+                let mut splits = cfg.splitn(2, '=');
+                let failpoint = splits
+                    .next()
+                    .ok_or_else(|| VarError::InvalidParameterValue {
+                        parameter: (&FAILPOINTS).into(),
+                        values: input.to_vec(),
+                        reason: "missing failpxoint name".into(),
+                    })?;
+                let action = splits
+                    .next()
+                    .ok_or_else(|| VarError::InvalidParameterValue {
+                        parameter: (&FAILPOINTS).into(),
+                        values: input.to_vec(),
+                        reason: "missing failpoint action".into(),
+                    })?;
+                fail::cfg(failpoint, action).map_err(|e| VarError::InvalidParameterValue {
+                    parameter: (&FAILPOINTS).into(),
+                    values: input.to_vec(),
+                    reason: e,
+                })?;
+
+                Ok(())
+            };
+
+            if let Err(e) = parse_config() {
+                return Ok(Failpoints(Err(e)));
+            }
+        }
+
+        Ok(Failpoints(Ok(())))
+    }
+
+    fn format(&self) -> String {
+        "<omitted>".to_string()
     }
 }
 
