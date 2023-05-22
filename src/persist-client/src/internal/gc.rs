@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Borrow;
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
@@ -31,7 +32,7 @@ use mz_persist_types::{Codec, Codec64};
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::RetryMetrics;
-use crate::internal::paths::{BlobKey, PartialBatchKey, PartialRollupKey};
+use crate::internal::paths::{BlobKey, PartialBatchKey, PartialBlobKey, PartialRollupKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_diff::StateDiff;
 use crate::ShardId;
@@ -328,7 +329,7 @@ where
     /// incremental progress is made even if the process is interrupted.
     async fn incrementally_truncate<F>(
         shard_id: &ShardId,
-        diffs: Vec<StateDiff<T>>,
+        mut diffs: VecDeque<StateDiff<T>>,
         machine: &mut Machine<K, V, T, D>,
         mut timer: &mut F,
     ) -> Option<SeqNo>
@@ -346,18 +347,67 @@ where
                 .dynamic
                 .gc_blob_delete_concurrency_limit(),
         );
-        let mut pending_batch_parts_to_delete: Vec<PartialBatchKey> = vec![];
-        let mut pending_rollups_to_delete: Vec<PartialRollupKey> = vec![];
-        let mut latest_seqno_seen = SeqNo::minimum();
+        let mut batch_parts_to_delete: Vec<PartialBatchKey> = vec![];
+        let mut rollups_to_delete: Vec<PartialRollupKey> = vec![];
+        let mut truncated_to = None;
 
-        for diff in diffs {
+        while let Some(seqno) = Self::truncate_to_next_rollup_or_end(
+            shard_id,
+            &mut diffs,
+            machine,
+            timer,
+            &mut batch_parts_to_delete,
+            &mut rollups_to_delete,
+            &delete_semaphore,
+        )
+        .await
+        {
+            if let Some(truncated_to) = &truncated_to {
+                assert!(seqno > *truncated_to);
+            }
+            truncated_to = Some(seqno);
+        }
+
+        truncated_to
+    }
+
+    async fn truncate_to_next_rollup_or_end<F>(
+        shard_id: &ShardId,
+        diffs: &mut VecDeque<StateDiff<T>>,
+        machine: &mut Machine<K, V, T, D>,
+        mut timer: &mut F,
+        batch_parts_to_delete: &mut Vec<PartialBatchKey>,
+        rollups_to_delete: &mut Vec<PartialRollupKey>,
+        delete_semaphore: &Semaphore,
+    ) -> Option<SeqNo>
+    where
+        F: FnMut(&Counter),
+    {
+        if diffs.is_empty() {
+            return None;
+        }
+
+        let mut latest_seqno_seen = SeqNo::minimum();
+        // move all of this into Iterator closure
+        while let Some(diff) = diffs.pop_front() {
             assert!(latest_seqno_seen < diff.seqno_to);
             latest_seqno_seen = diff.seqno_to;
 
-            let mut has_rollup = false;
+            let mut truncate_to_rollup = None;
             diff.map_blob_inserts(|blob| match blob {
-                HollowBlobRef::Rollup(_) => {
-                    has_rollup = true;
+                HollowBlobRef::Rollup(x) => {
+                    // NB: a rollup of seqno X may be written at any seqno >= X, so we must parse
+                    // the rollup key to know how far we're allowed to truncate. it is NOT safe
+                    // to use `diff.seqno_to` to determine the truncation point!
+                    match BlobKey::parse_ids(&x.key.complete(shard_id)).expect("valid rollup key") {
+                        (_shard, PartialBlobKey::Rollup(rollup_seqno, _rollup_id)) => {
+                            assert!(rollup_seqno >= diff.seqno_to);
+                            truncate_to_rollup = Some(rollup_seqno);
+                        }
+                        (_, _) => {
+                            panic!("invalid rollup blob: {:?}", x);
+                        }
+                    }
                 }
                 _ => {}
             });
@@ -365,11 +415,11 @@ where
             diff.map_blob_deletes(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for part in &batch.parts {
-                        pending_batch_parts_to_delete.push(part.key.to_owned());
+                        batch_parts_to_delete.push(part.key.to_owned());
                     }
                 }
                 HollowBlobRef::Rollup(rollup) => {
-                    pending_rollups_to_delete.push(rollup.key.to_owned());
+                    rollups_to_delete.push(rollup.key.to_owned());
                 }
             });
 
@@ -377,22 +427,21 @@ where
             // to delete blobs in batches / truncate state. this makes the
             // overall GC process incremental, operating on the ranges
             // between rollups.
-            if has_rollup {
-                debug!("truncating up to rollup: {}", diff.seqno_to);
+            if let Some(truncate_to_rollup) = truncate_to_rollup {
+                debug!("truncating up to rollup: {}", truncate_to_rollup);
 
                 Self::truncate(
                     shard_id,
-                    diff.seqno_to,
-                    &mut pending_batch_parts_to_delete,
-                    &mut pending_rollups_to_delete,
+                    truncate_to_rollup,
+                    batch_parts_to_delete,
+                    rollups_to_delete,
                     machine,
-                    &mut timer,
+                    timer,
                     &delete_semaphore,
                 )
                 .await;
 
-                assert!(pending_rollups_to_delete.is_empty());
-                assert!(pending_batch_parts_to_delete.is_empty());
+                return Some(truncate_to_rollup);
             }
         }
 
