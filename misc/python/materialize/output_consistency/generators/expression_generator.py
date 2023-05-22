@@ -21,11 +21,8 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
-from materialize.output_consistency.input_data.operations.all_operations_provider import (
-    ALL_OPERATION_TYPES,
-)
-from materialize.output_consistency.input_data.values.all_values_provider import (
-    ALL_DATA_TYPES_WITH_VALUES,
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
 )
 from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
     KnownOutputInconsistenciesFilter,
@@ -41,9 +38,11 @@ class ExpressionGenerator:
     def __init__(
         self,
         config: ConsistencyTestConfiguration,
+        input_data: ConsistencyTestInputData,
         known_inconsistencies_filter: KnownOutputInconsistenciesFilter,
     ):
         self.config = config
+        self.input_data = input_data
         self.known_inconsistencies_filter = known_inconsistencies_filter
         self.randomized_picker = RandomizedPicker(self.config)
         self.selectable_operations: List[DbOperationOrFunction] = []
@@ -55,7 +54,7 @@ class ExpressionGenerator:
         self._initialize_types()
 
     def _initialize_operations(self) -> None:
-        for operation in ALL_OPERATION_TYPES:
+        for operation in self.input_data.all_operation_types:
             if operation.aggregation:
                 # aggregation functions are not supported yet
                 continue
@@ -68,7 +67,7 @@ class ExpressionGenerator:
             )
 
     def _initialize_types(self) -> None:
-        for data_type_with_values in ALL_DATA_TYPES_WITH_VALUES:
+        for data_type_with_values in self.input_data.all_data_types_with_values:
             category = data_type_with_values.data_type.category
             types_with_values = self.types_with_values_by_category.get(category, [])
             types_with_values.append(data_type_with_values)
@@ -165,7 +164,7 @@ class ExpressionGenerator:
         self, category: DataTypeCategory
     ) -> List[DataTypeWithValues]:
         if category == DataTypeCategory.ANY:
-            return ALL_DATA_TYPES_WITH_VALUES
+            return self.input_data.all_data_types_with_values
 
         if category == DataTypeCategory.DYNAMIC:
             raise RuntimeError(

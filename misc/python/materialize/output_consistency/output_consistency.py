@@ -25,6 +25,9 @@ from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
 from materialize.output_consistency.generators.query_generator import QueryGenerator
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
+)
 from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
     KnownOutputInconsistenciesFilter,
 )
@@ -122,13 +125,18 @@ def _run_output_consistency_tests_internal(
 
     known_inconsistencies_filter = KnownOutputInconsistenciesFilter()
 
-    expression_generator = ExpressionGenerator(config, known_inconsistencies_filter)
+    input_data = ConsistencyTestInputData()
+
+    expression_generator = ExpressionGenerator(
+        config, input_data, known_inconsistencies_filter
+    )
     query_generator = QueryGenerator(config)
     output_comparator = ResultComparator()
     sql_executor = create_sql_executor(config, connection)
 
     test_runner = ConsistencyTestRunner(
         config,
+        input_data,
         evaluation_strategies,
         expression_generator,
         query_generator,

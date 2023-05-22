@@ -25,8 +25,8 @@ from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
 from materialize.output_consistency.generators.query_generator import QueryGenerator
-from materialize.output_consistency.input_data.values.all_values_provider import (
-    ALL_DATA_TYPES_WITH_VALUES,
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
 )
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
@@ -37,6 +37,7 @@ class ConsistencyTestRunner:
     def __init__(
         self,
         config: ConsistencyTestConfiguration,
+        input_data: ConsistencyTestInputData,
         evaluation_strategies: List[EvaluationStrategy],
         expression_generator: ExpressionGenerator,
         query_generator: QueryGenerator,
@@ -44,6 +45,7 @@ class ConsistencyTestRunner:
         sql_executor: SqlExecutor,
     ):
         self.config = config
+        self.input_data = input_data
         self.evaluation_strategies = evaluation_strategies
         self.expression_generator = expression_generator
         self.query_generator = query_generator
@@ -55,7 +57,7 @@ class ConsistencyTestRunner:
 
     def setup(self) -> None:
         self.execution_manager.setup_database_objects(
-            ALL_DATA_TYPES_WITH_VALUES, self.evaluation_strategies
+            self.input_data.all_data_types_with_values, self.evaluation_strategies
         )
 
     def start(self) -> ConsistencyTestSummary:
