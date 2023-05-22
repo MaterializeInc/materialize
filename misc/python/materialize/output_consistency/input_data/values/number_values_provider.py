@@ -19,6 +19,7 @@ from materialize.output_consistency.input_data.types.number_types_provider impor
     INT8_TYPE,
     NUMERIC_DATA_TYPES,
     REAL_TYPE,
+    UINT2_TYPE,
     UINT4_TYPE,
     UINT8_TYPE,
     NumberDataType,
@@ -85,12 +86,28 @@ VALUES_PER_NUMERIC_DATA_TYPE[UINT4_TYPE].add_characteristic_to_all_values(
 VALUES_PER_NUMERIC_DATA_TYPE[INT8_TYPE].add_characteristic_to_all_values(
     ExpressionCharacteristics.LARGER_THAN_INT4_SIZED
 )
+VALUES_PER_NUMERIC_DATA_TYPE[INT8_TYPE].add_characteristic_to_all_values(
+    ExpressionCharacteristics.INT8_SIZED
+)
 VALUES_PER_NUMERIC_DATA_TYPE[UINT8_TYPE].add_characteristic_to_all_values(
     ExpressionCharacteristics.LARGER_THAN_INT4_SIZED
+)
+VALUES_PER_NUMERIC_DATA_TYPE[UINT8_TYPE].add_characteristic_to_all_values(
+    ExpressionCharacteristics.INT8_SIZED
 )
 VALUES_PER_NUMERIC_DATA_TYPE[REAL_TYPE].add_characteristic_to_all_values(
     ExpressionCharacteristics.FLOAT_TYPED
 )
 VALUES_PER_NUMERIC_DATA_TYPE[DOUBLE_TYPE].add_characteristic_to_all_values(
     ExpressionCharacteristics.FLOAT_TYPED
+)
+
+VALUES_PER_NUMERIC_DATA_TYPE[UINT2_TYPE].add_characteristic_to_all_values(
+    ExpressionCharacteristics.UNSIGNED_TYPED
+)
+VALUES_PER_NUMERIC_DATA_TYPE[UINT4_TYPE].add_characteristic_to_all_values(
+    ExpressionCharacteristics.UNSIGNED_TYPED
+)
+VALUES_PER_NUMERIC_DATA_TYPE[UINT8_TYPE].add_characteristic_to_all_values(
+    ExpressionCharacteristics.UNSIGNED_TYPED
 )

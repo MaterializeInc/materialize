@@ -17,6 +17,28 @@ from materialize.output_consistency.operation.operation_args_validator import (
 )
 
 
+class Uint8MixedWithTypedArgsValidator(OperationArgsValidator):
+    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
+        if len(args) < 2:
+            return False
+
+        index_of_uint8 = self.index_of_characteristic_combination(
+            args,
+            {
+                ExpressionCharacteristics.INT8_SIZED,
+                ExpressionCharacteristics.UNSIGNED_TYPED,
+            },
+        )
+
+        index_of_signed = self.index_of(
+            args,
+            lambda arg_characteristics, index: ExpressionCharacteristics.UNSIGNED_TYPED
+            not in arg_characteristics,
+        )
+
+        return index_of_uint8 != -1 and index_of_signed != -1
+
+
 class SingleParamValueGrowsArgsValidator(OperationArgsValidator):
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
         return self.has_any_characteristic(

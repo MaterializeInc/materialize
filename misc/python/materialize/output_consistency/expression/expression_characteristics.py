@@ -29,5 +29,9 @@ class ExpressionCharacteristics(Enum):
     DECIMAL = 122
 
     DECIMAL_OR_FLOAT_TYPED = 150
-    LARGER_THAN_INT4_SIZED = 151
-    FLOAT_TYPED = 152
+    FLOAT_TYPED = 151
+    UNSIGNED_TYPED = 152
+
+    LARGER_THAN_INT4_SIZED = 160
+    # INT8 or UINT8
+    INT8_SIZED = 161

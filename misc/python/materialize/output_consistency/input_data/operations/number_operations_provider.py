@@ -19,6 +19,7 @@ from materialize.output_consistency.input_data.validators.number_args_validator 
     MaxMinusNegMaxArgsValidator,
     MultiParamValueGrowsArgsValidator,
     SingleParamValueGrowsArgsValidator,
+    Uint8MixedWithTypedArgsValidator,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -87,6 +88,7 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         DataTypeCategory.NUMERIC,
+        {Uint8MixedWithTypedArgsValidator()},
     )
 )
 # Bitwise OR
@@ -102,6 +104,7 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         DataTypeCategory.NUMERIC,
+        {Uint8MixedWithTypedArgsValidator()},
     )
 )
 # Bitwise XOR
@@ -117,6 +120,7 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         DataTypeCategory.NUMERIC,
+        {Uint8MixedWithTypedArgsValidator()},
     )
 )
 # Bitwise NOT
@@ -147,6 +151,7 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         DataTypeCategory.NUMERIC,
+        {Uint8MixedWithTypedArgsValidator()},
     )
 )
 # Bitwise right shift
@@ -165,6 +170,7 @@ NUMERIC_OPERATION_TYPES.append(
             ),
         ],
         DataTypeCategory.NUMERIC,
+        {Uint8MixedWithTypedArgsValidator()},
     )
 )
 
