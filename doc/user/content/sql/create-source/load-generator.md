@@ -112,7 +112,7 @@ is placed in the currently ongoing auction.
 
 ### Marketing
 
-The marketing load generator simulates an marketing organization that is using a machine learning model to send coupons to potential leads. The marketing source will be automatically demuxed
+The marketing load generator simulates a marketing organization that is using a machine learning model to send coupons to potential leads. The marketing source will be automatically demuxed
 into multiple subsources when the `CREATE SOURCE` command is executed. This will
 create the following subsources:
 
@@ -121,8 +121,8 @@ create the following subsources:
     Field     | Type       | Description
     ----------|------------|------------
     `id`      | [`bigint`] | A unique identifier for the customer.
-    `email`   | [`text`]   | A customers email.
-    `income`  | [`bigint`] | The customers income in pennies.
+    `email`   | [`text`]   | The customer's email.
+    `income`  | [`bigint`] | The customer's income in pennies.
 
   * `impressions` describes online ads that have been seen by a customer.
 
@@ -130,7 +130,7 @@ create the following subsources:
     ------------------|------------------------------|------------
     `id`              | [`bigint`]                   | A unique identifier for the impression.
     `customer_id`     | [`bigint`]                   | The identifier of the customer that saw the ad. References `customers.id`.
-    `impression_time` | [`timestamp with time zone`] | The time the ad was seen.
+    `impression_time` | [`timestamp with time zone`] | The time at which the ad was seen.
 
   * `clicks` describes clicks of ads.
 
@@ -145,8 +145,8 @@ create the following subsources:
     --------------------|------------------------------|------------
     `id`                | [`bigint`]                   | A unique identifier for the lead.
     `customer_id`       | [`bigint`]                   | The identifier of the customer we'd like to convert. References `customers.id`.
-    `created_at`        | [`timestamp with time zone`] | The time the lead was created.
-    `converted_at`      | [`timestamp with time zone`] | The time the lead was converted.
+    `created_at`        | [`timestamp with time zone`] | The time at which the lead was created.
+    `converted_at`      | [`timestamp with time zone`] | The time at which the lead was converted.
     `conversion_amount` | [`bigint`]                   | The amount the lead converted for in pennies.
 
   * `coupons` describes coupons given to leads.
@@ -155,7 +155,7 @@ create the following subsources:
     --------------------|------------------------------|------------
     `id`                | [`bigint`]                   | A unique identifier for the coupon.
     `lead_id`           | [`bigint`]                   | The identifier of the lead we're attempting to convert. References `leads.id`.
-    `created_at`        | [`timestamp with time zone`] | The time the coupon was created.
+    `created_at`        | [`timestamp with time zone`] | The time at which the coupon was created.
     `amount`            | [`bigint`]                   | The amount the coupon is for in pennies.
 
   * `conversion_predictions` describes the predictions made by a highly sophisticated machine learning model.
@@ -163,9 +163,9 @@ create the following subsources:
     Field               | Type                         | Description
     --------------------|------------------------------|------------
     `lead_id`           | [`bigint`]                   | The identifier of the lead we're attempting to convert. References `leads.id`.
-    `experiement_bucket`| [`text`]                     | Whether the lead is a control or experiment.
-    `created_at`        | [`timestamp with time zone`] | The time the prediction was made.
-    `score`             | [`numeric`]                  | The predicted likelyhood the lead will convert.
+    `experiment_bucket`| [`text`]                     | Whether the lead is a control or experiment.
+    `created_at`        | [`timestamp with time zone`] | The time at which the prediction was made.
+    `score`             | [`numeric`]                  | The predicted likelihood the lead will convert.
 
 ### TPCH
 
