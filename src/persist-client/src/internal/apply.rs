@@ -207,16 +207,26 @@ where
             })
     }
 
-    pub fn earliest_rollup_lte_seqno(&self, seqno: SeqNo) -> Option<(SeqNo, PartialRollupKey)> {
-        self.state
-            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
-                state
-                    .collections
-                    .rollups
-                    .first_key_value()
-                    .filter(|(earliest_rollup_seqno, _rollup)| **earliest_rollup_seqno <= seqno)
-                    .map(|(seqno, rollup)| (*seqno, rollup.key.to_owned()))
-            })
+    /// WIP:
+    pub fn removable_rollups(&self) -> Vec<(SeqNo, PartialRollupKey)> {
+        let mut rollups: Vec<(SeqNo, PartialRollupKey)> =
+            self.state
+                .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                    state
+                        .collections
+                        .rollups
+                        .range(..=state.seqno_since())
+                        .map(|(seqno, rollup)| (*seqno, rollup.key.to_owned()))
+                        .collect()
+                });
+
+        // as noted in StateVersions, our invariant holds that we may truncate
+        // rollups `<` than the latest rollup that is `<= seqno_since`. this
+        // means callers should not remove the latest rollup, if any, so pop it
+        // from our output:
+        rollups.pop();
+
+        rollups
     }
 
     pub fn all_fueled_merge_reqs(&self) -> Vec<FueledMergeReq<T>> {

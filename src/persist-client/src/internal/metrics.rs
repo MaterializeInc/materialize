@@ -858,20 +858,20 @@ pub struct GcMetrics {
 #[derive(Debug)]
 pub struct GcStepTimings {
     pub(crate) fetch_seconds: Counter,
+    pub(crate) find_deletable_blobs_seconds: Counter,
     pub(crate) delete_rollup_seconds: Counter,
     pub(crate) delete_batch_part_seconds: Counter,
     pub(crate) truncate_diff_seconds: Counter,
-    pub(crate) remove_rollup_seconds: Counter,
 }
 
 impl GcStepTimings {
     fn new(step_timings: CounterVec) -> Self {
         Self {
             fetch_seconds: step_timings.with_label_values(&["fetch"]),
+            find_deletable_blobs_seconds: step_timings.with_label_values(&["find_deletable_blobs"]),
             delete_rollup_seconds: step_timings.with_label_values(&["delete_rollup"]),
             delete_batch_part_seconds: step_timings.with_label_values(&["delete_batch_part"]),
             truncate_diff_seconds: step_timings.with_label_values(&["truncate_diff"]),
-            remove_rollup_seconds: step_timings.with_label_values(&["finish"]),
         }
     }
 }
