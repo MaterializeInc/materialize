@@ -269,20 +269,21 @@ SELECT * from bids;
 
 ### Creating a marketing load generator
 
-To create a load generator source that simulates an online marketing campaing: 
+To create a load generator source that simulates an online marketing campaign:
 
 ```sql
-CREATE SOURCE marketing 
+CREATE SOURCE marketing
   FROM LOAD GENERATOR MARKETING
-  FOR ALL TABLES 
+  FOR ALL TABLES
   WITH (SIZE = '3xsmall');
 ```
 
 To display the created subsources:
 
-```
+```sql
 SHOW SOURCES;
 ```
+
 ```nofmt
           name          |      type      | size
 ------------------------+----------------+------
@@ -292,11 +293,11 @@ SHOW SOURCES;
  customers              | subsource      |
  impressions            | subsource      |
  leads                  | subsource      |
- marketing              | load-generator | 1
+ marketing              | load-generator | 3xsmall
  marketing_progress     | subsource      |
 ```
 
-To find all impressions and clicks associated with a campaign over the last 30 days: 
+To find all impressions and clicks associated with a campaign over the last 30 days:
 
 ```sql
 WITH
@@ -318,6 +319,7 @@ SELECT campaign_id, sum(impressions) AS impressions, sum(clicks) AS clicks
 FROM impression_rollup LEFT JOIN click_rollup USING(id)
 GROUP BY campaign_id;
 ```
+
 ```nofmt
  campaign_id | impressions | clicks
 -------------+-------------+--------
@@ -431,6 +433,7 @@ The smallest source size (`3xsmall`) is a resonable default to get started. For 
 - [`CREATE SOURCE`](../)
 
 [`bigint`]: /sql/types/bigint
+[`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
 [`timestamp with time zone`]: /sql/types/timestamp
 [feature request]: https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml
