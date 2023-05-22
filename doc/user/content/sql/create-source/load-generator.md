@@ -27,9 +27,10 @@ Field | Use
 ------|-----
 _src_name_  | The name for the source.
 **IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
-**COUNTER** | Use the [counter](#counter) load generator.
-**AUCTION** | Use the [auction](#auction) load generator.
-**TPCH**    | Use the [tpch](#tpch) load generator.
+**COUNTER**  | Use the [counter](#counter) load generator.
+**AUCTION**  | Use the [auction](#auction) load generator.
+**MARKETING**| Use the [marketing](#marketing) load generator.
+**TPCH**     | Use the [tpch](#tpch) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
 **SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
@@ -264,6 +265,81 @@ SELECT * from bids;
  10 |  3844 |          1 |     59 | 2022-09-16 23:24:07.332+00
  11 |  1861 |          1 |     40 | 2022-09-16 23:24:08.332+00
  12 |  3338 |          1 |     97 | 2022-09-16 23:24:09.332+00
+```
+
+### Creating a marketing load generator
+
+To create a load generator source that simulates an online marketing campaing: 
+
+```sql
+CREATE SOURCE marketing 
+  FROM LOAD GENERATOR MARKETING
+  FOR ALL TABLES 
+  WITH (SIZE = '3xsmall');
+```
+
+To display the created subsources:
+
+```
+SHOW SOURCES;
+```
+```nofmt
+          name          |      type      | size
+------------------------+----------------+------
+ clicks                 | subsource      |
+ conversion_predictions | subsource      |
+ coupons                | subsource      |
+ customers              | subsource      |
+ impressions            | subsource      |
+ leads                  | subsource      |
+ marketing              | load-generator | 1
+ marketing_progress     | subsource      |
+```
+
+To find all impressions and clicks associated with a campaign over the last 30 days: 
+
+```sql
+WITH
+    click_rollup AS
+    (
+        SELECT impression_id AS id, count(*) AS clicks
+        FROM clicks
+        WHERE click_time - INTERVAL '30' DAY <= mz_now()
+        GROUP BY impression_id
+    ),
+    impression_rollup AS
+    (
+        SELECT id, campaign_id, count(*) AS impressions
+        FROM impressions
+        WHERE impression_time - INTERVAL '30' DAY <= mz_now()
+        GROUP BY id, campaign_id
+    )
+SELECT campaign_id, sum(impressions) AS impressions, sum(clicks) AS clicks
+FROM impression_rollup LEFT JOIN click_rollup USING(id)
+GROUP BY campaign_id;
+```
+```nofmt
+ campaign_id | impressions | clicks
+-------------+-------------+--------
+           0 |         350 |     33
+           1 |         325 |     28
+           2 |         319 |     24
+           3 |         315 |     38
+           4 |         305 |     28
+           5 |         354 |     31
+           6 |         346 |     25
+           7 |         337 |     36
+           8 |         329 |     38
+           9 |         305 |     24
+          10 |         345 |     27
+          11 |         323 |     30
+          12 |         320 |     29
+          13 |         331 |     27
+          14 |         310 |     22
+          15 |         324 |     28
+          16 |         315 |     32
+          17 |         329 |     36
+          18 |         329 |     28
 ```
 
 ### Creating a TPCH load generator
