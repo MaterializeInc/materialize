@@ -3001,6 +3001,8 @@ pub const PG_ROLES: BuiltinView = BuiltinView {
     '********'::pg_catalog.text AS rolpassword,
     r.rolvaliduntil,
     r.rolbypassrls,
+    --Note: this is NULL because Materialize doesn't support Role-specific config values.
+    NULL::pg_catalog.text[] as rolconfig,
     r.oid AS oid
 FROM pg_catalog.pg_authid r",
 };
