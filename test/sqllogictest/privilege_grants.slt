@@ -204,7 +204,7 @@ SELECT * FROM database_privileges
 ----
 materialize  =U/mz_system
 materialize  mz_system=UC/mz_system
-materialize  materialize=arwdUC/mz_system
+materialize  materialize=UC/mz_system
 
 query TT
 SELECT name, privilege FROM schema_privileges ORDER BY name
@@ -219,14 +219,14 @@ pg_catalog          =U/mz_system
 pg_catalog          mz_system=UC/mz_system
 public              =U/mz_system
 public              mz_system=UC/mz_system
-public              materialize=arwdUC/mz_system
+public              materialize=UC/mz_system
 
 query TT
 SELECT * FROM cluster_privileges ORDER BY name
 ----
 default           =U/mz_system
 default           mz_system=UC/mz_system
-default           materialize=arwdUC/mz_system
+default           materialize=UC/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_introspection=UC/mz_system
@@ -334,8 +334,8 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'public' ORDER BY nam
 public  =U/mz_system
 public  =U/materialize
 public  mz_system=UC/mz_system
+public  materialize=UC/mz_system
 public  materialize=UC/materialize
-public  materialize=arwdUC/mz_system
 
 statement ok
 CREATE SCHEMA sch;

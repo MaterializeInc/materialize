@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-ALTER ROLE materialize CREATEROLE
-
 > CREATE ROLE superuser_login;
 
 > CREATE ROLE "space role";

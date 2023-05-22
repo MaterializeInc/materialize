@@ -190,9 +190,6 @@ ALTER SYSTEM SET max_roles = 2;
 > SHOW max_roles
 2
 
-$ postgres-execute connection=mz_system
-ALTER ROLE materialize CREATEROLE
-
 > CREATE ROLE joe
 
 ! CREATE ROLE mike

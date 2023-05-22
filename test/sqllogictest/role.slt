@@ -21,7 +21,7 @@ s2 mz_introspection true false false false
 query TBBBB
 SELECT name, inherit, create_role, create_db, create_cluster FROM mz_roles WHERE id LIKE 'u%'
 ----
-materialize  true  false  true  true
+materialize  true  true  true  true
 
 # Give materialize the CREATEROLE attribute.
 simple conn=mz_system,user=mz_system
@@ -253,20 +253,6 @@ simple conn=mz_system,user=mz_system
 DROP CLUSTER mz_introspection CASCADE;
 ----
 db error: ERROR: system cluster 'mz_introspection' cannot be modified
-
-# TODO: I'm expecting this to fail, why does it succeed in SLT?
-# db error: ERROR: system cluster 'mz_system' cannot be modified
-simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA mz_system.r2 SIZE '1';
-----
-COMPLETE 0
-
-# TODO: I'm expecting this to fail, why does it succeed in SLT?
-# db error: ERROR: system cluster 'mz_system' cannot be modified
-simple conn=mz_system,user=mz_system
-DROP CLUSTER REPLICA mz_system.r1
-----
-COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 SET CLUSTER TO mz_introspection
