@@ -60,4 +60,4 @@ class ValidationOutcome:
         if len(entries) == 0:
             return ""
 
-        return LI_PREFIX + f"\n{LI_PREFIX}\n".join([str(entry) for entry in entries])
+        return "\n".join(f"{LI_PREFIX}\n{str(entry)}" for entry in entries)
