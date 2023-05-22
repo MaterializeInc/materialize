@@ -39,12 +39,15 @@ def find_modified_lines() -> Coverage:
     base_branch = os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "main") or os.getenv(
         "BUILDKITE_PIPELINE_DEFAULT_BRANCH", "main"
     )
+    # Make sure we have the latest state to correctly identify the merge base
+    subprocess.run(["git", "fetch", "origin", base_branch], check=True)
     result = subprocess.run(
         ["git", "merge-base", "HEAD", f"origin/{base_branch}"],
         check=True,
         capture_output=True,
     )
     merge_base = result.stdout.strip()
+    print(f"Merge base: {merge_base.decode('utf-8')}")
     result = subprocess.run(
         ["git", "diff", "-U0", merge_base], check=True, capture_output=True
     )
