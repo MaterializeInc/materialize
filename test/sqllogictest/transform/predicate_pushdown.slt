@@ -763,7 +763,10 @@ SELECT * FROM c1 WHERE n>7;
 ----
 Explained Query:
   Return
-    Get l1
+    Project (#1)
+      Filter (#1 > 7)
+        Map ((#0 + #0))
+          Get l0
   With Mutually Recursive
     cte l2 =
       Union
@@ -808,7 +811,9 @@ SELECT * FROM c1;
 ----
 Explained Query:
   Return
-    Get l1
+    Project (#1)
+      Map ((#0 + #0))
+        Get l0
   With Mutually Recursive
     cte l2 =
       Union

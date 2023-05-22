@@ -1444,3 +1444,246 @@ Used Indexes:
   - materialize.public.i1
 
 EOF
+
+
+# WITH MUTUALLY RECURSIVE support
+# -------------------------------
+
+# Basic support for recursive queries.
+# Note that some opportunities arising from the appearance of the same
+# sub-expression under different WMR bindings are not exploited at the moment:
+# (1) a Filter (#1 > 7) over l0 appears twice.
+# (2) l2 is equivalent to l5.
+# (3) l1 is not equivalent (although structurally equal) to l4.
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH MUTUALLY RECURSIVE
+  c0(f1 INTEGER, f2 INTEGER) AS (
+    SELECT f1, f2 FROM t1
+    UNION ALL
+    SELECT f1, f2 FROM t1
+  ),
+  c1(f1 INTEGER, f2 INTEGER) AS (
+    SELECT * FROM c0 WHERE f2 > 7
+    UNION ALL
+    SELECT * FROM c1 WHERE f2 > 7
+    UNION ALL
+    SELECT * FROM c1 WHERE f2 > 7
+    UNION ALL
+    SELECT * FROM c2 WHERE f2 > 7
+    UNION ALL
+    SELECT * FROM c2 WHERE f2 > 7
+  ),
+  c2(f1 INTEGER, f2 INTEGER) AS (
+    SELECT * FROM c0 WHERE f2 > 7
+    UNION ALL
+    SELECT * FROM c1 WHERE f2 > 7
+    UNION ALL
+    SELECT * FROM c1 WHERE f2 > 7
+    UNION ALL
+    SELECT * FROM c2 WHERE f2 > 7
+    UNION ALL
+    SELECT * FROM c2 WHERE f2 > 7
+  )
+SELECT * FROM c0 WHERE f1 > 7
+UNION ALL
+SELECT * FROM c1 WHERE f1 > 7
+UNION ALL
+SELECT * FROM c2 WHERE f1 > 7
+----
+Explained Query:
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Filter (#0 > 7) // { arity: 2 }
+        Get l0 // { arity: 2 }
+      Filter (#0 > 7) // { arity: 2 }
+        Get l3 // { arity: 2 }
+      Filter (#0 > 7) // { arity: 2 }
+        Get l6 // { arity: 2 }
+  With Mutually Recursive
+    cte l6 =
+      Union // { arity: 2 }
+        Filter (#1 > 7) // { arity: 2 }
+          Get l0 // { arity: 2 }
+        Get l4 // { arity: 2 }
+        Get l4 // { arity: 2 }
+        Get l5 // { arity: 2 }
+        Get l5 // { arity: 2 }
+    cte l5 =
+      Filter (#1 > 7) // { arity: 2 }
+        Get l6 // { arity: 2 }
+    cte l4 =
+      Filter (#1 > 7) // { arity: 2 }
+        Get l3 // { arity: 2 }
+    cte l3 =
+      Union // { arity: 2 }
+        Filter (#1 > 7) // { arity: 2 }
+          Get l0 // { arity: 2 }
+        Get l1 // { arity: 2 }
+        Get l1 // { arity: 2 }
+        Get l2 // { arity: 2 }
+        Get l2 // { arity: 2 }
+    cte l2 =
+      Filter (#1 > 7) // { arity: 2 }
+        Get l6 // { arity: 2 }
+    cte l1 =
+      Filter (#1 > 7) // { arity: 2 }
+        Get l3 // { arity: 2 }
+    cte l0 =
+      Union // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+        Get materialize.public.t1 // { arity: 2 }
+
+Used Indexes:
+  - materialize.public.i1
+
+EOF
+
+# Correlated WMR block.
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+SELECT bound, (
+    WITH MUTUALLY RECURSIVE
+        numbers (n int) as (
+            VALUES (1)
+            UNION ALL
+            (
+                WITH rebound AS (SELECT * FROM numbers)
+                SELECT distinct t1.n + t2.n AS n
+                FROM rebound AS t1, rebound AS t2
+                WHERE t1.n <= bound AND t2.n <= bound
+            )
+        )
+    SELECT count(*) FROM numbers
+)
+FROM (
+    SELECT generate_series AS bound FROM generate_series(1, 10)
+);
+----
+Explained Query:
+  Return // { arity: 2 }
+    Return // { arity: 2 }
+      Project (#0, #3) // { arity: 2 }
+        Join on=(eq(#0, #1, #2)) type=delta // { arity: 4 }
+          implementation
+            %0 » %1:l3[#0]UKA » %2[#0]KA
+            %1:l3 » %0[#0]UKA » %2[#0]KA
+            %2 » %0[#0]UKA » %1:l3[#0]UKA
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Constant // { arity: 1 }
+              - (1)
+              - (2)
+              - (3)
+              - (4)
+              - (5)
+              - (6)
+              - (7)
+              - (8)
+              - (9)
+              - (10)
+          Get l3 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Union // { arity: 2 }
+              Get l5 // { arity: 2 }
+              Project (#0, #2) // { arity: 2 }
+                Map (null) // { arity: 3 }
+                  Join on=(#0 = #1) type=differential // { arity: 2 }
+                    implementation
+                      %1:l3[#0]UK » %0[#0]K
+                    ArrangeBy keys=[[#0]] // { arity: 1 }
+                      Union // { arity: 1 }
+                        Negate // { arity: 1 }
+                          Distinct group_by=[#0] // { arity: 1 }
+                            Project (#0) // { arity: 1 }
+                              Get l5 // { arity: 2 }
+                        Constant // { arity: 1 }
+                          - (1)
+                          - (2)
+                          - (3)
+                          - (4)
+                          - (5)
+                          - (6)
+                          - (7)
+                          - (8)
+                          - (9)
+                          - (10)
+                    Get l3 // { arity: 1 }
+    With
+      cte l5 =
+        Union // { arity: 2 }
+          Get l4 // { arity: 2 }
+          Map (error("more than one record produced in subquery")) // { arity: 2 }
+            Project (#0) // { arity: 1 }
+              Filter (#1 > 1) // { arity: 2 }
+                Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+                  Project (#0) // { arity: 1 }
+                    Get l4 // { arity: 2 }
+      cte l4 =
+        Union // { arity: 2 }
+          Get l2 // { arity: 2 }
+          Project (#0, #2) // { arity: 2 }
+            Map (0) // { arity: 3 }
+              Join on=(#0 = #1) type=differential // { arity: 2 }
+                implementation
+                  %1:l3[#0]UK » %0[#0]K
+                ArrangeBy keys=[[#0]] // { arity: 1 }
+                  Union // { arity: 1 }
+                    Negate // { arity: 1 }
+                      Project (#0) // { arity: 1 }
+                        Get l2 // { arity: 2 }
+                    Constant // { arity: 1 }
+                      - (1)
+                      - (2)
+                      - (3)
+                      - (4)
+                      - (5)
+                      - (6)
+                      - (7)
+                      - (8)
+                      - (9)
+                      - (10)
+                Get l3 // { arity: 1 }
+      cte l3 =
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Constant // { arity: 1 }
+            - (1)
+            - (2)
+            - (3)
+            - (4)
+            - (5)
+            - (6)
+            - (7)
+            - (8)
+            - (9)
+            - (10)
+      cte l2 =
+        Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+          Project (#0) // { arity: 1 }
+            Get l1 // { arity: 2 }
+  With Mutually Recursive
+    cte l1 =
+      Union // { arity: 2 }
+        Distinct group_by=[#0, (#1 + #2)] // { arity: 2 }
+          Project (#0, #1, #3) // { arity: 3 }
+            Join on=(#0 = #2) type=differential // { arity: 4 }
+              implementation
+                %0:l0[#0]Kf » %1:l0[#0]Kf
+              Get l0 // { arity: 2 }
+              Get l0 // { arity: 2 }
+        Constant // { arity: 2 }
+          - (1, 1)
+          - (2, 1)
+          - (3, 1)
+          - (4, 1)
+          - (5, 1)
+          - (6, 1)
+          - (7, 1)
+          - (8, 1)
+          - (9, 1)
+          - (10, 1)
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 2 }
+        Filter (#1 <= #0) // { arity: 2 }
+          Get l1 // { arity: 2 }
+
+EOF
