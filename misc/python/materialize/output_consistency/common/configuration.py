@@ -14,7 +14,7 @@ class ConsistencyTestConfiguration:
         queries_per_tx: int = 20,
         use_autocommit: bool = True,
         max_cols_per_query: int = 8,
-        random_seed: int = 0,
+        random_seed: str = "0",
         split_and_retry_on_db_error: bool = True,
         dry_run: bool = False,
         fail_fast: bool = False,

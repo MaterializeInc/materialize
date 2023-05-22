@@ -53,7 +53,7 @@ def run_output_consistency_tests(
 def parse_output_consistency_input_args(
     parser: argparse.ArgumentParser,
 ) -> argparse.Namespace:
-    parser.add_argument("--seed", default=0, type=int)
+    parser.add_argument("--seed", default="0", type=str)
     parser.add_argument(
         "--dry-run", default=False, type=bool, action=argparse.BooleanOptionalAction
     )
@@ -86,7 +86,7 @@ def parse_output_consistency_input_args(
 
 def _run_output_consistency_tests_internal(
     connection: Connection,
-    random_seed: int,
+    random_seed: str,
     dry_run: bool,
     fail_fast: bool,
     execute_setup: bool,
