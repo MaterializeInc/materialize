@@ -155,7 +155,7 @@ pub(crate) async fn run_line_reader(
     let has_kafka_cmd = cmds.iter().any(|cmd| {
         matches!(
             &cmd.command,
-            Command::Builtin(BuiltinCommand { name, .. }) if name.starts_with("kafka-"),
+            Command::Builtin(BuiltinCommand { name, .. }, _) if name.starts_with("kafka-"),
         )
     });
 
