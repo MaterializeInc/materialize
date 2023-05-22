@@ -18,11 +18,11 @@ bin/mzcompose --find output-consistency down -v && bin/mzcompose --find output-c
 ```
 To start the tests from a shell, use
 ```
-bin/output-consistency --runtime-in-sec 60
+bin/output-consistency --max-runtime-in-sec 60
 ```
 
 Possible parameters are:
-* `--runtime-in-sec`: limit the duration of the test execution (`0` is unlimited, but `max-iterations` must be set in
+* `--max-runtime-in-sec`: limit the duration of the test execution (`0` is unlimited, but `max-iterations` must be set in
 this case)
 * `--max-iterations`: limit the number of processed expressions (`0` is unlimited, but `runtime-in-sec` must be set in
 this case)
