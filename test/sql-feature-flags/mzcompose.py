@@ -44,6 +44,7 @@ def header(test_name: str, drop_schema: bool) -> str:
             $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
             DROP SCHEMA IF EXISTS public CASCADE;
             CREATE SCHEMA public /* {test_name} */;
+            GRANT ALL PRIVILEGES ON SCHEMA public TO materialize;
             """
         )
     # Create connections.

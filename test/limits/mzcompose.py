@@ -44,6 +44,7 @@ class Generator:
         )
         print("DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"CREATE SCHEMA public /* {cls} */;")
+        print("GRANT ALL PRIVILEGES ON SCHEMA public TO materialize")
         print(
             "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}"
         )
@@ -1330,7 +1331,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     WORKERS {args.workers}
                 )
             )
-        """
+        """,
+            port=6877,
+            user="mz_system",
         )
 
         c.up("testdrive", persistent=True)
