@@ -485,6 +485,20 @@ pub trait StorageController: Debug + Send {
     /// initial state and the controller can reconcile (i.e. drop) any unclaimed
     /// resources.
     async fn reconcile_state(&mut self);
+
+    /// Exposes the internal state of the data shard for debugging and QA.
+    ///
+    /// We'll be thoughtful about making unnecessary changes, but the **output
+    /// of this method needs to be gated from users**, so that it's not subject
+    /// to our backward compatibility guarantees.
+    ///
+    /// TODO: Ideally this would return `impl Serialize` so the caller can do
+    /// with it what they like, but that doesn't work in traits yet. The
+    /// workaround (an associated type) doesn't work because persist doesn't
+    /// want to make the type public. In the meantime, move the `serde_json`
+    /// call from the single user into this method.
+    async fn inspect_persist_state(&self, id: GlobalId)
+        -> Result<serde_json::Value, anyhow::Error>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -2409,6 +2423,22 @@ where
 
     async fn reconcile_state(&mut self) {
         self.reconcile_state_inner().await
+    }
+
+    async fn inspect_persist_state(
+        &self,
+        id: GlobalId,
+    ) -> Result<serde_json::Value, anyhow::Error> {
+        let collection = &self.collection(id)?.collection_metadata;
+        let client = self
+            .persist
+            .open(collection.persist_location.clone())
+            .await?;
+        let shard_state = client
+            .inspect_shard::<Self::Timestamp>(&collection.data_shard)
+            .await?;
+        let json_state = serde_json::to_value(shard_state)?;
+        Ok(json_state)
     }
 }
 
