@@ -16,8 +16,7 @@ from materialize.output_consistency.output_consistency import (
 
 SERVICES = [
     Cockroach(setup_materialize=True),
-    # We use mz_panic() in some test scenarios, so environmentd must stay up.
-    Materialized(propagate_crashes=False, external_cockroach=True),
+    Materialized(propagate_crashes=True, external_cockroach=True),
 ]
 
 
