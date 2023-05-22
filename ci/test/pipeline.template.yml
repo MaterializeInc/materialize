@@ -640,6 +640,7 @@ steps:
 
   - id: sqlancer-pqs
     label: "SQLancer PQS"
+    depends_on: build-x86_64
     artifact_paths: junit_*.xml
     timeout_in_minutes: 15
     agents:
@@ -652,6 +653,7 @@ steps:
   - id: sqlancer-norec
     label: "SQLancer NoREC"
     artifact_paths: junit_*.xml
+    depends_on: build-x86_64
     timeout_in_minutes: 15
     agents:
       queue: linux-x86_64
@@ -663,6 +665,7 @@ steps:
   - id: sqlancer-query-partitioning
     label: "SQLancer QueryPartitioning"
     artifact_paths: junit_*.xml
+    depends_on: build-x86_64
     timeout_in_minutes: 15
     agents:
       queue: linux-x86_64
@@ -674,6 +677,7 @@ steps:
   - id: sqlancer-having
     label: "SQLancer Having"
     artifact_paths: junit_*.xml
+    depends_on: build-x86_64
     timeout_in_minutes: 15
     agents:
       queue: linux-x86_64
