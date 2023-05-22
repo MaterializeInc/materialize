@@ -90,7 +90,7 @@ where
                             };
                             (group_row, row)
                         })
-                        .consolidate_named_if::<RowSpine<_, _, _, _>>(
+                        .consolidate_named_if::<RowKeySpine<_, _, _>>(
                             must_consolidate,
                             "Consolidated MonotonicTopK input",
                         );
@@ -334,7 +334,7 @@ where
                     (group_key, row)
                 }
             })
-            .consolidate_named_if::<RowSpine<_, _, _, _>>(
+            .consolidate_named_if::<RowKeySpine<_, _, _>>(
                 must_consolidate,
                 "Consolidated MonotonicTop1 input",
             );

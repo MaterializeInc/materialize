@@ -226,7 +226,7 @@ where
         D1: differential_dataflow::ExchangeData + Hashable,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice,
-        Tr: Trace + TraceReader<Key = u8, Val = D1, Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch;
 }
 
@@ -524,21 +524,18 @@ where
         D1: differential_dataflow::ExchangeData + Hashable,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice + Ord,
-        Tr: Trace + TraceReader<Key = u8, Val = D1, Time = G::Timestamp, R = R> + 'static,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch,
     {
         if must_consolidate {
-            let hash_keyed = self.map(|d| {
-                let hash_key: u8 = u8::try_from(d.hashed().into() & 0xff).expect("must fit");
-                (hash_key, d)
-            });
+            use tab_hash::Tab64Twisted;
             use timely::dataflow::channels::pact::Exchange;
-            let exchange =
-                Exchange::new(|update: &((u8, D1), G::Timestamp, R)| (update.0).0.into());
-            let name = format!("Radix {}", name);
-            hash_keyed
-                .arrange_core::<_, Tr>(exchange, name.as_str())
-                .as_collection(|_k, v| v.clone())
+            let hasher = Tab64Twisted::new();
+            let exchange = Exchange::new(move |update: &((D1, _), G::Timestamp, R)| {
+                hasher.hash((update.0).0.hashed().into())
+            });
+            self.arrange_core::<_, Tr>(exchange, name)
+                .as_collection(|k, _v| k.clone())
         } else {
             self
         }
