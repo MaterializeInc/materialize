@@ -90,9 +90,7 @@ use mz::error::Error;
 use mz::context::{Context, ContextLoadArgs};
 use mz_ore::cli::CliConfig;
 use once_cell::sync::Lazy;
-use secrets::SecretCommand;
 use serde::Deserialize;
-use utils::{ascii_validator, new_client};
 
 use crate::command::app_password::AppPasswordCommand;
 use crate::command::config::ConfigCommand;
