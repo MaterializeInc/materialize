@@ -156,3 +156,12 @@ name                nullable    type
  member             false       oid
  grantor            false       oid
  admin_option       false       boolean
+
+> SHOW COLUMNS FROM pg_tablespace
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ spcname            false       text
+ spcowner           true        oid
+ spcacl             true        text[]
+ spcoptions         true        text[]
