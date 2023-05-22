@@ -7,12 +7,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> CREATE CLUSTER storage_cluster REPLICAS (
+    r1 (
+      STORAGECTL ADDRESSES ['storage_cluster:2100'],
+      STORAGE ADDRESSES ['storage_cluster:2103'],
+      COMPUTECTL ADDRESSES ['storage_cluster:2101'],
+      COMPUTE ADDRESSES ['storage_cluster:2102'],
+      WORKERS 4
+    )
+  )
+
 $ kafka-create-topic topic=failpoint
 
 > CREATE CONNECTION conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 > CREATE SOURCE failpoint
+  IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-failpoint-${testdrive.seed}'
   )
@@ -36,11 +47,3 @@ $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<T
 
 > select * from mz_internal.mz_source_statuses where id = '${source_id}';
 "${source_id}" failpoint kafka "<TIMESTAMP> UTC" running <null> <null>
-
-> SET failpoints = '${arg.failpoint}=${arg.action}';
-
-$ kafka-ingest format=bytes topic=failpoint key-format=bytes key-terminator=:
-mammal:whale
-
-> select * from mz_internal.mz_source_statuses where id = '${source_id}';
-"${source_id}" failpoint kafka "<TIMESTAMP> UTC" stalled <null> <null>

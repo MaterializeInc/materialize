@@ -10,7 +10,6 @@
 # This mzcompose currently tests `UPSERT` sources with `DISK` configured.
 # TODO(guswynn): move ALL upsert-related tests into this directory.
 
-import time
 from pathlib import Path
 
 from materialize import ci_util
@@ -185,41 +184,46 @@ def workflow_rehydration(c: Composition) -> None:
 def workflow_failpoint(c: Composition) -> None:
     """Test behaviour when upsert state errors"""
 
-    c.down(destroy_volumes=True)
-
-    dependencies = [
-        "materialized",
-        "zookeeper",
-        "kafka",
-    ]
     with c.override(
-        Testdrive(no_reset=True, consistent_seed=True),
+        Clusterd(name="storage_cluster"),
+        Testdrive(no_reset=True, consistent_seed=True, default_timeout="10s"),
     ):
-        print(f"Running failpoint workflow")
-
-        c.up(*dependencies)
+        print("Running failpoint workflow")
 
         for failpoint in [
-            "fail_state_multi_put",
-            "fail_state_multi_get",
+            (
+                "fail_state_multi_put",
+                "failure while rehydrating state: Error putting values into state",
+            ),
+            (
+                "fail_state_multi_get",
+                "failure while fetching records from state: Error getting values from state",
+            ),
         ]:
-            for action in ["return", "panic"]:
-                run_one_failpoint(c, failpoint, action)
+            run_one_failpoint(c, failpoint[0], failpoint[1])
 
 
-def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
-    print(f">>> Running failpoint test for failpoint {failpoint} with action {action}")
+def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> None:
+    failpoint_env = "FAILPOINTS={}=return".format(failpoint)
+    print(f">>> Running failpoint test for failpoint {failpoint_env}")
 
-    c.up("materialized")
+    c.down(destroy_volumes=True)
+    dependencies = ["zookeeper", "kafka"]
+    c.up("storage_cluster", "materialized", *dependencies)
+    c.run("testdrive", "failpoint/01-setup.td")
 
-    c.run(
-        "testdrive",
-        f"--var=failpoint={failpoint}",
-        f"--var=action={action}",
-        "failpoint/01-before.td",
-    )
-    c.kill("materialized")
-    c.up("materialized")
+    with c.override(
+        # Start clusterd with failpoint
+        Clusterd(name="storage_cluster", environment_extra=[failpoint_env]),
+    ):
+        c.kill("storage_cluster", "materialized")
+        c.up("storage_cluster", "materialized")
+        c.run("testdrive", f"--var=error={error_message}", "failpoint/02-failpoint.td")
 
-    c.run("testdrive", "failpoint/02-after.td")
-    c.rm("materialized", "testdrive", destroy_volumes=True)
+        with c.override(
+            # Turn off the failpoint
+            Clusterd(name="storage_cluster")
+        ):
+            c.kill("storage_cluster", "materialized")
+            c.up("storage_cluster", "materialized")
+            c.run("testdrive", "failpoint/03-recover.td")

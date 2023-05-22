@@ -7,22 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
-# Validate existing data
-> SELECT * from failpoint
-key           text
--------------------
-fish          fish
-bird          goose
-
-# Validate ingestion can continue
+# This will trigger the failpoint
 $ kafka-ingest format=bytes topic=failpoint key-format=bytes key-terminator=:
-mammal:moose
+mammal:whale
 
+$ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<TIMESTAMP>"
 
-> SELECT * from failpoint
-key           text
--------------------
-fish          fish
-bird          goose
-mammal        moose
+$ set-from-sql var=source_id
+SELECT id FROM mz_sources WHERE name = 'failpoint'
+
+> select * from mz_internal.mz_source_statuses where id = '${source_id}';
+"${source_id}" failpoint kafka "<TIMESTAMP> UTC" stalled "${arg.error}" <null>
