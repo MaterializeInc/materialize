@@ -74,7 +74,7 @@ pub enum Error {
     ConvertingJwks,
     /// An error indicating that the claims are invalid, acoording to the structure
     /// or keys provided. If the error persists,
-    /// check if the token claims matches [mz_frontegg_auth::auth::Claims]
+    /// check if the token claims matches the struct.
     #[error("Decoding JWT claims.")]
     DecodingClaims,
 }
