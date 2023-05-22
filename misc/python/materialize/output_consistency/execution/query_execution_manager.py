@@ -60,9 +60,6 @@ class QueryExecutionManager:
         data_type_with_values: List[DataTypeWithValues],
         evaluation_strategies: List[EvaluationStrategy],
     ) -> None:
-        if not self.config.execute_setup:
-            return
-
         for strategy in evaluation_strategies:
             print(f"{COMMENT_PREFIX} Setup for evaluation strategy '{strategy.name}'")
             ddl_statements = strategy.generate_source(data_type_with_values)
@@ -73,12 +70,8 @@ class QueryExecutionManager:
                 try:
                     self.executor.ddl(sql_statement)
                 except SqlExecutionError as e:
-                    print(
-                        f"Setting up data structures failed ({e.message})!"
-                        + " Hint: Does the table already contain the structure?"
-                        + " Consider using flag --no-execute-setup"
-                    )
-                    exit()
+                    print(f"Setting up data structures failed ({e.message})!")
+                    raise e
 
     def execute_query(
         self, query: QueryTemplate, summary_to_update: ConsistencyTestSummary

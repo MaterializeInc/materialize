@@ -45,7 +45,6 @@ def run_output_consistency_tests(
         args.seed,
         args.dry_run,
         args.fail_fast,
-        args.execute_setup,
         args.verbose,
         args.max_cols_per_query,
         args.runtime_in_sec,
@@ -63,12 +62,6 @@ def parse_output_consistency_input_args(
     )
     parser.add_argument(
         "--fail-fast", default=False, type=bool, action=argparse.BooleanOptionalAction
-    )
-    parser.add_argument(
-        "--execute-setup",
-        default=True,
-        type=bool,
-        action=argparse.BooleanOptionalAction,
     )
     parser.add_argument(
         "--verbose",
@@ -94,7 +87,6 @@ def _run_output_consistency_tests_internal(
     random_seed: str,
     dry_run: bool,
     fail_fast: bool,
-    execute_setup: bool,
     verbose_output: bool,
     max_cols_per_query: int,
     runtime_in_sec: int,
@@ -105,7 +97,6 @@ def _run_output_consistency_tests_internal(
         random_seed=random_seed,
         dry_run=dry_run,
         fail_fast=fail_fast,
-        execute_setup=execute_setup,
         verbose_output=verbose_output,
         max_cols_per_query=max_cols_per_query,
         max_runtime_in_sec=runtime_in_sec,

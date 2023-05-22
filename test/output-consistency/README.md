@@ -29,7 +29,6 @@ this case)
 * `--seed`: specify a certain seed to allow reproducibility
 * `--dry-run`: only print the queries without executing them
 * `--fail-fast`: abort the execution after the first test error (comparison mismatch)
-* `--no-execute-setup`: do not create tables and views (useful when running with a database that is not reset)
 * `--verbose`: print queries and details, otherwise only queries with warnings and errors will be printed
 * `--avoid-expressions-expecting-db-error`: try to avoid executing expressions likely producing a database error (e.g.,
 division by zero)

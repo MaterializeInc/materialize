@@ -48,6 +48,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         self, data_type_with_values: List[DataTypeWithValues]
     ) -> List[str]:
         column_specs = create_column_specs(data_type_with_values, True)
+        drop_table_statement = f"DROP TABLE IF EXISTS {self.db_object_name};"
         create_table_statement = (
             f"CREATE TABLE {self.db_object_name} ({', '.join(column_specs)});"
         )
@@ -57,7 +58,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
             f"INSERT INTO {self.db_object_name} VALUES ({value_row});"
         )
 
-        return [create_table_statement, fill_table_statement]
+        return [drop_table_statement, create_table_statement, fill_table_statement]
 
 
 class ConstantFoldingEvaluation(EvaluationStrategy):
@@ -71,7 +72,10 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
 
         value_row = create_value_row(data_type_with_values)
 
-        create_view_statement = f"CREATE VIEW {self.db_object_name} ({', '.join(column_specs)}) AS SELECT {value_row};"
+        create_view_statement = (
+            f"CREATE OR REPLACE VIEW {self.db_object_name} ({', '.join(column_specs)})"
+            f" AS SELECT {value_row};"
+        )
 
         return [create_view_statement]
 
