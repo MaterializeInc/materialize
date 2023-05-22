@@ -1906,7 +1906,7 @@ impl SystemVars {
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
     where
         V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+        V::Owned: Debug + Send + Clone + Sync,
     {
         self.vars.insert(var.name, Box::new(SystemVar::new(var)));
         self
@@ -1924,7 +1924,7 @@ impl SystemVars {
     fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
     where
         V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+        V::Owned: Debug + Send + Clone + Sync,
     {
         let var = self
             .vars
@@ -2665,6 +2665,26 @@ where
     session_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
     feature_flag: Option<&'static FeatureFlag>,
+    constraints: Vec<ValueConstraint<V>>,
+}
+
+#[derive(Debug)]
+enum ValueConstraint<V>
+where
+    V: ToOwned + Debug + ?Sized + 'static,
+{
+    Fixed,
+    ReadOnly,
+    // Arbitrary constraints over values.
+    Domain(&'static dyn DomainConstraint<V>),
+}
+
+trait DomainConstraint<V>: Debug + Send + Sync
+where
+    V: Value + Debug + ?Sized + 'static,
+{
+    // This useless `self` is just to make a trait object
+    fn check(&self, v: &V::Owned) -> Result<(), VarError>;
 }
 
 impl<V> SessionVar<V>
@@ -2679,6 +2699,7 @@ where
             session_value: None,
             parent,
             feature_flag: None,
+            constraints: vec![],
         }
     }
 
@@ -2687,9 +2708,40 @@ where
         self
     }
 
+    fn as_read_only(mut self) -> SessionVar<V> {
+        assert!(
+            self.constraints.is_empty(),
+            "read only params do not support any other constraints"
+        );
+        self.constraints.push(ValueConstraint::ReadOnly);
+        self
+    }
+
+    fn as_fixed_value(mut self) -> SessionVar<V> {
+        assert!(
+            self.constraints.is_empty(),
+            "fixed value params do not support any other constraints"
+        );
+        self.constraints.push(ValueConstraint::Fixed);
+        self
+    }
+
+    fn with_constraint(mut self, c: &'static dyn DomainConstraint<V>) -> SessionVar<V> {
+        assert!(
+            !self
+                .constraints
+                .iter()
+                .any(|c| matches!(c, ValueConstraint::ReadOnly | ValueConstraint::Fixed)),
+            "fixed value and read only params do not support any other constraints"
+        );
+        self.constraints.push(ValueConstraint::Domain(c));
+        self
+    }
+
     fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
         match V::parse(input) {
             Ok(v) => {
+                self.check_constraints(&v)?;
                 if local {
                     self.local_value = Some(v);
                 } else {
@@ -2700,6 +2752,10 @@ where
             }
             Err(()) => Err(VarError::InvalidParameterType(self.parent.into())),
         }
+    }
+
+    fn check_constraints(&self, v: &V::Owned) -> Result<(), VarError> {
+        todo!()
     }
 
     fn reset(&mut self, local: bool) {
