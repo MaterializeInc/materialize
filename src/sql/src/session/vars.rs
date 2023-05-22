@@ -66,7 +66,6 @@
 use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -2345,7 +2344,7 @@ impl SystemVars {
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
-pub trait Var: fmt::Debug {
+pub trait Var: Debug {
     /// Returns the name of the configuration parameter.
     fn name(&self) -> &'static str;
 
@@ -2401,7 +2400,7 @@ pub trait VarMut: Var + Send + Sync {
 #[derive(Debug)]
 pub struct ServerVar<V>
 where
-    V: fmt::Debug + ?Sized + 'static,
+    V: Debug + ?Sized + 'static,
 {
     name: &'static UncasedStr,
     value: &'static V,
@@ -2411,7 +2410,7 @@ where
 
 impl<V> Var for ServerVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
+    V: Value + Debug + ?Sized + 'static,
 {
     fn name(&self) -> &'static str {
         self.name.as_str()
@@ -2450,8 +2449,8 @@ where
 #[derive(Debug)]
 struct SystemVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + Debug + ?Sized + 'static,
+    V::Owned: Debug,
 {
     persisted_value: Option<V::Owned>,
     dynamic_default: Option<V::Owned>,
@@ -2461,8 +2460,8 @@ where
 // The derived `Clone` implementation requires `V: Clone`, which is not needed.
 impl<V> Clone for SystemVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug + Clone,
+    V: Value + Debug + ?Sized + 'static,
+    V::Owned: Debug + Clone,
 {
     fn clone(&self) -> Self {
         SystemVar {
@@ -2475,8 +2474,8 @@ where
 
 impl<V> SystemVar<V>
 where
-    V: Value + fmt::Debug + PartialEq + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + Debug + PartialEq + ?Sized + 'static,
+    V::Owned: Debug,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
@@ -2505,8 +2504,8 @@ where
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + fmt::Debug + PartialEq + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + Debug + PartialEq + ?Sized + 'static,
+    V::Owned: Debug,
 {
     fn name(&self) -> &'static str {
         self.parent.name()
@@ -2531,8 +2530,8 @@ where
 
 impl<V> VarMut for SystemVar<V>
 where
-    V: Value + fmt::Debug + PartialEq + 'static,
-    V::Owned: fmt::Debug + Clone + Send + Sync,
+    V: Value + Debug + PartialEq + 'static,
+    V::Owned: Debug + Clone + Send + Sync,
 {
     fn as_var(&self) -> &dyn Var {
         self
@@ -2649,7 +2648,7 @@ impl FeatureFlag {
 #[derive(Debug)]
 struct SessionVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
+    V: Value + Debug + ?Sized + 'static,
 {
     default_value: &'static V,
     local_value: Option<V::Owned>,
@@ -2661,7 +2660,7 @@ where
 
 impl<V> SessionVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
+    V: Value + Debug + ?Sized + 'static,
 {
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
@@ -2726,8 +2725,8 @@ where
 
 impl<V> Var for SessionVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + Debug + ?Sized + 'static,
+    V::Owned: Debug,
 {
     fn name(&self) -> &'static str {
         self.parent.name()
