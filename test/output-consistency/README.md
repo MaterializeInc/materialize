@@ -22,8 +22,10 @@ bin/output-consistency --runtime-in-sec 60
 ```
 
 Possible parameters are:
-* `--runtime-in-sec`: limit the duration of the test execution
-* `--max-iterations`: limit the number of processed expressions
+* `--runtime-in-sec`: limit the duration of the test execution (`0` is unlimited, but `max-iterations` must be set in
+this case)
+* `--max-iterations`: limit the number of processed expressions (`0` is unlimited, but `runtime-in-sec` must be set in
+this case)
 * `--seed`: specify a certain seed to allow reproducibility
 * `--dry-run`: only print the queries without executing them
 * `--fail-fast`: abort the execution after the first test error (comparison mismatch)

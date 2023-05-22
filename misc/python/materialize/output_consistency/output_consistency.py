@@ -118,6 +118,7 @@ def _run_output_consistency_tests_internal(
     )
 
     print_config(config)
+    config.validate()
 
     evaluation_strategies = [
         DataFlowRenderingEvaluation(),

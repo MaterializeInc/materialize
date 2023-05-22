@@ -38,3 +38,9 @@ class ConsistencyTestConfiguration:
         self.max_iterations = max_iterations
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
         self.skip_postgres_incompatible_types = skip_postgres_incompatible_types
+
+    def validate(self) -> None:
+        if self.max_runtime_in_sec == 0 and self.max_iterations == 0:
+            raise RuntimeError(
+                "Either 'max_runtime_in_sec' or 'max_iterations' must not be 0"
+            )

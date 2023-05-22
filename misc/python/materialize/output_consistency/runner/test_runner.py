@@ -122,11 +122,14 @@ class ConsistencyTestRunner:
         return False
 
     def _shall_abort(self, iteration_count: int, end_time: datetime) -> bool:
-        if iteration_count >= self.config.max_iterations:
+        if (
+            self.config.max_iterations != 0
+            and iteration_count >= self.config.max_iterations
+        ):
             print("Ending test run because the iteration count limit has been reached")
             return True
 
-        if datetime.now() >= end_time:
+        if self.config.max_runtime_in_sec != 0 and datetime.now() >= end_time:
             print("Ending test run because the maximum runtime has been reached")
             return True
 
