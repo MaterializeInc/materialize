@@ -80,13 +80,13 @@ for type_definition, values_of_type in VALUES_PER_NUMERIC_DATA_TYPE.items():
             value.characteristics.add(ExpressionCharacteristics.LARGE_VALUE)
 
 VALUES_PER_NUMERIC_DATA_TYPE[UINT4_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.LARGER_THAN_INT4_TYPED
+    ExpressionCharacteristics.LARGER_THAN_INT4_SIZED
 )
 VALUES_PER_NUMERIC_DATA_TYPE[INT8_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.LARGER_THAN_INT4_TYPED
+    ExpressionCharacteristics.LARGER_THAN_INT4_SIZED
 )
 VALUES_PER_NUMERIC_DATA_TYPE[UINT8_TYPE].add_characteristic_to_all_values(
-    ExpressionCharacteristics.LARGER_THAN_INT4_TYPED
+    ExpressionCharacteristics.LARGER_THAN_INT4_SIZED
 )
 VALUES_PER_NUMERIC_DATA_TYPE[REAL_TYPE].add_characteristic_to_all_values(
     ExpressionCharacteristics.FLOAT_TYPED
