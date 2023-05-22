@@ -1121,7 +1121,8 @@ pub struct ShardsMetrics {
     pushdown_parts_fetched_count: mz_ore::metrics::IntCounterVec,
     pushdown_parts_fetched_bytes: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_applied: mz_ore::metrics::IntCounterVec,
-    pubsub_push_diff_not_applied: mz_ore::metrics::IntCounterVec,
+    pubsub_push_diff_not_applied_stale: mz_ore::metrics::IntCounterVec,
+    pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
@@ -1271,9 +1272,14 @@ impl ShardsMetrics {
                 help: "number of diffs received via pubsub that applied",
                 var_labels: ["shard"],
             )),
-            pubsub_push_diff_not_applied: registry.register(metric!(
-                name: "mz_persist_shard_pubsub_diff_not_applied",
-                help: "number of diffs received via pubsub that did not apply",
+            pubsub_push_diff_not_applied_stale: registry.register(metric!(
+                name: "mz_persist_shard_pubsub_diff_not_applied_stale",
+                help: "number of diffs received via pubsub that did not apply due to staleness",
+                var_labels: ["shard"],
+            )),
+            pubsub_push_diff_not_applied_out_of_order: registry.register(metric!(
+                name: "mz_persist_shard_pubsub_diff_not_applied_out_of_order",
+                help: "number of diffs received via pubsub that did not apply due to out-of-order delivery",
                 var_labels: ["shard"],
             )),
             blob_gets: registry.register(metric!(
@@ -1351,7 +1357,9 @@ pub struct ShardMetrics {
     pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub pushdown: PushdownMetrics,
     pub pubsub_push_diff_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pubsub_push_diff_not_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub pubsub_push_diff_not_applied_out_of_order:
+        DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 }
@@ -1425,8 +1433,11 @@ impl ShardMetrics {
             pubsub_push_diff_applied: shards_metrics
                 .pubsub_push_diff_applied
                 .get_delete_on_drop_counter(vec![shard.clone()]),
-            pubsub_push_diff_not_applied: shards_metrics
-                .pubsub_push_diff_not_applied
+            pubsub_push_diff_not_applied_stale: shards_metrics
+                .pubsub_push_diff_not_applied_stale
+                .get_delete_on_drop_counter(vec![shard.clone()]),
+            pubsub_push_diff_not_applied_out_of_order: shards_metrics
+                .pubsub_push_diff_not_applied_out_of_order
                 .get_delete_on_drop_counter(vec![shard.clone()]),
             blob_gets: shards_metrics
                 .blob_gets
