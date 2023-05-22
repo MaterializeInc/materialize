@@ -23,6 +23,8 @@ use mz_cloud_api::client::cloud_provider::CloudProvider;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
+use super::sql::check_environment_health;
+
 pub async fn enable(cx: &mut RegionContext) -> Result<(), Error> {
     // TODO: Handle error creating environment
     cx.cloud_client()
@@ -67,9 +69,17 @@ pub async fn list(cx: &mut RegionContext) -> Result<(), Error> {
 pub async fn show(cx: &mut RegionContext) -> Result<(), Error> {
     let region = cx.get_region().await?;
     let environment = cx.get_environment(region.clone()).await?;
+    let environment_health = match check_environment_health(cx, environment.clone()).await {
+        Ok(healthy) => match healthy {
+            true => "yes",
+            false => "no",
+        },
+        Err(err) => "no",
+    };
+
     let output_formatter = cx.output_formatter();
-    // TODO: Display region is healthy after the psql work is done.
-    // output_formatter.output_scalar(Some(format!("Healthy: \t", region.cluster)));
+
+    output_formatter.output_scalar(Some(&format!("Healthy: \t{}", environment_health)));
     output_formatter.output_scalar(Some(&format!(
         "SQL address: \t{}",
         environment.environmentd_pgwire_address

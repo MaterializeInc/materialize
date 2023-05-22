@@ -67,4 +67,20 @@ impl Client {
 
         command
     }
+
+    /// Runs pg_isready to check if an environment is healthy
+    pub fn is_ready(&self, environment: Environment, email: String) -> Command {
+        let mut command = Command::new("pg_isready");
+        command
+            .arg("-q")
+            .args(vec![
+                "-q",
+                "-d",
+                self.build_psql_url(environment, email).as_str(),
+            ])
+            .env("PGPASSWORD", &self.app_password.to_string())
+            .env("PGAPPNAME", PG_APPLICATION_NAME);
+
+        command
+    }
 }

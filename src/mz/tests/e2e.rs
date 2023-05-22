@@ -109,17 +109,9 @@ fn test_e2e() {
     assert!(!expected_version.is_empty());
 
     // Regions
-    cmd()
-        .arg("region")
-        .arg("list")
-        .assert()
-        .success();
+    cmd().arg("region").arg("list").assert().success();
 
-    cmd()
-        .arg("region")
-        .arg("show")
-        .assert()
-        .success();
+    cmd().arg("region").arg("show").assert().success();
 
     // TODO:
     // cmd()
@@ -129,11 +121,7 @@ fn test_e2e() {
     //     .success();
 
     // Config
-    cmd()
-        .arg("config")
-        .arg("list")
-        .assert()
-        .success();
+    cmd().arg("config").arg("list").assert().success();
 
     cmd()
         .arg("config")
@@ -198,11 +186,7 @@ fn test_e2e() {
     //     .assert()
     //     .success();
 
-    cmd()
-        .arg("profile")
-        .arg("list")
-        .assert()
-        .success();
+    cmd().arg("profile").arg("list").assert().success();
 
     // cmd()
     //     .arg("profile")
@@ -211,11 +195,7 @@ fn test_e2e() {
     //     .success();
 
     // App Passwords
-    cmd()
-        .arg("app-password")
-        .arg("list")
-        .assert()
-        .success();
+    cmd().arg("app-password").arg("list").assert().success();
 
     // Since we don't want to introduce thousands of passwords per month.
     // TODO: We should have a remove password
@@ -227,10 +207,7 @@ fn test_e2e() {
     //     .success();
 
     // TODO: Add more interactions with Materialize
-    cmd()
-        .arg("sql")
-        .assert()
-        .success();
+    cmd().arg("sql").assert().success();
 
     // Secrets
     cmd()
@@ -242,7 +219,7 @@ fn test_e2e() {
         .success();
 
     // Force
-        cmd()
+    cmd()
         .arg("secret")
         .arg("create")
         .arg("mz_test")

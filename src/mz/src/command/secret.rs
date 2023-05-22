@@ -17,7 +17,10 @@
 //!
 //! Consult the user-facing documentation for details.
 
-use std::{io::{self, Write}, os::unix::process::CommandExt};
+use std::{
+    io::{self, Write},
+    os::unix::process::CommandExt,
+};
 
 use crate::{context::RegionContext, error::Error};
 
@@ -51,9 +54,7 @@ pub async fn create(
     let enviornment = cx.get_environment(region).await?;
     let email = claims.await?.email;
 
-    let mut client = cx
-    .sql_client()
-    .shell(enviornment, email);
+    let mut client = cx.sql_client().shell(enviornment, email);
 
     // Build the queries to create the secret.
     let mut commands: Vec<String> = vec![];
@@ -82,16 +83,19 @@ pub async fn create(
 
         // Otherwise if the SECRET exists `psql` will display a NOTICE message.
         commands.push("SET client_min_messages TO WARNING;".to_string());
-        commands.push(format!("CREATE SECRET IF NOT EXISTS {} AS {};", name, buffer));
+        commands.push(format!(
+            "CREATE SECRET IF NOT EXISTS {} AS {};",
+            name, buffer
+        ));
         commands.push(format!("ALTER SECRET {} AS {};", name, buffer));
     } else {
         commands.push(format!("CREATE SECRET {} AS {};", name, buffer));
     }
 
-    commands.iter().for_each(|c| { client.args(vec!["-c", c]); });
-    let _error = client
-        .arg("-q")
-        .exec();
+    commands.iter().for_each(|c| {
+        client.args(vec!["-c", c]);
+    });
+    let _error = client.arg("-q").exec();
 
     Ok(())
 }
