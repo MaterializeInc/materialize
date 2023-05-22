@@ -33,8 +33,7 @@ privileges
 
 ## Step 2. Connect to Materialize
 
-Materialize stores role names, IDs, and object IDs in the `mz_roles` catalog
-table. You need to connect to your Materialize instance with `psql` to add roles
+Materialize stores role names and role IDs in the mz_roles catalog table. You need to connect to your Materialize instance with `psql` to add roles
 to this table.
 
 1. In the [Materialize UI](https://console.materialize.com/), go to the **Connect** screen.

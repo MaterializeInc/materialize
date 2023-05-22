@@ -86,8 +86,8 @@ Materialize supports the following privileges:
 | `INSERT`  | Allows inserting into an object.                           | `a`    |
 | `UPDATE`  | Allows updating an object (requires `SELECT`).             | `w`    |
 | `DELETE`  | Allows deleting from an object (requires `SELECT`).        | `d`    |
-| `CREATE`  | Allows creating a new object within another object.        | `U`    |
-| `USAGE`   | Allows using an object or looking up members of an object. | `C`    |
+| `CREATE`  | Allows creating a new object within another object.        | `C`    |
+| `USAGE`   | Allows using an object or looking up members of an object. | `U`    |
 
 Note that `psql` returns an abbreviation of the privilege name.
 

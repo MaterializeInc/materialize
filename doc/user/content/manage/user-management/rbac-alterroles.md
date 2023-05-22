@@ -24,7 +24,7 @@ privileges as needed.
 1. Create a second role your Materialize account:
 
    ```sql
-   CREATE ROLE qa WITH CREATEDB;
+   CREATE ROLE qa_role WITH CREATEDB;
    ```
 
    This role has permission to create a new database in the Materialize account.
@@ -53,7 +53,7 @@ permissions as the `qa_role`.
    GRANT qa_role TO dev_role;
    ```
 
-   Roles also inherit all the attributes and privileges of the granted role.
+   Roles also inherit all the privileges of the granted role.
    Making roles members of other roles allows you to manage sets of
    permissions, rather than granting privileges to roles on an individual basis.
 
@@ -84,11 +84,10 @@ inherited from another role.
 1. Update the `CREATEROLE` attribute for the `dev_role`:
 
    ```sql
-   ALTER ROLE dev WITH CREATEROLE;
+   ALTER ROLE dev_role WITH CREATEROLE;
    ```
 
-   The `qa_role` will not have the `CREATEROLE` attribute enabled because the
-   attribute was enabled _after_ the role grant.
+   The `qa_role` will not have the `CREATEROLE` attribute enabled because attributes are not inherited.
 
 2. Compare the attributes of the `qa_role` and `dev_role`:
 
