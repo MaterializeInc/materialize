@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from typing import List
 
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.operation.operation_args_validator import (
@@ -23,7 +23,7 @@ class DataTypeCategoryMatchesArgsValidator(OperationArgsValidator):
         self.param_index1 = param_index1
         self.param_index2 = param_index2
 
-    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
+    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
         if self.param_index1 >= len(args) or self.param_index2 >= len(args):
             return False
 

@@ -6,13 +6,14 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from typing import List
 
 
 class ConsistencyTestLogger:
     def __init__(
         self,
     ) -> None:
-        self.global_warnings: list[str] = []
+        self.global_warnings: List[str] = []
 
     def add_global_warning(self, message: str) -> None:
         self.global_warnings.append(message)
@@ -50,7 +51,7 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
 
         return "\n".join(output_rows)
 
-    def _get_global_warning_rows(self) -> list[str]:
+    def _get_global_warning_rows(self) -> List[str]:
         if len(self.global_warnings) == 0:
             return []
 

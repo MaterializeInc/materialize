@@ -6,6 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from typing import List
+
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
@@ -20,8 +22,8 @@ class EvaluationStrategy:
         self.name = name
 
     def generate_source(
-        self, data_type_with_values: list[DataTypeWithValues]
-    ) -> list[str]:
+        self, data_type_with_values: List[DataTypeWithValues]
+    ) -> List[str]:
         raise RuntimeError("Not implemented")
 
     def __str__(self) -> str:
@@ -33,8 +35,8 @@ class DummyEvaluation(EvaluationStrategy):
         super().__init__("<source>", "Dummy")
 
     def generate_source(
-        self, data_type_with_values: list[DataTypeWithValues]
-    ) -> list[str]:
+        self, data_type_with_values: List[DataTypeWithValues]
+    ) -> List[str]:
         return []
 
 
@@ -43,8 +45,8 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
         super().__init__("t_dfr", "Dataflow rendering")
 
     def generate_source(
-        self, data_type_with_values: list[DataTypeWithValues]
-    ) -> list[str]:
+        self, data_type_with_values: List[DataTypeWithValues]
+    ) -> List[str]:
         column_specs = create_column_specs(data_type_with_values, True)
         create_table_statement = (
             f"CREATE TABLE {self.db_object_name} ({', '.join(column_specs)});"
@@ -63,8 +65,8 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         super().__init__("v_ctf", "Constant folding")
 
     def generate_source(
-        self, data_type_with_values: list[DataTypeWithValues]
-    ) -> list[str]:
+        self, data_type_with_values: List[DataTypeWithValues]
+    ) -> List[str]:
         column_specs = create_column_specs(data_type_with_values, False)
 
         value_row = create_value_row(data_type_with_values)
@@ -75,8 +77,8 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
 
 
 def create_column_specs(
-    data_type_with_values: list[DataTypeWithValues], include_type: bool
-) -> list[str]:
+    data_type_with_values: List[DataTypeWithValues], include_type: bool
+) -> List[str]:
     column_specs = []
     for type_with_values in data_type_with_values:
         for data_value in type_with_values.raw_values:
@@ -88,7 +90,7 @@ def create_column_specs(
     return column_specs
 
 
-def create_value_row(data_type_with_values: list[DataTypeWithValues]) -> str:
+def create_value_row(data_type_with_values: List[DataTypeWithValues]) -> str:
     row_values = []
 
     for type_with_values in data_type_with_values:

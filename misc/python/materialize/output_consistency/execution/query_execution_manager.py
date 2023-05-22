@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from typing import List
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -43,7 +44,7 @@ class QueryExecutionManager:
 
     def __init__(
         self,
-        evaluation_strategies: list[EvaluationStrategy],
+        evaluation_strategies: List[EvaluationStrategy],
         config: ConsistencyTestConfiguration,
         executor: SqlExecutor,
         comparator: ResultComparator,
@@ -56,8 +57,8 @@ class QueryExecutionManager:
 
     def setup_database_objects(
         self,
-        data_type_with_values: list[DataTypeWithValues],
-        evaluation_strategies: list[EvaluationStrategy],
+        data_type_with_values: List[DataTypeWithValues],
+        evaluation_strategies: List[EvaluationStrategy],
     ) -> None:
         if not self.config.execute_setup:
             return
@@ -134,8 +135,8 @@ class QueryExecutionManager:
         query_template: QueryTemplate,
         query_index: int,
         query_id_prefix: str,
-        evaluation_strategies: list[EvaluationStrategy],
-    ) -> list[ValidationOutcome]:
+        evaluation_strategies: List[EvaluationStrategy],
+    ) -> List[ValidationOutcome]:
         query_no = query_index + 1
         query_id = f"{query_id_prefix}{query_no}"
         query_execution = QueryExecution(query_template, query_id)
@@ -183,8 +184,8 @@ class QueryExecutionManager:
         self,
         original_query_template: QueryTemplate,
         query_id: str,
-        evaluation_strategies: list[EvaluationStrategy],
-    ) -> list[ValidationOutcome]:
+        evaluation_strategies: List[EvaluationStrategy],
+    ) -> List[ValidationOutcome]:
         args_count = len(original_query_template.select_expressions)
 
         if args_count < 2:

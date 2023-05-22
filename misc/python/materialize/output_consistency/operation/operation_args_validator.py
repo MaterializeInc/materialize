@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Set
 
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -18,24 +18,24 @@ from materialize.output_consistency.expression.expression_characteristics import
 class OperationArgsValidator:
     """Validator that performs heuristic checks to determine if a database error is to be expected"""
 
-    def is_expected_to_cause_error(self, args: list[Expression]) -> bool:
+    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
         raise RuntimeError("Not implemented")
 
     def has_all_characteristics(
         self,
         arg: Expression,
-        characteristics: set[ExpressionCharacteristics],
+        characteristics: Set[ExpressionCharacteristics],
     ) -> bool:
         overlap = arg.characteristics & characteristics
         return len(overlap) == len(characteristics)
 
     def index_of_characteristic(
         self,
-        args: list[Expression],
+        args: List[Expression],
         characteristic: ExpressionCharacteristics,
-        skip_argument_indices: Optional[set[int]] = None,
+        skip_argument_indices: Optional[Set[int]] = None,
         skip_argument_fn: Callable[
-            [set[ExpressionCharacteristics], int], bool
+            [Set[ExpressionCharacteristics], int], bool
         ] = lambda chars, index: False,
     ) -> int:
         if skip_argument_indices is None:

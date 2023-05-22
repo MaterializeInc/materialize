@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
+from typing import Dict, List, Optional
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -46,10 +46,10 @@ class ExpressionGenerator:
         self.config = config
         self.known_inconsistencies_filter = known_inconsistencies_filter
         self.randomized_picker = RandomizedPicker(self.config)
-        self.selectable_operations: list[DbOperationOrFunction] = []
-        self.operation_weights: list[float] = []
-        self.types_with_values_by_category: dict[
-            DataTypeCategory, list[DataTypeWithValues]
+        self.selectable_operations: List[DbOperationOrFunction] = []
+        self.operation_weights: List[float] = []
+        self.types_with_values_by_category: Dict[
+            DataTypeCategory, List[DataTypeWithValues]
         ] = dict()
         self._initialize_operations()
         self._initialize_types()
@@ -114,7 +114,7 @@ class ExpressionGenerator:
 
     def generate_args_for_operation(
         self, operation: DbOperationOrFunction, try_number: int = 1
-    ) -> list[Expression]:
+    ) -> List[Expression]:
         number_of_args = self.randomized_picker.random_number(
             operation.min_param_count, operation.max_param_count
         )
@@ -163,7 +163,7 @@ class ExpressionGenerator:
 
     def _get_data_type_values_of_category(
         self, category: DataTypeCategory
-    ) -> list[DataTypeWithValues]:
+    ) -> List[DataTypeWithValues]:
         if category == DataTypeCategory.ANY:
             return ALL_DATA_TYPES_WITH_VALUES
 

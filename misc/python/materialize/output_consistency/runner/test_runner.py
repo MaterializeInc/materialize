@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from datetime import datetime, timedelta
+from typing import List
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -36,7 +37,7 @@ class ConsistencyTestRunner:
     def __init__(
         self,
         config: ConsistencyTestConfiguration,
-        evaluation_strategies: list[EvaluationStrategy],
+        evaluation_strategies: List[EvaluationStrategy],
         expression_generator: ExpressionGenerator,
         query_generator: QueryGenerator,
         output_comparator: ResultComparator,

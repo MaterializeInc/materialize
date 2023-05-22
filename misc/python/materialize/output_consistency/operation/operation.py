@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
-from typing import Optional
+from typing import List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import Expression
@@ -34,11 +34,11 @@ class DbOperationOrFunction:
 
     def __init__(
         self,
-        params: list[OperationParam],
+        params: List[OperationParam],
         min_param_count: int,
         max_param_count: int,
         return_type_category: DataTypeCategory,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
+        args_validators: Optional[Set[OperationArgsValidator]] = None,
         aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.NORMAL,
     ):
@@ -49,7 +49,7 @@ class DbOperationOrFunction:
         self.min_param_count = min_param_count
         self.max_param_count = max_param_count
         self.return_type_category = return_type_category
-        self.args_validators: set[OperationArgsValidator] = args_validators
+        self.args_validators: Set[OperationArgsValidator] = args_validators
         self.aggregation = aggregation
         self.relevance = relevance
 
@@ -67,15 +67,15 @@ class DbOperationOrFunction:
             )
 
     def derive_characteristics(
-        self, args: list[Expression]
-    ) -> set[ExpressionCharacteristics]:
+        self, args: List[Expression]
+    ) -> Set[ExpressionCharacteristics]:
         # a non-trivial implementation will be helpful for nested expressions
         return set()
 
     def __str__(self) -> str:
         raise RuntimeError("Not implemented")
 
-    def is_expected_to_cause_db_error(self, args: list[Expression]) -> bool:
+    def is_expected_to_cause_db_error(self, args: List[Expression]) -> bool:
         """checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max
         data_type)
         """
@@ -101,9 +101,9 @@ class DbOperation(DbOperationOrFunction):
     def __init__(
         self,
         pattern: str,
-        params: list[OperationParam],
+        params: List[OperationParam],
         return_type_category: DataTypeCategory,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
+        args_validators: Optional[Set[OperationArgsValidator]] = None,
     ):
         param_count = len(params)
         super().__init__(
@@ -135,9 +135,9 @@ class DbFunction(DbOperationOrFunction):
     def __init__(
         self,
         function_name: str,
-        params: list[OperationParam],
+        params: List[OperationParam],
         return_type_category: DataTypeCategory,
-        args_validators: Optional[set[OperationArgsValidator]] = None,
+        args_validators: Optional[Set[OperationArgsValidator]] = None,
         aggregation: bool = False,
     ):
         self.validate_params(params)
@@ -152,7 +152,7 @@ class DbFunction(DbOperationOrFunction):
         )
         self.function_name = function_name
 
-    def validate_params(self, params: list[OperationParam]) -> None:
+    def validate_params(self, params: List[OperationParam]) -> None:
         optional_param_seen = False
 
         for param in params:
@@ -162,7 +162,7 @@ class DbFunction(DbOperationOrFunction):
             if param.optional:
                 optional_param_seen = True
 
-    def get_min_param_count(self, params: list[OperationParam]) -> int:
+    def get_min_param_count(self, params: List[OperationParam]) -> int:
         for index, param in enumerate(params):
             if param.optional:
                 return index

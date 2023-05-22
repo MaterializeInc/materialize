@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
+from typing import Optional, Set
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -20,7 +20,7 @@ class BooleanOperationParam(OperationParam):
     def __init__(
         self,
         optional: bool = False,
-        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
     ):
         super().__init__(
             DataTypeCategory.BOOLEAN,

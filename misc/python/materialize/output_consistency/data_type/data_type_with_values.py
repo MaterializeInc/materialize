@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from typing import List, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_value.data_value import DataValue
@@ -19,13 +20,13 @@ class DataTypeWithValues:
 
     def __init__(self, data_type: DataType):
         self.data_type = data_type
-        self.raw_values: list[DataValue] = []
+        self.raw_values: List[DataValue] = []
 
     def add_raw_value(
         self,
         value: str,
         column_name: str,
-        characteristics: set[ExpressionCharacteristics],
+        characteristics: Set[ExpressionCharacteristics],
     ) -> None:
         self.raw_values.append(
             DataValue(value, self.data_type, column_name, characteristics)

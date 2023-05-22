@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Optional
+from typing import List, Optional
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -18,16 +18,16 @@ from materialize.output_consistency.query.query_format import QueryOutputFormat
 class QueryTemplate:
     """Query template as base for creating SQL for different evaluation strategies"""
 
-    def __init__(self, select_expressions: Optional[list[Expression]] = None) -> None:
+    def __init__(self, select_expressions: Optional[List[Expression]] = None) -> None:
         if select_expressions is None:
             select_expressions = []
 
-        self.select_expressions: list[Expression] = select_expressions
+        self.select_expressions: List[Expression] = select_expressions
 
     def add_select_expression(self, expression: Expression) -> None:
         self.select_expressions.append(expression)
 
-    def add_multiple_select_expressions(self, expressions: list[Expression]) -> None:
+    def add_multiple_select_expressions(self, expressions: List[Expression]) -> None:
         self.select_expressions.extend(expressions)
 
     def to_sql(

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import re
-from typing import cast
+from typing import List, cast
 
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
@@ -56,7 +56,7 @@ class ResultComparator:
         return validation_outcome
 
     def validate_outcomes_metadata(
-        self, outcomes: list[QueryOutcome], validation_outcome: ValidationOutcome
+        self, outcomes: List[QueryOutcome], validation_outcome: ValidationOutcome
     ) -> None:
         outcome1 = outcomes[0]
 
@@ -204,7 +204,7 @@ class ResultComparator:
             )
 
     def validate_outcomes_data(
-        self, outcomes: list[QueryOutcome], validation_outcome: ValidationOutcome
+        self, outcomes: List[QueryOutcome], validation_outcome: ValidationOutcome
     ) -> None:
         # each outcome is known to contain at least one row
         # each row is supposed to have the same number of columns

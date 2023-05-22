@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from typing import List
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -20,7 +20,7 @@ class QueryGenerator:
 
     def __init__(self, config: ConsistencyTestConfiguration):
         self.config = config
-        self.current_expressions: list[Expression] = []
+        self.current_expressions: List[Expression] = []
         self.has_expression_expecting_error = True
 
     def push_expression(self, expression: Expression) -> None:

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
+from typing import List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import Expression
@@ -23,9 +23,9 @@ class OperationParam:
         self,
         type_category: DataTypeCategory,
         optional: bool = False,
-        incompatibilities: Optional[set[ExpressionCharacteristics]] = None,
+        incompatibilities: Optional[Set[ExpressionCharacteristics]] = None,
         incompatibility_combinations: Optional[
-            list[set[ExpressionCharacteristics]]
+            List[Set[ExpressionCharacteristics]]
         ] = None,
     ):
         self.type_category = type_category

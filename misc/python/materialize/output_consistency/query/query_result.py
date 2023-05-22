@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Any, Sequence
+from typing import Any, List, Sequence
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     DummyEvaluation,
@@ -22,7 +22,7 @@ class QueryExecution:
     def __init__(self, query: QueryTemplate, query_id: str):
         self.generic_sql = query.to_sql(DummyEvaluation(), QueryOutputFormat.MULTI_LINE)
         self.query_id = query_id
-        self.outcomes: list[QueryOutcome] = []
+        self.outcomes: List[QueryOutcome] = []
 
     def __str__(self) -> str:
         return f"QueryExecution with {len(self.outcomes)} outcomes for template query: {self.generic_sql})"

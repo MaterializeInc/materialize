@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence
 
 from materialize.output_consistency.common.format_constants import LI_PREFIX
 from materialize.output_consistency.validation.validation_message import (
@@ -22,9 +22,9 @@ class ValidationOutcome:
 
     def __init__(self) -> None:
         self.success_reason: Optional[str] = None
-        self.errors: list[ValidationError] = []
-        self.warnings: list[ValidationWarning] = []
-        self.remarks: list[ValidationRemark] = []
+        self.errors: List[ValidationError] = []
+        self.warnings: List[ValidationWarning] = []
+        self.remarks: List[ValidationRemark] = []
 
     def add_error(self, error: ValidationError) -> None:
         self.errors.append(error)

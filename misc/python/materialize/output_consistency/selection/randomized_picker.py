@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+from typing import List
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -31,16 +32,16 @@ class RandomizedPicker:
         return random.randint(min_value_incl, max_value_incl)
 
     def random_operation(
-        self, operations: list[DbOperationOrFunction], weights: list[float]
+        self, operations: List[DbOperationOrFunction], weights: List[float]
     ) -> DbOperationOrFunction:
         return random.choices(operations, k=1, weights=weights)[0]
 
     def random_type_with_values(
-        self, types_with_values: list[DataTypeWithValues]
+        self, types_with_values: List[DataTypeWithValues]
     ) -> DataTypeWithValues:
         return random.choice(types_with_values)
 
-    def random_value(self, values: list[DataValue]) -> DataValue:
+    def random_value(self, values: List[DataValue]) -> DataValue:
         return random.choice(values)
 
     def convert_operation_relevance_to_number(

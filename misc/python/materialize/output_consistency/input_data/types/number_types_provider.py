@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
+from typing import List, Optional
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -127,7 +127,7 @@ DOUBLE_TYPE = NumberDataType(
     max_negative_value="-999999999999999999999999999999999999999",
 )
 
-NUMERIC_DATA_TYPES: list[NumberDataType] = [
+NUMERIC_DATA_TYPES: List[NumberDataType] = [
     INT2_TYPE,
     INT4_TYPE,
     INT8_TYPE,
