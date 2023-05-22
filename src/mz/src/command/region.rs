@@ -26,8 +26,9 @@ use tabled::Tabled;
 use super::sql::check_environment_health;
 
 pub async fn enable(cx: &mut RegionContext) -> Result<(), Error> {
-    // TODO: Handle error creating environment
-    let loading_spinner = cx.output_formatter().loading_spinner("Retrieving information...");
+    let loading_spinner = cx
+        .output_formatter()
+        .loading_spinner("Retrieving information...");
     let cloud_provider = cx.get_cloud_provider().await?;
 
     loading_spinner.set_message("Enabling the region...");

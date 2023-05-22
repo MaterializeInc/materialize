@@ -33,7 +33,7 @@ use mz_cloud_api::client::Client as CloudClient;
 use mz_cloud_api::config::{
     ClientBuilder as CloudClientBuilder, ClientConfig as CloudClientConfig,
 };
-use mz_frontegg_client::client::Client as AdminClient;
+use mz_frontegg_client::client::{Authentication, Client as AdminClient};
 use mz_frontegg_client::config::{
     ClientBuilder as AdminClientBuilder, ClientConfig as AdminClientConfig,
 };
@@ -88,7 +88,7 @@ impl Context {
         // Build clients
         let admin_client: Arc<AdminClient> =
             Arc::new(AdminClientBuilder::default().build(AdminClientConfig {
-                app_password: profile.app_password().parse()?,
+                authentication: Authentication::AppPassword(profile.app_password().parse()?),
             }));
 
         let mut cloud_client_builder = CloudClientBuilder::default();

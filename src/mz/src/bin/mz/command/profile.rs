@@ -32,7 +32,11 @@ pub struct ProfileCommand {
 #[derive(Debug, clap::Subcommand)]
 pub enum ProfileSubcommand {
     /// Iniitialize an authentication profile.
-    Init,
+    Init {
+        /// Prompt for a username and password on the terminal.
+        #[clap(long)]
+        no_browser: bool,
+    },
     /// List available authentication profiles.
     #[clap(alias = "ls")]
     List,
@@ -74,7 +78,9 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
 
     match &cmd.subcommand {
         // Initiating a profile doesn't requires an active profile.
-        ProfileSubcommand::Init => mz::command::profile::init(&mut cx, profile).await,
+        ProfileSubcommand::Init { no_browser } => {
+            mz::command::profile::init(&mut cx, profile, *no_browser).await
+        }
         ProfileSubcommand::List => mz::command::profile::list(&mut cx).await,
         ProfileSubcommand::Remove => mz::command::profile::remove(&mut cx).await,
         _ => {
@@ -97,7 +103,7 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
                             .await
                     }
                 },
-                ProfileSubcommand::Init => panic!("invalid command."),
+                ProfileSubcommand::Init { no_browser: _ } => panic!("invalid command."),
                 ProfileSubcommand::List => panic!("invalid command."),
                 ProfileSubcommand::Remove => panic!("invalid command."),
             }

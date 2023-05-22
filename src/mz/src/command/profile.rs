@@ -17,7 +17,14 @@
 //!
 //! Consult the user-facing documentation for details.
 
-use std::str::FromStr;
+use std::{io::Write, str::FromStr};
+
+use mz_frontegg_auth::AppPassword;
+use mz_frontegg_client::client::app_password::CreateAppPasswordRequest;
+use mz_frontegg_client::client::{Client as AdminClient, Credentials};
+use mz_frontegg_client::config::{
+    ClientBuilder as AdminClientBuilder, ClientConfig as AdminClientConfig,
+};
 
 use mz_cloud_api::config::DEFAULT_ENDPOINT;
 use serde::{Deserialize, Serialize};
@@ -31,7 +38,7 @@ use crate::{
     server::server,
 };
 
-pub async fn init(scx: &mut Context, profile_name: Option<String>) -> Result<(), Error> {
+pub async fn init_with_browser() -> Result<AppPassword, Error> {
     // Bind a web server to a local port to receive the app password.
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (server, port) = server(tx);
@@ -63,25 +70,77 @@ pub async fn init(scx: &mut Context, profile_name: Option<String>) -> Result<(),
         _ = server => unreachable!("server should not shut down"),
         result = rx.recv() => {
             match result {
-                Some(app_password) => {
-                    // TODO:
-                    // * Append vault
-                    // * Append region
-                    let new_profile = TomlProfile {
-                        app_password: Some(app_password.to_string()),
-                        vault: None,
-                        region: None,
-                        admin_endpoint: None,
-                        cloud_endpoint: None
-                    };
-                    // TODO:
-                    // * Replace default with env/config value
-                    scx.config_file().add_profile(profile_name.map_or("default".to_string(), |n| n), new_profile).await?;
-                },
+                Some(app_password) => Ok(app_password),
                 None => { panic!("failed to login via browser") },
             }
         }
     }
+}
+
+pub async fn init_without_browser() -> Result<AppPassword, Error> {
+    // Handle interactive user input
+    let mut email = String::new();
+
+    print!("Email: ");
+    let _ = std::io::stdout().flush();
+    std::io::stdin().read_line(&mut email).unwrap();
+
+    // Trim lines
+    if email.ends_with('\n') {
+        email.pop();
+        if email.ends_with('\r') {
+            email.pop();
+        }
+    }
+
+    print!("Password: ");
+    let _ = std::io::stdout().flush();
+    let password = rpassword::read_password().unwrap();
+
+    let admin_client: AdminClient = AdminClientBuilder::default().build(AdminClientConfig {
+        authentication: mz_frontegg_client::client::Authentication::Credentials(Credentials {
+            email,
+            password,
+        }),
+    });
+
+    let app_password = admin_client
+        .create_app_password(CreateAppPasswordRequest {
+            description: "App password for the CLI",
+        })
+        .await?;
+
+    Ok(app_password)
+}
+
+pub async fn init(
+    scx: &mut Context,
+    profile_name: Option<String>,
+    no_browser: bool,
+) -> Result<(), Error> {
+    let app_password = match no_browser {
+        true => init_without_browser().await?,
+        false => init_with_browser().await?,
+    };
+
+    // TODO:
+    // * Append vault
+    // * Append region
+    let new_profile = TomlProfile {
+        app_password: Some(app_password.to_string()),
+        vault: None,
+        region: None,
+        admin_endpoint: None,
+        cloud_endpoint: None,
+    };
+    // TODO:
+    // * Replace default with env/config value
+    scx.config_file()
+        .add_profile(
+            profile_name.map_or("default".to_string(), |n| n),
+            new_profile,
+        )
+        .await?;
 
     Ok(())
 }
