@@ -303,10 +303,10 @@ $ unset-regex
 
 # Cannot drop subsources independent of primary source
 ! DROP SOURCE conflict_table
-contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 ! DROP SOURCE conflict_table CASCADE
-contains: SOURCE materialize.public.conflict_table is a subsource and cannot be dropped independently of its primary source
+contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 > SELECT * FROM no_replica_identity;
 1
