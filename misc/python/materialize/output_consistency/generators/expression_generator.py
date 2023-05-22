@@ -131,7 +131,7 @@ class ExpressionGenerator:
 
         if (
             self.config.avoid_expressions_expecting_db_error
-            and try_number <= 10
+            and try_number <= 50
             and operation.is_expected_to_cause_db_error(args)
         ):
             return self.generate_args_for_operation(
