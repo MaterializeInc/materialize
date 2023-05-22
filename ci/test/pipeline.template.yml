@@ -638,6 +638,50 @@ steps:
           args: [--scenario=KafkaUpsertUnique]
     coverage: skip
 
+  - id: sqlancer-pqs
+    label: "SQLancer PQS"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=PQS, --no-qpg]
+
+  - id: sqlancer-norec
+    label: "SQLancer NoREC"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=NOREC]
+
+  - id: sqlancer-query-partitioning
+    label: "SQLancer QueryPartitioning"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=QUERY_PARTITIONING]
+
+  - id: sqlancer-having
+    label: "SQLancer Having"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=HAVING]
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs
