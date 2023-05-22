@@ -106,11 +106,11 @@ pub enum VarError {
     /// values.
     #[error(
         "invalid value for parameter {}: {}",
-        parameter.name().quoted(),
+        parameter.name.quoted(),
         values.iter().map(|v| v.quoted()).join(",")
     )]
     ConstrainedParameter {
-        parameter: &'static (dyn Var + Send + Sync),
+        parameter: VarErrParam,
         values: Vec<String>,
         valid_values: Option<Vec<&'static str>>,
     },
@@ -120,21 +120,21 @@ pub enum VarError {
     /// with PostgreSQL-based tools.
     #[error(
         "parameter {} can only be set to {}",
-        .0.name().quoted(),
-        .0.value().quoted(),
+        .0.name.quoted(),
+        .0.value.quoted(),
     )]
-    FixedValueParameter(&'static (dyn Var + Send + Sync)),
+    FixedValueParameter(VarErrParam),
     /// The value for the specified parameter does not have the right type.
     #[error(
         "parameter {} requires a {} value",
-        .0.name().quoted(),
-        .0.type_name().quoted()
+        .0.name.quoted(),
+        .0.type_name.quoted()
     )]
-    InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    InvalidParameterType(VarErrParam),
     /// The value of the specified parameter is incorrect.
     #[error(
         "parameter {} cannot have value {}: {}",
-        parameter.name().quoted(),
+        parameter.name.quoted(),
         values
             .iter()
             .map(|v| v.quoted().to_string())
@@ -143,7 +143,7 @@ pub enum VarError {
         reason,
     )]
     InvalidParameterValue {
-        parameter: &'static (dyn Var + Send + Sync),
+        parameter: VarErrParam,
         values: Vec<String>,
         reason: String,
     },
@@ -189,6 +189,25 @@ impl VarError {
                 name_hint.map(|name| format!("Enable with {name} flag"))
             }
             _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+/// We don't want to hold a static reference to a variable while erroring, so take an owned version
+/// of the fields we want.
+pub struct VarErrParam {
+    name: &'static str,
+    value: String,
+    type_name: String,
+}
+
+impl<'a, V: Var + Send + Sync + ?Sized> From<&'a V> for VarErrParam {
+    fn from(var: &'a V) -> VarErrParam {
+        VarErrParam {
+            name: var.name(),
+            value: var.value(),
+            type_name: var.type_name(),
         }
     }
 }
@@ -1335,14 +1354,14 @@ impl SessionVars {
         } else if name == CLIENT_ENCODING.name {
             match extract_single_value(input) {
                 Ok(value) if UncasedStr::new(value) == CLIENT_ENCODING.value => Ok(()),
-                _ => Err(VarError::FixedValueParameter(&CLIENT_ENCODING)),
+                _ => Err(VarError::FixedValueParameter((&CLIENT_MIN_MESSAGES).into())),
             }
         } else if name == CLIENT_MIN_MESSAGES.name {
             if let Ok(_) = ClientSeverity::parse(input) {
                 self.client_min_messages.set(input, local)
             } else {
                 return Err(VarError::ConstrainedParameter {
-                    parameter: &CLIENT_MIN_MESSAGES,
+                    parameter: (&CLIENT_MIN_MESSAGES).into(),
                     values: input.to_vec(),
                     valid_values: Some(ClientSeverity::valid_values()),
                 });
@@ -1355,12 +1374,12 @@ impl SessionVars {
             self.database.set(input, local)
         } else if name == DATE_STYLE.name {
             let Ok(values) = Vec::<String>::parse(input) else {
-                return Err(VarError::FixedValueParameter(&*DATE_STYLE));
+                return Err(VarError::FixedValueParameter((&*DATE_STYLE).into()));
             };
             for value in values {
                 let value = UncasedStr::new(value.trim());
                 if value != "ISO" && value != "MDY" {
-                    return Err(VarError::FixedValueParameter(&*DATE_STYLE));
+                    return Err(VarError::FixedValueParameter((&*DATE_STYLE).into()));
                 }
             }
             Ok(())
@@ -1377,19 +1396,19 @@ impl SessionVars {
                 let failpoint = splits
                     .next()
                     .ok_or_else(|| VarError::InvalidParameterValue {
-                        parameter: &FAILPOINTS,
+                        parameter: (&FAILPOINTS).into(),
                         values: input.to_vec(),
                         reason: "missing failpoint name".into(),
                     })?;
                 let action = splits
                     .next()
                     .ok_or_else(|| VarError::InvalidParameterValue {
-                        parameter: &FAILPOINTS,
+                        parameter: (&FAILPOINTS).into(),
                         values: input.to_vec(),
                         reason: "missing failpoint action".into(),
                     })?;
                 fail::cfg(failpoint, action).map_err(|e| VarError::InvalidParameterValue {
-                    parameter: &FAILPOINTS,
+                    parameter: (&FAILPOINTS).into(),
                     values: input.to_vec(),
                     reason: e,
                 })?;
@@ -1400,7 +1419,7 @@ impl SessionVars {
         } else if name == INTERVAL_STYLE.name {
             match extract_single_value(input) {
                 Ok(value) if UncasedStr::new(value) == INTERVAL_STYLE.value => Ok(()),
-                _ => Err(VarError::FixedValueParameter(&INTERVAL_STYLE)),
+                _ => Err(VarError::FixedValueParameter((&INTERVAL_STYLE).into())),
             }
         } else if name == SEARCH_PATH.name {
             self.search_path.set(input, local)
@@ -1413,8 +1432,12 @@ impl SessionVars {
         } else if name == STANDARD_CONFORMING_STRINGS.name {
             match bool::parse(input) {
                 Ok(value) if value == *STANDARD_CONFORMING_STRINGS.value => Ok(()),
-                Ok(_) => Err(VarError::FixedValueParameter(&STANDARD_CONFORMING_STRINGS)),
-                Err(()) => Err(VarError::InvalidParameterType(&STANDARD_CONFORMING_STRINGS)),
+                Ok(_) => Err(VarError::FixedValueParameter(
+                    (&STANDARD_CONFORMING_STRINGS).into(),
+                )),
+                Err(()) => Err(VarError::InvalidParameterType(
+                    (&STANDARD_CONFORMING_STRINGS).into(),
+                )),
             }
         } else if name == STATEMENT_TIMEOUT.name {
             self.statement_timeout.set(input, local)
@@ -1425,7 +1448,7 @@ impl SessionVars {
                 self.timezone.set(input, local)
             } else {
                 Err(VarError::ConstrainedParameter {
-                    parameter: &TIMEZONE,
+                    parameter: (&TIMEZONE).into(),
                     values: input.to_vec(),
                     valid_values: None,
                 })
@@ -1435,7 +1458,7 @@ impl SessionVars {
                 self.transaction_isolation.set(input, local)
             } else {
                 return Err(VarError::ConstrainedParameter {
-                    parameter: &TRANSACTION_ISOLATION,
+                    parameter: (&TRANSACTION_ISOLATION).into(),
                     values: input.to_vec(),
                     valid_values: Some(IsolationLevel::valid_values()),
                 });
@@ -2549,7 +2572,7 @@ where
     fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
         match V::parse(input) {
             Ok(v) => Ok(self.parent.value == v.borrow()),
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+            Err(()) => Err(VarError::InvalidParameterType(self.parent.into())),
         }
     }
 
@@ -2563,7 +2586,7 @@ where
                     Ok(false)
                 }
             }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+            Err(()) => Err(VarError::InvalidParameterType(self.parent.into())),
         }
     }
 
@@ -2582,7 +2605,7 @@ where
                 self.dynamic_default = Some(v);
                 Ok(())
             }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+            Err(()) => Err(VarError::InvalidParameterType(self.parent.into())),
         }
     }
 }
@@ -2689,7 +2712,7 @@ where
                 }
                 Ok(())
             }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+            Err(()) => Err(VarError::InvalidParameterType(self.parent.into())),
         }
     }
 
