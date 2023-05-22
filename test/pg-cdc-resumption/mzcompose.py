@@ -76,16 +76,24 @@ def disconnect_pg_during_snapshot(c: Composition) -> None:
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
+        "alter-mz.td",
     )
 
 
 def restart_pg_during_snapshot(c: Composition) -> None:
     restart_pg(c)
 
-    c.run("testdrive", "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
+    c.run(
+        "testdrive",
+        "delete-rows-t1.td",
+        "delete-rows-t2.td",
+        "alter-table.td",
+        "alter-mz.td",
+    )
 
 
 def restart_mz_during_snapshot(c: Composition) -> None:
+    c.run("testdrive", "alter-mz.td")
     restart_mz(c)
 
     c.run("testdrive", "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
@@ -98,13 +106,20 @@ def disconnect_pg_during_replication(c: Composition) -> None:
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
+        "alter-mz.td",
         "toxiproxy-close-connection.td",
         "toxiproxy-restore-connection.td",
     )
 
 
 def restart_pg_during_replication(c: Composition) -> None:
-    c.run("testdrive", "wait-for-snapshot.td", "delete-rows-t1.td", "alter-table.td")
+    c.run(
+        "testdrive",
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+        "alter-table.td",
+        "alter-mz.td",
+    )
 
     restart_pg(c)
 
@@ -112,7 +127,13 @@ def restart_pg_during_replication(c: Composition) -> None:
 
 
 def restart_mz_during_replication(c: Composition) -> None:
-    c.run("testdrive", "wait-for-snapshot.td", "delete-rows-t1.td", "alter-table.td")
+    c.run(
+        "testdrive",
+        "wait-for-snapshot.td",
+        "delete-rows-t1.td",
+        "alter-table.td",
+        "alter-mz.td",
+    )
 
     restart_mz(c)
 
@@ -125,6 +146,7 @@ def fix_pg_schema_while_mz_restarts(c: Composition) -> None:
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
+        "alter-mz.td",
         "verify-data.td",
         "alter-table-fix.td",
     )
@@ -144,4 +166,5 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
+        "alter-mz.td",
     )
