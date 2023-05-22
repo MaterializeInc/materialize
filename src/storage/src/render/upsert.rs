@@ -30,7 +30,9 @@ use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
-use crate::render::upsert::types::{InMemoryHashMap, UpsertState, UpsertStateBackend};
+use crate::render::upsert::types::{
+    upsert_bincode_opts, InMemoryHashMap, UpsertState, UpsertStateBackend,
+};
 use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 
@@ -178,6 +180,9 @@ where
                         mz_rocksdb::Options::defaults_with_env(env),
                         tuning,
                         rocksdb_metrics,
+                        // For now, just use the same config as the one used for
+                        // merging snapshots.
+                        upsert_bincode_opts(),
                     )
                     .await
                     .unwrap(),

@@ -99,6 +99,7 @@ async fn basic() -> Result<(), anyhow::Error> {
         Options::defaults_with_env(rocksdb::Env::new()?),
         RocksDBTuningParameters::default(),
         metrics_for_tests()?,
+        bincode::DefaultOptions::new(),
     )
     .await?;
 

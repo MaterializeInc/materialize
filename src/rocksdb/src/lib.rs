@@ -261,13 +261,24 @@ where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
-    /// Start a new RocksDB instance at the path.
-    pub async fn new<M: Deref<Target = RocksDBMetrics> + Send + 'static>(
+    /// Start a new RocksDB instance at the path, using
+    /// the `Options` and `RocksDBTuningParameters` to
+    /// configure the instance.
+    ///
+    /// `metrics` is a set of metric types that this type will keep
+    /// up to date. `enc_opts` is the `bincode` options used to
+    /// serialize and deserialize the keys and values.
+    pub async fn new<M, O>(
         instance_path: &Path,
         options: Options,
         tuning_config: RocksDBTuningParameters,
         metrics: M,
-    ) -> Result<Self, Error> {
+        enc_opts: O,
+    ) -> Result<Self, Error>
+    where
+        O: bincode::Options + Copy + Send + Sync + 'static,
+        M: Deref<Target = RocksDBMetrics> + Send + 'static,
+    {
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
             mz_ore::task::spawn_blocking(
@@ -298,6 +309,7 @@ where
                 rx,
                 metrics,
                 creation_error_tx,
+                enc_opts,
             )
         });
 
@@ -421,17 +433,19 @@ where
 }
 
 // TODO(guswynn): retry retryable rocksdb errors.
-fn rocksdb_core_loop<K, V, M>(
+fn rocksdb_core_loop<K, V, M, O>(
     options: Options,
     tuning_config: RocksDBTuningParameters,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     metrics: M,
     creation_error_tx: oneshot::Sender<Error>,
+    enc_opts: O,
 ) where
     K: AsRef<[u8]> + Send + Sync + 'static,
     V: Serialize + DeserializeOwned + Send + Sync + 'static,
     M: Deref<Target = RocksDBMetrics> + Send + 'static,
+    O: bincode::Options + Copy + Send + Sync + 'static,
 {
     let rocksdb_options = options.as_rocksdb_options(&tuning_config);
 
@@ -448,8 +462,6 @@ fn rocksdb_core_loop<K, V, M>(
     };
     let wo = options.as_rocksdb_write_options();
 
-    use bincode::Options;
-    let enc_opts = bincode::DefaultOptions::new().allow_trailing_bytes();
     while let Some(cmd) = cmd_rx.blocking_recv() {
         match cmd {
             Command::Shutdown { done_sender } => {
@@ -485,7 +497,6 @@ fn rocksdb_core_loop<K, V, M>(
                                     match enc_opts.deserialize(&previous_value) {
                                         Ok(value) => Some(GetResult {
                                             value,
-
                                             size: u64::cast_from(previous_value.len()),
                                         }),
                                         Err(e) => {
