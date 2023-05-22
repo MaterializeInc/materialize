@@ -170,3 +170,11 @@ postgres
 contains:parameter "IntervalStyle" can only be set to "postgres"
 
 > SET intervalstyle = 'postgres';
+
+# Test some other parameter value codepaths, like `Option<String>` here
+> SET cluster_replica = ''
+
+> SET cluster_replica = 'r1'
+
+! SET cluster_replica = 1, 2
+contains:parameter "cluster_replica" requires a "optional string" value
