@@ -114,6 +114,7 @@ def _run_output_consistency_tests_internal(
         queries_per_tx=20,
         use_autocommit=True,
         split_and_retry_on_db_error=True,
+        skip_postgres_incompatible_types=False,
     )
 
     print_config(config)
@@ -133,6 +134,9 @@ def _run_output_consistency_tests_internal(
     query_generator = QueryGenerator(config)
     output_comparator = ResultComparator()
     sql_executor = create_sql_executor(config, connection)
+
+    if config.skip_postgres_incompatible_types:
+        input_data.remove_postgres_incompatible_types()
 
     test_runner = ConsistencyTestRunner(
         config,

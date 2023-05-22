@@ -33,3 +33,10 @@ class ConsistencyTestInputData:
             DataTypeWithValues
         ] = ALL_DATA_TYPES_WITH_VALUES
         self.all_operation_types: List[DbOperationOrFunction] = ALL_OPERATION_TYPES
+
+    def remove_postgres_incompatible_types(self) -> None:
+        self.all_data_types_with_values = [
+            x
+            for x in self.all_data_types_with_values
+            if x.data_type not in UNSIGNED_INT_TYPES
+        ]
