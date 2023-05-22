@@ -600,7 +600,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: output-consistency
-          args: ["--seed=$BUILDKITE_JOB_ID", "--runtime-in-sec=3300", "--dry-run=False", "--fail-fast=False", "--execute-setup=True"]
+          args: ["--seed=$BUILDKITE_JOB_ID", "--runtime-in-sec=3300"]
 
   - id: sqlsmith
     label: "SQLsmith"
