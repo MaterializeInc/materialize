@@ -29,6 +29,14 @@ class OperationArgsValidator:
         overlap = arg.characteristics & characteristics
         return len(overlap) == len(characteristics)
 
+    def has_any_characteristic(
+        self,
+        arg: Expression,
+        characteristics: Set[ExpressionCharacteristics],
+    ) -> bool:
+        overlap = arg.characteristics & characteristics
+        return len(overlap) > 0
+
     def index_of_characteristic(
         self,
         args: List[Expression],

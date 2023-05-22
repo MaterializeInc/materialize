@@ -17,7 +17,8 @@ from materialize.output_consistency.input_data.params.number_operation_param imp
 )
 from materialize.output_consistency.input_data.validators.number_args_validator import (
     MaxMinusNegMaxArgsValidator,
-    ValueGrowsArgsValidator,
+    MultiParamValueGrowsArgsValidator,
+    SingleParamValueGrowsArgsValidator,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -34,7 +35,7 @@ NUMERIC_OPERATION_TYPES.append(
         "$ + $",
         [NumericOperationParam(), NumericOperationParam()],
         DataTypeCategory.NUMERIC,
-        {ValueGrowsArgsValidator()},
+        {MultiParamValueGrowsArgsValidator()},
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -50,7 +51,7 @@ NUMERIC_OPERATION_TYPES.append(
         "$ * $",
         [NumericOperationParam(), NumericOperationParam()],
         DataTypeCategory.NUMERIC,
-        {ValueGrowsArgsValidator()},
+        {MultiParamValueGrowsArgsValidator()},
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -198,7 +199,7 @@ NUMERIC_OPERATION_TYPES.append(
         "EXP",
         [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
-        {ValueGrowsArgsValidator()},
+        {SingleParamValueGrowsArgsValidator()},
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -346,7 +347,7 @@ NUMERIC_OPERATION_TYPES.append(
         "COSH",
         [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
-        {ValueGrowsArgsValidator()},
+        {SingleParamValueGrowsArgsValidator()},
     )
 )
 # only for numbers [1,)
@@ -395,7 +396,7 @@ NUMERIC_OPERATION_TYPES.append(
         "SINH",
         [NumericOperationParam()],
         DataTypeCategory.NUMERIC,
-        {ValueGrowsArgsValidator()},
+        {SingleParamValueGrowsArgsValidator()},
     )
 )
 NUMERIC_OPERATION_TYPES.append(

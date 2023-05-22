@@ -17,7 +17,18 @@ from materialize.output_consistency.operation.operation_args_validator import (
 )
 
 
-class ValueGrowsArgsValidator(OperationArgsValidator):
+class SingleParamValueGrowsArgsValidator(OperationArgsValidator):
+    def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
+        return self.has_any_characteristic(
+            args[0],
+            {
+                ExpressionCharacteristics.LARGE_VALUE,
+                ExpressionCharacteristics.MAX_VALUE,
+            },
+        )
+
+
+class MultiParamValueGrowsArgsValidator(OperationArgsValidator):
 
     # error if one MAX_VALUE and a further NON_EMPTY value
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
