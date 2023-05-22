@@ -12,6 +12,7 @@ from typing import List
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.util import MzVersion
 
 
 def schemas() -> str:
@@ -185,7 +186,12 @@ class SinkTables(Check):
                 """
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_table_keys = true;
-
+                """
+                if self.current_version >= MzVersion(0, 55, 0)
+                else ""
+            )
+            + dedent(
+                """
                 > CREATE TABLE sink_large_transaction_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
                 > CREATE DEFAULT INDEX ON sink_large_transaction_table;
 
