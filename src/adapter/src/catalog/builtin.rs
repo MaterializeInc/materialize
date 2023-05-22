@@ -3177,6 +3177,37 @@ AS SELECT
 FROM mz_catalog.mz_roles r",
 };
 
+pub const PG_TRIGGER: BuiltinView = BuiltinView {
+    name: "pg_trigger",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_trigger
+AS SELECT
+    -- MZ doesn't support triggers so all of these fields are NULL.
+    NULL::pg_catalog.oid AS oid,
+    NULL::pg_catalog.oid AS tgrelid,
+    NULL::pg_catalog.oid AS tgparentid,
+    NULL::pg_catalog.text AS tgname,
+    NULL::pg_catalog.oid AS tgfoid,
+    NULL::pg_catalog.int2 AS tgtype,
+    NULL::pg_catalog.\"char\" AS tgenabled,
+    NULL::pg_catalog.bool AS tgisinternal,
+    NULL::pg_catalog.oid AS tgconstrrelid,
+    NULL::pg_catalog.oid AS tgconstrindid,
+    NULL::pg_catalog.oid AS tgconstraint,
+    NULL::pg_catalog.bool AS tgdeferrable,
+    NULL::pg_catalog.bool AS tginitdeferred,
+    NULL::pg_catalog.int2 AS tgnargs,
+    NULL::pg_catalog.int2vector AS tgattr,
+    NULL::pg_catalog.bytea AS tgargs,
+    -- NOTE: The tgqual column is actually type `pg_node_tree` which we don't support. CockroachDB
+    -- uses text as a placeholder, so we'll follow their lead here.
+    NULL::pg_catalog.text AS tgqual,
+    NULL::pg_catalog.text AS tgoldtable,
+    NULL::pg_catalog.text AS tgnewtable
+WHERE false
+    ",
+};
+
 pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
     name: "mz_show_materialized_views",
     schema: MZ_INTERNAL_SCHEMA,
@@ -3783,6 +3814,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_COLLATION),
         Builtin::View(&PG_POLICY),
         Builtin::View(&PG_INHERITS),
+        Builtin::View(&PG_TRIGGER),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_TABLES),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),

@@ -165,3 +165,26 @@ name                nullable    type
  spcowner           true        oid
  spcacl             true        text[]
  spcoptions         true        text[]
+
+> SHOW COLUMNS FROM pg_trigger
+name                nullable    type
+------------------------------------------------------------
+ oid                false       oid
+ tgrelid            false       oid
+ tgparentid         false       oid
+ tgname             false       text
+ tgfoid             false       oid
+ tgtype             false       smallint
+ tgenabled          false       char
+ tgisinternal       false       boolean
+ tgconstrrelid      false       oid
+ tgconstrindid      false       oid
+ tgconstraint       false       oid
+ tgdeferrable       false       boolean
+ tginitdeferred     false       boolean
+ tgnargs            false       smallint
+ tgattr             false       int2vector
+ tgargs             false       bytea
+ tgqual             false       text
+ tgoldtable         false       text
+ tgnewtable         false       text

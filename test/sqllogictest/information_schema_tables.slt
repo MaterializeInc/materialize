@@ -601,6 +601,10 @@ pg_tablespace
 VIEW
 materialize
 pg_catalog
+pg_trigger
+VIEW
+materialize
+pg_catalog
 pg_type
 VIEW
 materialize
