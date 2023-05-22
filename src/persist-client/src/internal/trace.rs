@@ -1326,8 +1326,46 @@ pub mod datadriven {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use proptest::prelude::*;
+
+    use crate::internal::state::tests::any_hollow_batch;
+
     use super::*;
+
+    pub fn any_trace<T: Arbitrary + Timestamp + Lattice>(
+        max_batches: usize,
+    ) -> impl Strategy<Value = Trace<T>> {
+        Strategy::prop_map(
+            (
+                any::<Option<T>>(),
+                proptest::collection::vec(any_hollow_batch::<T>(), 0..=max_batches),
+            ),
+            |(since, mut batches)| {
+                let mut trace = Trace::<T>::default();
+                trace.downgrade_since(&since.map_or_else(Antichain::new, Antichain::from_elem));
+
+                // Fix up the arbitrary HollowBatches so the lowers and uppers
+                // align.
+                batches.sort_by(|x, y| x.desc.upper().elements().cmp(y.desc.upper().elements()));
+                let mut lower = Antichain::from_elem(T::minimum());
+                for mut batch in batches {
+                    // Overall trace since has to be past each batch's since.
+                    if PartialOrder::less_than(trace.since(), batch.desc.since()) {
+                        trace.downgrade_since(batch.desc.since());
+                    }
+                    batch.desc = Description::new(
+                        lower.clone(),
+                        batch.desc.upper().clone(),
+                        batch.desc.since().clone(),
+                    );
+                    lower = batch.desc.upper().clone();
+                    let _merge_req = trace.push_batch(batch);
+                }
+                trace
+            },
+        )
+    }
 
     #[test]
     fn remove_redundant_merge_reqs() {

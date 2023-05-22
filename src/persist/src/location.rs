@@ -18,6 +18,7 @@ use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
 use mz_proto::RustType;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
@@ -35,7 +36,9 @@ use crate::error::Error;
 /// Read-only requests are assigned the SeqNo of a write, indicating that all
 /// mutating requests up to and including that one are reflected in the read
 /// state.
-#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary, Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize,
+)]
 pub struct SeqNo(pub u64);
 
 impl std::fmt::Display for SeqNo {
