@@ -82,20 +82,6 @@ use std::time::Duration;
 use std::{env, thread};
 
 use anyhow::anyhow;
-use once_cell::sync::Lazy;
-use postgres::error::DbError;
-use postgres::tls::{MakeTlsConnect, TlsConnect};
-use postgres::types::{FromSql, Type};
-use postgres::{NoTls, Socket};
-use regex::Regex;
-use tempfile::TempDir;
-use tokio::net::TcpListener;
-use tokio::runtime::Runtime;
-use tokio_postgres::config::Host;
-use tokio_postgres::Client;
-use tokio_stream::wrappers::TcpListenerStream;
-use tower_http::cors::AllowOrigin;
-
 use mz_controller::ControllerConfig;
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
@@ -116,6 +102,19 @@ use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use postgres::error::DbError;
+use postgres::tls::{MakeTlsConnect, TlsConnect};
+use postgres::types::{FromSql, Type};
+use postgres::{NoTls, Socket};
+use regex::Regex;
+use tempfile::TempDir;
+use tokio::net::TcpListener;
+use tokio::runtime::Runtime;
+use tokio_postgres::config::Host;
+use tokio_postgres::Client;
+use tokio_stream::wrappers::TcpListenerStream;
+use tower_http::cors::AllowOrigin;
 use tracing_subscriber::filter::Targets;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
@@ -373,7 +372,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             now: SYSTEM_TIME.clone(),
             postgres_factory,
             metrics_registry: metrics_registry.clone(),
-            scratch_directory: None,
+            scratch_directory_enabled: false,
             persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
         },
         secrets_controller,
@@ -385,6 +384,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         tls: config.tls,
         frontegg: config.frontegg,
         unsafe_mode: config.unsafe_mode,
+        all_features: false,
         metrics_registry: metrics_registry.clone(),
         now: config.now,
         environment_id,
@@ -443,7 +443,7 @@ impl Server {
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
-            .user("materialize");
+            .user("mz_system");
         config
     }
 
@@ -457,20 +457,40 @@ impl Server {
         config
     }
 
-    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    pub fn enable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .unwrap();
+        }
+    }
+
+    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
         T::Stream: Send,
         <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
     {
-        Ok(self.pg_config().connect(tls)?)
+        self.pg_config().connect(tls)
+    }
+
+    pub fn connect_internal<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        Ok(self.pg_config_internal().connect(tls)?)
     }
 
     pub async fn connect_async<T>(
         &self,
         tls: T,
-    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), anyhow::Error>
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), postgres::Error>
     where
         T: MakeTlsConnect<Socket> + Send + 'static,
         T::TlsConnect: Send,
@@ -700,7 +720,7 @@ pub fn wait_for_view_population(
 pub fn auth_with_ws(
     ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
     options: BTreeMap<String, String>,
-) {
+) -> Result<(), anyhow::Error> {
     ws.write_message(Message::Text(
         serde_json::to_string(&WebSocketAuth::Basic {
             user: "materialize".into(),
@@ -708,11 +728,10 @@ pub fn auth_with_ws(
             options,
         })
         .unwrap(),
-    ))
-    .unwrap();
+    ))?;
     // Wait for initial ready response.
     loop {
-        let resp = ws.read_message().unwrap();
+        let resp = ws.read_message()?;
         match resp {
             Message::Text(msg) => {
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
@@ -722,7 +741,12 @@ pub fn auth_with_ws(
                 }
             }
             Message::Ping(_) => continue,
+            Message::Close(None) => return Err(anyhow!("ws closed after auth")),
+            Message::Close(Some(close_frame)) => {
+                return Err(anyhow!("ws closed after auth").context(close_frame))
+            }
             _ => panic!("unexpected response: {:?}", resp),
         }
     }
+    Ok(())
 }

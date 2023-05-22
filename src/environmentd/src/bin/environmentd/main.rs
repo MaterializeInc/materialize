@@ -78,18 +78,13 @@
 //! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
 //! on port 6876.
 
-use std::cmp;
-use std::env;
 use std::ffi::CStr;
-use std::iter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use std::{cmp, env, iter, process, thread};
 
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
@@ -97,19 +92,6 @@ use fail::FailScenario;
 use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use mz_ore::task::RuntimeExt;
-use mz_persist_client::rpc::{
-    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
-};
-use once_cell::sync::Lazy;
-use opentelemetry::trace::TraceContextExt;
-use prometheus::IntGauge;
-use tracing::{error, info, Instrument};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-use url::Url;
-use uuid::Uuid;
-
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
@@ -130,14 +112,25 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::task::RuntimeExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::{
+    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
+};
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_storage_client::types::connections::ConnectionContext;
+use once_cell::sync::Lazy;
+use opentelemetry::trace::TraceContextExt;
+use prometheus::IntGauge;
+use tracing::{error, info, Instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+use url::Url;
+use uuid::Uuid;
 
 mod sys;
 
@@ -158,15 +151,15 @@ static LONG_VERSION: Lazy<String> = Lazy::new(|| {
 )]
 pub struct Args {
     // === Special modes. ===
-    /// Enable unsafe features.
-    ///
-    /// Unsafe features fall into two categories:
-    ///
-    ///   * In-development features that are not yet ready for production use.
-    ///   * Features useful for development and testing that would pose a
-    ///     legitimate security risk if used in Materialize Cloud.
+    /// Enable unsafe features. Unsafe features are those that should never run
+    /// in production but are appropriate for testing/local development.
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
+
+    /// Enables all feature flags, meant only as a tool for local development;
+    /// this should never be enabled in CI.
+    #[clap(long, env = "ALL_FEATURES")]
+    all_features: bool,
 
     // === Connection options. ===
     /// The address on which to listen for untrusted SQL connections.
@@ -572,7 +565,7 @@ fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args) {
-        eprintln!("environmentd: {}", err.display_with_causes());
+        eprintln!("environmentd: fatal: {}", err.display_with_causes());
         process::exit(1);
     }
 }
@@ -810,7 +803,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         now: SYSTEM_TIME.clone(),
         postgres_factory: StashFactory::new(&metrics_registry),
         metrics_registry: metrics_registry.clone(),
-        scratch_directory: args.orchestrator_process_scratch_directory,
+        scratch_directory_enabled: args.orchestrator_process_scratch_directory.is_some(),
         persist_pubsub_url: args.persist_pubsub_url,
     };
 
@@ -845,6 +838,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         secrets_controller,
         cloud_resource_controller,
         unsafe_mode: args.unsafe_mode,
+        all_features: args.all_features,
         metrics_registry,
         now,
         environment_id: args.environment_id,

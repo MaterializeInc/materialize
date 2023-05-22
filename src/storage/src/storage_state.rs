@@ -69,15 +69,30 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 
+use anyhow::Context;
 use crossbeam_channel::TryRecvError;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
+use mz_ore::halt;
+use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::read::ReadHandle;
+use mz_persist_client::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_storage_client::client::{
+    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
+};
+use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -87,20 +102,6 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration, Instant};
 use tracing::{info, trace};
-
-use mz_ore::halt;
-use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::ReadHandle;
-use mz_persist_client::ShardId;
-use mz_repr::{Diff, GlobalId, Timestamp};
-use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
-use mz_storage_client::client::{StorageCommand, StorageResponse};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::instances::StorageInstanceContext;
-use mz_storage_client::types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_client::types::sources::{IngestionDescription, SourceData};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::internal_control::{
@@ -300,6 +301,47 @@ pub struct StorageState {
 
     /// Dynamically configurable parameters that control how dataflows are rendered.
     pub dataflow_parameters: DataflowParameters,
+}
+
+/// Extra context for a storage instance.
+/// This is extra information that is used when rendering source
+/// and sinks that is not tied to the source/connection configuration itself.
+#[derive(Clone)]
+pub struct StorageInstanceContext {
+    /// A directory that can be used for scratch work.
+    pub scratch_directory: Option<PathBuf>,
+    /// A global `rocksdb::Env`, shared across ALL instances of `RocksDB` (even
+    /// across sources!). This `Env` lets us control some resources (like background threads)
+    /// process-wide.
+    pub rocksdb_env: rocksdb::Env,
+}
+
+impl StorageInstanceContext {
+    /// Build a new `StorageInstanceContext`.
+    pub async fn new(scratch_directory: Option<PathBuf>) -> Result<Self, anyhow::Error> {
+        if let Some(scratch_directory) = &scratch_directory {
+            tokio::fs::create_dir_all(scratch_directory)
+                .await
+                .with_context(|| {
+                    format!(
+                        "creating scratch directory: {}",
+                        scratch_directory.display()
+                    )
+                })?;
+        }
+        Ok(Self {
+            scratch_directory,
+            rocksdb_env: rocksdb::Env::new()?,
+        })
+    }
+
+    /// Constructs a new connection context for usage in tests.
+    pub fn for_tests(rocksdb_env: rocksdb::Env) -> Self {
+        Self {
+            scratch_directory: None,
+            rocksdb_env,
+        }
+    }
 }
 
 /// This maintains an additional read hold on the source data for a sink, alongside
@@ -1088,9 +1130,8 @@ impl StorageState {
                 if worker_index == 0 {
                     internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration(
                         DataflowParameters {
-                            enable_multi_worker_storage_persist_sink: params
-                                .enable_multi_worker_storage_persist_sink,
                             pg_replication_timeouts: params.pg_replication_timeouts,
+                            upsert_rocksdb_tuning_config: params.upsert_rocksdb_tuning_config,
                         },
                     ))
                 }

@@ -231,6 +231,7 @@ mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_introspection=UC/mz_system
 mz_system         mz_system=UC/mz_system
+mz_system         mz_introspection=U/mz_system
 
 ### The materialize privilege comes from the views created above
 query T

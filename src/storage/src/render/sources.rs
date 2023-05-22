@@ -16,20 +16,20 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
-use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{self, Exchange, OkErr};
-use timely::dataflow::scopes::{Child, Scope};
-use timely::dataflow::Stream;
-use timely::progress::{Antichain, Timestamp as _};
-
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
 };
-use mz_storage_client::types::sources::{encoding::*, *};
+use mz_storage_client::types::sources::encoding::*;
+use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;
+use serde::{Deserialize, Serialize};
+use timely::dataflow::operators::{self, Exchange, OkErr};
+use timely::dataflow::scopes::{Child, Scope};
+use timely::dataflow::Stream;
+use timely::progress::{Antichain, Timestamp as _};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::render::upsert::UpsertKey;
@@ -392,6 +392,7 @@ where
                         previous_token,
                         base_source_config,
                         &storage_state.instance_context,
+                        &storage_state.dataflow_parameters,
                     );
 
                     let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);

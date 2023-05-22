@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -19,14 +20,10 @@ use axum::Json;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
-use serde::{Deserialize, Serialize};
-use tokio::time;
-use tracing::warn;
-use tungstenite::protocol::frame::coding::CloseCode;
-
 use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
 use mz_adapter::{
-    AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient,
+    AdapterError, AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary,
+    SessionClient,
 };
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::ToJson;
@@ -36,10 +33,13 @@ use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::plan::Plan;
+use serde::{Deserialize, Serialize};
+use tokio::time;
+use tokio_postgres::error::SqlState;
+use tracing::warn;
+use tungstenite::protocol::frame::coding::CloseCode;
 
-use crate::http::{AuthedClient, MAX_REQUEST_SIZE};
-
-use super::{init_ws, WsState};
+use crate::http::{init_ws, AuthedClient, WsState, MAX_REQUEST_SIZE};
 
 pub async fn handle_sql(
     mut client: AuthedClient,
@@ -88,12 +88,17 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         Ok(client) => client,
         Err(e) => {
             // We omit most detail from the error message we send to the client, to
-            // avoid giving attackers unnecessary information.
-            warn!("WS request failed authentication: {}", e);
+            // avoid giving attackers unnecessary information during auth. AdapterErrors
+            // are safe to return because they're generated after authentication.
+            warn!("WS request failed init: {}", e);
+            let reason = match e.downcast_ref::<AdapterError>() {
+                Some(error) => Cow::Owned(error.to_string()),
+                None => "unauthorized".into(),
+            };
             let _ = ws
                 .send(Message::Close(Some(CloseFrame {
                     code: CloseCode::Protocol.into(),
-                    reason: "unauthorized".into(),
+                    reason,
                 })))
                 .await;
             return;
@@ -104,14 +109,14 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
     let _ = ws
         .send(Message::Text(
             serde_json::to_string(&WebSocketResponse::ReadyForQuery(
-                client.0.session().transaction_code().into(),
+                client.client.session().transaction_code().into(),
             ))
             .expect("must serialize"),
         ))
         .await;
 
     // Send any notices that might have been generated on startup.
-    let notices = client.0.session().drain_notices();
+    let notices = client.client.session().drain_notices();
     if let Err(err) = forward_notices(&mut ws, notices).await {
         tracing::error!("failed to forward notices to WebSocket, {err:?}");
         return;
@@ -144,7 +149,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         // Figure out if we need to send an error, any notices, but always the ready message.
         let err = match run_ws_request(req, &mut client, &mut ws).await {
             Ok(()) => None,
-            Err(err) => Some(WebSocketResponse::Error(err.to_string())),
+            Err(err) => Some(WebSocketResponse::Error(err.into())),
         };
 
         // After running our request, there are several messages we need to send in a
@@ -160,12 +165,12 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
             }
 
             // Then forward along any notices we generated.
-            let notices = client.0.session().drain_notices();
+            let notices = client.client.session().drain_notices();
             forward_notices(&mut ws, notices).await?;
 
             // Finally, respond that we're ready for the next query.
             let ready =
-                WebSocketResponse::ReadyForQuery(client.0.session().transaction_code().into());
+                WebSocketResponse::ReadyForQuery(client.client.session().transaction_code().into());
             send_ws_response(&mut ws, ready).await?;
 
             Ok::<_, anyhow::Error>(())
@@ -210,6 +215,8 @@ async fn forward_notices(
             severity: Severity::for_adapter_notice(&notice)
                 .as_str()
                 .to_lowercase(),
+            detail: notice.detail(),
+            hint: notice.hint(),
         })
     });
 
@@ -293,8 +300,7 @@ pub enum SqlResult {
     },
     /// The query returned an error.
     Err {
-        /// The error message.
-        error: String,
+        error: SqlError,
         // Any notices generated during execution of the query.
         notices: Vec<Notice>,
     },
@@ -315,9 +321,9 @@ impl SqlResult {
         }
     }
 
-    fn err(client: &mut SessionClient, msg: impl std::fmt::Display) -> SqlResult {
+    fn err(client: &mut SessionClient, error: impl Into<SqlError>) -> SqlResult {
         SqlResult::Err {
-            error: msg.to_string(),
+            error: error.into(),
             notices: make_notices(client),
         }
     }
@@ -331,6 +337,51 @@ impl SqlResult {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct SqlError {
+    pub message: String,
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+impl From<AdapterError> for SqlError {
+    fn from(err: AdapterError) -> Self {
+        SqlError {
+            message: err.to_string(),
+            // TODO: Move codes out of pgwire so they can be shared here.
+            code: SqlState::INTERNAL_ERROR.code().to_string(),
+            detail: err.detail(),
+            hint: err.hint(),
+        }
+    }
+}
+
+impl From<String> for SqlError {
+    fn from(message: String) -> Self {
+        SqlError {
+            message,
+            code: SqlState::INTERNAL_ERROR.code().to_string(),
+            detail: None,
+            hint: None,
+        }
+    }
+}
+
+impl From<&str> for SqlError {
+    fn from(value: &str) -> Self {
+        SqlError::from(value.to_string())
+    }
+}
+
+impl From<anyhow::Error> for SqlError {
+    fn from(value: anyhow::Error) -> Self {
+        SqlError::from(value.to_string())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum WebSocketResponse {
     ReadyForQuery(String),
@@ -338,13 +389,17 @@ pub enum WebSocketResponse {
     Rows(Vec<String>),
     Row(Vec<serde_json::Value>),
     CommandComplete(String),
-    Error(String),
+    Error(SqlError),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Notice {
     message: String,
     severity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 impl Notice {
@@ -469,7 +524,7 @@ impl ResultSender for WebSocket {
                             }
                         }
                         Some(PeekResponseUnary::Error(err)) => {
-                            break (true, vec![WebSocketResponse::Error(err)])
+                            break (true, vec![WebSocketResponse::Error(err.into())])
                         }
                         Some(PeekResponseUnary::Canceled) => {
                             break (
@@ -581,7 +636,7 @@ async fn execute_request<S: ResultSender>(
     request: SqlRequest,
     sender: &mut S,
 ) -> Result<(), anyhow::Error> {
-    let client = &mut client.0;
+    let client = &mut client.client;
 
     // This API prohibits executing statements with responses whose
     // semantics are at odds with an HTTP response.
@@ -760,7 +815,10 @@ async fn execute_stmt<S: ResultSender>(
         .map(|portal| portal.desc.clone())
         .expect("unnamed portal should be present");
 
-    let res = match client.execute(EMPTY_PORTAL.into()).await {
+    let res = match client
+        .execute(EMPTY_PORTAL.into(), futures::future::pending())
+        .await
+    {
         Ok(res) => res,
         Err(e) => {
             return Ok(SqlResult::err(client, e).into());
@@ -867,6 +925,8 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
             severity: Severity::for_adapter_notice(&notice)
                 .as_str()
                 .to_lowercase(),
+            detail: notice.detail(),
+            hint: notice.hint(),
         })
         .collect()
 }

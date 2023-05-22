@@ -10,14 +10,12 @@
 //! Types related to storage instances.
 
 use std::fmt;
-use std::path::PathBuf;
 use std::str::FromStr;
 
-use anyhow::{bail, Context, Error};
+use anyhow::bail;
+use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -95,38 +93,6 @@ impl RustType<ProtoStorageInstanceId> for StorageInstanceId {
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageInstanceId::kind",
             )),
-        }
-    }
-}
-
-/// Extra context for a storage instance.
-/// This is extra information that is used when rendering source
-/// and sinks that is not tied to the source/connection configuration itself.
-#[derive(Debug, Clone)]
-pub struct StorageInstanceContext {
-    /// A directory that can be used for scratch work.
-    pub scratch_directory: Option<PathBuf>,
-}
-
-impl StorageInstanceContext {
-    pub async fn new(scratch_directory: Option<PathBuf>) -> Result<StorageInstanceContext, Error> {
-        if let Some(scratch_directory) = &scratch_directory {
-            tokio::fs::create_dir_all(scratch_directory)
-                .await
-                .with_context(|| {
-                    format!(
-                        "creating scratch directory: {}",
-                        scratch_directory.display()
-                    )
-                })?;
-        }
-        Ok(Self { scratch_directory })
-    }
-
-    /// Constructs a new connection context for usage in tests.
-    pub fn for_tests() -> StorageInstanceContext {
-        Self {
-            scratch_directory: None,
         }
     }
 }

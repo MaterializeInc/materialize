@@ -42,6 +42,7 @@ use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
 };
+use crate::session::vars;
 use crate::{normalize, plan};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -338,7 +339,7 @@ pub fn plan_explain(
     let config = ExplainConfig::try_from(config_flags)?;
 
     if config.mfp_pushdown {
-        scx.require_unsafe_mode("`mfp_pushdown` explain flag")?;
+        scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
     }
 
     let format = match format {
@@ -529,7 +530,7 @@ pub fn plan_subscribe(
     let output = match output {
         SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
         SubscribeOutput::EnvelopeUpsert { key_columns } => {
-            scx.require_envelope_upsert_in_subscribe()?;
+            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_UPSERT_IN_SUBSCRIBE)?;
             let order_by = key_columns
                 .iter()
                 .map(|ident| OrderByExpr {
@@ -554,7 +555,7 @@ pub fn plan_subscribe(
             }
         }
         SubscribeOutput::EnvelopeDebezium { key_columns } => {
-            scx.require_envelope_debezium_in_subscribe()?;
+            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)?;
             let order_by = key_columns
                 .iter()
                 .map(|ident| OrderByExpr {
@@ -579,7 +580,7 @@ pub fn plan_subscribe(
             }
         }
         SubscribeOutput::WithinTimestampOrderBy { order_by } => {
-            scx.require_within_timestamp_order_by_in_subscribe()?;
+            scx.require_feature_flag(&vars::ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)?;
             let mz_diff = "mz_diff".into();
             let output_columns = std::iter::once((0, &mz_diff))
                 .chain(output_columns.into_iter().map(|(i, c)| (i + 1, c)))

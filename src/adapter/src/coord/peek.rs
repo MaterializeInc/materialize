@@ -17,11 +17,6 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use futures::TryFutureExt;
-use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp;
-use tokio::sync::oneshot;
-use uuid::Uuid;
-
 use mz_compute_client::controller::{ComputeInstanceId, ReplicaId};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_client::types::dataflows::DataflowDescription;
@@ -30,19 +25,21 @@ use mz_expr::{
     EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::cast::CastFrom;
-use mz_ore::str::StrExt;
-use mz_ore::str::{separated, Indent};
+use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, Indices};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
+use serde::{Deserialize, Serialize};
+use timely::progress::Timestamp;
+use tokio::sync::oneshot;
+use uuid::Uuid;
 
 use crate::client::ConnectionId;
+use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::util::{send_immediate_rows, ResultExt};
 use crate::AdapterError;
-
-use super::id_bundle::CollectionIdBundle;
 
 #[derive(Debug)]
 pub(crate) struct PendingPeek {
@@ -572,7 +569,8 @@ fn consolidate_constant_updates(rows: Vec<(Row, Diff)>) -> Vec<(Row, Diff)> {
 
 #[cfg(test)]
 mod tests {
-    use mz_expr::{func::IsNull, MapFilterProject, UnaryFunc};
+    use mz_expr::func::IsNull;
+    use mz_expr::{MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;
     use mz_repr::explain::text::text_string_at;
     use mz_repr::explain::{DummyHumanizer, RenderingContext};

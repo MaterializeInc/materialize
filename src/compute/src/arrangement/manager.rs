@@ -16,15 +16,14 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::trace::TraceReader;
-use prometheus::core::{AtomicF64, AtomicU64};
-use timely::progress::frontier::{Antichain, AntichainRef};
-
 use mz_ore::metric;
 use mz_ore::metrics::{
     CounterVec, CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt,
     MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::{GlobalId, Timestamp};
+use prometheus::core::{AtomicF64, AtomicU64};
+use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::typedefs::{ErrsHandle, KeysValsHandle};
 

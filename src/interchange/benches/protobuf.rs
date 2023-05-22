@@ -74,10 +74,9 @@
 // END LINT CONFIG
 
 use criterion::{black_box, Criterion, Throughput};
-use prost::Message;
-
 use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
 use mz_ore::cast::CastFrom;
+use prost::Message;
 
 use self::gen::benchmark::{Connector, Record, Value};
 

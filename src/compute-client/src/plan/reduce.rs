@@ -62,19 +62,15 @@
 
 use std::collections::BTreeMap;
 
+use mz_expr::{permutation_for_arrangement, AggregateExpr, AggregateFunc, MirScalarExpr};
+use mz_ore::soft_assert_or_log;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_expr::permutation_for_arrangement;
-use mz_expr::AggregateExpr;
-use mz_expr::AggregateFunc;
-use mz_expr::MirScalarExpr;
-use mz_ore::soft_assert_or_log;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-
-use super::{bucketing_of_expected_group_size, AvailableCollections};
+use crate::plan::{bucketing_of_expected_group_size, AvailableCollections};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -943,9 +939,10 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
 
     // This test causes stack overflows if not run with --release,
     // ignore by default.

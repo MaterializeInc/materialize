@@ -23,9 +23,8 @@
 //!
 
 use bytes::{Buf, Bytes};
-use smallvec::SmallVec;
-
 use internal::SegmentedReader;
+use smallvec::SmallVec;
 
 /// A cheaply clonable collection of possibly non-contiguous bytes.
 ///
@@ -195,10 +194,11 @@ impl<const N: usize> FromIterator<Vec<u8>> for SegmentedBytes<N> {
 }
 
 mod internal {
-    use bytes::Bytes;
     use std::collections::BTreeMap;
     use std::io;
     use std::ops::Bound;
+
+    use bytes::Bytes;
 
     use crate::cast::CastFrom;
 
@@ -313,9 +313,10 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Seek, SeekFrom};
+
     use bytes::{Buf, Bytes};
     use proptest::prelude::*;
-    use std::io::{Read, Seek, SeekFrom};
 
     use super::SegmentedBytes;
 

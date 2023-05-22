@@ -11,15 +11,14 @@
 
 use std::fmt::Debug;
 
+use mz_persist_client::ShardId;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{GlobalId, RelationDesc};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
-
-use mz_persist_client::ShardId;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationDesc};
 
 use crate::controller::CollectionMetadata;
 use crate::types::connections::{CsrConnection, KafkaConnection};

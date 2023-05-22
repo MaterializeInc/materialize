@@ -15,16 +15,15 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-
 use mz_expr::func;
 use mz_ore::collections::CollectionExt;
 use mz_pgrepr::oid;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
+use once_cell::sync::Lazy;
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
-use crate::names::{self, PartialItemName};
+use crate::names::{self, ResolvedItemName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
@@ -34,12 +33,13 @@ use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
+use crate::session::vars;
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
 pub enum FuncSpec<'a> {
     /// A function name.
-    Func(&'a PartialItemName),
+    Func(&'a ResolvedItemName),
     /// An operator name.
     Op(&'a str),
 }
@@ -396,7 +396,7 @@ fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
 // aliased if needed.
 fn sql_impl_table_func_inner(
     sql: &'static str,
-    unsafe_mode: Option<&'static str>,
+    feature_flag: Option<&'static vars::FeatureFlag>,
 ) -> Operation<TableFuncPlan> {
     let query = match mz_sql_parser::parser::parse_statements(sql)
         .expect("static function definition failed to parse")
@@ -426,8 +426,8 @@ fn sql_impl_table_func_inner(
     };
 
     Operation::variadic(move |ecx, args| {
-        if let Some(feature_name) = unsafe_mode {
-            ecx.require_unsafe_mode(feature_name)?;
+        if let Some(feature_flag) = feature_flag {
+            ecx.require_feature_flag(feature_flag)?;
         }
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
         let (mut expr, scope) = invoke(ecx.qcx, types)?;
@@ -444,7 +444,7 @@ fn sql_impl_table_func(sql: &'static str) -> Operation<TableFuncPlan> {
 }
 
 fn experimental_sql_impl_table_func(
-    feature: &'static str,
+    feature: &'static vars::FeatureFlag,
     sql: &'static str,
 ) -> Operation<TableFuncPlan> {
     sql_impl_table_func_inner(sql, Some(feature))
@@ -961,9 +961,13 @@ where
         if candidates == 0 {
             match spec {
                 FuncSpec::Func(name) => PlanError::UnknownFunction {
-                    name: name.to_string(),
+                    name: ecx
+                        .qcx
+                        .scx
+                        .humanize_resolved_name(name)
+                        .expect("resolved to object")
+                        .to_string(),
                     arg_types,
-                    alternative_hint: None,
                 },
                 FuncSpec::Op(name) => PlanError::UnknownOperator {
                     name: name.to_string(),
@@ -973,7 +977,12 @@ where
         } else {
             match spec {
                 FuncSpec::Func(name) => PlanError::IndistinctFunction {
-                    name: name.to_string(),
+                    name: ecx
+                        .qcx
+                        .scx
+                        .humanize_resolved_name(name)
+                        .expect("resolved to object")
+                        .to_string(),
                     arg_types,
                 },
                 FuncSpec::Op(name) => PlanError::IndistinctOperator {
@@ -1786,6 +1795,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 current_settings(name, missing_ok)
             }) => ScalarType::String, 3294;
         },
+        "current_timestamp" => Scalar {
+            params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, oid::FUNC_CURRENT_TIMESTAMP_OID;
+        },
         "current_user" => Scalar {
             params!() => UnmaterializableFunc::CurrentUser => String, 745;
         },
@@ -1802,11 +1814,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "date_bin" => Scalar {
             params!(Interval, Timestamp) => Operation::binary(|ecx, stride, source| {
-                ecx.require_unsafe_mode("binary date_bin")?;
+                ecx.require_feature_flag(&vars::ENABLE_BINARY_DATE_BIN)?;
                 Ok(stride.call_binary(source, BinaryFunc::DateBinTimestamp))
             }) => Timestamp, oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TS_OID;
             params!(Interval, TimestampTz) => Operation::binary(|ecx, stride, source| {
-                ecx.require_unsafe_mode("binary date_bin")?;
+                ecx.require_feature_flag(&vars::ENABLE_BINARY_DATE_BIN)?;
                 Ok(stride.call_binary(source, BinaryFunc::DateBinTimestampTz))
             }) => TimestampTz, oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TSTZ_OID;
             params!(Interval, Timestamp, Timestamp) => VariadicFunc::DateBinTimestamp => Timestamp, 6177;
@@ -2811,28 +2823,28 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         // equally valid windows we could generate.
         "date_bin_hopping" => Table {
             // (hop, width, timestamp)
-            params!(Interval, Interval, Timestamp) => experimental_sql_impl_table_func("date_bin_hopping", "
+            params!(Interval, Interval, Timestamp) => experimental_sql_impl_table_func(&vars::ENABLE_DATE_BIN_HOPPING, "
                     SELECT *
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, '1970-01-01') - $2, $3, $1
                     ) AS dbh(date_bin_hopping)
                 ") => ReturnType::set_of(Timestamp.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TS_OID;
             // (hop, width, timestamp)
-            params!(Interval, Interval, TimestampTz) => experimental_sql_impl_table_func("date_bin_hopping", "
+            params!(Interval, Interval, TimestampTz) => experimental_sql_impl_table_func(&vars::ENABLE_DATE_BIN_HOPPING, "
                     SELECT *
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, '1970-01-01') - $2, $3, $1
                     ) AS dbh(date_bin_hopping)
                 ") => ReturnType::set_of(TimestampTz.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_UNIX_EPOCH_TSTZ_OID;
             // (hop, width, timestamp, origin)
-            params!(Interval, Interval, Timestamp, Timestamp) => experimental_sql_impl_table_func("date_bin_hopping", "
+            params!(Interval, Interval, Timestamp, Timestamp) => experimental_sql_impl_table_func(&vars::ENABLE_DATE_BIN_HOPPING, "
                     SELECT *
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, $4) - $2, $3, $1
                     ) AS dbh(date_bin_hopping)
                 ") => ReturnType::set_of(Timestamp.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_TS_OID;
             // (hop, width, timestamp, origin)
-            params!(Interval, Interval, TimestampTz, TimestampTz) => experimental_sql_impl_table_func("date_bin_hopping", "
+            params!(Interval, Interval, TimestampTz, TimestampTz) => experimental_sql_impl_table_func(&vars::ENABLE_DATE_BIN_HOPPING, "
                     SELECT *
                     FROM pg_catalog.generate_series(
                         pg_catalog.date_bin($1, $3 + $1, $4) - $2, $3, $1
@@ -2891,9 +2903,6 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "concat_agg" => Aggregate {
             params!(Any) => Operation::unary(|_ecx, _e| bail_unsupported!("concat_agg")) => String, oid::FUNC_CONCAT_AGG_OID;
         },
-        "current_timestamp" => Scalar {
-            params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, oid::FUNC_CURRENT_TIMESTAMP_OID;
-        },
         "list_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
                 if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
@@ -2916,7 +2925,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "list_n_layers" => Scalar {
             vec![ListAny] => Operation::unary(|ecx, e| {
-                ecx.require_unsafe_mode("list_n_layers")?;
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_N_LAYERS)?;
                 let d = ecx.scalar_type(&e).unwrap_list_n_layers();
                 match i32::try_from(d) {
                     Ok(d) => Ok(HirScalarExpr::literal(Datum::Int32(d), ScalarType::Int32)),
@@ -2930,7 +2939,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "list_length_max" => Scalar {
             vec![ListAny, Plain(Int64)] => Operation::binary(|ecx, lhs, rhs| {
-                ecx.require_unsafe_mode("list_length_max")?;
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_LENGTH_MAX)?;
                 let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
             }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
@@ -2940,7 +2949,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "list_remove" => Scalar {
             vec![ListAnyCompatible, ListElementAnyCompatible] => Operation::binary(|ecx, lhs, rhs| {
-                ecx.require_unsafe_mode("list_remove")?;
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_REMOVE)?;
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListRemove))
             }) => ListAnyCompatible, oid::FUNC_LIST_REMOVE_OID;
         },
@@ -2988,7 +2997,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "repeat_row" => Table {
             params!(Int64) => Operation::unary(move |ecx, n| {
-                ecx.require_unsafe_mode("repeat_row")?;
+                ecx.require_feature_flag(&crate::session::vars::ENABLE_REPEAT_ROW)?;
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
                         func: TableFunc::Repeat,

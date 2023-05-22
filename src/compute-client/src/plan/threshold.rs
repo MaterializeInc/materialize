@@ -25,14 +25,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::plan::any_arranged_thin;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-
-use super::AvailableCollections;
+use crate::plan::{any_arranged_thin, AvailableCollections};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -178,9 +176,10 @@ impl ThresholdPlan {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
 
     proptest! {
        #[test]

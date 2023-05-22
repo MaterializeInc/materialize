@@ -9,12 +9,11 @@
 
 use std::collections::BTreeMap;
 
-use prometheus::core::AtomicI64;
-use tracing::debug;
-
 use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
+use prometheus::core::AtomicI64;
+use tracing::debug;
 
 use crate::source::metrics::SourceBaseMetrics;
 pub(super) struct KafkaPartitionMetrics {

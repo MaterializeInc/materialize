@@ -19,15 +19,13 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
-use mz_sql::plan::PlanKind;
-use tokio::sync::oneshot;
-use tokio::sync::watch;
-
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{FetchDirection, ObjectType, Raw, Statement};
-use mz_sql::plan::ExecuteTimeout;
+use mz_sql::plan::{ExecuteTimeout, PlanKind};
+use mz_sql::session::vars::Var;
+use tokio::sync::{oneshot, watch};
 
 use crate::client::ConnectionId;
 use crate::coord::peek::PeekResponseUnary;
@@ -85,7 +83,7 @@ pub enum Command {
 
     DumpCatalog {
         session: Session,
-        tx: oneshot::Sender<Response<String>>,
+        tx: oneshot::Sender<Response<CatalogDump>>,
     },
 
     CopyRows {
@@ -98,7 +96,7 @@ pub enum Command {
 
     GetSystemVars {
         session: Session,
-        tx: oneshot::Sender<Response<BTreeMap<String, String>>>,
+        tx: oneshot::Sender<Response<GetVariablesResponse>>,
     },
 
     SetSystemVars {
@@ -233,6 +231,56 @@ impl fmt::Display for StartupMessage {
                 write!(f, "session database {} does not exist", name.quoted())
             }
         }
+    }
+}
+
+/// The response to [`SessionClient::dump_catalog`](crate::SessionClient::dump_catalog).
+#[derive(Debug, Clone)]
+pub struct CatalogDump(String);
+
+impl CatalogDump {
+    pub fn new(raw: String) -> Self {
+        CatalogDump(raw)
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl Transmittable for CatalogDump {
+    type Allowed = bool;
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
+/// The response to [`SessionClient::get_system_vars`](crate::SessionClient::get_system_vars).
+#[derive(Debug, Clone)]
+pub struct GetVariablesResponse(BTreeMap<String, String>);
+
+impl GetVariablesResponse {
+    pub fn new<'a>(vars: impl Iterator<Item = &'a dyn Var>) -> Self {
+        GetVariablesResponse(
+            vars.map(|var| (var.name().to_string(), var.value()))
+                .collect(),
+        )
+    }
+}
+
+impl Transmittable for GetVariablesResponse {
+    type Allowed = bool;
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
+impl IntoIterator for GetVariablesResponse {
+    type Item = (String, String);
+    type IntoIter = std::collections::btree_map::IntoIter<String, String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 

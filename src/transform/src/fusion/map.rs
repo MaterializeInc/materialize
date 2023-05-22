@@ -19,9 +19,10 @@
 
 use std::mem;
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+
+use crate::TransformArgs;
 
 /// Fuses a sequence of `Map` operators in to one `Map` operator.
 #[derive(Debug)]

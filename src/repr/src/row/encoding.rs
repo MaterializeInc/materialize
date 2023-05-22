@@ -15,17 +15,16 @@ use bytes::BufMut;
 use chrono::Timelike;
 use dec::Decimal;
 use enum_dispatch::enum_dispatch;
+use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::{
     ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
 use mz_persist_types::part::{ColumnsMut, ColumnsRef, DynColumnRef};
 use mz_persist_types::stats::{AtomicBytesStats, BytesStats, DynStats, OptionStats, StatsFn};
 use mz_persist_types::Codec;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use prost::Message;
 use uuid::Uuid;
-
-use mz_ore::cast::CastFrom;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::jsonb::Jsonb;

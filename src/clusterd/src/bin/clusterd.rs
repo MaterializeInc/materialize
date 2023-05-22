@@ -81,9 +81,6 @@ use anyhow::Context;
 use axum::routing;
 use fail::FailScenario;
 use futures::future;
-use once_cell::sync::Lazy;
-use tracing::info;
-
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
@@ -101,9 +98,11 @@ use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::GrpcServer;
 use mz_service::secrets::SecretsReaderCliArgs;
+use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::instances::StorageInstanceContext;
+use once_cell::sync::Lazy;
+use tracing::info;
 
 const BUILD_INFO: BuildInfo = build_info!();
 

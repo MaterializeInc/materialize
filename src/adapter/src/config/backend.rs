@@ -9,9 +9,8 @@
 
 use std::collections::BTreeMap;
 
-use tracing::{debug, error};
-
 use mz_sql::session::user::SYSTEM_USER;
+use tracing::{debug, error};
 
 use crate::config::SynchronizedParameters;
 use crate::{AdapterError, Client, SessionClient};

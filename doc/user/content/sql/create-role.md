@@ -11,12 +11,7 @@ menu:
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
 
-{{< warning >}}
-Role-based access control (RBAC) is under development {{% gh 11579 %}}.
-Currently, no role attributes or privileges are considered when executing
-`CREATE ROLE` statements, but these attributes are saved and will be considered
-in a future release.
-{{< /warning >}}
+{{< alpha />}}
 
 ## Syntax
 

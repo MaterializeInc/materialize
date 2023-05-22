@@ -94,7 +94,8 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use chrono::NaiveDateTime;
-use mz_avro::{types::DecimalValue, types::Value, Schema};
+use mz_avro::types::{DecimalValue, Value};
+use mz_avro::Schema;
 use once_cell::sync::Lazy;
 
 static UNPARSEABLE_SCHEMAS: Lazy<Vec<&'static str>> = Lazy::new(|| {

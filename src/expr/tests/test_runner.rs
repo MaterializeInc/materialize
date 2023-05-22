@@ -82,7 +82,6 @@ mod test {
     use mz_ore::result::ResultExt;
     use mz_ore::str::separated;
     use mz_repr::{ColumnType, RelationType, RowArena};
-
     use serde::{Deserialize, Serialize};
 
     fn reduce(s: &str) -> Result<MirScalarExpr, String> {

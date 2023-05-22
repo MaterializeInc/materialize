@@ -7,37 +7,34 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use itertools::Itertools;
-use mz_repr::adt::date::DateError;
-use mz_repr::adt::timestamp::TimestampError;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use std::mem;
 use std::ops::BitOrAssign;
+use std::{fmt, mem};
 
+use itertools::Itertools;
+use mz_lowertest::MzReflect;
+use mz_ore::collections::CollectionExt;
+use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
-use mz_proto::IntoRustIfSome;
+use mz_ore::vec::swap_remove_multiple;
+use mz_pgrepr::TypeFromOidError;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::adt::array::InvalidArrayError;
+use mz_repr::adt::date::DateError;
+use mz_repr::adt::datetime::DateTimeUnits;
+use mz_repr::adt::range::InvalidRangeError;
+use mz_repr::adt::regex::Regex;
+use mz_repr::adt::timestamp::TimestampError;
+use mz_repr::strconv::{ParseError, ParseHexError};
+use mz_repr::{arb_datum, ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_lowertest::MzReflect;
-use mz_ore::collections::CollectionExt;
-use mz_ore::iter::IteratorExt;
-use mz_ore::vec::swap_remove_multiple;
-use mz_pgrepr::TypeFromOidError;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::array::InvalidArrayError;
-use mz_repr::adt::datetime::DateTimeUnits;
-use mz_repr::adt::range::InvalidRangeError;
-use mz_repr::adt::regex::Regex;
-use mz_repr::arb_datum;
-use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
-
-use self::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
-use self::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
-use crate::scalar::func::parse_timezone;
+use crate::scalar::func::{
+    parse_timezone, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+};
+use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::scalar::proto_mir_scalar_expr::*;
 use crate::visit::{Visit, VisitChildren};
 
@@ -2700,8 +2697,9 @@ impl RustType<ProtoDims> for (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use super::*;
 
     #[test]
     fn test_reduce() {

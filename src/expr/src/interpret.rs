@@ -37,9 +37,10 @@ enum Monotonic {
 }
 
 fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
-    use crate::func::impls as funcs;
     use Monotonic::*;
     use UnaryFunc::*;
+
+    use crate::func::impls as funcs;
     match func {
         // Casts are generally monotonic.
         CastUint64ToNumeric(_)
@@ -994,10 +995,9 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
 #[cfg(test)]
 mod tests {
+    use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
     use proptest::prelude::*;
     use proptest::sample::{select, Index};
-
-    use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
 
     use crate::func::*;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};

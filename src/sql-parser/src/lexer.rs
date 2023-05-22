@@ -32,8 +32,7 @@
 //! ["Lexical Structure"]: https://www.postgresql.org/docs/current/sql-syntax-lexical.html
 //! [backend/parser/scan.l]: https://github.com/postgres/postgres/blob/90851d1d26f54ccb4d7b1bc49449138113d6ec83/src/backend/parser/scan.l
 
-use std::char;
-use std::fmt;
+use std::{char, fmt};
 
 use mz_ore::lex::LexBuf;
 use mz_ore::str::StrExt;

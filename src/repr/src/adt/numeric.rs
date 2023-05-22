@@ -17,13 +17,12 @@ use std::fmt;
 
 use anyhow::bail;
 use dec::{Context, Decimal};
-use once_cell::sync::Lazy;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.numeric.rs"));
 
@@ -765,9 +764,10 @@ impl DecimalLike for Numeric {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
 
     proptest! {
         #[test]

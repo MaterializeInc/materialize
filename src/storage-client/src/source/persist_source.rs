@@ -14,16 +14,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use timely::communication::Push;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::Bundle;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Capability, OkErr};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::scheduling::Activator;
-use tracing::error;
-
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
@@ -34,12 +24,20 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::stats::PersistSourceDataStats;
 use mz_repr::{
     ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationType,
     Row, RowArena, ScalarType, Timestamp,
 };
 use mz_timely_util::buffer::ConsolidateBuffer;
+use timely::communication::Push;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::Bundle;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::{Capability, OkErr};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
+use timely::scheduling::Activator;
+use tracing::error;
 
 use crate::controller::CollectionMetadata;
 use crate::types::errors::DataflowError;
@@ -156,7 +154,7 @@ where
         Arc::new(UnitSchema),
         move |stats| {
             if let Some(plan) = &filter_plan {
-                let stats = PersistSourceDataStatsImpl {
+                let stats = PersistSourceDataStats {
                     desc: &fake_desc,
                     stats,
                 };
@@ -173,7 +171,7 @@ where
 fn filter_may_match(
     relation_type: &RelationType,
     time_range: ResultSpec,
-    stats: PersistSourceDataStatsImpl,
+    stats: PersistSourceDataStats,
     plan: &MfpPlan,
 ) -> bool {
     let arena = RowArena::new();
@@ -382,7 +380,7 @@ impl PendingWork {
 }
 
 #[derive(Debug)]
-pub(crate) struct PersistSourceDataStatsImpl<'a> {
+pub(crate) struct PersistSourceDataStats<'a> {
     pub(crate) desc: &'a RelationDescHack,
     pub(crate) stats: &'a PartStats,
 }
@@ -401,7 +399,7 @@ fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> 
     }
 }
 
-impl PersistSourceDataStatsImpl<'_> {
+impl PersistSourceDataStats<'_> {
     fn json_spec(stats: &JsonStats) -> ResultSpec {
         match stats {
             JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
@@ -490,9 +488,7 @@ impl PersistSourceDataStatsImpl<'_> {
             _ => ResultSpec::anything(),
         }
     }
-}
 
-impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
     fn len(&self) -> Option<usize> {
         Some(self.stats.key.len)
     }
@@ -567,12 +563,97 @@ impl PersistSourceDataStats for PersistSourceDataStatsImpl<'_> {
         let stats = self.stats.key.cols.get(name.as_str());
         typ.to_persist(ColNullCount(stats?.as_ref()))
     }
+}
 
-    fn row_min(&self, _row: &mut Row) -> Option<usize> {
-        None
+#[cfg(test)]
+mod tests {
+    use mz_persist_client::stats::PartStats;
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_persist_types::columnar::{PartEncoder, Schema};
+    use mz_persist_types::part::PartBuilder;
+    use mz_repr::{
+        ColumnType, Datum, DatumToPersist, DatumToPersistFn, RelationDesc, Row, RowArena,
+        ScalarType,
+    };
+    use proptest::prelude::*;
+
+    use crate::source::persist_source::PersistSourceDataStats;
+    use crate::types::sources::{RelationDescHack, SourceData};
+
+    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
+        struct ValidateStatsSome<'a>(PersistSourceDataStats<'a>, &'a RowArena, Datum<'a>);
+        impl<'a> DatumToPersistFn<()> for ValidateStatsSome<'a> {
+            fn call<T: DatumToPersist>(self) -> () {
+                let ValidateStatsSome(stats, arena, datum) = self;
+                if let Some(lower) = stats.col_min(0, arena) {
+                    assert!(lower <= datum, "{} vs {} stats={:?}", lower, datum, stats);
+                }
+                if let Some(upper) = stats.col_max(0, arena) {
+                    assert!(upper >= datum, "{} vs {}", upper, datum);
+                }
+                assert_eq!(stats.col_null_count(0), Some(0));
+            }
+        }
+
+        struct ValidateStatsNone<'a>(PersistSourceDataStats<'a>, &'a RowArena);
+        impl<'a> DatumToPersistFn<()> for ValidateStatsNone<'a> {
+            fn call<T: DatumToPersist>(self) -> () {
+                let ValidateStatsNone(stats, arena) = self;
+                assert_eq!(stats.col_min(0, arena), None);
+                assert_eq!(stats.col_max(0, arena), None);
+                assert_eq!(stats.col_null_count(0), Some(1));
+            }
+        }
+
+        fn validate_stats(column_type: &ColumnType, datum: Datum<'_>) -> Result<(), String> {
+            let schema = RelationDesc::empty().with_column("col", column_type.clone());
+            let row = SourceData(Ok(Row::pack(std::iter::once(datum))));
+
+            let mut part = PartBuilder::new::<SourceData, _, _, _>(&schema, &UnitSchema);
+            {
+                let part_mut = part.get_mut();
+                <RelationDesc as Schema<SourceData>>::encoder(&schema, part_mut.key)?.encode(&row);
+                part_mut.ts.push(1);
+                part_mut.diff.push(1);
+            }
+            let part = part.finish()?;
+            let stats = part.key_stats::<SourceData, _>(&schema)?;
+
+            let schema_hack = RelationDescHack::new(&schema);
+            let stats = PersistSourceDataStats {
+                stats: &PartStats { key: stats },
+                desc: &schema_hack,
+            };
+            let arena = RowArena::default();
+            if datum.is_null() {
+                column_type.to_persist(ValidateStatsNone(stats, &arena));
+            } else {
+                column_type.to_persist(ValidateStatsSome(stats, &arena, datum));
+            }
+            Ok(())
+        }
+
+        // Non-nullable version of the column.
+        let column_type = scalar_type.clone().nullable(false);
+        for datum in scalar_type.interesting_datums() {
+            assert_eq!(validate_stats(&column_type, datum), Ok(()));
+        }
+
+        // Nullable version of the column.
+        let column_type = scalar_type.clone().nullable(true);
+        for datum in scalar_type.interesting_datums() {
+            assert_eq!(validate_stats(&column_type, datum), Ok(()));
+        }
+        assert_eq!(validate_stats(&column_type, Datum::Null), Ok(()));
     }
 
-    fn row_max(&self, _row: &mut Row) -> Option<usize> {
-        None
+    #[test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn all_scalar_types_stats_roundtrip() {
+        mz_ore::test::init_logging();
+        proptest!(|(scalar_type in any::<ScalarType>())| {
+            // The proptest! macro interferes with rustfmt.
+            scalar_type_stats_roundtrip(scalar_type)
+        });
     }
 }

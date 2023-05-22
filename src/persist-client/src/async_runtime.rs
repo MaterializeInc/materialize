@@ -11,10 +11,9 @@
 
 use std::future::Future;
 
+use mz_ore::task::RuntimeExt;
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::JoinHandle;
-
-use mz_ore::task::RuntimeExt;
 
 /// A runtime for running CPU-heavy asynchronous tasks.
 #[derive(Debug)]

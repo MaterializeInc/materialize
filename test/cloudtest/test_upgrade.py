@@ -19,16 +19,17 @@ from materialize.checks.executors import CloudtestExecutor
 from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.application import MaterializeApplication
 from materialize.cloudtest.wait import wait
-from materialize.util import MzVersion, released_materialize_versions
+from materialize.util import MzVersion
+from materialize.version_list import VersionsFromDocs
 
-LAST_RELEASED_VERSION = str(released_materialize_versions()[0])
+LAST_RELEASED_VERSION = VersionsFromDocs().minor_versions()[-1]
 
 
 class CloudtestUpgrade(Scenario):
     """A Platform Checks scenario that performs an upgrade in cloudtest/K8s"""
 
     def base_version(self) -> MzVersion:
-        return MzVersion.parse_mz(LAST_RELEASED_VERSION)
+        return LAST_RELEASED_VERSION
 
     def actions(self) -> List[Action]:
         return [
@@ -44,7 +45,7 @@ class CloudtestUpgrade(Scenario):
 def test_upgrade(aws_region: Optional[str]) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
 
-    mz = MaterializeApplication(tag=LAST_RELEASED_VERSION, aws_region=aws_region)
+    mz = MaterializeApplication(tag=str(LAST_RELEASED_VERSION), aws_region=aws_region)
     wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
 
     executor = CloudtestExecutor(application=mz)

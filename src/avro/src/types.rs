@@ -467,8 +467,9 @@ impl Value {
 mod tests {
     use std::str::FromStr;
 
-    use super::*;
     use crate::Schema;
+
+    use super::*;
 
     #[test]
     fn validate() {

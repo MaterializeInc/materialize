@@ -73,14 +73,13 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+use std::collections::BTreeMap;
+use std::io::{BufReader, Write};
+use std::{env, fs};
+
 use anyhow::Context;
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
-
-use std::collections::BTreeMap;
-use std::env;
-use std::fs;
-use std::io::{BufReader, Write};
 
 /// The path of a protobuf file and its [`md5`] hash.
 ///
@@ -205,6 +204,7 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("ReplicaConfig.location", "#[derive(Eq, PartialOrd, Ord)]")
         .enum_attribute("AuditLogEventV1.details", "#[derive(Eq, PartialOrd, Ord)]")
         .enum_attribute("AuditLogKey.event", "#[derive(Eq, PartialOrd, Ord)]")
+        .enum_attribute("StorageUsageKey.usage", "#[derive(Eq, PartialOrd, Ord)]")
         .compile_protos(
             &paths,
             &[ /*

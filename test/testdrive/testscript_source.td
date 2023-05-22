@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 #
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_from_testscript = true
+
 # Basic test for `TEST SCRIPT` sources.
 
 # replace timestamps

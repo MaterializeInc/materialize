@@ -312,12 +312,13 @@ mod support {
 
 mod let_motion {
 
-    use itertools::izip;
     use std::collections::{BTreeMap, BTreeSet};
     use std::num::NonZeroU64;
 
-    use crate::normalize_lets::support::{map_to_3vecs, replace_bindings_from_map};
+    use itertools::izip;
     use mz_expr::{LocalId, MirRelationExpr};
+
+    use crate::normalize_lets::support::{map_to_3vecs, replace_bindings_from_map};
 
     /// Promotes all `Let` and `LetRec` nodes to the roots of their expressions.
     ///
@@ -492,12 +493,13 @@ mod let_motion {
 
 mod inlining {
 
-    use itertools::izip;
     use std::collections::BTreeMap;
     use std::num::NonZeroU64;
 
-    use crate::normalize_lets::support::replace_bindings_from_map;
+    use itertools::izip;
     use mz_expr::{Id, LocalId, MirRelationExpr};
+
+    use crate::normalize_lets::support::replace_bindings_from_map;
 
     pub(super) fn inline_lets(
         expr: &mut MirRelationExpr,

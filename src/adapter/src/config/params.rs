@@ -141,8 +141,9 @@ pub struct ModifiedParameter {
 
 #[cfg(test)]
 mod tests {
-    use super::SynchronizedParameters;
     use mz_sql::session::vars::SystemVars;
+
+    use super::SynchronizedParameters;
 
     #[test]
     fn test_github_18189() {

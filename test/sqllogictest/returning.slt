@@ -90,10 +90,10 @@ INSERT INTO t VALUES (7, 8) RETURNING 1/0
 statement error column "z" does not exist
 INSERT INTO t VALUES (7, 8) RETURNING z
 
-statement error aggregate functions are not allowed in RETURNING clause \(function count\)
+statement error db error: ERROR: aggregate functions are not allowed in RETURNING clause \(function pg_catalog\.count\)
 INSERT INTO t VALUES (7, 8) RETURNING count(*)
 
-statement error window functions are not allowed in RETURNING clause \(function row_number\)
+statement error db error: ERROR: window functions are not allowed in RETURNING clause \(function pg_catalog\.row_number\)
 INSERT INTO t VALUES (7, 8) RETURNING row_number()
 
 statement error RETURNING clause does not allow subqueries

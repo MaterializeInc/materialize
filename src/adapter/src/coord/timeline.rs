@@ -9,19 +9,13 @@
 
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
-use std::cmp;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::future::Future;
-use std::thread;
 use std::time::Duration;
+use std::{cmp, fmt, thread};
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::error;
-
 use mz_compute_client::controller::ComputeInstanceId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -30,16 +24,18 @@ use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_client::types::sources::Timeline;
+use once_cell::sync::Lazy;
+use timely::progress::Timestamp as TimelyTimestamp;
+use tracing::error;
 
 use crate::catalog::CatalogItem;
 use crate::client::ConnectionId;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
+use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::{timeline, Coordinator};
 use crate::util::ResultExt;
 use crate::AdapterError;
-
-use super::timestamp_selection::TimestampProvider;
 
 /// An enum describing the timeline context of a query.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]

@@ -81,12 +81,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use chrono::Utc;
-use time::Instant;
-use walkdir::WalkDir;
-
 use mz_ore::cli::{self, CliConfig};
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
+use time::Instant;
+use walkdir::WalkDir;
 
 /// Runs sqllogictest scripts to verify database engine correctness.
 #[derive(clap::Parser)]

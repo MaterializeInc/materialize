@@ -9,13 +9,18 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t (a int, b int)
 
 statement ok
 INSERT INTO t (a, b) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
 
-query error aggregate functions are not allowed in WHERE clause \(function sum\)
+query error aggregate functions are not allowed in WHERE clause \(function pg_catalog.sum\)
 SELECT a FROM t WHERE sum(b) = 3 GROUP BY a
 
 query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
@@ -223,7 +228,7 @@ SELECT avg(a) FROM t2
 
 # avg of an explicit NULL should return an error.
 
-query error db error: ERROR: function pg_catalog\.sum\(unknown\) is not unique
+query error db error: ERROR: function sum\(unknown\) is not unique
 SELECT avg(NULL)
 
 statement error
@@ -283,7 +288,7 @@ SELECT abs(1) FILTER (WHERE false)
 query error Expected end of statement, found left parenthesis
 SELECT column1 FILTER (WHERE column1 = 1) FROM (VALUES (1))
 
-query error aggregate functions are not allowed in FILTER \(function count\)
+query error db error: ERROR: aggregate functions are not allowed in FILTER \(function pg_catalog\.count\)
 SELECT v, count(*) FILTER (WHERE count(1) > 5) FROM filter_test GROUP BY v
 
 # These filter tests are Materialize-specific.

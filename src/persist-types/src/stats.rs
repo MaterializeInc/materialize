@@ -673,7 +673,7 @@ mod impls {
             let value =
                 BooleanArray::new(arrow2::datatypes::DataType::Boolean, value.clone(), None);
             let lower = arrow2::compute::aggregate::min_boolean(&value).unwrap_or_default();
-            let upper = arrow2::compute::aggregate::min_boolean(&value).unwrap_or_default();
+            let upper = arrow2::compute::aggregate::max_boolean(&value).unwrap_or_default();
             PrimitiveStats { lower, upper }
         }
     }
@@ -681,7 +681,7 @@ mod impls {
     impl From<&BooleanArray> for OptionStats<PrimitiveStats<bool>> {
         fn from(value: &BooleanArray) -> Self {
             let lower = arrow2::compute::aggregate::min_boolean(value).unwrap_or_default();
-            let upper = arrow2::compute::aggregate::min_boolean(value).unwrap_or_default();
+            let upper = arrow2::compute::aggregate::max_boolean(value).unwrap_or_default();
             let none = value.validity().map_or(0, |x| x.unset_bits());
             OptionStats {
                 none,

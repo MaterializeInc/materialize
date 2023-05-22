@@ -9,10 +9,9 @@
 
 //! Custom Protobuf types for the [`url`] crate.
 
+use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::Strategy;
 use url::Url;
-
-use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.url.rs"));
 
@@ -34,10 +33,10 @@ pub fn any_url() -> impl Strategy<Value = Url> {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     use super::*;
-    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]

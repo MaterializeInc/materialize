@@ -85,7 +85,10 @@ use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::future;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
+use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_pgrepr::{Numeric, Record};
 use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::error::SqlState;
 use postgres::types::Type;
@@ -93,10 +96,6 @@ use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
-
-use mz_ore::collections::CollectionExt;
-use mz_ore::task;
-use mz_pgrepr::{Numeric, Record};
 
 use crate::util::PostgresErrorExt;
 
@@ -554,10 +553,11 @@ fn test_record_types() {
     assert_eq!(rows.len(), 2);
 }
 
-fn pg_test_inner(dir: PathBuf) {
+fn pg_test_inner(dir: PathBuf, flags: &[&'static str]) {
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
         let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+        server.enable_feature_flags(flags);
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {
             tokio_postgres::config::Host::Tcp(host) => {
@@ -576,7 +576,7 @@ fn pg_test_inner(dir: PathBuf) {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_pgtest() {
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
-    pg_test_inner(dir);
+    pg_test_inner(dir, &[]);
 }
 
 #[test]
@@ -585,5 +585,11 @@ fn test_pgtest() {
 // Materialize's differences from Postgres' responses.
 fn test_pgtest_mz() {
     let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
-    pg_test_inner(dir);
+    pg_test_inner(
+        dir,
+        &[
+            "enable_raise_statement",
+            "enable_unmanaged_cluster_replicas",
+        ],
+    );
 }

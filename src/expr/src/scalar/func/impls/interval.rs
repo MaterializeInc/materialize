@@ -8,11 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use chrono::NaiveTime;
+use mz_repr::adt::interval::Interval;
+use mz_repr::strconv;
 use num::traits::CheckedNeg;
 
 use crate::EvalError;
-use mz_repr::adt::interval::Interval;
-use mz_repr::strconv;
 
 sqlfunc!(
     #[sqlname = "interval_to_text"]

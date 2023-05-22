@@ -259,8 +259,6 @@ regex: the following columns contain unsupported types:\npostgres\.public\.anoth
     "create"
   );
 
-$ set-regex match=\d+ replacement=<NUMBER>
-
 > SHOW SOURCES
 array_types_table     subsource <null>
 conflict_table        subsource <null>
@@ -268,7 +266,7 @@ create                subsource <null>
 escaped_text_table    subsource <null>
 large_text            subsource <null>
 multipart_pk          subsource <null>
-mz_source             postgres  <NUMBER>
+mz_source             postgres  ${arg.default-storage-size}
 mz_source_progress    subsource <null>
 no_replica_identity   subsource <null>
 nonpk_table           subsource <null>
@@ -279,11 +277,11 @@ trailing_space_nopk   subsource <null>
 trailing_space_pk     subsource <null>
 "\"literal_quotes\""  subsource <null>
 types_table           subsource <null>
-utf<NUMBER>_table     subsource <null>
+utf8_table            subsource <null>
 таблица               subsource <null>
 
-> SELECT * FROM mz_source_progress
-<NUMBER>
+> SELECT lsn > 0 FROM mz_source_progress
+true
 
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
@@ -642,14 +640,11 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
     public.another_enum_table
   );
 
-$ set-regex match=\d+ replacement=<NUMBER>
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 another_enum_table      subsource <null>
-enum_source             postgres  <NUMBER>
+enum_source             postgres  ${arg.default-storage-size}
 enum_source_progress    subsource <null>
 enum_table              subsource <null>
-
-$ unset-regex
 
 > SELECT * FROM enum_table
 var0
@@ -688,10 +683,8 @@ regex:Source error: .*: db error: ERROR: publication "mz_source" does not exist
     another_schema
   );
 
-$ set-regex match=\d+ replacement=<NUMBER>
-
 > SHOW SOURCES
-another_source          postgres  <NUMBER>
+another_source          postgres  ${arg.default-storage-size}
 another_source_progress subsource <null>
 another_table           subsource <null>
 

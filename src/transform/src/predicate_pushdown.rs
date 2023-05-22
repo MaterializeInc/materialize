@@ -80,7 +80,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
@@ -89,6 +88,8 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{ColumnType, Datum, ScalarType};
+
+use crate::{TransformArgs, TransformError};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
@@ -211,8 +212,7 @@ impl PredicatePushdown {
                             let mut pred_not_translated = Vec::new();
 
                             for mut predicate in predicates.drain(..) {
-                                use mz_expr::BinaryFunc;
-                                use mz_expr::UnaryFunc;
+                                use mz_expr::{BinaryFunc, UnaryFunc};
                                 if let MirScalarExpr::CallBinary {
                                     func: BinaryFunc::Eq,
                                     expr1,

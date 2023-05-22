@@ -69,7 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -78,12 +78,6 @@ use derivative::Derivative;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
-use tokio::runtime::Handle as TokioHandle;
-use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, span, warn, Instrument, Level};
-use uuid::Uuid;
-
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_client::controller::ComputeInstanceId;
@@ -109,6 +103,7 @@ use mz_sql::ast::{CreateSourceStatement, CreateSubsourceStatement, Raw, Statemen
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::Aug;
 use mz_sql::plan::{CopyFormat, Params, QueryWhen};
+use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
     CollectionDescription, CreateExportToken, DataSource, StorageError,
 };
@@ -116,6 +111,11 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::sinks::StorageSinkConnection;
 use mz_storage_client::types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_transform::Optimizer;
+use tokio::runtime::Handle as TokioHandle;
+use tokio::select;
+use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
+use tracing::{info, span, warn, Instrument, Level};
+use uuid::Uuid;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
@@ -415,6 +415,7 @@ pub struct Config {
     pub dataflow_client: mz_controller::Controller,
     pub storage: storage::Connection,
     pub unsafe_mode: bool,
+    pub all_features: bool,
     pub build_info: &'static BuildInfo,
     pub environment_id: EnvironmentId,
     pub metrics_registry: MetricsRegistry,
@@ -434,6 +435,7 @@ pub struct Config {
     pub system_parameter_frontend: Option<Arc<SystemParameterFrontend>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
+    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1446,6 +1448,7 @@ pub async fn serve(
         dataflow_client,
         storage,
         unsafe_mode,
+        all_features,
         build_info,
         environment_id,
         metrics_registry,
@@ -1465,6 +1468,7 @@ pub async fn serve(
         aws_account_id,
         aws_privatelink_availability_zones,
         system_parameter_frontend,
+        active_connection_count,
     }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
     info!("coordinator init: beginning");
@@ -1506,6 +1510,7 @@ pub async fn serve(
         Catalog::open(catalog::Config {
             storage,
             unsafe_mode,
+            all_features,
             build_info,
             environment_id,
             now: now.clone(),
@@ -1522,6 +1527,7 @@ pub async fn serve(
             system_parameter_frontend,
             storage_usage_retention_period,
             connection_context: Some(connection_context.clone()),
+            active_connection_count,
         })
         .await?;
     let session_id = catalog.config().session_id;

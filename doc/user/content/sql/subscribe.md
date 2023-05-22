@@ -36,8 +36,12 @@ You can use `SUBSCRIBE` to:
 | _object_name_                   | The name of the source, table, or view that you want to subscribe to.                                                                    |
 | _select_stmt_                   | The [`SELECT` statement](../select) whose output you want to subscribe to.
 | **ENVELOPE UPSERT**             | Use the upsert envelope, which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
-| **ENVELOPE DEBEZIUM**           | Use the debezium envelope, which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
+| **ENVELOPE DEBEZIUM**           | Use a [Debezium-style diff envelope](https://materialize.com/docs/sql/create-sink/#debezium-envelope), which takes a list of `KEY` columns and supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
 | **WITHIN TIMESTAMP...ORDER BY** | Use an `ORDER BY` clause to sort the subscription output within a timestamp. For more information, see [Modifying the output format](#modifying-the-output-format). |
+
+
+
+The generated schemas have a Debezium-style diff envelope to capture changes in the input view or source.
 
 ### `WITH` options
 
@@ -388,15 +392,18 @@ column. Each progress row will have a `NULL` key and a `NULL` value.
 
 #### `ENVELOPE DEBEZIUM`
 
-To modify the output of `SUBSCRIBE` to support debezium upserts, use `ENVELOPE DEBEZIUM`.
-This clause allows you to specify a `KEY` that Materialize uses to interpret
-the rows as a series of inserts, updates and deletes within each distinct
-timestamp. In the envelope we return the state of the values before and after this upsert.
+To modify the output of `SUBSCRIBE` to support upserts using a
+[Debezium-style diff envelope](https://materialize.com/docs/sql/create-sink/#debezium-envelope)
+, use`ENVELOPE DEBEZIUM`. This clause allows you to specify a `KEY` that
+Materialize uses to interpret the rows as a series of inserts, updates and
+deletes within each distinct timestamp. Unlike `ENVELOPE UPSERT`, the output
+includes the state of the row before and after the upsert operation.
 
 The output columns are reordered so that all the key columns come before the
-value columns. There are two copies of the value columns, the first is prefixed with
-`before_` and represents the value of the values before this upsert. The current values
-are all prefixed with `after_`.
+value columns. There are two copies of the value columns: one prefixed with
+`before_`, which represents the value of the columns before the upsert
+operation; and another prefixed with `after_`, which represents the current
+value of the columns.
 
 * Using this modifier, the output rows will have the following
 structure:
@@ -456,11 +463,11 @@ structure:
    ...
   ```
 
-* Like `ENVELOPE UPSERT`, only use `ENVELOPE DEBEZIUM` when there is at most one
-  live value per key. If materialize detects that a given key has multiple values,
-  it will generate an update with `mz_state` set to `"key_violation"`, the
-  problematic key, and all the values nulled out. Materialize is not guaranteed to
-  detect this case, please don't rely on it.
+* Like `ENVELOPE UPSERT`, using `ENVELOPE DEBEZIUM` requires that there is at
+  most one live value per key. If Materialize detects that a given key has
+  multiple values, it will generate an update with `mz_state` set to
+  `"key_violation"`, the problematic key, and all the values nulled out.
+  Materialize identifies key violations on a best-effort basis.
 
   _Key violation_
 
@@ -473,8 +480,9 @@ structure:
    ...
   ```
 
-* If [`PROGRESS`](#progress) is set, Materialize also returns the `mz_progressed`
-column. Each progress row will have a `NULL` key and a `NULL` befor and after value.
+* If [`PROGRESS`](#progress) is set, Materialize also returns the
+`mz_progressed` column. Each progress row will have a `NULL` key and a `NULL`
+before and after value.
 
 #### `WITHIN TIMESTAMP ORDER BY`
 

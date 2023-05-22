@@ -215,8 +215,9 @@ impl StashType for EpochMillis {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use proptest::prelude::*;
+
+    use super::*;
 
     proptest! {
         #[test]

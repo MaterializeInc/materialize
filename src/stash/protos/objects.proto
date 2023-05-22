@@ -151,12 +151,45 @@ message AuditLogKey {
     }
 }
 
+message StorageUsageKey {
+    message StorageUsageV1 {
+        uint64 id = 1;
+        StringWrapper shard_id = 2;
+        uint64 size_bytes = 3;
+        EpochMillis collection_timestamp = 4;
+    }
+
+    oneof usage {
+        StorageUsageV1 v1 = 1;
+    }
+}
+
+message SinkAsOf {
+    TimestampAntichain frontier = 1;
+    bool strict = 2;
+}
+
+message DurableCollectionMetadata {
+    ShardId remap_shard = 1;
+    ShardId data_shard = 2;
+}
+
+message DurableExportMetadata {
+    SinkAsOf initial_as_of = 1;
+}
+
 // ---- Common Types
 //
 // Note: Normally types like this would go in some sort of `common.proto` file, but we want to keep
 // our proto definitions in a single file to make snapshotting easier, hence them living here.
 
 message Empty { /* purposefully empty */ }
+
+// In protobuf a "None" string is the same thing as an empty string. To get the same semantics of
+// an `Option<String>` from Rust, we need to wrap a string in a message.
+message StringWrapper {
+    string inner = 1;
+}
 
 message Duration {
     uint64 secs = 1;
@@ -297,6 +330,13 @@ message MzAclItem {
     AclMode acl_mode = 3;
 }
 
+message TimestampAntichain {
+    repeated Timestamp elements = 1;
+}
+
+message ShardId {
+    bytes id = 1;
+}
 
 message AuditLogEventV1 {
     enum EventType {
@@ -311,12 +351,12 @@ message AuditLogEventV1 {
     enum ObjectType {
         OBJECT_TYPE_UNKNOWN = 0;
         OBJECT_TYPE_CLUSTER = 1;
-        OBJECT_TYPE_CLUSTERREPLICA = 2;
+        OBJECT_TYPE_CLUSTER_REPLICA = 2;
         OBJECT_TYPE_CONNECTION = 3;
         OBJECT_TYPE_DATABASE = 4;
         OBJECT_TYPE_FUNC = 5;
         OBJECT_TYPE_INDEX = 6;
-        OBJECT_TYPE_MATERIALIZEDVIEW = 7;
+        OBJECT_TYPE_MATERIALIZED_VIEW = 7;
         OBJECT_TYPE_ROLE = 8;
         OBJECT_TYPE_SECRET = 9;
         OBJECT_TYPE_SCHEMA = 10;
@@ -352,7 +392,7 @@ message AuditLogEventV1 {
     message CreateClusterReplicaV1 {
         string cluster_id = 1;
         string cluser_name = 2;
-        string replica_id = 3;
+        StringWrapper replica_id = 3;
         string replica_name = 4;
         string logical_size = 5;
     }
@@ -360,28 +400,28 @@ message AuditLogEventV1 {
     message DropClusterReplicaV1 {
         string cluster_id = 1;
         string cluster_name = 2;
-        string replica_id = 3;
-        string replice_name = 4;
+        StringWrapper replica_id = 3;
+        string replica_name = 4;
     }
 
     message CreateSourceSinkV1 {
         string id = 1;
         FullNameV1 name = 2;
-        string size = 3;
+        StringWrapper size = 3;
     }
 
     message CreateSourceSinkV2 {
         string id = 1;
         FullNameV1 name = 2;
-        string size = 3;
+        StringWrapper size = 3;
         string external_type = 4;
     }
 
     message AlterSourceSinkV1 {
         string id = 1;
         FullNameV1 name = 2;
-        string old_size = 3;
-        string new_size = 4;
+        StringWrapper old_size = 3;
+        StringWrapper new_size = 4;
     }
 
     message GrantRoleV1 {
@@ -418,17 +458,13 @@ message AuditLogEventV1 {
     message SchemaV2 {
         string id = 1;
         string name = 2;
-        string database_name = 3;
-    }
-
-    message User {
-        string value = 1;
+        StringWrapper database_name = 3;
     }
 
     uint64 id = 1;
     EventType event_type = 2;
     ObjectType object_type = 3;
-    User user = 4;
+    StringWrapper user = 4;
     EpochMillis occurred_at = 5;
     oneof details {
         CreateClusterReplicaV1 create_cluster_replica_v1 = 6;

@@ -21,22 +21,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail};
 use differential_dataflow::{AsCollection, Collection};
 use futures::{StreamExt, TryStreamExt};
-use once_cell::sync::Lazy;
-use postgres_protocol::message::backend::{
-    LogicalReplicationMessage, ReplicationMessage, TupleData,
-};
-use timely::dataflow::operators::to_stream::Event;
-use timely::dataflow::operators::Capability;
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio_postgres::error::DbError;
-use tokio_postgres::replication::LogicalReplicationStream;
-use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
-use tokio_postgres::SimpleQueryMessage;
-use tracing::{info, warn};
-
 use mz_expr::MirScalarExpr;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::TimeoutError;
@@ -50,9 +34,22 @@ use mz_storage_client::types::errors::SourceErrorDetails;
 use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use once_cell::sync::Lazy;
+use postgres_protocol::message::backend::{
+    LogicalReplicationMessage, ReplicationMessage, TupleData,
+};
+use timely::dataflow::operators::to_stream::Event;
+use timely::dataflow::operators::Capability;
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio_postgres::error::DbError;
+use tokio_postgres::replication::LogicalReplicationStream;
+use tokio_postgres::types::PgLsn;
+use tokio_postgres::{Client, SimpleQueryMessage};
+use tracing::{info, warn};
 
-use self::metrics::PgSourceMetrics;
-
+use crate::source::postgres::metrics::PgSourceMetrics;
 use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 

@@ -46,4 +46,4 @@ materialize_public_kafka_source  linked
   FROM mz_audit_events
   WHERE details->>'name' = 'materialize_public_kafka_source' OR details->>'cluster_name' = 'materialize_public_kafka_source'
 create  cluster          "{\"name\":\"materialize_public_kafka_source\"}"  ${expected-user}
-create  cluster-replica  "{\"cluster_name\":\"materialize_public_kafka_source\",\"logical_size\":\"4\",\"replica_name\":\"linked\"}"  ${expected-user}
+create  cluster-replica  "{\"cluster_name\":\"materialize_public_kafka_source\",\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}"  ${expected-user}
