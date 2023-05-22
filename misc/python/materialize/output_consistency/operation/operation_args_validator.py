@@ -37,10 +37,10 @@ class OperationArgsValidator:
         overlap = arg.characteristics & characteristics
         return len(overlap) > 0
 
-    def index_of_characteristic(
+    def index_of_characteristic_combination(
         self,
         args: List[Expression],
-        characteristic: ExpressionCharacteristics,
+        characteristic_combination: Set[ExpressionCharacteristics],
         skip_argument_indices: Optional[Set[int]] = None,
         skip_argument_fn: Callable[
             [Set[ExpressionCharacteristics], int], bool
@@ -56,7 +56,9 @@ class OperationArgsValidator:
             if skip_argument_fn(arg.characteristics, index):
                 continue
 
-            if characteristic in arg.characteristics:
+            if len(characteristic_combination & arg.characteristics) == len(
+                characteristic_combination
+            ):
                 return index
 
         return -1

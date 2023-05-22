@@ -32,16 +32,16 @@ class MultiParamValueGrowsArgsValidator(OperationArgsValidator):
 
     # error if one MAX_VALUE and a further NON_EMPTY value
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
-        index_of_max_value = self.index_of_characteristic(
-            args, ExpressionCharacteristics.MAX_VALUE
+        index_of_max_value = self.index_of_characteristic_combination(
+            args, {ExpressionCharacteristics.MAX_VALUE}
         )
 
         if index_of_max_value == -1:
             return False
 
-        index_of_further_inc_value = self.index_of_characteristic(
+        index_of_further_inc_value = self.index_of_characteristic_combination(
             args,
-            ExpressionCharacteristics.NON_EMPTY,
+            {ExpressionCharacteristics.NON_EMPTY},
             skip_argument_indices={index_of_max_value},
         )
 
