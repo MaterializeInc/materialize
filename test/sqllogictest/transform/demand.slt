@@ -9,15 +9,101 @@
 
 mode cockroach
 
-statement ok
-CREATE TABLE t (a int)
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
 
 statement ok
-INSERT INTO t (a) VALUES (1)
+CREATE TABLE t (a int);
+
+statement ok
+INSERT INTO t (a) VALUES (0), (1), (2), (3);
 
 # Test that demand analysis does not result in a 1/0 error for column
 # that is not demanded as a join output (column a from t).
+# The output should have NO errors.
 query I
-select x from (select x, 1/a from (select 2 as x), t)
+select x from (select x, 1/a from (select 2 as x), t);
 ----
 2
+2
+2
+2
+
+## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
+
+# Demand creates the `#0 + #0` from `#0 + #2`.
+
+query T multiline
+EXPLAIN WITH(arity, join_impls)
+WITH MUTUALLY RECURSIVE
+  c0(key int, a int) AS (
+    SELECT * FROM c2
+    UNION
+    SELECT a, a FROM t
+  ),
+  c1(key int, a int) AS (
+    SELECT key + 1, -a FROM c0
+  ),
+  c2(key int, a int) AS (
+    SELECT c0.key + c1.key, c0.a + c1.a
+    FROM c0, c1
+    WHERE c0.key = c1.key
+  )
+SELECT * FROM c2;
+----
+Explained Query:
+  Return // { arity: 2 }
+    Get l1 // { arity: 2 }
+  With Mutually Recursive
+    cte l1 =
+      Project (#4, #5) // { arity: 2 }
+        Map ((#0 + #0), (#1 + #3)) // { arity: 6 }
+          Join on=(#0 = #2) type=differential // { arity: 4 }
+            implementation
+              %0:l0[#0]K » %1:l0[#0]K
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Get l0 // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Project (#2, #3) // { arity: 2 }
+                Map ((#0 + 1), -(#1)) // { arity: 4 }
+                  Get l0 // { arity: 2 }
+    cte l0 =
+      Distinct group_by=[#0, #1] // { arity: 2 }
+        Union // { arity: 2 }
+          Filter (#0) IS NOT NULL // { arity: 2 }
+            Get l1 // { arity: 2 }
+          Project (#0, #0) // { arity: 2 }
+            Filter (#0) IS NOT NULL // { arity: 1 }
+              Get materialize.public.t // { arity: 1 }
+
+Source materialize.public.t
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+query II
+WITH MUTUALLY RECURSIVE
+  c0(key int, a int) AS (
+    SELECT * FROM c2
+    UNION
+    SELECT a, a FROM t
+  ),
+  c1(key int, a int) AS (
+    SELECT key + 1, -a FROM c0
+  ),
+  c2(key int, a int) AS (
+    SELECT c0.key + c1.key, c0.a + c1.a
+    FROM c0, c1
+    WHERE c0.key = c1.key
+  )
+SELECT * FROM c2;
+----
+2  1
+4  0
+4  1
+6  1
+6  2
+8  -3
+8  -2

@@ -81,15 +81,16 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Union // { arity: 4, keys: "()" }
-        Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
-          implementation
-            %1:y[#1]UK » %0[#1]K
-          ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
-            Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
-              Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
-                Get materialize.public.x // { arity: 2, keys: "()" }
-          ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
-            Get materialize.public.y // { arity: 2, keys: "([1])" }
+        Project (#0..=#2, #1) // { arity: 4, keys: "([0, 1])" }
+          Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
+            implementation
+              %1:y[#1]UK » %0[#1]K
+            ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
+              Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
+                Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
+                  Get materialize.public.x // { arity: 2, keys: "()" }
+            ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
+              Get materialize.public.y // { arity: 2, keys: "([1])" }
         Get l0 // { arity: 4, keys: "()" }
 
 Source materialize.public.x
@@ -121,15 +122,16 @@ Explained Query:
     cte l0 =
       Distinct group_by=[#0..=#3] // { arity: 4, keys: "([0, 1, 2, 3])" }
         Union // { arity: 4, keys: "()" }
-          Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
-            implementation
-              %1:y[#1]UK » %0[#1]K
-            ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
-              Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
-                Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
-                  Get materialize.public.x // { arity: 2, keys: "()" }
-            ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
-              Get materialize.public.y // { arity: 2, keys: "([1])" }
+          Project (#0..=#2, #1) // { arity: 4, keys: "([0, 1])" }
+            Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
+              implementation
+                %1:y[#1]UK » %0[#1]K
+              ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
+                Distinct group_by=[#0, #1] // { arity: 2, keys: "([0, 1])" }
+                  Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
+                    Get materialize.public.x // { arity: 2, keys: "()" }
+              ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
+                Get materialize.public.y // { arity: 2, keys: "([1])" }
           Distinct group_by=[#0..=#3] // { arity: 4, keys: "([0, 1, 2, 3])" }
             Get l0 // { arity: 4, keys: "()" }
 

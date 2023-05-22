@@ -9,6 +9,7 @@
 
 //! Transformation based on pushing demand information about columns toward sources.
 
+use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{
@@ -32,6 +33,22 @@ use crate::TransformArgs;
 /// not observed in its output. Internal arrangements need not maintain
 /// columns that are no longer required in the join pipeline, which are
 /// those columns not required by the output nor any further equalities.
+///
+/// Nowadays, this transform is mostly obsoleted by `ProjectionPushdown`.
+/// However, I know of one thing that it still does that `ProjectionPushdown`
+/// doesn't do (might possibly be more such things):
+/// if you have something like
+// ```
+//     Project (#0, #1)
+//       Join on=(#0 = #1)
+// ```
+// then this is turned into
+// ```
+//     Project (#0, #0)
+//       Join on=(#0 = #1)
+// ```
+// This can be beneficial for projecting out some columns earlier inside a complex join (by the LIR
+// planning), and then recovering them after the join (if needed) by duplicating existing columns.
 #[derive(Debug)]
 pub struct Demand {
     recursion_guard: RecursionGuard,
@@ -52,6 +69,10 @@ impl CheckedRecursion for Demand {
 }
 
 impl crate::Transform for Demand {
+    fn recursion_safe(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -106,15 +127,45 @@ impl Demand {
                     // and pushes the union of the requirements at its value.
                     let id = Id::Local(*id);
                     let prior = gets.insert(id, BTreeSet::new());
+                    assert!(prior.is_none()); // no shadowing
                     self.action(body, columns, gets)?;
-                    let needs = gets.remove(&id).unwrap();
+                    let needs = gets.remove(&id).expect("existing gets entry");
                     if let Some(prior) = prior {
                         gets.insert(id, prior);
                     }
 
                     self.action(value, needs, gets)
                 }
-                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    max_iters: _,
+                    body,
+                } => {
+                    let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values)?
+                        .iter()
+                        .map(|id| Id::Local(*id))
+                        .collect::<BTreeSet<_>>();
+                    let ids = ids.iter().map(|id| Id::Local(*id)).collect_vec();
+                    for id in ids.iter() {
+                        let prior = gets.insert(id.clone(), BTreeSet::new());
+                        assert!(prior.is_none()); // no shadowing
+                    }
+                    self.action(body, columns, gets)?;
+                    for (id, value) in ids.iter().rev().zip_eq(values.iter_mut().rev()) {
+                        let needs = if !ids_used_across_iterations.contains(id) {
+                            gets.remove(id).expect("existing gets entry")
+                        } else {
+                            // Remove, but ignore the collected needs
+                            gets.remove(id).expect("existing gets entry");
+                            // Instead of using `gets`, we'll say we need all columns for a
+                            // recursive id
+                            (0..value.arity()).collect::<BTreeSet<_>>()
+                        };
+                        self.action(value, needs, gets)?;
+                    }
+                    Ok(())
+                }
                 MirRelationExpr::Project { input, outputs } => self.action(
                     input,
                     columns.into_iter().map(|c| outputs[c]).collect(),
