@@ -2842,6 +2842,76 @@ where
     }
 }
 
+/// A `Var` with additional methods for mutating the value, as well as
+/// helpers that enable various operations in a `dyn` context.
+pub trait SessionVarMut: Var + Send + Sync {
+    /// Upcast to Var, for use with `dyn`.
+    fn as_var(&self) -> &dyn Var;
+
+    fn value_any(&self) -> &(dyn Any + 'static);
+
+    /// Parse the input and update the stored value to match.
+    fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError>;
+
+    /// Reset the stored value to the default.
+    fn reset(&mut self, local: bool);
+
+    fn end_transaction(&mut self, action: EndTransactionAction);
+}
+
+impl<V> SessionVarMut for SessionVar<V>
+where
+    V: Value + Debug + PartialEq + 'static,
+    V::Owned: Debug + Send + Sync + PartialEq,
+{
+    /// Upcast to Var, for use with `dyn`.
+    fn as_var(&self) -> &dyn Var {
+        self
+    }
+
+    fn value_any(&self) -> &(dyn Any + 'static) {
+        let value = SessionVar::value(self);
+        value
+    }
+
+    /// Parse the input and update the stored value to match.
+    fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
+        let mut v = V::parse(self, input)?;
+
+        V::canonicalize(&mut v);
+        self.check_constraints(&v)?;
+
+        if local {
+            self.local_value = Some(v);
+        } else {
+            self.local_value = None;
+            self.staged_value = Some(v);
+        }
+        Ok(())
+    }
+
+    /// Reset the stored value to the default.
+    fn reset(&mut self, local: bool) {
+        let value = self.default_value.to_owned();
+        if local {
+            self.local_value = Some(value);
+        } else {
+            self.local_value = None;
+            self.staged_value = Some(value);
+        }
+    }
+
+    fn end_transaction(&mut self, action: EndTransactionAction) {
+        self.local_value = None;
+        match action {
+            EndTransactionAction::Commit if self.staged_value.is_some() => {
+                self.session_value = self.staged_value.take()
+            }
+            _ => self.staged_value = None,
+        }
+    }
+}
+
 impl Var for BuildInfo {
     fn name(&self) -> &'static str {
         MZ_VERSION_NAME.as_str()
