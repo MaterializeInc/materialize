@@ -207,15 +207,15 @@ where
             })
     }
 
-    pub fn rollups_lte_seqno(&self, seqno: SeqNo) -> Vec<(SeqNo, PartialRollupKey)> {
+    pub fn earliest_rollup_lte_seqno(&self, seqno: SeqNo) -> Option<(SeqNo, PartialRollupKey)> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
                 state
                     .collections
                     .rollups
-                    .range(..=seqno)
+                    .first_key_value()
+                    .filter(|(earliest_rollup_seqno, _rollup)| **earliest_rollup_seqno <= seqno)
                     .map(|(seqno, rollup)| (*seqno, rollup.key.to_owned()))
-                    .collect()
             })
     }
 

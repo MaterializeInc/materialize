@@ -35,6 +35,7 @@ use crate::internal::metrics::RetryMetrics;
 use crate::internal::paths::{BlobKey, PartialBatchKey, PartialBlobKey, PartialRollupKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_diff::StateDiff;
+use crate::internal::state_versions::InspectDiff;
 use crate::ShardId;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -220,6 +221,51 @@ where
         // arbitrary order), all of the logic below has to work even if we've
         // already gc'd and truncated past new_seqno_since.
 
+        let mut state = machine
+            .applier
+            .state_versions
+            .fetch_all_live_states(req.shard_id)
+            .await
+            .expect("state is initialized")
+            .check_ts_codec()
+            .expect("ts codec has not changed");
+
+        // WIP: should just be earliest rollup
+        while let Some((truncate_to, _rollup)) = machine
+            .applier
+            .earliest_rollup_lte_seqno(req.new_seqno_since)
+        {
+            while let Some(s) = state.next(|diff| match diff {
+                InspectDiff::FromInitial(_) => {}
+                InspectDiff::Diff(diff) => {
+                    diff.map_blob_deletes(|blob| match blob {
+                        HollowBlobRef::Batch(batch) => {
+                            for part in &batch.parts {
+                                batch_parts_to_delete.push(part.key.to_owned());
+                            }
+                        }
+                        HollowBlobRef::Rollup(rollup) => {
+                            rollups_to_delete.push(rollup.key.to_owned());
+                        }
+                    });
+                }
+            }) {
+                if s.seqno == truncate_to {
+                    break;
+                }
+            }
+
+            Self::truncate(
+                shard_id,
+                truncate_to_rollup,
+                batch_parts_to_delete,
+                rollups_to_delete,
+                machine,
+                timer,
+                &delete_semaphore,
+            )
+            .await;
+        }
         let Some((truncate_to, removable_rollups)) = Self::determine_truncation_range(&req, machine) else {
             // Fast-path: Someone already GC'd past `req.new_seqno_since`, don't
             // bother running any of the below logic.
@@ -284,6 +330,7 @@ where
         // we do this work after the physical deletion of the rollup blobs to ensure we
         // have references to them if GC fails partway through.
         debug!("removing rollups: {:?}", removable_rollups);
+
         let (removed_rollups, maintenance) = machine.remove_rollups(&removable_rollups).await;
         debug!("removed rollups: {:?}", removed_rollups);
         report_step_timing(&machine.applier.metrics.gc.steps.remove_rollup_seconds);
@@ -299,10 +346,10 @@ where
     /// Returns None if there are no rollups with SeqNo <= new_seqno_since, otherwise returns the
     /// SeqNo of the latest rollup <= new_seqno_since and a Vec of all earlier rollups (if any).
     fn determine_truncation_range(
-        req: &GcReq,
+        seqno_since: SeqNo,
         machine: &mut Machine<K, V, T, D>,
     ) -> Option<(SeqNo, Vec<(SeqNo, PartialRollupKey)>)> {
-        let mut rollups_lte_seqno_since = machine.applier.rollups_lte_seqno(req.new_seqno_since);
+        let mut rollups_lte_seqno_since = machine.applier.earliest_rollup_lte_seqno(seqno_since);
 
         // TODO: we could, if we wanted, leave a configurable N rollups in state to avoid state slow paths.
         // so fetch the Nth latest rollup <= new_seqno_since rather than just the latest. this knob might
