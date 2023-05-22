@@ -1768,7 +1768,7 @@ impl DropConnection {
 pub struct SystemVars {
     /// Allows "unsafe" parameters to be set.
     allow_unsafe: bool,
-    vars: BTreeMap<&'static UncasedStr, Box<dyn VarMut>>,
+    vars: BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>,
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
@@ -2344,7 +2344,7 @@ pub trait Var: Debug {
 
 /// A `Var` with additional methods for mutating the value, as well as
 /// helpers that enable various operations in a `dyn` context.
-pub trait VarMut: Var + Send + Sync {
+pub trait SystemVarMut: Var + Send + Sync {
     /// Upcast to Var, for use with `dyn`.
     fn as_var(&self) -> &dyn Var;
 
@@ -2352,7 +2352,7 @@ pub trait VarMut: Var + Send + Sync {
     fn value_any(&self) -> &(dyn Any + 'static);
 
     /// Clone, but object safe and specialized to `VarMut`.
-    fn clone_var(&self) -> Box<dyn VarMut>;
+    fn clone_var(&self) -> Box<dyn SystemVarMut>;
 
     /// Return whether or not `input` is equal to this var's default value,
     /// if there is one.
@@ -2525,7 +2525,7 @@ where
     }
 }
 
-impl<V> VarMut for SystemVar<V>
+impl<V> SystemVarMut for SystemVar<V>
 where
     V: Value + Debug + PartialEq + 'static,
     V::Owned: Debug + Clone + Send + Sync,
@@ -2539,7 +2539,7 @@ where
         value
     }
 
-    fn clone_var(&self) -> Box<dyn VarMut> {
+    fn clone_var(&self) -> Box<dyn SystemVarMut> {
         Box::new(self.clone())
     }
 
