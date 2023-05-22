@@ -54,9 +54,11 @@ pub async fn system_parameter_sync(
     loop {
         interval.tick().await;
         backend.pull(&mut params).await;
-        let launchdarkly_enabled =
-            <bool as Value>::parse(VarInput::Flat(&params.get(ENABLE_LAUNCHDARKLY.name())))
-                .expect("This is known to be a bool");
+        let launchdarkly_enabled = <bool as Value>::parse(
+            &ENABLE_LAUNCHDARKLY,
+            VarInput::Flat(&params.get(ENABLE_LAUNCHDARKLY.name())),
+        )
+        .expect("This is known to be a bool");
         if launchdarkly_enabled && frontend.pull(&mut params) {
             backend.push(&mut params).await;
         }
