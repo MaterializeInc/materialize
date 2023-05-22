@@ -21,7 +21,9 @@
 
 use std::time::{Duration, SystemTime};
 
-use mz_frontegg_auth::AppPassword;
+use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use mz_frontegg_auth::{AppPassword, Claims};
 use reqwest::{Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -203,5 +205,30 @@ impl Client {
             refresh_token: res.refresh_token,
         });
         Ok(res.access_token)
+    }
+
+    /// Returns the JSON Web Key Set (JWKS) from the well known endpoint: `/.well-known/jwks.json`
+    async fn get_jwks(&self) -> Result<JwkSet, Error> {
+        let well_known = vec![".well-known", "jwks.json"];
+        let req = self.build_request(Method::GET, well_known);
+        let jwks: JwkSet = self.send_request(req).await?;
+        Ok(jwks)
+    }
+
+    /// Verifies the JWT signature using a JWK from the well-known endpoint and
+    /// returns the user claims.
+    pub async fn claims(&self) -> Result<Claims, Error> {
+        let jwks = self.get_jwks().await.map_err(|_| Error::FetchingJwks)?;
+        let jwk = jwks.keys.first().ok_or_else(|| Error::EmptyJwks)?;
+        let token = self.auth().await?;
+
+        let token_data = decode::<Claims>(
+            &token,
+            &DecodingKey::from_jwk(jwk).map_err(|_| Error::ConvertingJwks)?,
+            &Validation::new(Algorithm::RS256),
+        )
+        .map_err(|_| Error::DecodingClaims)?;
+
+        Ok(token_data.claims)
     }
 }

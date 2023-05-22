@@ -36,6 +36,10 @@ ci_collapsed_heading ":docker: Purging containers and volumes from previous buil
 mzcompose --mz-quiet kill
 mzcompose --mz-quiet rm --force -v
 mzcompose --mz-quiet down --volumes
+killall -9 clusterd || true # There might be remaining processes from a previous cargo-test run
+if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+  find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
+fi
 
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes

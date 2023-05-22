@@ -12,7 +12,6 @@ from typing import List
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.util import MzVersion
 
 
 def schema() -> str:
@@ -49,18 +48,6 @@ class AlterIndex(Check):
         )
 
     def manipulate(self) -> List[Testdrive]:
-        fix_ownership = (
-            """
-                # When upgrading from old version without roles the indexes are
-                # owned by default_role, thus we have to change the owner
-                # before altering them:
-                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
-                ALTER INDEX alter_index_table_primary_idx OWNER TO materialize;
-                ALTER INDEX alter_index_source_primary_idx OWNER TO materialize;
-                """
-            if self.base_version >= MzVersion.parse("0.47.0")
-            else ""
-        )
         return [
             Testdrive(schema() + dedent(s))
             for s in [
@@ -80,8 +67,14 @@ class AlterIndex(Check):
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "C${kafka-ingest.iteration}"}
                 """,
-                fix_ownership
-                + """
+                """
+                # When upgrading from old version without roles the indexes are
+                # owned by default_role, thus we have to change the owner
+                # before altering them:
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER INDEX alter_index_table_primary_idx OWNER TO materialize;
+                ALTER INDEX alter_index_source_primary_idx OWNER TO materialize;
+
                 > INSERT INTO alter_index_table SELECT 'D' || generate_series FROM generate_series(1,10000);
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "D${kafka-ingest.iteration}"}

@@ -373,7 +373,13 @@ impl<'a> ResultSpec<'a> {
             // Since we only care about whether / not an error is possible, and not the specific
             // error, create an arbitrary error here.
             // NOTE! This assumes that functions do not discriminate on the type of the error.
-            result_map(Err(EvalError::Internal(String::new())))
+            let map_err = result_map(Err(EvalError::Internal(String::new())));
+            let raise_err = ResultSpec::fails();
+            // SQL has a very loose notion of evaluation order: https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-EXPRESS-EVAL
+            // Here, we account for the possibility that the expression is evaluated strictly,
+            // raising the error, or that it's evaluated lazily by the result_map function
+            // (which may return a non-error result even when given an error as input).
+            raise_err.union(map_err)
         } else {
             ResultSpec::nothing()
         };
@@ -1307,6 +1313,51 @@ mod tests {
         proptest!(|(data in gen_expr_data())| {
             check(data)?;
         });
+    }
+
+    #[test]
+    fn test_mfp() {
+        // Regression test for https://github.com/MaterializeInc/materialize/issues/19338
+        use MirScalarExpr::*;
+        let mfp = MapFilterProject {
+            expressions: vec![],
+            predicates: vec![
+                // Always fails on the known input range
+                (
+                    1,
+                    CallUnary {
+                        func: UnaryFunc::IsNull(IsNull),
+                        expr:
+                            Box::new(CallBinary {
+                                func: BinaryFunc::MulInt32,
+                                expr1: Box::new(Column(0)),
+                                expr2: Box::new(Column(0)),
+                            }),
+                    },
+                ),
+                // Always returns false on the known input range
+                (
+                    1,
+                    CallBinary {
+                        func: BinaryFunc::Eq,
+                        expr1: Box::new(Column(0)),
+                        expr2: Box::new(Literal(
+                            Ok(Row::pack_slice(&[Datum::Int32(1727694505)])),
+                            ScalarType::Int32.nullable(false),
+                        )),
+                    },
+                ),
+            ],
+            projection: vec![],
+            input_arity: 1,
+        };
+
+        let relation = RelationType::new(vec![ScalarType::Int32.nullable(true)]);
+        let arena = RowArena::new();
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(0, ResultSpec::value(Datum::Int32(-1294725158)));
+        let spec = interpreter.mfp_filter(&mfp);
+        assert!(spec.range.may_fail());
     }
 
     #[test]

@@ -63,7 +63,7 @@ INSERT INTO band_members VALUES
 
 # Simple case: EXCEPT ALL with a const literal constraint.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 (
     SELECT id FROM people
 )
@@ -73,20 +73,20 @@ EXCEPT
 )
 ----
 Explained Query:
-  Union
-    Project (#0)
-      Get materialize.public.people
-    Map (5)
-      Negate
-        Project ()
-          Filter (#0 = 5)
-            Get materialize.public.people
+  Union // { non_negative: false }
+    Project (#0) // { non_negative: true }
+      Get materialize.public.people // { non_negative: true }
+    Map (5) // { non_negative: false }
+      Negate // { non_negative: false }
+        Project () // { non_negative: true }
+          Filter (#0 = 5) // { non_negative: true }
+            Get materialize.public.people // { non_negative: true }
 
 EOF
 
 # Simple case: EXCEPT ALL with an IS NOT NULL filter.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 (
     SELECT id FROM people
 )
@@ -96,57 +96,57 @@ EXCEPT ALL
 )
 ----
 Explained Query:
-  Union
-    Project (#0)
-      Get materialize.public.people
-    Negate
-      Project (#0)
-        Filter (#3) IS NOT NULL
-          Get materialize.public.people
+  Union // { non_negative: false }
+    Project (#0) // { non_negative: true }
+      Get materialize.public.people // { non_negative: true }
+    Negate // { non_negative: false }
+      Project (#0) // { non_negative: true }
+        Filter (#3) IS NOT NULL // { non_negative: true }
+          Get materialize.public.people // { non_negative: true }
 
 EOF
 
 # Simple case: EXCEPT.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 SELECT name FROM people
 EXCEPT
 SELECT name FROM people WHERE id > 1
 ----
 Explained Query:
-  Union
-    Distinct group_by=[#0]
-      Project (#1)
-        Get materialize.public.people
-    Negate
-      Distinct group_by=[#0]
-        Project (#1)
-          Filter (#0 > 1)
-            Get materialize.public.people
+  Union // { non_negative: false }
+    Distinct group_by=[#0] // { non_negative: true }
+      Project (#1) // { non_negative: true }
+        Get materialize.public.people // { non_negative: true }
+    Negate // { non_negative: false }
+      Distinct group_by=[#0] // { non_negative: true }
+        Project (#1) // { non_negative: true }
+          Filter (#0 > 1) // { non_negative: true }
+            Get materialize.public.people // { non_negative: true }
 
 EOF
 
 # Negative example: EXCEPT ALL that should not be confused for an EXCEPT
 # the two inputs have a Reduce *with aggregates*.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 SELECT MAX(id) FROM people GROUP BY name
 EXCEPT ALL
 SELECT MAX(id) FROM (SELECT * FROM people WHERE id > 1) GROUP BY name
 ----
 Explained Query:
-  Threshold
-    Union
-      Project (#1)
-        Reduce group_by=[#1] aggregates=[max(#0)]
-          Project (#0, #1)
-            Get materialize.public.people
-      Negate
-        Project (#1)
-          Reduce group_by=[#1] aggregates=[max(#0)]
-            Project (#0, #1)
-              Filter (#0 > 1)
-                Get materialize.public.people
+  Threshold // { non_negative: true }
+    Union // { non_negative: false }
+      Project (#1) // { non_negative: true }
+        Reduce group_by=[#1] aggregates=[max(#0)] // { non_negative: true }
+          Project (#0, #1) // { non_negative: true }
+            Get materialize.public.people // { non_negative: true }
+      Negate // { non_negative: false }
+        Project (#1) // { non_negative: true }
+          Reduce group_by=[#1] aggregates=[max(#0)] // { non_negative: true }
+            Project (#0, #1) // { non_negative: true }
+              Filter (#0 > 1) // { non_negative: true }
+                Get materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -155,7 +155,7 @@ EOF
 # and for some reason (TBD later) this means that we need to run it at the
 # end of the physical pass.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 (
     SELECT
         id, name
@@ -176,16 +176,16 @@ EXCEPT ALL
 )
 ----
 Explained Query:
-  Return
-    Union
-      Get l0
-      Negate
-        TopK group_by=[#0] limit=1 monotonic=false
-          Get l0
+  Return // { non_negative: false }
+    Union // { non_negative: false }
+      Get l0 // { non_negative: true }
+      Negate // { non_negative: false }
+        TopK group_by=[#0] limit=1 monotonic=false // { non_negative: true }
+          Get l0 // { non_negative: true }
   With
     cte l0 =
-      Project (#0, #1)
-        Get materialize.public.people
+      Project (#0, #1) // { non_negative: true }
+        Get materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -194,7 +194,7 @@ EOF
 # and for some reason (TBD later) this means that we need to run it at the
 # end of the physical pass.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 (
     SELECT
         id, name
@@ -215,68 +215,68 @@ EXCEPT
 )
 ----
 Explained Query:
-  Return
-    Union
-      Get l0
-      Negate
-        TopK group_by=[#0] limit=1 monotonic=false
-          Get l0
+  Return // { non_negative: false }
+    Union // { non_negative: false }
+      Get l0 // { non_negative: true }
+      Negate // { non_negative: false }
+        TopK group_by=[#0] limit=1 monotonic=false // { non_negative: true }
+          Get l0 // { non_negative: true }
   With
     cte l0 =
-      Project (#0, #1)
-        Get materialize.public.people
+      Project (#0, #1) // { non_negative: true }
+        Get materialize.public.people // { non_negative: true }
 
 EOF
 
 # Complex example: CTE with a join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 WITH cte AS (SELECT people.id FROM people, bands)
 SELECT * FROM cte EXCEPT ALL SELECT * FROM cte where id > 5;
 ----
 Explained Query:
-  Return
-    Union
-      Get l0
-      Negate
-        Filter (#0 > 5)
-          Get l0
+  Return // { non_negative: false }
+    Union // { non_negative: false }
+      Get l0 // { non_negative: true }
+      Negate // { non_negative: false }
+        Filter (#0 > 5) // { non_negative: true }
+          Get l0 // { non_negative: true }
   With
     cte l0 =
-      CrossJoin type=differential
-        ArrangeBy keys=[[]]
-          Project (#0)
-            Get materialize.public.people
-        ArrangeBy keys=[[]]
-          Project ()
-            Get materialize.public.bands
+      CrossJoin type=differential // { non_negative: true }
+        ArrangeBy keys=[[]] // { non_negative: true }
+          Project (#0) // { non_negative: true }
+            Get materialize.public.people // { non_negative: true }
+        ArrangeBy keys=[[]] // { non_negative: true }
+          Project () // { non_negative: true }
+            Get materialize.public.bands // { non_negative: true }
 
 EOF
 
 # Complex example: CTE with a DISTINCT.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 WITH cte AS (SELECT DISTINCT name FROM people)
 SELECT * FROM cte EXCEPT ALL SELECT * FROM cte WHERE name LIKE 'J%'
 ----
 Explained Query:
-  Return
-    Union
-      Get l0
-      Negate
-        Filter "J%" ~~(#0)
-          Get l0
+  Return // { non_negative: false }
+    Union // { non_negative: false }
+      Get l0 // { non_negative: true }
+      Negate // { non_negative: false }
+        Filter "J%" ~~(#0) // { non_negative: true }
+          Get l0 // { non_negative: true }
   With
     cte l0 =
-      Distinct group_by=[#0]
-        Project (#1)
-          Get materialize.public.people
+      Distinct group_by=[#0] // { non_negative: true }
+        Project (#1) // { non_negative: true }
+          Get materialize.public.people // { non_negative: true }
 
 EOF
 
 # Complex example: CTE with a GROUP BY.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 WITH a(birth_year, no_people_born) AS (
     SELECT EXTRACT(year from born), COUNT(*)
     FROM people
@@ -285,17 +285,17 @@ WITH a(birth_year, no_people_born) AS (
 SELECT * FROM a EXCEPT (SELECT * FROM a WHERE birth_year > 1940);
 ----
 Explained Query:
-  Return
-    Union
-      Get l0
-      Negate
-        Filter (#0 > 1940)
-          Get l0
+  Return // { non_negative: false }
+    Union // { non_negative: false }
+      Get l0 // { non_negative: true }
+      Negate // { non_negative: false }
+        Filter (#0 > 1940) // { non_negative: true }
+          Get l0 // { non_negative: true }
   With
     cte l0 =
-      Reduce group_by=[extract_year_d(#0)] aggregates=[count(*)]
-        Project (#2)
-          Get materialize.public.people
+      Reduce group_by=[extract_year_d(#0)] aggregates=[count(*)] // { non_negative: true }
+        Project (#2) // { non_negative: true }
+          Get materialize.public.people // { non_negative: true }
 
 EOF
 
@@ -307,7 +307,7 @@ EOF
 # (1) and (3) because the non_negative value inferred for cte1
 # prior to the rewrite is maintained for downstream rewrites.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 WITH cte1 AS (
     SELECT * FROM people
     EXCEPT ALL
@@ -320,26 +320,26 @@ EXCEPT
 SELECT * FROM cte2 WHERE name LIKE 'P%';
 ----
 Explained Query:
-  Return
-    Union
-      Get l0
-      Negate
-        Filter "P%" ~~(#1)
-          Get l0
+  Return // { non_negative: false }
+    Union // { non_negative: false }
+      Get l0 // { non_negative: false }
+      Negate // { non_negative: false }
+        Filter "P%" ~~(#1) // { non_negative: false }
+          Get l0 // { non_negative: false }
   With
     cte l0 =
-      Distinct group_by=[#0..=#3]
-        Union
-          Get materialize.public.people
-          Negate
-            Filter "J%" ~~(#1)
-              Get materialize.public.people
+      Distinct group_by=[#0..=#3] // { non_negative: false }
+        Union // { non_negative: false }
+          Get materialize.public.people // { non_negative: true }
+          Negate // { non_negative: false }
+            Filter "J%" ~~(#1) // { non_negative: true }
+              Get materialize.public.people // { non_negative: true }
 
 EOF
 
 # Complex example (unsupported): A - (σ(p)(A) ⊎ σ(q)(A)).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
 SELECT name FROM people
 EXCEPT ALL
 (
@@ -349,17 +349,149 @@ EXCEPT ALL
 )
 ----
 Explained Query:
-  Threshold
-    Union
-      Project (#1)
-        Get materialize.public.people
-      Negate
-        Project (#1)
-          Filter (#0 = 1)
-            Get materialize.public.people
-      Negate
-        Project (#1)
-          Filter (#0 = 2)
-            Get materialize.public.people
+  Threshold // { non_negative: true }
+    Union // { non_negative: false }
+      Project (#1) // { non_negative: true }
+        Get materialize.public.people // { non_negative: true }
+      Negate // { non_negative: false }
+        Project (#1) // { non_negative: true }
+          Filter (#0 = 1) // { non_negative: true }
+            Get materialize.public.people // { non_negative: true }
+      Negate // { non_negative: false }
+        Project (#1) // { non_negative: true }
+          Filter (#0 = 2) // { non_negative: true }
+            Get materialize.public.people // { non_negative: true }
+
+EOF
+
+# WMR
+# https://github.com/MaterializeInc/materialize/issues/18175
+
+# WMR -- Threshold in the loop-invariant part
+# The "Very basic" implementation from #18175 should handle this.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+WITH MUTUALLY RECURSIVE
+  c0(id int, name text) as (
+    SELECT id, name FROM people
+    EXCEPT
+    SELECT id, name FROM people WHERE id > 1
+  ),
+  c1(id int, name text) as (
+    (SELECT id, name || '_init' FROM c0)
+    UNION
+    (
+      SELECT id, name || '_iter' FROM c1
+    )
+  )
+SELECT * FROM c1
+----
+Explained Query:
+  Return // { non_negative: false }
+    Get l0 // { non_negative: false }
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0, #1] // { non_negative: false }
+        Union // { non_negative: false }
+          Project (#0, #2) // { non_negative: false }
+            Map ((#1 || "_init")) // { non_negative: false }
+              Union // { non_negative: false }
+                Project (#0, #1) // { non_negative: true }
+                  Get materialize.public.people // { non_negative: true }
+                Negate // { non_negative: false }
+                  Project (#0, #1) // { non_negative: true }
+                    Filter (#0 > 1) // { non_negative: true }
+                      Get materialize.public.people // { non_negative: true }
+          Project (#0, #2) // { non_negative: false }
+            Map ((#1 || "_iter")) // { non_negative: false }
+              Get l0 // { non_negative: false }
+
+EOF
+
+# WMR -- Threshold inside the cycle -- Two Thresholds, the second one should be easy to eliminate, because the result of
+# the first one is obviously non-negative.
+# The "Basic" implementation from #18175 should handle this.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+WITH MUTUALLY RECURSIVE
+  c1(id int, name text) as (
+    (SELECT id, name || '_init' FROM people)
+    UNION
+    (
+      SELECT id, name || '_iter' FROM c2
+      EXCEPT
+      SELECT id, name || '_iter' FROM c2 WHERE id > 1
+    )
+  ),
+  c2(id int, name text) as (
+    SELECT * FROM c1
+    EXCEPT
+    SELECT * FROM c1 WHERE id > 2
+  )
+SELECT * FROM c1
+----
+Explained Query:
+  Return // { non_negative: true }
+    Get l0 // { non_negative: true }
+  With Mutually Recursive
+    cte l1 =
+      Union // { non_negative: false }
+        Get l0 // { non_negative: true }
+        Negate // { non_negative: false }
+          Filter (#0 > 2) // { non_negative: true }
+            Get l0 // { non_negative: true }
+    cte l0 =
+      Distinct group_by=[#0, #1] // { non_negative: true }
+        Union // { non_negative: true }
+          Project (#0, #4) // { non_negative: true }
+            Map ((#1 || "_init")) // { non_negative: true }
+              Get materialize.public.people // { non_negative: true }
+          Threshold // { non_negative: true }
+            Union // { non_negative: false }
+              Distinct group_by=[#0, (#1 || "_iter")] // { non_negative: false }
+                Get l1 // { non_negative: false }
+              Negate // { non_negative: false }
+                Distinct group_by=[#0, (#1 || "_iter")] // { non_negative: false }
+                  Filter (#0 > 1) // { non_negative: false }
+                    Get l1 // { non_negative: false }
+
+EOF
+
+# WMR -- Threshold inside the cycle -- The Threshold could be eliminated only if we propagated non-negativity through
+# recursive bindings.
+# Currently a negative example.
+# The "Advanced" implementation from #18175 should handle this.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+WITH MUTUALLY RECURSIVE
+  c0(id int, name text) as (
+    (SELECT id, name || '_init' FROM people)
+    UNION
+    (
+      SELECT id, name || '_iter' FROM c0
+      EXCEPT
+      SELECT id, name || '_iter' FROM c0 WHERE id > 1
+    )
+  )
+SELECT * FROM c0
+----
+Explained Query:
+  Return // { non_negative: true }
+    Get l0 // { non_negative: true }
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0, #1] // { non_negative: true }
+        Union // { non_negative: true }
+          Project (#0, #4) // { non_negative: true }
+            Map ((#1 || "_init")) // { non_negative: true }
+              Get materialize.public.people // { non_negative: true }
+          Threshold // { non_negative: true }
+            Union // { non_negative: false }
+              Distinct group_by=[#0, (#1 || "_iter")] // { non_negative: false }
+                Get l0 // { non_negative: false }
+              Negate // { non_negative: false }
+                Distinct group_by=[#0, (#1 || "_iter")] // { non_negative: false }
+                  Filter (#0 > 1) // { non_negative: false }
+                    Get l0 // { non_negative: false }
 
 EOF

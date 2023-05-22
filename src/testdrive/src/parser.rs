@@ -24,11 +24,18 @@ pub struct PosCommand {
     pub command: Command,
 }
 
+// min and max versions, both inclusive
+#[derive(Debug, Clone)]
+pub struct VersionConstraint {
+    pub min: i32,
+    pub max: i32,
+}
+
 #[derive(Debug, Clone)]
 pub enum Command {
-    Builtin(BuiltinCommand),
-    Sql(SqlCommand),
-    FailSql(FailSqlCommand),
+    Builtin(BuiltinCommand, Option<VersionConstraint>),
+    Sql(SqlCommand, Option<VersionConstraint>),
+    FailSql(FailSqlCommand, Option<VersionConstraint>),
 }
 
 #[derive(Debug, Clone)]
@@ -85,16 +92,34 @@ pub(crate) fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, Pos
     while let Some((pos, line)) = line_reader.peek() {
         let pos = *pos;
         let command = match line.chars().next() {
-            Some('$') => Command::Builtin(parse_builtin(line_reader)?),
-            Some('>') => Command::Sql(parse_sql(line_reader)?),
-            Some('?') => Command::Sql(parse_explain_sql(line_reader)?),
-            Some('!') => Command::FailSql(parse_fail_sql(line_reader)?),
+            Some('$') => {
+                let version = parse_version_constraint(line_reader)?;
+                Command::Builtin(parse_builtin(line_reader)?, version)
+            }
+            Some('>') => {
+                let version = parse_version_constraint(line_reader)?;
+                Command::Sql(parse_sql(line_reader)?, version)
+            }
+            Some('?') => {
+                let version = parse_version_constraint(line_reader)?;
+                Command::Sql(parse_explain_sql(line_reader)?, version)
+            }
+            Some('!') => {
+                let version = parse_version_constraint(line_reader)?;
+                Command::FailSql(parse_fail_sql(line_reader)?, version)
+            }
             Some('#') => {
                 // Comment line.
                 line_reader.next();
                 continue;
             }
-            _ => {
+            Some(x) => {
+                return Err(PosError {
+                    source: anyhow!(format!("unexpected input line at beginning of file: {}", x)),
+                    pos: Some(pos),
+                });
+            }
+            None => {
                 return Err(PosError {
                     source: anyhow!("unexpected input line at beginning of file"),
                     pos: Some(pos),
@@ -160,6 +185,85 @@ pub fn validate_ident(name: &str) -> Result<(), anyhow::Error> {
         );
     }
     Ok(())
+}
+
+fn parse_version_constraint(
+    line_reader: &mut LineReader,
+) -> Result<Option<VersionConstraint>, PosError> {
+    let (pos, line) = line_reader.next().unwrap();
+    if line[1..2].to_string() != "[" {
+        line_reader.push(&line);
+        return Ok(None);
+    }
+    let closed_brace_pos = match line.find(']') {
+        Some(x) => x,
+        None => {
+            return Err(PosError {
+                source: anyhow!("version-constraint: found no closing brace"),
+                pos: Some(pos),
+            });
+        }
+    };
+    if line[2..9].to_string() != "version" {
+        return Err(PosError {
+            source: anyhow!(
+                "version-constraint: invalid property {}",
+                line[2..closed_brace_pos].to_string()
+            ),
+            pos: Some(pos),
+        });
+    }
+    let remainder = line[closed_brace_pos + 1..].to_string();
+    line_reader.push(&remainder);
+    const MIN_VERSION: i32 = 0;
+    const MAX_VERSION: i32 = 9999999;
+    let version_pos = if line.as_bytes()[10].is_ascii_digit() {
+        10
+    } else {
+        11
+    };
+    let version = match line[version_pos..closed_brace_pos].parse::<i32>() {
+        Ok(x) => x,
+        Err(_) => {
+            return Err(PosError {
+                source: anyhow!(
+                    "version-constraint: invalid version number {}",
+                    line[version_pos..closed_brace_pos].to_string()
+                ),
+                pos: Some(pos),
+            });
+        }
+    };
+
+    match &line[9..version_pos] {
+        "=" => Ok(Some(VersionConstraint {
+            min: version,
+            max: version,
+        })),
+        "<=" => Ok(Some(VersionConstraint {
+            min: MIN_VERSION,
+            max: version,
+        })),
+        "<" => Ok(Some(VersionConstraint {
+            min: MIN_VERSION,
+            max: version - 1,
+        })),
+        ">=" => Ok(Some(VersionConstraint {
+            min: version,
+            max: MAX_VERSION,
+        })),
+        ">" => Ok(Some(VersionConstraint {
+            min: version + 1,
+            max: MAX_VERSION,
+        })),
+        _ => Err(PosError {
+            source: anyhow!(
+                "version-constraint: unknown comparison operator {}",
+                line[9..version_pos].to_string()
+            ),
+            pos: Some(pos),
+        }),
+    }
 }
 
 fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
@@ -406,6 +510,10 @@ impl<'a> LineReader<'a> {
     pub fn line_col(&self, pos: usize) -> (usize, usize) {
         let (base_pos, (line, col)) = self.pos_map.range(..=pos).next_back().unwrap();
         (*line, col + (pos - base_pos))
+    }
+
+    fn push(&mut self, text: &String) {
+        self.next = Some(Some((0usize, text.to_string())));
     }
 }
 

@@ -9,7 +9,7 @@
 
 //! Derived attributes framework and definitions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 
 use mz_expr::explain::ExplainContext;
@@ -43,7 +43,7 @@ pub trait Attribute: 'static + Default + Send + Sync {
 
     /// Schedule environment maintenance tasks.
     ///
-    /// Deletate to [`Env::schedule_tasks`] if this attribute has an [`Env`] field.
+    /// Delegate to [`Env::schedule_tasks`] if this attribute has an [`Env`] field.
     fn schedule_env_tasks(&mut self, _expr: &MirRelationExpr) {}
 
     /// Handle scheduled environment maintenance tasks.
@@ -82,7 +82,7 @@ pub struct Env<A: Attribute> {
     /// The [`BTreeMap`] backing this environment.
     env: BTreeMap<LocalId, A::Value>,
     // A stack of tasks to maintain the `env` map.
-    env_tasks: Vec<EnvTask<A::Value>>,
+    env_tasks: Vec<EnvTask>,
 }
 
 impl<A: Attribute> Env<A> {
@@ -92,71 +92,92 @@ impl<A: Attribute> Env<A> {
 }
 
 impl<A: Attribute> Env<A> {
-    /// Schedules environment maintenance tasks.
+    /// Schedules exactly one environment maintenance task associated with the
+    /// given `expr`.
     ///
-    /// Should be called from a `Visitor<MirRelationExpr>::pre_visit` implementaion.
+    /// This should be:
+    /// 1. Called from a `Visitor<MirRelationExpr>::pre_visit` implementation.
+    /// 2. A `Bind` task for `MirRelationExpr` variants that represent a change
+    ///    to the environment (in other words, `Let*` variants).
+    /// 3. A `Done` task for all other `MirRelationExpr` variants.
     pub fn schedule_tasks(&mut self, expr: &MirRelationExpr) {
         match expr {
             MirRelationExpr::Let { id, .. } => {
-                // Add an Extend task to be handled in the post_visit the node children.
-                self.env_tasks.push(EnvTask::Extend(id.clone()));
+                // Add a `Bind` task for the `LocalId` bound by this node.
+                self.env_tasks.push(EnvTask::bind_one(id));
+            }
+            MirRelationExpr::LetRec { ids, .. } => {
+                // Add a `Bind` task for all `LocalId`s bound by this node. This
+                // will result in attribute derivation corresponding to a single
+                // sequential pass through all bindings (one iteration).
+                self.env_tasks.push(EnvTask::bind_seq(ids));
             }
             _ => {
-                // Don not do anything with the environment in this node's children.
-                self.env_tasks.push(EnvTask::NoOp);
+                // Do not do anything with the environment.
+                self.env_tasks.push(EnvTask::Done);
             }
         }
     }
 
-    /// Handles scheduled evinronment maintenance tasks.
+    /// Handles scheduled environment maintenance tasks.
     ///
-    /// Should be called from a `Visitor<MirRelationExpr>::post_visit` implementaion.
+    /// Should be called from a `Visitor<MirRelationExpr>::post_visit` implementation.
     pub fn handle_tasks(&mut self, results: &Vec<A::Value>) {
-        // Pop the env task for this element's children.
+        // Pop the env task associated with the just visited node.
         let parent = self.env_tasks.pop();
-        // This should be always be NoOp, as this is either the original value or the
-        // terminal state of the state machine that Let children implement (see the
-        // code at the end of this method).
-        debug_assert!(parent.is_some() && parent.unwrap() == EnvTask::NoOp);
+        // This should always be a Done, as this is either the original value or
+        // the terminal state of the state machine that should be reached after
+        // all children of the current node have been visited, which should
+        // always be the case if handle_tasks is called from post_visit.
+        assert!(parent.is_some() && parent.unwrap() == EnvTask::Done);
 
-        // Handle EnvTask initiated by the parent.
+        // Update the state machine associated with the parent.
+        // This should always exist when post-visiting non-root nodes.
         if let Some(env_task) = self.env_tasks.pop() {
             // Compute a task to represent the next state of the state machine associated with
             // this task.
             let env_task = match env_task {
-                // An Extend indicates that the parent of the current node is a Let binding
-                // and we are about to leave a Let binding value.
-                EnvTask::Extend(id) => {
-                    // Before descending to the next sibling (the Let binding body), do as follows:
-                    // 1. Update the env map with the attribute derived for the Let binding value.
-                    let result = results.last().expect("unexpected empty results vector");
-                    let oldval = self.env.insert(id, result.clone());
-                    // 2. Create a task to be handled after visiting the Let binding body.
-                    match oldval {
-                        Some(val) => EnvTask::Reset(id, val), // reset old value if present
-                        None => EnvTask::Remove(id),          // remove key otherwise
+                // A Bind state indicates that the parent of the current node is
+                // a Let or a LetRec, and we are about to leave a Let or LetRec
+                // binding value.
+                EnvTask::Bind(mut unbound, mut bound) => {
+                    let id = unbound.pop().expect("non-empty unbound vector");
+                    // Update the env map with the attribute value derived for
+                    // the Let or LetRec binding value.
+                    let result = results.last().expect("non-empty attribute results vector");
+                    let oldval = self.env.insert(id.clone(), result.clone());
+                    // No shadowing
+                    assert!(oldval.is_none());
+                    // Mark this LocalId as bound
+                    bound.insert(id);
+
+                    if unbound.is_empty() {
+                        // The next sibling is a Let / LetRec body. Advance the
+                        // state machine to a state where after the next sibling
+                        // is visited all bound LocalIds associated with this
+                        // state machine will be removed from the environment.
+                        EnvTask::Unbind(bound)
+                    } else {
+                        // The next sibling is a LetRec value bound to the last
+                        // element of `unbound`. Advance the state machine to a
+                        // state where this LocalId will be bound after visiting
+                        // that value.
+                        EnvTask::Bind(unbound, bound)
                     }
                 }
-                // An Reset task indicates that we are about to leave the Let binding body
-                // and the id of the Let parent shadowed another `id` in the environment.
-                EnvTask::Reset(id, val) => {
-                    // Before moving to the post_visit of the enclosing Let parent, do as follows:
-                    // 1. Reset the entry in the env map with the shadowed value.
-                    self.env.insert(id, val);
-                    // 2. Create a NoOp task indicating that there is nothing more to be done.
-                    EnvTask::NoOp
+                // An Unbind state indicates that we are about to leave the Let or LetRec body.
+                EnvTask::Unbind(ids) => {
+                    // Remove values associated with the given `ids`.
+                    for id in ids {
+                        self.env.remove(&id);
+                    }
+
+                    // Advance to a Done task indicating that there is nothing
+                    // more to be done.
+                    EnvTask::Done
                 }
-                // An Remove task indicates that we are about to leave the Let binding body
-                // and the id of the Let parent did not shadow another `id` in the environment.
-                EnvTask::Remove(id) => {
-                    // Before moving to the post_visit of the enclosing Let parent, do as follows:
-                    // 1. Remove the value assciated with the given `id` from the environment.
-                    self.env.remove(&id);
-                    // 2. Create a NoOp task indicating that there is nothing more to be done.
-                    EnvTask::NoOp
-                }
-                // A NoOp task indicates that we don't need to do anyting.
-                EnvTask::NoOp => EnvTask::NoOp,
+                // A Done state indicates that we don't need to do anything.
+                EnvTask::Done => EnvTask::Done,
             };
             // Advance the state machine.
             self.env_tasks.push(env_task);
@@ -164,30 +185,42 @@ impl<A: Attribute> Env<A> {
     }
 }
 
-/// Models an environment maintenence task that needs to be executed
-/// after visiting a [`MirRelationExpr`].
+/// Models an environment maintenance task that needs to be executed after
+/// visiting a [`MirRelationExpr`]. Each task is a state of a finite state
+/// machine.
 ///
-/// The [`Env::schedule_tasks`] hook installs such a task for each node,
-/// and the [`Env::handle_tasks`] hook removes it.
+/// The [`Env::schedule_tasks`] hook installs exactly one such task for each
+/// subexpression, and the [`Env::handle_tasks`] hook removes it.
 ///
-/// In addition, the [`Env::handle_tasks`] looks at the task installed
-/// by its parent and modifies it if needed, advancing it through the
-/// following state machinge from left to right:
+/// In addition, the [`Env::handle_tasks`] looks at the task installed by the
+/// parent expression and modifies it if needed, advancing it through the
+/// following states from left to right:
+///
 /// ```text
-/// Set --- Reset ---- NoOp
-///     \            /
-///      -- Remove --
+/// Bind([...,x], {...}) --> Bind([...], {...,x}) --> Unbind({...}) --> Done
 /// ```
 #[derive(Eq, PartialEq, Debug)]
-enum EnvTask<T> {
-    /// Add the latest attribute to the environment under the given key.
-    Extend(LocalId),
-    /// Reset value of an environment entry.
-    Reset(LocalId, T),
-    /// Remove an entry from the environment.
-    Remove(LocalId),
+enum EnvTask {
+    /// Extend the environment by binding the last derived attribute under
+    /// the key given the tail of the lhs Vec and move that key from the
+    /// lhs Vec to the rhs BTreeSet.
+    Bind(Vec<LocalId>, BTreeSet<LocalId>),
+    /// Remove all LocalId entries in the given set from the environment.
+    Unbind(BTreeSet<LocalId>),
     /// Do not do anything.
-    NoOp,
+    Done,
+}
+
+impl EnvTask {
+    /// Create an [`EnvTask::Bind`] state for a single binding.
+    fn bind_one(id: &LocalId) -> Self {
+        EnvTask::Bind(vec![id.clone()], BTreeSet::new())
+    }
+
+    /// Create an [`EnvTask::Bind`] state for a sequence of bindings.
+    fn bind_seq(ids: &Vec<LocalId>) -> Self {
+        EnvTask::Bind(ids.iter().rev().cloned().collect(), BTreeSet::new())
+    }
 }
 
 #[allow(missing_debug_implementations)]
