@@ -238,9 +238,9 @@ pub static APPLICATION_NAME: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
 
 pub static DEFAULT_CLIENT_ENCODING: Lazy<String> = Lazy::new(|| "UTF8".to_string());
 pub static CLIENT_ENCODING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
-    name: UncasedStr::new("application_name"),
+    name: UncasedStr::new("client_encoding"),
     value: &DEFAULT_CLIENT_ENCODING,
-    description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
+    description: "Sets the client's character set encoding (PostgreSQL).",
     internal: false,
 });
 
@@ -1125,73 +1125,102 @@ impl OwnedVarInput {
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SessionVars {
-    // Normal variables.
-    application_name: SessionVar<String>,
-    client_encoding: SessionVar<String>,
-    client_min_messages: SessionVar<ClientSeverity>,
-    cluster: SessionVar<String>,
-    cluster_replica: SessionVar<Option<String>>,
-    database: SessionVar<String>,
-    date_style: SessionVar<Vec<String>>,
-    extra_float_digits: SessionVar<i32>,
-    failpoints: SessionVar<Failpoints>,
-    integer_datetimes: SessionVar<bool>,
-    interval_style: SessionVar<String>,
-    search_path: SessionVar<Vec<Ident>>,
-    server_version: SessionVar<String>,
-    server_version_num: SessionVar<i32>,
-    sql_safe_updates: SessionVar<bool>,
-    standard_conforming_strings: SessionVar<bool>,
-    statement_timeout: SessionVar<Duration>,
-    idle_in_transaction_session_timeout: SessionVar<Duration>,
-    timezone: SessionVar<TimeZone>,
-    transaction_isolation: SessionVar<IsolationLevel>,
-    real_time_recency: SessionVar<bool>,
-    emit_timestamp_notice: SessionVar<bool>,
-    emit_trace_id_notice: SessionVar<bool>,
-    auto_route_introspection_queries: SessionVar<bool>,
-    enable_session_rbac_checks: SessionVar<bool>,
+    vars: BTreeMap<&'static UncasedStr, Box<dyn SessionVarMut>>,
     // Inputs to computed variables.
     build_info: &'static BuildInfo,
     user: User,
 }
 
 impl SessionVars {
-    /// Creates a new [`SessionVars`].
     pub fn new(build_info: &'static BuildInfo, user: User) -> SessionVars {
-        SessionVars {
-            application_name: SessionVar::new(&APPLICATION_NAME),
-            client_encoding: SessionVar::new(&CLIENT_ENCODING).as_fixed_value(),
-            client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
-            cluster: SessionVar::new(&CLUSTER),
-            cluster_replica: SessionVar::new(&CLUSTER_REPLICA),
-            database: SessionVar::new(&DATABASE),
-            date_style: SessionVar::new(&DATE_STYLE).as_fixed_value(),
-            extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
-            failpoints: SessionVar::new(&FAILPOINTS),
-            integer_datetimes: SessionVar::new(&INTEGER_DATETIMES).as_fixed_value(),
-            interval_style: SessionVar::new(&INTERVAL_STYLE).as_fixed_value(),
-            search_path: SessionVar::new(&SEARCH_PATH),
-            server_version: SessionVar::new(&SERVER_VERSION).as_read_only(),
-            server_version_num: SessionVar::new(&SERVER_VERSION_NUM).as_read_only(),
-            sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
-            standard_conforming_strings: SessionVar::new(&STANDARD_CONFORMING_STRINGS)
-                .as_fixed_value(),
-            statement_timeout: SessionVar::new(&STATEMENT_TIMEOUT),
-            idle_in_transaction_session_timeout: SessionVar::new(
-                &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
-            ),
-            timezone: SessionVar::new(&TIMEZONE),
-            transaction_isolation: SessionVar::new(&TRANSACTION_ISOLATION),
-            real_time_recency: SessionVar::new(&REAL_TIME_RECENCY)
-                .add_feature_flag(&ALLOW_REAL_TIME_RECENCY),
-            emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
-            emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
-            auto_route_introspection_queries: SessionVar::new(&AUTO_ROUTE_INTROSPECTION_QUERIES),
-            enable_session_rbac_checks: SessionVar::new(&ENABLE_SESSION_RBAC_CHECKS),
+        let s = SessionVars {
+            vars: BTreeMap::new(),
             build_info,
             user,
-        }
+        };
+
+        s.with_var(&APPLICATION_NAME)
+            .with_value_constrained_var(&CLIENT_ENCODING, ValueConstraint::Fixed)
+            .with_var(&CLIENT_MIN_MESSAGES)
+            .with_var(&CLUSTER)
+            .with_var(&CLUSTER_REPLICA)
+            .with_var(&DATABASE)
+            .with_value_constrained_var(&DATE_STYLE, ValueConstraint::Fixed)
+            .with_var(&EXTRA_FLOAT_DIGITS)
+            .with_var(&FAILPOINTS)
+            .with_value_constrained_var(&INTEGER_DATETIMES, ValueConstraint::Fixed)
+            .with_value_constrained_var(&INTERVAL_STYLE, ValueConstraint::Fixed)
+            .with_var(&SEARCH_PATH)
+            .with_value_constrained_var(&SERVER_VERSION, ValueConstraint::ReadOnly)
+            .with_value_constrained_var(&SERVER_VERSION_NUM, ValueConstraint::ReadOnly)
+            .with_var(&SEARCH_PATH)
+            .with_var(&SQL_SAFE_UPDATES)
+            .with_value_constrained_var(&STANDARD_CONFORMING_STRINGS, ValueConstraint::Fixed)
+            .with_var(&STATEMENT_TIMEOUT)
+            .with_var(&IDLE_IN_TRANSACTION_SESSION_TIMEOUT)
+            .with_var(&TIMEZONE)
+            .with_var(&TRANSACTION_ISOLATION)
+            .with_feature_gated_var(&REAL_TIME_RECENCY, &ALLOW_REAL_TIME_RECENCY)
+            .with_var(&EMIT_TIMESTAMP_NOTICE)
+            .with_var(&EMIT_TRACE_ID_NOTICE)
+            .with_var(&AUTO_ROUTE_INTROSPECTION_QUERIES)
+            .with_var(&ENABLE_SESSION_RBAC_CHECKS)
+    }
+
+    fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
+    where
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+    {
+        self.vars.insert(var.name, Box::new(SessionVar::new(var)));
+        self
+    }
+
+    fn with_value_constrained_var<V>(
+        mut self,
+        var: &'static ServerVar<V>,
+        c: ValueConstraint<V>,
+    ) -> Self
+    where
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+    {
+        self.vars.insert(
+            var.name,
+            Box::new(SessionVar::new(var).with_value_constraint(c)),
+        );
+        self
+    }
+
+    fn with_feature_gated_var<V>(
+        mut self,
+        var: &'static ServerVar<V>,
+        flag: &'static FeatureFlag,
+    ) -> Self
+    where
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+    {
+        self.vars.insert(
+            var.name,
+            Box::new(SessionVar::new(var).add_feature_flag(flag)),
+        );
+        self
+    }
+
+    fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
+    where
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+    {
+        let var = self
+            .vars
+            .get(var.name)
+            .expect("provided var should be in state");
+
+        var.value_any()
+            .downcast_ref()
+            .expect("provided var type should matched stored var")
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1201,62 +1230,37 @@ impl SessionVars {
     /// be visible because of other settings or users. Before or after accessing
     /// this method, you should call `Var::visible`.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        // `as` is ok to use to cast to a trait object.
         #[allow(clippy::as_conversions)]
-        let vars = [
-            &self.application_name as &dyn Var,
-            &self.client_encoding,
-            &self.client_min_messages,
-            &self.cluster,
-            &self.cluster_replica,
-            &self.database,
-            &self.date_style,
-            &self.extra_float_digits,
-            &self.failpoints,
-            &self.integer_datetimes,
-            &self.interval_style,
-            &self.search_path,
-            &self.server_version,
-            &self.server_version_num,
-            &self.sql_safe_updates,
-            &self.standard_conforming_strings,
-            &self.statement_timeout,
-            &self.idle_in_transaction_session_timeout,
-            &self.timezone,
-            &self.transaction_isolation,
-            &self.real_time_recency,
-            &self.emit_timestamp_notice,
-            &self.emit_trace_id_notice,
-            &self.auto_route_introspection_queries,
-            &self.enable_session_rbac_checks,
-            self.build_info,
-            &self.user,
-        ];
-        vars.into_iter()
+        self.vars
+            .values()
+            .map(|v| v.as_var())
+            .chain([self.build_info as &dyn Var, &self.user].into_iter())
     }
 
     /// Returns an iterator over configuration parameters (and their current
     /// values for this session) that are expected to be sent to the client when
     /// a new connection is established or when their value changes.
     pub fn notify_set(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 9] = [
-            &self.application_name,
-            &self.client_encoding,
-            &self.date_style,
-            &self.integer_datetimes,
-            &self.server_version,
-            &self.standard_conforming_strings,
-            &self.timezone,
-            &self.interval_style,
-            // Including `mz_version` in the notify set is a Materialize
-            // extension. Doing so allows applications to detect whether they
-            // are talking to Materialize or PostgreSQL without an additional
-            // network roundtrip. This is known to be safe because CockroachDB
-            // has an analogous extension [0].
-            // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
-            self.build_info,
-        ];
-        vars.into_iter()
+        #[allow(clippy::as_conversions)]
+        [
+            &*APPLICATION_NAME as &dyn Var,
+            &*CLIENT_ENCODING,
+            &*DATE_STYLE,
+            &INTEGER_DATETIMES,
+            &*SERVER_VERSION,
+            &STANDARD_CONFORMING_STRINGS,
+            &TIMEZONE,
+            &*INTERVAL_STYLE,
+        ]
+        .into_iter()
+        .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
+        // Including `mz_version` in the notify set is a Materialize
+        // extension. Doing so allows applications to detect whether they
+        // are talking to Materialize or PostgreSQL without an additional
+        // network roundtrip. This is known to be safe because CockroachDB
+        // has an analogous extension [0].
+        // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
+        .chain(std::iter::once(self.build_info as &dyn Var))
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -1269,71 +1273,22 @@ impl SessionVars {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
-    ///
-    /// If the variable does not exist or the user does not have the visibility requires, this
-    /// function returns an error.
     pub fn get(&self, system_vars: Option<&SystemVars>, name: &str) -> Result<&dyn Var, VarError> {
-        let var: &dyn Var = if name == APPLICATION_NAME.name {
-            &self.application_name
-        } else if name == CLIENT_ENCODING.name {
-            &self.client_encoding
-        } else if name == CLIENT_MIN_MESSAGES.name {
-            &self.client_min_messages
-        } else if name == CLUSTER.name {
-            &self.cluster
-        } else if name == CLUSTER_REPLICA.name {
-            &self.cluster_replica
-        } else if name == DATABASE.name {
-            &self.database
-        } else if name == DATE_STYLE.name {
-            &self.date_style
-        } else if name == EXTRA_FLOAT_DIGITS.name {
-            &self.extra_float_digits
-        } else if name == FAILPOINTS.name {
-            &self.failpoints
-        } else if name == INTEGER_DATETIMES.name {
-            &self.integer_datetimes
-        } else if name == INTERVAL_STYLE.name {
-            &self.interval_style
-        } else if name == MZ_VERSION_NAME {
-            self.build_info
-        } else if name == SEARCH_PATH.name {
-            &self.search_path
-        } else if name == SERVER_VERSION.name {
-            &self.server_version
-        } else if name == SERVER_VERSION_NUM.name {
-            &self.server_version_num
-        } else if name == SQL_SAFE_UPDATES.name {
-            &self.sql_safe_updates
-        } else if name == STANDARD_CONFORMING_STRINGS.name {
-            &self.standard_conforming_strings
-        } else if name == STATEMENT_TIMEOUT.name {
-            &self.statement_timeout
-        } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
-            &self.idle_in_transaction_session_timeout
-        } else if name == TIMEZONE.name {
-            &self.timezone
-        } else if name == TRANSACTION_ISOLATION.name {
-            &self.transaction_isolation
-        } else if name == REAL_TIME_RECENCY.name {
-            &self.real_time_recency
-        } else if name == EMIT_TIMESTAMP_NOTICE.name {
-            &self.emit_timestamp_notice
-        } else if name == EMIT_TRACE_ID_NOTICE.name {
-            &self.emit_trace_id_notice
-        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
-            &self.auto_route_introspection_queries
+        let name = UncasedStr::new(name);
+        if name == MZ_VERSION_NAME {
+            Ok(self.build_info)
         } else if name == IS_SUPERUSER_NAME {
-            &self.user
-        } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
-            &self.enable_session_rbac_checks
+            Ok(&self.user)
         } else {
-            return Err(VarError::UnknownParameter(name.into()));
-        };
-
-        var.visible(&self.user, system_vars)?;
-
-        Ok(var)
+            self.vars
+                .get(name)
+                .map(|v| {
+                    v.visible(&self.user, system_vars)?;
+                    Ok(v.as_var())
+                })
+                .transpose()?
+                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+        }
     }
 
     /// Sets the configuration parameter named `name` to the value represented
@@ -1348,9 +1303,6 @@ impl SessionVars {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    ///
-    /// If the variable does not exist or the user does not have the visibility requires, this
-    /// function returns an error.
     pub fn set(
         &mut self,
         system_vars: Option<&SystemVars>,
@@ -1358,67 +1310,20 @@ impl SessionVars {
         input: VarInput,
         local: bool,
     ) -> Result<(), VarError> {
-        self.get(system_vars, name)?;
-
-        if name == APPLICATION_NAME.name {
-            self.application_name.set(input, local)
-        } else if name == CLIENT_ENCODING.name {
-            self.client_encoding.set(input, local)
-        } else if name == CLIENT_MIN_MESSAGES.name {
-            self.client_min_messages.set(input, local)
-        } else if name == CLUSTER.name {
-            self.cluster.set(input, local)
-        } else if name == CLUSTER_REPLICA.name {
-            self.cluster_replica.set(input, local)
-        } else if name == DATABASE.name {
-            self.database.set(input, local)
-        } else if name == DATE_STYLE.name {
-            self.date_style.set(input, local)
-        } else if name == EXTRA_FLOAT_DIGITS.name {
-            self.extra_float_digits.set(input, local)
-        } else if name == FAILPOINTS.name {
-            self.failpoints.set(input, local)
-        } else if name == INTEGER_DATETIMES.name {
-            self.integer_datetimes.set(input, local)
-        } else if name == INTERVAL_STYLE.name {
-            self.interval_style.set(input, local)
-        } else if name == SEARCH_PATH.name {
-            self.search_path.set(input, local)
-        } else if name == SERVER_VERSION.name {
-            self.server_version.set(input, local)
-        } else if name == SERVER_VERSION_NUM.name {
-            self.server_version_num.set(input, local)
-        } else if name == SQL_SAFE_UPDATES.name {
-            self.sql_safe_updates.set(input, local)
-        } else if name == STANDARD_CONFORMING_STRINGS.name {
-            self.standard_conforming_strings.set(input, local)
-        } else if name == STATEMENT_TIMEOUT.name {
-            self.statement_timeout.set(input, local)
-        } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
-            self.idle_in_transaction_session_timeout.set(input, local)
-        } else if name == TIMEZONE.name {
-            self.timezone.set(input, local)
-        } else if name == TRANSACTION_ISOLATION.name {
-            self.transaction_isolation.set(input, local)
-        } else if name == REAL_TIME_RECENCY.name {
-            self.real_time_recency.set(input, local)
-        } else if name == EMIT_TIMESTAMP_NOTICE.name {
-            self.emit_timestamp_notice.set(input, local)
-        } else if name == EMIT_TRACE_ID_NOTICE.name {
-            self.emit_trace_id_notice.set(input, local)
-        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
-            self.auto_route_introspection_queries.set(input, local)
+        let name = UncasedStr::new(name);
+        if name == MZ_VERSION_NAME {
+            Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
         } else if name == IS_SUPERUSER_NAME {
-            Err(VarError::ReadOnlyParameter(self.user.name()))
-        } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
-            self.enable_session_rbac_checks.set(input, local)
+            Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
         } else {
-            mz_ore::soft_assert!(
-                false,
-                "SessionVars get/set states have diverged; get has {name}, but set does not",
-            );
-
-            Err(VarError::UnknownParameter(name.into()))
+            self.vars
+                .get_mut(name)
+                .map(|v| {
+                    v.visible(&self.user, system_vars)?;
+                    v.set(input, local)
+                })
+                .transpose()?
+                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
         }
     }
 
@@ -1441,120 +1346,35 @@ impl SessionVars {
         name: &str,
         local: bool,
     ) -> Result<(), VarError> {
-        self.get(system_vars, name)?;
-
-        if name == APPLICATION_NAME.name {
-            self.application_name.reset(local);
-        } else if name == CLIENT_MIN_MESSAGES.name {
-            self.client_min_messages.reset(local);
-        } else if name == CLUSTER.name {
-            self.cluster.reset(local);
-        } else if name == CLUSTER_REPLICA.name {
-            self.cluster_replica.reset(local);
-        } else if name == DATABASE.name {
-            self.database.reset(local);
-        } else if name == EXTRA_FLOAT_DIGITS.name {
-            self.extra_float_digits.reset(local);
-        } else if name == SEARCH_PATH.name {
-            self.search_path.reset(local);
-        } else if name == SQL_SAFE_UPDATES.name {
-            self.sql_safe_updates.reset(local);
-        } else if name == STATEMENT_TIMEOUT.name {
-            self.statement_timeout.reset(local);
-        } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
-            self.idle_in_transaction_session_timeout.reset(local);
-        } else if name == TIMEZONE.name {
-            self.timezone.reset(local);
-        } else if name == TRANSACTION_ISOLATION.name {
-            self.transaction_isolation.reset(local);
-        } else if name == REAL_TIME_RECENCY.name {
-            self.real_time_recency.reset(local);
-        } else if name == EMIT_TIMESTAMP_NOTICE.name {
-            self.emit_timestamp_notice.reset(local);
-        } else if name == EMIT_TRACE_ID_NOTICE.name {
-            self.emit_trace_id_notice.reset(local);
-        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
-            self.auto_route_introspection_queries.reset(local);
-        } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
-            self.enable_session_rbac_checks.reset(local);
-        } else if name == CLIENT_ENCODING.name
-            || name == DATE_STYLE.name
-            || name == FAILPOINTS.name
-            || name == INTEGER_DATETIMES.name
-            || name == INTERVAL_STYLE.name
-            || name == SERVER_VERSION.name
-            || name == SERVER_VERSION_NUM.name
-            || name == STANDARD_CONFORMING_STRINGS.name
-            || name == IS_SUPERUSER_NAME
-        {
-            // fixed value
+        let name = UncasedStr::new(name);
+        if name == MZ_VERSION_NAME {
+            Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
+        } else if name == IS_SUPERUSER_NAME {
+            Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
         } else {
-            mz_ore::soft_assert!(
-                false,
-                "SessionVars get/reset states have diverged; get has {name}, but set does not",
-            );
-
-            return Err(VarError::UnknownParameter(name.into()));
+            self.vars
+                .get_mut(name)
+                .map(|v| {
+                    v.visible(&self.user, system_vars)?;
+                    v.reset(local);
+                    Ok(())
+                })
+                .transpose()?
+                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
         }
-        Ok(())
     }
 
     /// Commits or rolls back configuration parameter updates made via
     /// [`SessionVars::set`] since the last call to `end_transaction`.
     pub fn end_transaction(&mut self, action: EndTransactionAction) {
-        // IMPORTANT: if you've added a new `SessionVar`, add a corresponding
-        // call to `end_transaction` below.
-        let SessionVars {
-            application_name,
-            client_encoding: _,
-            client_min_messages,
-            cluster,
-            cluster_replica,
-            database,
-            date_style: _,
-            extra_float_digits,
-            failpoints: _,
-            integer_datetimes: _,
-            interval_style: _,
-            search_path,
-            server_version: _,
-            server_version_num: _,
-            sql_safe_updates,
-            standard_conforming_strings: _,
-            statement_timeout,
-            idle_in_transaction_session_timeout,
-            timezone,
-            transaction_isolation,
-            real_time_recency,
-            emit_timestamp_notice,
-            emit_trace_id_notice,
-            auto_route_introspection_queries,
-            enable_session_rbac_checks,
-            build_info: _,
-            user: _,
-        } = self;
-        application_name.end_transaction(action);
-        client_min_messages.end_transaction(action);
-        cluster.end_transaction(action);
-        cluster_replica.end_transaction(action);
-        database.end_transaction(action);
-        extra_float_digits.end_transaction(action);
-        search_path.end_transaction(action);
-        sql_safe_updates.end_transaction(action);
-        statement_timeout.end_transaction(action);
-        idle_in_transaction_session_timeout.end_transaction(action);
-        timezone.end_transaction(action);
-        transaction_isolation.end_transaction(action);
-        real_time_recency.end_transaction(action);
-        emit_timestamp_notice.end_transaction(action);
-        emit_trace_id_notice.end_transaction(action);
-        auto_route_introspection_queries.end_transaction(action);
-        enable_session_rbac_checks.end_transaction(action);
+        for var in self.vars.values_mut() {
+            var.end_transaction(action);
+        }
     }
 
     /// Returns the value of the `application_name` configuration parameter.
     pub fn application_name(&self) -> &str {
-        self.application_name.value()
+        self.expect_value(&*APPLICATION_NAME).as_str()
     }
 
     /// Returns the build info.
@@ -1564,47 +1384,47 @@ impl SessionVars {
 
     /// Returns the value of the `client_encoding` configuration parameter.
     pub fn client_encoding(&self) -> &str {
-        self.client_encoding.value()
+        self.expect_value(&*CLIENT_ENCODING).as_str()
     }
 
     /// Returns the value of the `client_min_messages` configuration parameter.
     pub fn client_min_messages(&self) -> &ClientSeverity {
-        self.client_min_messages.value()
+        self.expect_value(&CLIENT_MIN_MESSAGES)
     }
 
     /// Returns the value of the `cluster` configuration parameter.
     pub fn cluster(&self) -> &str {
-        self.cluster.value()
+        self.expect_value(&*CLUSTER).as_str()
     }
 
     /// Returns the value of the `cluster_replica` configuration parameter.
     pub fn cluster_replica(&self) -> Option<&str> {
-        self.cluster_replica.value().as_deref()
+        self.expect_value(&CLUSTER_REPLICA).as_deref()
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.
     pub fn date_style(&self) -> &[String] {
-        self.date_style.value()
+        self.expect_value(&*DATE_STYLE).as_slice()
     }
 
     /// Returns the value of the `database` configuration parameter.
     pub fn database(&self) -> &str {
-        self.database.value()
+        self.expect_value(&*DATABASE).as_str()
     }
 
     /// Returns the value of the `extra_float_digits` configuration parameter.
     pub fn extra_float_digits(&self) -> i32 {
-        *self.extra_float_digits.value()
+        *self.expect_value(&EXTRA_FLOAT_DIGITS)
     }
 
     /// Returns the value of the `integer_datetimes` configuration parameter.
     pub fn integer_datetimes(&self) -> bool {
-        *self.integer_datetimes.value()
+        *self.expect_value(&INTEGER_DATETIMES)
     }
 
     /// Returns the value of the `intervalstyle` configuration parameter.
     pub fn intervalstyle(&self) -> &str {
-        self.interval_style.value()
+        self.expect_value(&*INTERVAL_STYLE).as_str()
     }
 
     /// Returns the value of the `mz_version` configuration parameter.
@@ -1614,74 +1434,74 @@ impl SessionVars {
 
     /// Returns the value of the `search_path` configuration parameter.
     pub fn search_path(&self) -> &[Ident] {
-        self.search_path.value()
+        self.expect_value(&*SEARCH_PATH).as_slice()
     }
 
     /// Returns the value of the `server_version` configuration parameter.
     pub fn server_version(&self) -> &str {
-        self.server_version.value()
+        self.expect_value(&*SERVER_VERSION).as_str()
     }
 
     /// Returns the value of the `server_version_num` configuration parameter.
     pub fn server_version_num(&self) -> i32 {
-        *self.server_version_num.value()
+        *self.expect_value(&SERVER_VERSION_NUM)
     }
 
     /// Returns the value of the `sql_safe_updates` configuration parameter.
     pub fn sql_safe_updates(&self) -> bool {
-        *self.sql_safe_updates.value()
+        *self.expect_value(&SQL_SAFE_UPDATES)
     }
 
     /// Returns the value of the `standard_conforming_strings` configuration
     /// parameter.
     pub fn standard_conforming_strings(&self) -> bool {
-        *self.standard_conforming_strings.value()
+        *self.expect_value(&STANDARD_CONFORMING_STRINGS)
     }
 
     /// Returns the value of the `statement_timeout` configuration parameter.
     pub fn statement_timeout(&self) -> &Duration {
-        self.statement_timeout.value()
+        self.expect_value(&STATEMENT_TIMEOUT)
     }
 
     /// Returns the value of the `idle_in_transaction_session_timeout` configuration parameter.
     pub fn idle_in_transaction_session_timeout(&self) -> &Duration {
-        self.idle_in_transaction_session_timeout.value()
+        self.expect_value(&IDLE_IN_TRANSACTION_SESSION_TIMEOUT)
     }
 
     /// Returns the value of the `timezone` configuration parameter.
     pub fn timezone(&self) -> &TimeZone {
-        self.timezone.value()
+        self.expect_value(&TIMEZONE)
     }
 
     /// Returns the value of the `transaction_isolation` configuration
     /// parameter.
     pub fn transaction_isolation(&self) -> &IsolationLevel {
-        self.transaction_isolation.value()
+        self.expect_value(&TRANSACTION_ISOLATION)
     }
 
     /// Returns the value of `real_time_recency` configuration parameter.
     pub fn real_time_recency(&self) -> bool {
-        *self.real_time_recency.value()
+        *self.expect_value(&REAL_TIME_RECENCY)
     }
 
     /// Returns the value of `emit_timestamp_notice` configuration parameter.
     pub fn emit_timestamp_notice(&self) -> bool {
-        *self.emit_timestamp_notice.value()
+        *self.expect_value(&EMIT_TIMESTAMP_NOTICE)
     }
 
     /// Returns the value of `emit_trace_id_notice` configuration parameter.
     pub fn emit_trace_id_notice(&self) -> bool {
-        *self.emit_trace_id_notice.value()
+        *self.expect_value(&EMIT_TRACE_ID_NOTICE)
     }
 
     /// Returns the value of `auto_route_introspection_queries` configuration parameter.
     pub fn auto_route_introspection_queries(&self) -> bool {
-        *self.auto_route_introspection_queries.value()
+        *self.expect_value(&AUTO_ROUTE_INTROSPECTION_QUERIES)
     }
 
     /// Returns the value of `enable_session_rbac_checks` configuration parameter.
     pub fn enable_session_rbac_checks(&self) -> bool {
-        *self.enable_session_rbac_checks.value()
+        *self.expect_value(&ENABLE_SESSION_RBAC_CHECKS)
     }
 
     /// Returns the value of `is_superuser` configuration parameter.
@@ -1700,7 +1520,8 @@ impl SessionVars {
     }
 
     pub fn set_cluster(&mut self, cluster: String) {
-        self.cluster.session_value = Some(cluster);
+        self.set(None, CLUSTER.name(), VarInput::Flat(&cluster), false)
+            .expect("setting cluster from string succeeds");
     }
 }
 
@@ -1806,7 +1627,7 @@ impl SystemVars {
             .with_var(&MAX_MATERIALIZED_VIEWS)
             .with_var(&MAX_CLUSTERS)
             .with_var(&MAX_REPLICAS_PER_CLUSTER)
-            .with_constrained_var(
+            .with_value_constrained_var(
                 &MAX_CREDIT_CONSUMPTION_RATE,
                 ValueConstraint::Domain(&NumericNonNegNonNan),
             )
@@ -1875,13 +1696,19 @@ impl SystemVars {
         self.allow_unsafe
     }
 
-    fn with_constrained_var<V>(mut self, var: &'static ServerVar<V>, c: ValueConstraint<V>) -> Self
+    fn with_value_constrained_var<V>(
+        mut self,
+        var: &'static ServerVar<V>,
+        c: ValueConstraint<V>,
+    ) -> Self
     where
         V: Value + Debug + PartialEq + Clone + 'static,
         V::Owned: Debug + Send + Clone + Sync,
     {
-        self.vars
-            .insert(var.name, Box::new(SystemVar::new(var).with_constraint(c)));
+        self.vars.insert(
+            var.name,
+            Box::new(SystemVar::new(var).with_value_constraint(c)),
+        );
         self
     }
 
@@ -2461,7 +2288,7 @@ where
         }
     }
 
-    fn with_constraint(mut self, c: ValueConstraint<V>) -> SystemVar<V> {
+    fn with_value_constraint(mut self, c: ValueConstraint<V>) -> SystemVar<V> {
         assert!(
             !self
                 .constraints
@@ -2728,25 +2555,7 @@ where
         self
     }
 
-    fn as_read_only(mut self) -> SessionVar<V> {
-        assert!(
-            self.constraints.is_empty(),
-            "read only params do not support any other constraints"
-        );
-        self.constraints.push(ValueConstraint::ReadOnly);
-        self
-    }
-
-    fn as_fixed_value(mut self) -> SessionVar<V> {
-        assert!(
-            self.constraints.is_empty(),
-            "fixed value params do not support any other constraints"
-        );
-        self.constraints.push(ValueConstraint::Fixed);
-        self
-    }
-
-    fn with_constraint(mut self, c: &'static dyn DomainConstraint<V>) -> SessionVar<V> {
+    fn with_value_constraint(mut self, c: ValueConstraint<V>) -> SessionVar<V> {
         assert!(
             !self
                 .constraints
@@ -2754,23 +2563,8 @@ where
                 .any(|c| matches!(c, ValueConstraint::ReadOnly | ValueConstraint::Fixed)),
             "fixed value and read only params do not support any other constraints"
         );
-        self.constraints.push(ValueConstraint::Domain(c));
+        self.constraints.push(c);
         self
-    }
-
-    fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
-        let mut v = V::parse(self, input)?;
-
-        V::canonicalize(&mut v);
-        self.check_constraints(&v)?;
-
-        if local {
-            self.local_value = Some(v);
-        } else {
-            self.local_value = None;
-            self.staged_value = Some(v);
-        }
-        Ok(())
     }
 
     fn check_constraints(&self, v: &V::Owned) -> Result<(), VarError> {
@@ -2780,26 +2574,6 @@ where
         }
 
         Ok(())
-    }
-
-    fn reset(&mut self, local: bool) {
-        let value = self.default_value.to_owned();
-        if local {
-            self.local_value = Some(value);
-        } else {
-            self.local_value = None;
-            self.staged_value = Some(value);
-        }
-    }
-
-    fn end_transaction(&mut self, action: EndTransactionAction) {
-        self.local_value = None;
-        match action {
-            EndTransactionAction::Commit if self.staged_value.is_some() => {
-                self.session_value = self.staged_value.take()
-            }
-            _ => self.staged_value = None,
-        }
     }
 
     fn value(&self) -> &V {
