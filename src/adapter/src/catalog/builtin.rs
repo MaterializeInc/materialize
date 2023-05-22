@@ -2975,6 +2975,24 @@ LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p')",
 };
 
+pub const PG_TABLESPACE: BuiltinView = BuiltinView {
+    name: "pg_tablespace",
+    schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_tablespace AS
+    SELECT oid, spcname, spcowner, spcacl, spcoptions
+    FROM (
+        VALUES (
+            --These are the same defaults CockroachDB uses.
+            0::pg_catalog.oid,
+            'pg_default'::pg_catalog.text,
+            NULL::pg_catalog.oid,
+            NULL::pg_catalog.text[],
+            NULL::pg_catalog.text[]
+        )
+    ) AS _ (oid, spcname, spcowner, spcacl, spcoptions)
+",
+};
+
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
     name: "pg_am",
     schema: PG_CATALOG_SCHEMA,
@@ -3756,6 +3774,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_AUTH_MEMBERS),
         Builtin::View(&PG_CONSTRAINT),
         Builtin::View(&PG_TABLES),
+        Builtin::View(&PG_TABLESPACE),
         Builtin::View(&PG_ACCESS_METHODS),
         Builtin::View(&PG_AUTHID),
         Builtin::View(&PG_ROLES),

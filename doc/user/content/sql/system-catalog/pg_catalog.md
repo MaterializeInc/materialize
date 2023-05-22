@@ -29,6 +29,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_roles`](https://www.postgresql.org/docs/current/view-pg-roles.html)
   * [`pg_settings`](https://www.postgresql.org/docs/current/view-pg-settings.html)
   * [`pg_tables`](https://www.postgresql.org/docs/current/view-pg-tables.html)
+  * [`pg_tablespace`](https://www.postgresql.org/docs/current/catalog-pg-tablespace.html)
   * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
   * [`pg_views`](https://www.postgresql.org/docs/current/view-pg-views.html)
   * [`pg_authid`](https://www.postgresql.org/docs/current/catalog-pg-authid.html)
