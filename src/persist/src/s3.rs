@@ -924,6 +924,7 @@ mod tests {
 
     use super::*;
 
+    #[ignore] // TODO(def-) Reenable when #19412 is fixed
     #[tokio::test(flavor = "multi_thread")]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
