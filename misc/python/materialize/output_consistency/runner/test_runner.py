@@ -59,19 +59,19 @@ class ConsistencyTestRunner:
         )
 
     def start(self) -> ConsistencyTestSummary:
-        iteration_count = 0
+        expression_count = 0
         test_summary = ConsistencyTestSummary(dry_run=self.config.dry_run)
 
         start_time = datetime.now()
         end_time = start_time + timedelta(seconds=self.config.max_runtime_in_sec)
 
         while True:
-            if iteration_count > 0 and iteration_count % 200 == 0:
-                print(f"Status: Expression {iteration_count}...")
+            if expression_count > 0 and expression_count % 200 == 0:
+                print(f"Status: Expression {expression_count}...")
 
             operation = self.expression_generator.pick_random_operation()
 
-            shall_abort_after_iteration = self._shall_abort(iteration_count, end_time)
+            shall_abort_after_iteration = self._shall_abort(expression_count, end_time)
 
             expression = self.expression_generator.generate_expression(
                 operation, test_summary
@@ -97,7 +97,7 @@ class ConsistencyTestRunner:
                     )
                     shall_abort_after_iteration = True
 
-            iteration_count += 1
+            expression_count += 1
 
             if shall_abort_after_iteration:
                 break
