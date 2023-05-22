@@ -46,6 +46,8 @@ pub enum ErrorKind {
     ReservedSchemaName(String),
     #[error("role name {} is reserved", .0.quoted())]
     ReservedRoleName(String),
+    #[error("role name {} is reserved", .0.quoted())]
+    ReservedSystemRoleName(String),
     #[error("cluster name {} is reserved", .0.quoted())]
     ReservedClusterName(String),
     #[error("replica name {} is reserved", .0.quoted())]
@@ -108,6 +110,9 @@ impl Error {
             }
             ErrorKind::ReservedRoleName(_) => {
                 Some("The role \"public\" and the prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
+            }
+            ErrorKind::ReservedSystemRoleName(_) => {
+                Some("The role prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
             }
             ErrorKind::ReservedClusterName(_) => {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system clusters.".into())

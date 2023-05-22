@@ -1509,6 +1509,17 @@ impl CatalogState {
         }
     }
 
+    pub fn ensure_not_system_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        if role_id.is_system() {
+            let role = self.get_role(role_id);
+            Err(Error::new(ErrorKind::ReservedSystemRoleName(
+                role.name().to_string(),
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     // TODO(mjibson): Is there a way to make this a closure to avoid explicitly
     // passing tx, session, and builtin_table_updates?
     fn add_to_audit_log(
@@ -6905,6 +6916,10 @@ impl Catalog {
 
     pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
         self.state.ensure_not_reserved_role(role_id)
+    }
+
+    pub fn ensure_not_system_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        self.state.ensure_not_system_role(role_id)
     }
 
     pub fn ensure_not_reserved_object(
