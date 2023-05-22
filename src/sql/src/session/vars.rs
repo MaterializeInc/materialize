@@ -294,7 +294,7 @@ const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
 
 const FAILPOINTS: ServerVar<Failpoints> = ServerVar {
     name: UncasedStr::new("failpoints"),
-    value: &Failpoints(Ok(())),
+    value: &Failpoints,
     description: "Allows failpoints to be dynamically activated.",
     internal: false,
 };
@@ -591,9 +591,12 @@ mod upsert_rocksdb {
             "rocksdb_compaction_style".to_string()
         }
 
-        fn parse<'a>(input: VarInput) -> Result<Self::Owned, ()> {
-            let s = extract_single_value(input)?;
-            CompactionStyle::from_str(s).map_err(|_| ())
+        fn parse<'a>(
+            param: &'a (dyn Var + Send + Sync),
+            input: VarInput,
+        ) -> Result<Self::Owned, VarError> {
+            let s = extract_single_value(param, input)?;
+            CompactionStyle::from_str(s).map_err(|_| VarError::InvalidParameterType(param.into()))
         }
 
         fn format(&self) -> String {
@@ -606,9 +609,12 @@ mod upsert_rocksdb {
             "rocksdb_compression_type".to_string()
         }
 
-        fn parse<'a>(input: VarInput) -> Result<Self::Owned, ()> {
-            let s = extract_single_value(input)?;
-            CompressionType::from_str(s).map_err(|_| ())
+        fn parse<'a>(
+            param: &'a (dyn Var + Send + Sync),
+            input: VarInput,
+        ) -> Result<Self::Owned, VarError> {
+            let s = extract_single_value(param, input)?;
+            CompressionType::from_str(s).map_err(|_| VarError::InvalidParameterType(param.into()))
         }
 
         fn format(&self) -> String {
@@ -1357,20 +1363,9 @@ impl SessionVars {
         if name == APPLICATION_NAME.name {
             self.application_name.set(input, local)
         } else if name == CLIENT_ENCODING.name {
-            match extract_single_value(input) {
-                Ok(value) if UncasedStr::new(value) == CLIENT_ENCODING.value => Ok(()),
-                _ => Err(VarError::FixedValueParameter((&*CLIENT_ENCODING).into())),
-            }
+            self.client_encoding.set(input, local)
         } else if name == CLIENT_MIN_MESSAGES.name {
-            if let Ok(_) = ClientSeverity::parse(input) {
-                self.client_min_messages.set(input, local)
-            } else {
-                return Err(VarError::ConstrainedParameter {
-                    parameter: (&CLIENT_MIN_MESSAGES).into(),
-                    values: input.to_vec(),
-                    valid_values: Some(ClientSeverity::valid_values()),
-                });
-            }
+            self.client_min_messages.set(input, local)
         } else if name == CLUSTER.name {
             self.cluster.set(input, local)
         } else if name == CLUSTER_REPLICA.name {
@@ -1378,78 +1373,33 @@ impl SessionVars {
         } else if name == DATABASE.name {
             self.database.set(input, local)
         } else if name == DATE_STYLE.name {
-            let Ok(values) = Vec::<String>::parse(input) else {
-                return Err(VarError::FixedValueParameter((&*DATE_STYLE).into()));
-            };
-            for value in values {
-                let value = UncasedStr::new(value.trim());
-                if value != "ISO" && value != "MDY" {
-                    return Err(VarError::FixedValueParameter((&*DATE_STYLE).into()));
-                }
-            }
-            Ok(())
+            self.date_style.set(input, local)
         } else if name == EXTRA_FLOAT_DIGITS.name {
             self.extra_float_digits.set(input, local)
         } else if name == FAILPOINTS.name {
-            self.failpoints
-                .set(input, local)
-                .expect("failpoint setting always succeeds; errors are passed in OK valued");
-
-            let Failpoints(v) = self.failpoints.value();
-            let r = v.clone();
-            self.failpoints
-                .set(VarInput::Flat(""), local)
-                .expect("empty string always a valid failpoint");
-            r
+            self.failpoints.set(input, local)
         } else if name == INTEGER_DATETIMES.name {
-            Err(VarError::ReadOnlyParameter(INTEGER_DATETIMES.name()))
+            self.integer_datetimes.set(input, local)
         } else if name == INTERVAL_STYLE.name {
-            match extract_single_value(input) {
-                Ok(value) if UncasedStr::new(value) == INTERVAL_STYLE.value => Ok(()),
-                _ => Err(VarError::FixedValueParameter((&*INTERVAL_STYLE).into())),
-            }
+            self.interval_style.set(input, local)
         } else if name == SEARCH_PATH.name {
             self.search_path.set(input, local)
         } else if name == SERVER_VERSION.name {
-            Err(VarError::ReadOnlyParameter(SERVER_VERSION.name()))
+            self.server_version.set(input, local)
         } else if name == SERVER_VERSION_NUM.name {
-            Err(VarError::ReadOnlyParameter(SERVER_VERSION_NUM.name()))
+            self.server_version_num.set(input, local)
         } else if name == SQL_SAFE_UPDATES.name {
             self.sql_safe_updates.set(input, local)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
-            match bool::parse(input) {
-                Ok(value) if value == *STANDARD_CONFORMING_STRINGS.value => Ok(()),
-                Ok(_) => Err(VarError::FixedValueParameter(
-                    (&STANDARD_CONFORMING_STRINGS).into(),
-                )),
-                Err(()) => Err(VarError::InvalidParameterType(
-                    (&STANDARD_CONFORMING_STRINGS).into(),
-                )),
-            }
+            self.standard_conforming_strings.set(input, local)
         } else if name == STATEMENT_TIMEOUT.name {
             self.statement_timeout.set(input, local)
         } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
             self.idle_in_transaction_session_timeout.set(input, local)
         } else if name == TIMEZONE.name {
-            if let Ok(_) = TimeZone::parse(input) {
-                self.timezone.set(input, local)
-            } else {
-                Err(VarError::ConstrainedParameter {
-                    parameter: (&TIMEZONE).into(),
-                    values: input.to_vec(),
-                    valid_values: None,
-                })
-            }
+            self.timezone.set(input, local)
         } else if name == TRANSACTION_ISOLATION.name {
-            if let Ok(_) = IsolationLevel::parse(input) {
-                self.transaction_isolation.set(input, local)
-            } else {
-                return Err(VarError::ConstrainedParameter {
-                    parameter: (&TRANSACTION_ISOLATION).into(),
-                    values: input.to_vec(),
-                    valid_values: Some(IsolationLevel::valid_values()),
-                });
-            }
+            self.transaction_isolation.set(input, local)
         } else if name == REAL_TIME_RECENCY.name {
             self.real_time_recency.set(input, local)
         } else if name == EMIT_TIMESTAMP_NOTICE.name {
@@ -2594,25 +2544,21 @@ where
     }
 
     fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
-        match V::parse(input) {
-            Ok(v) => Ok(self.parent.value == v.borrow()),
-            Err(()) => Err(VarError::InvalidParameterType(self.parent.into())),
-        }
+        let v = V::parse(self, input)?;
+        Ok(self.parent.value == v.borrow())
     }
 
     fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
-        match V::parse(input) {
-            Ok(v) => {
-                self.check_constraints(&v)?;
+        let mut v = V::parse(self, input)?;
 
-                if self.persisted_value() != Some(v.borrow()) {
-                    self.persisted_value = Some(v);
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent.into())),
+        V::canonicalize(&mut v);
+        self.check_constraints(&v)?;
+
+        if self.persisted_value() != Some(v.borrow()) {
+            self.persisted_value = Some(v);
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -2626,13 +2572,9 @@ where
     }
 
     fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
-        match V::parse(input) {
-            Ok(v) => {
-                self.dynamic_default = Some(v);
-                Ok(())
-            }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent.into())),
-        }
+        let v = V::parse(self, input)?;
+        self.dynamic_default = Some(v);
+        Ok(())
     }
 }
 
@@ -2817,20 +2759,18 @@ where
     }
 
     fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
-        match V::parse(input) {
-            Ok(mut v) => {
-                V::canonicalize(&mut v);
-                self.check_constraints(&v)?;
-                if local {
-                    self.local_value = Some(v);
-                } else {
-                    self.local_value = None;
-                    self.staged_value = Some(v);
-                }
-                Ok(())
-            }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent.into())),
+        let mut v = V::parse(self, input)?;
+
+        V::canonicalize(&mut v);
+        self.check_constraints(&v)?;
+
+        if local {
+            self.local_value = Some(v);
+        } else {
+            self.local_value = None;
+            self.staged_value = Some(v);
         }
+        Ok(())
     }
 
     fn check_constraints(&self, v: &V::Owned) -> Result<(), VarError> {
@@ -2951,7 +2891,10 @@ pub trait Value: ToOwned + Send + Sync {
     /// The name of the value type.
     fn type_name() -> String;
     /// Parses a value of this type from a [`VarInput`].
-    fn parse(input: VarInput) -> Result<Self::Owned, ()>;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError>;
     /// Formats this value as a flattened string.
     ///
     /// The resulting string is guaranteed to be parsable if provided to
@@ -2963,11 +2906,18 @@ pub trait Value: ToOwned + Send + Sync {
     fn canonicalize(_: &mut Self::Owned) {}
 }
 
-fn extract_single_value(input: VarInput) -> Result<&str, ()> {
+fn extract_single_value<'var, 'input: 'var>(
+    param: &'var (dyn Var + Send + Sync),
+    input: VarInput<'input>,
+) -> Result<&'input str, VarError> {
     match input {
         VarInput::Flat(value) => Ok(value),
         VarInput::SqlSet([value]) => Ok(value),
-        _ => Err(()),
+        VarInput::SqlSet(values) => Err(VarError::InvalidParameterValue {
+            parameter: param.into(),
+            values: values.to_vec(),
+            reason: "expects a single value".to_string(),
+        }),
     }
 }
 
@@ -2976,12 +2926,12 @@ impl Value for bool {
         "boolean".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<Self, VarError> {
+        let s = extract_single_value(param, input)?;
         match s {
             "t" | "true" | "on" => Ok(true),
             "f" | "false" | "off" => Ok(false),
-            _ => Err(()),
+            _ => Err(VarError::InvalidParameterType(param.into())),
         }
     }
 
@@ -2998,9 +2948,10 @@ impl Value for i32 {
         "integer".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<i32, ()> {
-        let s = extract_single_value(input)?;
-        s.parse().map_err(|_| ())
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<i32, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
     }
 
     fn format(&self) -> String {
@@ -3013,9 +2964,10 @@ impl Value for u32 {
         "unsigned integer".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<u32, ()> {
-        let s = extract_single_value(input)?;
-        s.parse().map_err(|_| ())
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<u32, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
     }
 
     fn format(&self) -> String {
@@ -3028,9 +2980,13 @@ impl Value for mz_repr::Timestamp {
         "mz-timestamp".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<mz_repr::Timestamp, ()> {
-        let s = extract_single_value(input)?;
-        s.parse().map_err(|_| ())
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<mz_repr::Timestamp, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
     }
 
     fn format(&self) -> String {
@@ -3043,9 +2999,10 @@ impl Value for usize {
         "unsigned integer".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<usize, ()> {
-        let s = extract_single_value(input)?;
-        s.parse().map_err(|_| ())
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<usize, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
     }
 
     fn format(&self) -> String {
@@ -3075,9 +3032,14 @@ impl Value for Numeric {
         "numeric".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-        let s = extract_single_value(input)?;
-        let n = s.parse().map_err(|_| ())?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let n = s
+            .parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))?;
         Ok(n)
     }
 
@@ -3096,8 +3058,11 @@ impl Value for Duration {
         "duration".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Duration, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Duration, VarError> {
+        let s = extract_single_value(param, input)?;
         let s = s.trim();
         // Take all numeric values from [0..]
         let split_pos = s
@@ -3106,7 +3071,9 @@ impl Value for Duration {
             .unwrap_or_else(|| s.chars().count());
 
         // Error if the numeric values don't parse, i.e. there aren't any.
-        let d = s[..split_pos].parse::<u64>().map_err(|_| ())?;
+        let d = s[..split_pos]
+            .parse::<u64>()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))?;
 
         // We've already trimmed end
         let (f, m): (fn(u64) -> Duration, u64) = match s[split_pos..].trim_start() {
@@ -3117,13 +3084,23 @@ impl Value for Duration {
             "min" => (Duration::from_secs, SEC_TO_MIN),
             "h" => (Duration::from_secs, SEC_TO_HOUR),
             "d" => (Duration::from_secs, SEC_TO_DAY),
-            _ => return Err(()),
+            o => {
+                return Err(VarError::InvalidParameterValue {
+                    parameter: param.into(),
+                    values: vec![s.to_string()],
+                    reason: format!("expected us, ms, s, min, h, or d but got {:?}", o),
+                })
+            }
         };
 
         let d = if d == 0 {
             Duration::from_secs(u64::MAX)
         } else {
-            f(d.checked_mul(m).ok_or(())?)
+            f(d.checked_mul(m).ok_or(VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: vec![s.to_string()],
+                reason: "expected value to fit in u64".to_string(),
+            })?)
         };
         Ok(d)
     }
@@ -3159,7 +3136,7 @@ impl Value for Duration {
 #[test]
 fn test_value_duration() {
     fn inner(t: &'static str, e: Duration, expected_format: Option<&'static str>) {
-        let d = Duration::parse(VarInput::Flat(t)).expect("invalid duration");
+        let d = Duration::parse(&STATEMENT_TIMEOUT, VarInput::Flat(t)).expect("invalid duration");
         assert_eq!(d, e);
         let mut d_format = d.format();
         d_format.retain(|c| !c.is_whitespace());
@@ -3206,7 +3183,7 @@ fn test_value_duration() {
     );
 
     fn errs(t: &'static str) {
-        assert!(Duration::parse(VarInput::Flat(t)).is_err());
+        assert!(Duration::parse(&STATEMENT_TIMEOUT, VarInput::Flat(t)).is_err());
     }
     errs("1 m");
     errs("1 sec");
@@ -3227,8 +3204,8 @@ impl Value for String {
         "string".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<String, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<String, VarError> {
+        let s = extract_single_value(param, input)?;
         Ok(s.to_owned())
     }
 
@@ -3246,16 +3223,20 @@ impl Value for Vec<String> {
         "string list".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Vec<String>, ()> {
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Vec<String>, VarError> {
         match input {
-            VarInput::Flat(v) => mz_sql_parser::parser::split_identifier_string(v).map_err(|_| ()),
+            VarInput::Flat(v) => mz_sql_parser::parser::split_identifier_string(v)
+                .map_err(|_| VarError::InvalidParameterType(param.into())),
             // Unlike parsing `Vec<Ident>`, we further split each element.
             // This matches PostgreSQL.
             VarInput::SqlSet(values) => {
                 let mut out = vec![];
                 for v in values {
-                    let idents =
-                        mz_sql_parser::parser::split_identifier_string(v).map_err(|_| ())?;
+                    let idents = mz_sql_parser::parser::split_identifier_string(v)
+                        .map_err(|_| VarError::InvalidParameterType(param.into()))?;
                     out.extend(idents)
                 }
                 Ok(out)
@@ -3283,11 +3264,15 @@ impl Value for Vec<Ident> {
         "identifier list".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Vec<Ident>, ()> {
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Vec<Ident>, VarError> {
         let holder;
         let values = match input {
             VarInput::Flat(value) => {
-                holder = mz_sql_parser::parser::split_identifier_string(value).map_err(|_| ())?;
+                holder = mz_sql_parser::parser::split_identifier_string(value)
+                    .map_err(|_| VarError::InvalidParameterType(param.into()))?;
                 &holder
             }
             // Unlike parsing `Vec<String>`, we do *not* further split each
@@ -3311,11 +3296,14 @@ where
         format!("optional {}", V::type_name())
     }
 
-    fn parse(input: VarInput) -> Result<Option<V>, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Option<V>, VarError> {
+        let s = extract_single_value(param, input)?;
         match s {
             "" => Ok(None),
-            _ => <V as Value>::parse(VarInput::Flat(s)).map(Some),
+            _ => <V as Value>::parse(param, VarInput::Flat(s)).map(Some),
         }
     }
 
@@ -3329,51 +3317,46 @@ where
 
 // This unorthodox design lets us escape complex errors from value parsing.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Failpoints(Result<(), VarError>);
+struct Failpoints;
 
 impl Value for Failpoints {
     fn type_name() -> String {
         "failpoints config".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Failpoints, ()> {
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Failpoints, VarError> {
         let values = input.to_vec();
         for mut cfg in values.iter().map(|v| v.trim().split(';')).flatten() {
-            let mut parse_config = || -> Result<(), VarError> {
-                cfg = cfg.trim();
-                if cfg.is_empty() {
-                    return Ok(());
-                }
-                let mut splits = cfg.splitn(2, '=');
-                let failpoint = splits
-                    .next()
-                    .ok_or_else(|| VarError::InvalidParameterValue {
-                        parameter: (&FAILPOINTS).into(),
-                        values: input.to_vec(),
-                        reason: "missing failpxoint name".into(),
-                    })?;
-                let action = splits
-                    .next()
-                    .ok_or_else(|| VarError::InvalidParameterValue {
-                        parameter: (&FAILPOINTS).into(),
-                        values: input.to_vec(),
-                        reason: "missing failpoint action".into(),
-                    })?;
-                fail::cfg(failpoint, action).map_err(|e| VarError::InvalidParameterValue {
-                    parameter: (&FAILPOINTS).into(),
-                    values: input.to_vec(),
-                    reason: e,
-                })?;
-
-                Ok(())
-            };
-
-            if let Err(e) = parse_config() {
-                return Ok(Failpoints(Err(e)));
+            cfg = cfg.trim();
+            if cfg.is_empty() {
+                continue;
             }
+            let mut splits = cfg.splitn(2, '=');
+            let failpoint = splits
+                .next()
+                .ok_or_else(|| VarError::InvalidParameterValue {
+                    parameter: param.into(),
+                    values: input.to_vec(),
+                    reason: "missing failpoint name".into(),
+                })?;
+            let action = splits
+                .next()
+                .ok_or_else(|| VarError::InvalidParameterValue {
+                    parameter: param.into(),
+                    values: input.to_vec(),
+                    reason: "missing failpoint action".into(),
+                })?;
+            fail::cfg(failpoint, action).map_err(|e| VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: input.to_vec(),
+                reason: e,
+            })?;
         }
 
-        Ok(Failpoints(Ok(())))
+        Ok(Failpoints)
     }
 
     fn format(&self) -> String {
@@ -3459,8 +3442,11 @@ impl Value for ClientSeverity {
         "string".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
         let s = UncasedStr::new(s);
 
         if s == ClientSeverity::Error.as_str() {
@@ -3485,7 +3471,11 @@ impl Value for ClientSeverity {
         } else if s == ClientSeverity::Debug5.as_str() {
             Ok(ClientSeverity::Debug5)
         } else {
-            Err(())
+            Err(VarError::ConstrainedParameter {
+                parameter: param.into(),
+                values: input.to_vec(),
+                valid_values: Some(ClientSeverity::valid_values()),
+            })
         }
     }
 
@@ -3521,8 +3511,11 @@ impl Value for TimeZone {
         "string".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
         let s = UncasedStr::new(s);
 
         if s == TimeZone::UTC.as_str() {
@@ -3530,7 +3523,11 @@ impl Value for TimeZone {
         } else if s == "+00:00" {
             Ok(TimeZone::FixedOffset("+00:00"))
         } else {
-            Err(())
+            Err(VarError::ConstrainedParameter {
+                parameter: (&TIMEZONE).into(),
+                values: input.to_vec(),
+                valid_values: None,
+            })
         }
     }
 
@@ -3576,8 +3573,11 @@ impl Value for IsolationLevel {
         "string".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
         let s = UncasedStr::new(s);
 
         // We don't have any optimizations for levels below Serializable,
@@ -3591,7 +3591,11 @@ impl Value for IsolationLevel {
         } else if s == Self::StrictSerializable.as_str() {
             Ok(Self::StrictSerializable)
         } else {
-            Err(())
+            Err(VarError::ConstrainedParameter {
+                parameter: (&TRANSACTION_ISOLATION).into(),
+                values: input.to_vec(),
+                valid_values: Some(IsolationLevel::valid_values()),
+            })
         }
     }
 
