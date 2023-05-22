@@ -29,7 +29,7 @@ BOOLEAN_OPERATION_TYPES.append(
     DbOperation(
         "CASE WHEN $ THEN $ ELSE $ END",
         [BooleanOperationParam(), AnyOperationParam(), AnyOperationParam()],
-        DataTypeCategory.BOOLEAN,
+        DataTypeCategory.DYNAMIC,
         {DataTypeCategoryMatchesArgsValidator(1, 2)},
     )
 )
