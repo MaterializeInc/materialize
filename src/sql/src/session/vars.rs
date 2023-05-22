@@ -70,7 +70,6 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use const_format::concatcp;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
@@ -229,19 +228,21 @@ pub const SERVER_PATCH_VERSION: u8 = 0;
 /// The name of the default database that Materialize uses.
 pub const DEFAULT_DATABASE_NAME: &str = "materialize";
 
-const APPLICATION_NAME: ServerVar<str> = ServerVar {
+pub static DEFAULT_APPLICATION_NAME: Lazy<String> = Lazy::new(|| "".to_string());
+pub static APPLICATION_NAME: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("application_name"),
-    value: "",
+    value: &DEFAULT_APPLICATION_NAME,
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
     internal: false,
-};
+});
 
-const CLIENT_ENCODING: ServerVar<str> = ServerVar {
-    name: UncasedStr::new("client_encoding"),
-    value: "UTF8",
-    description: "Sets the client's character set encoding (PostgreSQL).",
+pub static DEFAULT_CLIENT_ENCODING: Lazy<String> = Lazy::new(|| "UTF8".to_string());
+pub static CLIENT_ENCODING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("application_name"),
+    value: &DEFAULT_CLIENT_ENCODING,
+    description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
     internal: false,
-};
+});
 
 const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     name: UncasedStr::new("client_min_messages"),
@@ -249,14 +250,15 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
     internal: false,
 };
-pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 
-const CLUSTER: ServerVar<str> = ServerVar {
+pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
+pub static DEFAULT_CLUSTER: Lazy<String> = Lazy::new(|| "default".to_string());
+pub static CLUSTER: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: CLUSTER_VAR_NAME,
-    value: "default",
+    value: &DEFAULT_CLUSTER,
     description: "Sets the current cluster (Materialize).",
     internal: false,
-};
+});
 
 const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
     name: UncasedStr::new("cluster_replica"),
@@ -266,13 +268,13 @@ const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
 };
 
 pub const DATABASE_VAR_NAME: &UncasedStr = UncasedStr::new("database");
-
-const DATABASE: ServerVar<str> = ServerVar {
+pub static DEFAULT_DATABASE: Lazy<String> = Lazy::new(|| DEFAULT_DATABASE_NAME.to_string());
+pub static DATABASE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: DATABASE_VAR_NAME,
-    value: DEFAULT_DATABASE_NAME,
+    value: &DEFAULT_DATABASE,
     description: "Sets the current database (CockroachDB).",
     internal: false,
-};
+});
 
 static DEFAULT_DATE_STYLE: Lazy<Vec<String>> = Lazy::new(|| vec!["ISO".into(), "MDY".into()]);
 static DATE_STYLE: Lazy<ServerVar<Vec<String>>> = Lazy::new(|| ServerVar {
@@ -304,13 +306,14 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
-const INTERVAL_STYLE: ServerVar<str> = ServerVar {
+pub static DEFAULT_INTERVAL_STYLE: Lazy<String> = Lazy::new(|| "postgres".to_string());
+pub static INTERVAL_STYLE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     // IntervalStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("IntervalStyle"),
-    value: "postgres",
+    value: &DEFAULT_INTERVAL_STYLE,
     description: "Sets the display format for interval values (PostgreSQL).",
     internal: false,
-};
+});
 
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
 const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
@@ -345,18 +348,19 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: false,
 };
 
-const SERVER_VERSION: ServerVar<str> = ServerVar {
+pub static SERVER_VERSION_VALUE: Lazy<String> = Lazy::new(|| {
+    format!(
+        "{}.{}.{}",
+        SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION, SERVER_PATCH_VERSION
+    )
+});
+
+pub static SERVER_VERSION: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("server_version"),
-    value: concatcp!(
-        SERVER_MAJOR_VERSION,
-        ".",
-        SERVER_MINOR_VERSION,
-        ".",
-        SERVER_PATCH_VERSION
-    ),
+    value: &SERVER_VERSION_VALUE,
     description: "Shows the PostgreSQL compatible server version (PostgreSQL).",
     internal: false,
-};
+});
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("server_version_num"),
@@ -587,7 +591,7 @@ mod upsert_rocksdb {
             "rocksdb_compaction_style".to_string()
         }
 
-        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+        fn parse<'a>(input: VarInput) -> Result<Self::Owned, ()> {
             let s = extract_single_value(input)?;
             CompactionStyle::from_str(s).map_err(|_| ())
         }
@@ -602,7 +606,7 @@ mod upsert_rocksdb {
             "rocksdb_compression_type".to_string()
         }
 
-        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
+        fn parse<'a>(input: VarInput) -> Result<Self::Owned, ()> {
             let s = extract_single_value(input)?;
             CompressionType::from_str(s).map_err(|_| ())
         }
@@ -1116,19 +1120,19 @@ impl OwnedVarInput {
 #[derive(Debug)]
 pub struct SessionVars {
     // Normal variables.
-    application_name: SessionVar<str>,
-    client_encoding: ServerVar<str>,
+    application_name: SessionVar<String>,
+    client_encoding: &'static ServerVar<String>,
     client_min_messages: SessionVar<ClientSeverity>,
-    cluster: SessionVar<str>,
+    cluster: SessionVar<String>,
     cluster_replica: SessionVar<Option<String>>,
-    database: SessionVar<str>,
+    database: SessionVar<String>,
     date_style: &'static ServerVar<Vec<String>>,
     extra_float_digits: SessionVar<i32>,
     failpoints: SessionVar<Failpoints>,
     integer_datetimes: ServerVar<bool>,
-    interval_style: ServerVar<str>,
+    interval_style: &'static ServerVar<String>,
     search_path: SessionVar<Vec<Ident>>,
-    server_version: ServerVar<str>,
+    server_version: &'static ServerVar<String>,
     server_version_num: ServerVar<i32>,
     sql_safe_updates: SessionVar<bool>,
     standard_conforming_strings: ServerVar<bool>,
@@ -1151,7 +1155,7 @@ impl SessionVars {
     pub fn new(build_info: &'static BuildInfo, user: User) -> SessionVars {
         SessionVars {
             application_name: SessionVar::new(&APPLICATION_NAME),
-            client_encoding: CLIENT_ENCODING,
+            client_encoding: &*CLIENT_ENCODING,
             client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
             cluster: SessionVar::new(&CLUSTER),
             cluster_replica: SessionVar::new(&CLUSTER_REPLICA),
@@ -1160,9 +1164,9 @@ impl SessionVars {
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
             failpoints: SessionVar::new(&FAILPOINTS),
             integer_datetimes: INTEGER_DATETIMES,
-            interval_style: INTERVAL_STYLE,
+            interval_style: &*INTERVAL_STYLE,
             search_path: SessionVar::new(&SEARCH_PATH),
-            server_version: SERVER_VERSION,
+            server_version: &*SERVER_VERSION,
             server_version_num: SERVER_VERSION_NUM,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
@@ -1194,7 +1198,7 @@ impl SessionVars {
         #[allow(clippy::as_conversions)]
         let vars = [
             &self.application_name as &dyn Var,
-            &self.client_encoding,
+            self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
             &self.cluster_replica,
@@ -1203,9 +1207,9 @@ impl SessionVars {
             &self.extra_float_digits,
             &self.failpoints,
             &self.integer_datetimes,
-            &self.interval_style,
+            self.interval_style,
             &self.search_path,
-            &self.server_version,
+            self.server_version,
             &self.server_version_num,
             &self.sql_safe_updates,
             &self.standard_conforming_strings,
@@ -1230,13 +1234,13 @@ impl SessionVars {
     pub fn notify_set(&self) -> impl Iterator<Item = &dyn Var> {
         let vars: [&dyn Var; 9] = [
             &self.application_name,
-            &self.client_encoding,
+            self.client_encoding,
             self.date_style,
             &self.integer_datetimes,
-            &self.server_version,
+            self.server_version,
             &self.standard_conforming_strings,
             &self.timezone,
-            &self.interval_style,
+            self.interval_style,
             // Including `mz_version` in the notify set is a Materialize
             // extension. Doing so allows applications to detect whether they
             // are talking to Materialize or PostgreSQL without an additional
@@ -1265,7 +1269,7 @@ impl SessionVars {
         let var: &dyn Var = if name == APPLICATION_NAME.name {
             &self.application_name
         } else if name == CLIENT_ENCODING.name {
-            &self.client_encoding
+            &*self.client_encoding
         } else if name == CLIENT_MIN_MESSAGES.name {
             &self.client_min_messages
         } else if name == CLUSTER.name {
@@ -1283,13 +1287,13 @@ impl SessionVars {
         } else if name == INTEGER_DATETIMES.name {
             &self.integer_datetimes
         } else if name == INTERVAL_STYLE.name {
-            &self.interval_style
+            self.interval_style
         } else if name == MZ_VERSION_NAME {
             self.build_info
         } else if name == SEARCH_PATH.name {
             &self.search_path
         } else if name == SERVER_VERSION.name {
-            &self.server_version
+            self.server_version
         } else if name == SERVER_VERSION_NUM.name {
             &self.server_version_num
         } else if name == SQL_SAFE_UPDATES.name {
@@ -1354,7 +1358,7 @@ impl SessionVars {
         } else if name == CLIENT_ENCODING.name {
             match extract_single_value(input) {
                 Ok(value) if UncasedStr::new(value) == CLIENT_ENCODING.value => Ok(()),
-                _ => Err(VarError::FixedValueParameter((&CLIENT_MIN_MESSAGES).into())),
+                _ => Err(VarError::FixedValueParameter((&*CLIENT_ENCODING).into())),
             }
         } else if name == CLIENT_MIN_MESSAGES.name {
             if let Ok(_) = ClientSeverity::parse(input) {
@@ -1401,7 +1405,7 @@ impl SessionVars {
         } else if name == INTERVAL_STYLE.name {
             match extract_single_value(input) {
                 Ok(value) if UncasedStr::new(value) == INTERVAL_STYLE.value => Ok(()),
-                _ => Err(VarError::FixedValueParameter((&INTERVAL_STYLE).into())),
+                _ => Err(VarError::FixedValueParameter((&*INTERVAL_STYLE).into())),
             }
         } else if name == SEARCH_PATH.name {
             self.search_path.set(input, local)
@@ -2405,7 +2409,7 @@ pub trait VarMut: Var + Send + Sync {
 #[derive(Debug)]
 pub struct ServerVar<V>
 where
-    V: Debug + ?Sized + 'static,
+    V: Debug + 'static,
 {
     name: &'static UncasedStr,
     value: &'static V,
@@ -2415,7 +2419,7 @@ where
 
 impl<V> Var for ServerVar<V>
 where
-    V: Value + Debug + ?Sized + 'static,
+    V: Value + Debug + 'static,
 {
     fn name(&self) -> &'static str {
         self.name.as_str()
@@ -2454,7 +2458,7 @@ where
 #[derive(Debug)]
 struct SystemVar<V>
 where
-    V: Value + Debug + ?Sized + 'static,
+    V: Value + Debug + 'static,
     V::Owned: Debug,
 {
     persisted_value: Option<V::Owned>,
@@ -2465,7 +2469,7 @@ where
 // The derived `Clone` implementation requires `V: Clone`, which is not needed.
 impl<V> Clone for SystemVar<V>
 where
-    V: Value + Debug + ?Sized + 'static,
+    V: Value + Debug + 'static,
     V::Owned: Debug + Clone,
 {
     fn clone(&self) -> Self {
@@ -2479,7 +2483,7 @@ where
 
 impl<V> SystemVar<V>
 where
-    V: Value + Debug + PartialEq + ?Sized + 'static,
+    V: Value + Debug + PartialEq + 'static,
     V::Owned: Debug,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
@@ -2509,7 +2513,7 @@ where
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + Debug + PartialEq + ?Sized + 'static,
+    V: Value + Debug + PartialEq + 'static,
     V::Owned: Debug,
 {
     fn name(&self) -> &'static str {
@@ -2653,7 +2657,7 @@ impl FeatureFlag {
 #[derive(Debug)]
 struct SessionVar<V>
 where
-    V: Value + Debug + ?Sized + 'static,
+    V: Value + Debug + 'static,
 {
     default_value: &'static V,
     local_value: Option<V::Owned>,
@@ -2665,7 +2669,7 @@ where
 
 impl<V> SessionVar<V>
 where
-    V: Value + Debug + ?Sized + 'static,
+    V: Value + Debug + 'static,
 {
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
@@ -2730,7 +2734,7 @@ where
 
 impl<V> Var for SessionVar<V>
 where
-    V: Value + Debug + ?Sized + 'static,
+    V: Value + Debug + 'static,
     V::Owned: Debug,
 {
     fn name(&self) -> &'static str {
@@ -2772,7 +2776,7 @@ impl Var for BuildInfo {
     }
 
     fn type_name(&self) -> String {
-        str::type_name()
+        String::type_name()
     }
 
     fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
@@ -3066,21 +3070,6 @@ fn test_value_duration() {
     errs("x");
     errs("s");
     errs("18446744073709551615 min");
-}
-
-impl Value for str {
-    fn type_name() -> String {
-        "string".to_string()
-    }
-
-    fn parse(input: VarInput) -> Result<String, ()> {
-        let s = extract_single_value(input)?;
-        Ok(s.to_owned())
-    }
-
-    fn format(&self) -> String {
-        self.to_owned()
-    }
 }
 
 impl Value for String {
