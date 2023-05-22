@@ -676,7 +676,7 @@ def workflow_test_github_17177(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET enable_repeat_row  = true;
 
             # Set data for test up

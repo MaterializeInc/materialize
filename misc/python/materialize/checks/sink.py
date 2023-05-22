@@ -184,7 +184,7 @@ class SinkTables(Check):
             schemas()
             + dedent(
                 """
-                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_table_keys = true;
                 """
                 if self.current_version >= MzVersion(0, 55, 0)
