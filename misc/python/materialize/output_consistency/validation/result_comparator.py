@@ -6,8 +6,10 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 import re
-from typing import List, cast
+from decimal import Decimal
+from typing import Any, List, cast
 
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
@@ -209,12 +211,12 @@ class ResultComparator:
         # each outcome is known to contain at least one row
         # each row is supposed to have the same number of columns
 
-        result_outcome1 = cast(QueryResult, outcomes[0])
+        result1 = cast(QueryResult, outcomes[0])
 
         for index in range(1, len(outcomes)):
-            other_outcome = cast(QueryResult, outcomes[index])
+            other_result = cast(QueryResult, outcomes[index])
             self.validate_data_of_two_outcomes(
-                result_outcome1, other_outcome, validation_outcome
+                result1, other_result, validation_outcome
             )
 
     def validate_data_of_two_outcomes(
@@ -249,7 +251,7 @@ class ResultComparator:
             result_value1 = result1.result_rows[row_index][col_index]
             result_value2 = result2.result_rows[row_index][col_index]
 
-            if result_value1 != result_value2:
+            if not self.is_value_equal(result_value1, result_value2):
                 validation_outcome.add_error(
                     ValidationError(
                         ValidationErrorType.CONTENT_MISMATCH,
@@ -263,3 +265,12 @@ class ResultComparator:
                         location=f"row index {row_index}, column index {col_index}",
                     ),
                 )
+
+    def is_value_equal(self, value1: Any, value2: Any) -> bool:
+        if value1 == value2:
+            return True
+
+        if isinstance(value1, Decimal) and isinstance(value2, Decimal):
+            return value1.is_nan() and value2.is_nan()
+
+        return False
