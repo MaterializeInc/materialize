@@ -2924,9 +2924,9 @@ impl BinaryFunc {
         }
     }
 
-    /// Returns true if the function is monotone. Monotone functions map ranges to ranges: ie. given
-    /// a range of possible inputs, we can determine the range of possible outputs just by mapping
-    /// the endpoints.
+    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
+    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
+    /// determine the range of possible outputs just by mapping the endpoints.
     ///
     /// This describes the *pointwise* behaviour of the function:
     /// ie. the behaviour of any specific argument as the others are held constant. (For example, `a - b` is
@@ -2934,11 +2934,8 @@ impl BinaryFunc {
     /// always cause the result to increase... and in the second argument because for any specific `a`,
     /// increasing `b` will always cause the result to _decrease_.)
     ///
-    /// For monotone functions, this will return true whether the function is *non-decreasing*
-    /// or *non-increasing*.
-    ///
     /// This property describes the behaviour of the function over ranges where the function is defined:
-    /// ie. the arguments and the result are non-null datums.
+    /// ie. the arguments and the result are non-null (and non-error) datums.
     pub fn is_monotone(&self) -> (bool, bool) {
         match self {
             BinaryFunc::AddInt16
@@ -7116,9 +7113,9 @@ impl VariadicFunc {
         }
     }
 
-    /// Returns true if the function is monotone. Monotone functions map ranges to ranges: ie. given
-    /// a range of possible inputs, we can determine the range of possible outputs just by mapping
-    /// the endpoints.
+    /// Returns true if the function is monotone. (Non-strict; eithern increasing or decreasing.)
+    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
+    /// determine the range of possible outputs just by mapping the endpoints.
     ///
     /// This describes the *pointwise* behaviour of the function:
     /// ie. if more than one argument is provided, this describes the behaviour of
@@ -7130,7 +7127,7 @@ impl VariadicFunc {
     /// or *non-increasing*.
     ///
     /// This property describes the behaviour of the function over ranges where the function is defined:
-    /// ie. the arguments and the result are non-null datums.
+    /// ie. the arguments and the result are non-null (and non-error) datums.
     pub fn is_monotone(&self) -> bool {
         match self {
             VariadicFunc::Coalesce
