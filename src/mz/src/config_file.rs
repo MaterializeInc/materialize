@@ -25,7 +25,7 @@ use mz_ore::str::StrExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
-use toml_edit::Document;
+use toml_edit::{value, Document};
 
 use crate::error::Error;
 
@@ -70,6 +70,9 @@ impl ConfigFile {
                 fs::create_dir_all(parent).await?;
             }
         }
+        // Best feature store features we need to call our selves
+        // Features store development kit.
+        // Streamlit way
 
         // Create the file if it doesn't exist
         let mut file = OpenOptions::new()
@@ -83,6 +86,7 @@ impl ConfigFile {
 
         let parsed = toml_edit::de::from_str(&buffer)?;
         let editable = buffer.parse()?;
+
         Ok(ConfigFile {
             path,
             parsed,
@@ -109,17 +113,20 @@ impl ConfigFile {
     /// Adds a new profile to the config file.
     pub async fn add_profile(&self, name: String, profile: TomlProfile) -> Result<(), Error> {
         let mut editable = self.editable.clone();
-        let profiles = editable["profiles"].as_table_mut().unwrap();
 
-        profiles[&name]["admin_endpoint"] =
-            toml_edit::value(profile.admin_endpoint.unwrap_or(String::new()));
-        profiles[&name]["app_password"] =
-            toml_edit::value(profile.app_password.unwrap_or(String::new()));
-        profiles[&name]["cloud_endpoint"] =
-            toml_edit::value(profile.cloud_endpoint.unwrap_or(String::new()));
-        profiles[&name]["region"] = toml_edit::value(profile.region.unwrap_or(String::new()));
-        profiles[&name]["vault"] = toml_edit::value(profile.vault.unwrap_or(String::new()));
+        let profiles = editable.entry("profiles").or_insert(toml_edit::table());
+        let mut new_profile = toml_edit::Table::new();
+        // TODO: Replace unwrap for error.
+        new_profile["app-password"] = value(profile.app_password.unwrap());
 
+        if let Some(admin_endpoint) = profile.admin_endpoint {
+            new_profile["app-password"] = value(profile.app_password);
+        }
+
+        profiles[name] = toml_edit::Item::Table(new_profile);
+        editable["profiles"] = profiles.clone();
+
+        // TODO: I don't know why it creates an empty [profiles] table
         fs::write(&self.path, editable.to_string()).await?;
 
         Ok(())
@@ -151,14 +158,27 @@ impl ConfigFile {
         self.parsed.profiles.clone()
     }
 
-    pub fn list_profile_params(&self) -> Vec<(&str, Option<&str>)> {
-        let profiles = self.editable.get("profiles").unwrap();
-        let profile = profiles.get(self.profile()).unwrap().as_table().unwrap();
+    pub fn list_profile_params(&self) -> Vec<(&str, Option<String>)> {
+        // Use the parsed profile rather than reading from the editable.
+        // If there is a missing field it is more difficult to detect.
+        // TODO: Turn unwrap into errors.
+        let profile = self
+            .parsed
+            .profiles
+            .clone()
+            .unwrap()
+            .get(self.profile())
+            .unwrap()
+            .clone();
 
-        let mut out = vec![];
-        for (name, value) in profile {
-            out.push((name, value.as_str()));
-        }
+        let out = vec![
+            ("admin_endpoint", profile.admin_endpoint),
+            ("app-password", profile.app_password),
+            ("cloud_endpoint", profile.cloud_endpoint),
+            ("region", profile.region),
+            ("vault", profile.vault),
+        ];
+
         out
     }
 

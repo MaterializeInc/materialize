@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 use tokio::{select, sync::mpsc};
 
+use crate::ui::OptionalStr;
 use crate::{
     config_file::TomlProfile,
     context::{Context, ProfileContext},
@@ -221,18 +222,18 @@ pub async fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
     let output = cx.output_formatter();
 
     // Structure to format the output. The name of the field equals the column name.
-    #[derive(Clone, Serialize, Deserialize, Tabled)]
+    #[derive(Serialize, Deserialize, Tabled)]
     struct ProfileParam<'a> {
         #[tabled(rename = "Name")]
         name: &'a str,
         #[tabled(rename = "Value")]
-        value: &'a str,
+        value: OptionalStr<'a>,
     }
 
     // TODO: Improve map?
     output.output_table(profile_params.iter().map(|(name, value)| ProfileParam {
         name,
-        value: value.or(Some("")).unwrap(),
+        value: OptionalStr(value.as_deref()),
     }))?;
     Ok(())
 }
