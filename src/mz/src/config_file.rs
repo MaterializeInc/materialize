@@ -121,11 +121,11 @@ impl ConfigFile {
         new_profile["region"] = value(profile.region.unwrap_or("aws/us-east-1".to_string()));
 
         if let Some(admin_endpoint) = profile.admin_endpoint {
-            new_profile["admin_endpoint"] = value(admin_endpoint);
+            new_profile["admin-endpoint"] = value(admin_endpoint);
         }
 
         if let Some(cloud_endpoint) = profile.cloud_endpoint {
-            new_profile["cloud_endpoint"] = value(cloud_endpoint);
+            new_profile["cloud-endpoint"] = value(cloud_endpoint);
         }
 
         if let Some(vault) = profile.vault {
