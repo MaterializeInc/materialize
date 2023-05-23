@@ -981,6 +981,13 @@ impl RunnerInner {
             .await
             .unwrap();
 
+        if config.enable_table_keys {
+            system_client
+                .simple_query("ALTER SYSTEM SET enable_table_keys = true")
+                .await
+                .unwrap();
+        }
+
         Ok(RunnerInner {
             server_addr,
             internal_server_addr,
@@ -1432,6 +1439,7 @@ pub struct RunConfig<'a> {
     pub fail_fast: bool,
     pub auto_index_tables: bool,
     pub auto_transactions: bool,
+    pub enable_table_keys: bool,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

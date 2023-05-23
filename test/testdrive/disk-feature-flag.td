@@ -26,3 +26,14 @@ ALTER SYSTEM SET enable_upsert_source_disk = false
 ! CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
   WITH (DISK)
 contains:CREATE SOURCE...WITH (DISK..) is not supported
+
+# The following test that we don't crash envd with bad parameters, and instead just fallback
+# to safe parameters.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET upsert_rocksdb_universal_compaction_ratio = 50;
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET upsert_rocksdb_universal_compaction_ratio;
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET upsert_rocksdb_parallelism = -1;
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET upsert_rocksdb_parallelism

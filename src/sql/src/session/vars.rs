@@ -3062,7 +3062,6 @@ impl Value for str {
     }
 }
 
-// The same as the above impl, but works in `SystemVar`s.
 impl Value for String {
     fn type_name() -> String {
         "string".to_string()

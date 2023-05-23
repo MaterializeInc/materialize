@@ -31,7 +31,7 @@ sqllogictest \
     test/sqllogictest/transform/*.slt \
     | tee -a target/slt.log
 
-sqllogictest --auto-index-tables --auto-transactions \
+sqllogictest --auto-index-tables --auto-transactions --enable-table-keys \
     -v "$@" \
     test/sqllogictest/sqlite/test \
     | tee -a target/slt.log
