@@ -98,14 +98,14 @@ DECIMAL39_0_TYPE = NumberDataType(
     max_value="999999999999999999999999999999999999999",
     max_negative_value="-999999999999999999999999999999999999999",
 )
-DECIMAL39_4_TYPE = NumberDataType(
-    "DECIMAL_39_4",
-    "DECIMAL(39,4)",
+DECIMAL39_8_TYPE = NumberDataType(
+    "DECIMAL_39_8",
+    "DECIMAL(39,8)",
     is_signed=True,
     is_decimal=True,
-    tiny_value="0.0001",
-    max_value="99999999999999999999999999999999999.9999",
-    max_negative_value="-99999999999999999999999999999999999.9999",
+    tiny_value="0.00000001",
+    max_value="9999999999999999999999999999999.99999999",
+    max_negative_value="-9999999999999999999999999999999.99999999",
 )
 
 REAL_TYPE = NumberDataType(
@@ -141,7 +141,7 @@ UNSIGNED_INT_TYPES: List[NumberDataType] = [
 
 FLOAT_OR_DECIMAL_DATA_TYPES: List[NumberDataType] = [
     DECIMAL39_0_TYPE,
-    DECIMAL39_4_TYPE,
+    DECIMAL39_8_TYPE,
     REAL_TYPE,
     DOUBLE_TYPE,
 ]
