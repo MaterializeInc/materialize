@@ -334,7 +334,13 @@ where
                     "failed to apply pushed diff {}. seqno {} vs diff {}",
                     state.shard_id, seqno_before, diff.seqno
                 );
-                self.shard_metrics.pubsub_push_diff_not_applied.inc();
+                if diff.seqno <= seqno_before {
+                    self.shard_metrics.pubsub_push_diff_not_applied_stale.inc();
+                } else {
+                    self.shard_metrics
+                        .pubsub_push_diff_not_applied_out_of_order
+                        .inc();
+                }
             }
         })
     }
