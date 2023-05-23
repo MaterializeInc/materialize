@@ -10,14 +10,15 @@
 //! Common operator transformations on timely streams and differential collections.
 
 use std::future::Future;
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::rc::Weak;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
-use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
+use differential_dataflow::{AsCollection, Collection};
+use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::operator::{self, Operator};
@@ -223,7 +224,7 @@ where
     /// untouched otherwise.
     fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
     where
-        D1: differential_dataflow::ExchangeData + Hashable,
+        D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice,
         Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
@@ -521,18 +522,29 @@ where
 
     fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
     where
-        D1: differential_dataflow::ExchangeData + Hashable,
+        D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice + Ord,
         Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch,
     {
         if must_consolidate {
-            use tab_hash::Tab64Twisted;
-            use timely::dataflow::channels::pact::Exchange;
-            let hasher = Tab64Twisted::new();
+            // We employ AHash below instead of the default hasher in DD to obtain
+            // a better distribution of data to workers. AHash claims empirically
+            // both speed and high quality, according to
+            // https://github.com/tkaitchuck/aHash/blob/master/compare/readme.md.
+            // TODO(vmarcos): Consider here if it is worth it to spend the time to
+            // implement twisted tabulation hashing as proposed in Mihai Patrascu,
+            // Mikkel Thorup: Twisted Tabulation Hashing. SODA 2013: 209-228, available
+            // at https://epubs.siam.org/doi/epdf/10.1137/1.9781611973105.16. The latter
+            // would provide good bounds for balls-into-bins problems when the number of
+            // bins is small (as is our case), so we'd have a theoretical guarantee.
+            let random_state = ahash::RandomState::new();
+            let mut h = random_state.build_hasher();
             let exchange = Exchange::new(move |update: &((D1, _), G::Timestamp, R)| {
-                hasher.hash((update.0).0.hashed().into())
+                let data = &(update.0).0;
+                data.hash(&mut h);
+                h.finish()
             });
             self.arrange_core::<_, Tr>(exchange, name)
                 .as_collection(|k, _v| k.clone())
