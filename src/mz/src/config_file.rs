@@ -118,9 +118,18 @@ impl ConfigFile {
         let mut new_profile = toml_edit::Table::new();
         // TODO: Replace unwrap for error.
         new_profile["app-password"] = value(profile.app_password.unwrap());
+        new_profile["region"] = value(profile.region.unwrap_or("aws/us-east-1".to_string()));
 
         if let Some(admin_endpoint) = profile.admin_endpoint {
-            new_profile["app-password"] = value(profile.app_password);
+            new_profile["admin_endpoint"] = value(admin_endpoint);
+        }
+
+        if let Some(cloud_endpoint) = profile.cloud_endpoint {
+            new_profile["cloud_endpoint"] = value(cloud_endpoint);
+        }
+
+        if let Some(vault) = profile.vault {
+            new_profile["vault"] = value(vault);
         }
 
         profiles[name] = toml_edit::Item::Table(new_profile);
@@ -161,7 +170,7 @@ impl ConfigFile {
     pub fn list_profile_params(&self) -> Vec<(&str, Option<String>)> {
         // Use the parsed profile rather than reading from the editable.
         // If there is a missing field it is more difficult to detect.
-        // TODO: Turn unwrap into errors.
+        // TODO: Turn unwrap into errors. And use PROFILE_PARAMS
         let profile = self
             .parsed
             .profiles
