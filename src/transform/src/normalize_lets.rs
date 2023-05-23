@@ -672,7 +672,7 @@ mod inlining {
             //  1. The binding is used once and is available to be directly taken.
             //  2. The binding is simple enough that it can just be cloned.
             //  3. The binding is not available for inlining.
-            let mut inline_offer = BTreeMap::new();
+            let mut inline_offers = BTreeMap::new();
 
             // Each binding may require the expiration of prior inlining offers.
             // This occurs when an inlined body references the prior iterate of a binding,
@@ -694,7 +694,7 @@ mod inlining {
                 izip!(ids.drain(..), values.drain(..), max_iters.drain(..))
             {
                 // Substitute any appropriate prior let bindings.
-                inline_lets_helper(&mut expr, &mut inline_offer)?;
+                inline_lets_helper(&mut expr, &mut inline_offers)?;
 
                 // Determine the first `id'` at which any inlining offer must expire.
                 // An inlining offer expires because it references an `id'` that is not yet bound,
@@ -722,7 +722,7 @@ mod inlining {
                 // are cloned in to `Get` operators, and all others emitted as `Let` bindings.
                 if num_gets == 0 {
                 } else if num_gets == 1 {
-                    inline_offer.insert(id, InlineOffer::Take(Some(expr), max_iter));
+                    inline_offers.insert(id, InlineOffer::Take(Some(expr), max_iter));
                 } else {
                     let clone_binding = {
                         let stripped_value = if inline_mfp {
@@ -737,9 +737,9 @@ mod inlining {
                     };
 
                     if clone_binding {
-                        inline_offer.insert(id, InlineOffer::Clone(expr, max_iter));
+                        inline_offers.insert(id, InlineOffer::Clone(expr, max_iter));
                     } else {
-                        inline_offer.insert(id, InlineOffer::Unavailable(expr, max_iter));
+                        inline_offers.insert(id, InlineOffer::Unavailable(expr, max_iter));
                     }
                 }
 
@@ -748,18 +748,18 @@ mod inlining {
                 // `id` rather than the prior iteration's binding of `id`.
                 if let Some(expirations) = expire_offers.remove(&id) {
                     for expired_id in expirations.into_iter() {
-                        if let Some(offer) = inline_offer.remove(&expired_id) {
+                        if let Some(offer) = inline_offers.remove(&expired_id) {
                             expired_offers.push((expired_id, offer));
                         }
                     }
                 }
             }
             // Complete the inlining in `body`.
-            inline_lets_helper(body, &mut inline_offer)?;
+            inline_lets_helper(body, &mut inline_offers)?;
 
             // Re-introduce expired offers for the subsequent logic that expects to see them all.
             for (id, offer) in expired_offers.into_iter() {
-                inline_offer.insert(id, offer);
+                inline_offers.insert(id, offer);
             }
 
             // We may now be able to discard some of `inline_offer` based on the remaining pattern of `Get` expressions.
@@ -770,7 +770,7 @@ mod inlining {
             let mut todo = Vec::new();
             super::support::for_local_id(body, |id| todo.push(id));
             while let Some(id) = todo.pop() {
-                if let Some(offer) = inline_offer.remove(&id) {
+                if let Some(offer) = inline_offers.remove(&id) {
                     let (value, max_iter) = match offer {
                         InlineOffer::Take(value, max_iter) => (
                             value.ok_or_else(|| {
