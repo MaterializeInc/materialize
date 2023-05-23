@@ -24,6 +24,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64, Opaque};
+use proptest_derive::Arbitrary;
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -53,7 +54,7 @@ include!(concat!(
 
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IdempotencyToken(pub(crate) [u8; 16]);
 
 impl std::fmt::Display for IdempotencyToken {
@@ -98,7 +99,7 @@ pub struct LeasedReaderState<T> {
     pub debug: HandleDebugState,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, PartialEq)]
 pub struct OpaqueState(pub [u8; 8]);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,7 +132,7 @@ pub struct WriterState<T> {
 }
 
 /// Debugging info for a reader or writer.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, PartialEq)]
 pub struct HandleDebugState {
     /// Hostname of the persist user that registered this writer or reader. For
     /// critical readers, this is the _most recent_ registration.
@@ -141,7 +142,7 @@ pub struct HandleDebugState {
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
-#[derive(Clone, Debug)]
+#[derive(Arbitrary, Clone, Debug)]
 pub struct HollowBatchPart {
     /// Pointer usable to retrieve the updates.
     pub key: PartialBatchKey,
@@ -291,7 +292,7 @@ impl<'a, T> Iterator for HollowBatchRunIter<'a, T> {
 }
 
 /// A pointer to a rollup stored externally.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HollowRollup {
     /// Pointer usable to retrieve the rollup.
     pub key: PartialRollupKey,
@@ -1370,13 +1371,167 @@ impl<T> Determinacy for Upper<T> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::now::SYSTEM_TIME;
+    use proptest::prelude::*;
 
+    use crate::internal::trace::tests::any_trace;
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
 
     use super::*;
+
+    pub fn any_hollow_batch<T: Arbitrary + Timestamp>() -> impl Strategy<Value = HollowBatch<T>> {
+        Strategy::prop_map(
+            (
+                any::<T>(),
+                any::<T>(),
+                any::<T>(),
+                proptest::collection::vec(any::<HollowBatchPart>(), 0..3),
+                any::<usize>(),
+                any::<bool>(),
+            ),
+            |(t0, t1, since, parts, len, runs)| {
+                let (lower, upper) = if t0 <= t1 {
+                    (Antichain::from_elem(t0), Antichain::from_elem(t1))
+                } else {
+                    (Antichain::from_elem(t1), Antichain::from_elem(t0))
+                };
+                let since = Antichain::from_elem(since);
+                let runs = if runs { vec![parts.len()] } else { vec![] };
+                HollowBatch {
+                    desc: Description::new(lower, upper, since),
+                    parts,
+                    len: len % 10,
+                    runs,
+                }
+            },
+        )
+    }
+
+    pub fn any_leased_reader_state<T: Arbitrary>() -> impl Strategy<Value = LeasedReaderState<T>> {
+        Strategy::prop_map(
+            (
+                any::<SeqNo>(),
+                any::<Option<T>>(),
+                any::<u64>(),
+                any::<u64>(),
+                any::<HandleDebugState>(),
+            ),
+            |(seqno, since, last_heartbeat_timestamp_ms, mut lease_duration_ms, debug)| {
+                // lease_duration_ms of 0 means this state was written by an old
+                // version of code, which means we'll migrate it in the decode
+                // path. Avoid.
+                if lease_duration_ms == 0 {
+                    lease_duration_ms += 1;
+                }
+                LeasedReaderState {
+                    seqno,
+                    since: since.map_or_else(Antichain::new, Antichain::from_elem),
+                    last_heartbeat_timestamp_ms,
+                    lease_duration_ms,
+                    debug,
+                }
+            },
+        )
+    }
+
+    pub fn any_critical_reader_state<T: Arbitrary>() -> impl Strategy<Value = CriticalReaderState<T>>
+    {
+        Strategy::prop_map(
+            (
+                any::<Option<T>>(),
+                any::<OpaqueState>(),
+                any::<String>(),
+                any::<HandleDebugState>(),
+            ),
+            |(since, opaque, opaque_codec, debug)| CriticalReaderState {
+                since: since.map_or_else(Antichain::new, Antichain::from_elem),
+                opaque,
+                opaque_codec,
+                debug,
+            },
+        )
+    }
+
+    pub fn any_writer_state<T: Arbitrary>() -> impl Strategy<Value = WriterState<T>> {
+        Strategy::prop_map(
+            (
+                any::<u64>(),
+                any::<u64>(),
+                any::<IdempotencyToken>(),
+                any::<Option<T>>(),
+                any::<HandleDebugState>(),
+            ),
+            |(
+                last_heartbeat_timestamp_ms,
+                lease_duration_ms,
+                most_recent_write_token,
+                most_recent_write_upper,
+                debug,
+            )| WriterState {
+                last_heartbeat_timestamp_ms,
+                lease_duration_ms,
+                most_recent_write_token,
+                most_recent_write_upper: most_recent_write_upper
+                    .map_or_else(Antichain::new, Antichain::from_elem),
+                debug,
+            },
+        )
+    }
+
+    pub fn any_state<T: Arbitrary + Timestamp + Lattice>(
+        max_trace_batches: usize,
+    ) -> impl Strategy<Value = State<T>> {
+        Strategy::prop_map(
+            (
+                any::<ShardId>(),
+                any::<SeqNo>(),
+                any::<u64>(),
+                any::<String>(),
+                any::<SeqNo>(),
+                proptest::collection::btree_map(any::<SeqNo>(), any::<HollowRollup>(), 1..3),
+                proptest::collection::btree_map(
+                    any::<LeasedReaderId>(),
+                    any_leased_reader_state::<T>(),
+                    1..3,
+                ),
+                proptest::collection::btree_map(
+                    any::<CriticalReaderId>(),
+                    any_critical_reader_state::<T>(),
+                    1..3,
+                ),
+                proptest::collection::btree_map(any::<WriterId>(), any_writer_state::<T>(), 0..3),
+                any_trace::<T>(max_trace_batches),
+            ),
+            |(
+                shard_id,
+                seqno,
+                walltime_ms,
+                hostname,
+                last_gc_req,
+                rollups,
+                leased_readers,
+                critical_readers,
+                writers,
+                trace,
+            )| State {
+                applier_version: semver::Version::new(1, 2, 3),
+                shard_id,
+                seqno,
+                walltime_ms,
+                hostname,
+                collections: StateCollections {
+                    last_gc_req,
+                    rollups,
+                    leased_readers,
+                    critical_readers,
+                    writers,
+                    trace,
+                },
+            },
+        )
+    }
 
     fn hollow<T: Timestamp>(lower: T, upper: T, keys: &[&str], len: usize) -> HollowBatch<T> {
         HollowBatch {

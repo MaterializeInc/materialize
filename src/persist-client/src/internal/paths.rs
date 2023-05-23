@@ -11,6 +11,7 @@ use std::ops::Deref;
 use std::str::FromStr;
 
 use mz_persist::location::SeqNo;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -55,7 +56,7 @@ impl PartId {
 /// Used to reduce the bytes needed to refer to a blob key in memory and in
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PartialBatchKey(pub(crate) String);
 
 impl PartialBatchKey {
@@ -119,7 +120,7 @@ impl RollupId {
 /// Used to reduce the bytes needed to refer to a blob key in memory and in
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PartialRollupKey(pub(crate) String);
 
 impl PartialRollupKey {

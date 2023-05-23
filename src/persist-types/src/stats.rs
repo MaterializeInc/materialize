@@ -380,6 +380,7 @@ mod impls {
     use arrow2::types::simd::Simd;
     use arrow2::types::NativeType;
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
+    use proptest::prelude::*;
 
     use crate::columnar::Data;
     use crate::stats::private::StatsCost;
@@ -1066,6 +1067,23 @@ mod impls {
     primitive_stats_rust_type!(f64, LowerF64, UpperF64);
     primitive_stats_rust_type!(Vec<u8>, LowerBytes, UpperBytes);
     primitive_stats_rust_type!(String, LowerString, UpperString);
+
+    #[allow(unused_parens)]
+    impl Arbitrary for StructStats {
+        type Parameters = ();
+        type Strategy =
+            proptest::strategy::Map<(<usize as Arbitrary>::Strategy), fn((usize)) -> Self>;
+
+        fn arbitrary_with(_: ()) -> Self::Strategy {
+            Strategy::prop_map((any::<usize>()), |(len)| {
+                StructStats {
+                    len,
+                    // TODO: Fill in cols with stats.
+                    cols: Default::default(),
+                }
+            })
+        }
+    }
 }
 
 #[cfg(test)]

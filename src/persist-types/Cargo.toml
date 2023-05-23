@@ -14,6 +14,7 @@ arrow2 = { version = "0.16.0", features = ["compute_aggregate", "io_ipc", "io_pa
 bytes = "1.3.0"
 mz-proto = { path = "../proto" }
 parquet2 = { version = "0.17.1", default-features = false }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
