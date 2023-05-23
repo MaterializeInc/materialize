@@ -1156,6 +1156,7 @@ where
                 ret.state_batches_bytes += batch_size;
             }
             HollowBlobRef::Rollup(x) => {
+                ret.state_rollup_count += 1;
                 ret.state_rollups_bytes += x.encoded_size_bytes.unwrap_or_default()
             }
         });
@@ -1342,6 +1343,7 @@ pub struct StateSizeMetrics {
     pub largest_batch_bytes: usize,
     pub state_batches_bytes: usize,
     pub state_rollups_bytes: usize,
+    pub state_rollup_count: usize,
 }
 
 #[derive(Default)]

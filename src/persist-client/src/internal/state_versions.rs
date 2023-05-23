@@ -287,6 +287,9 @@ impl StateVersions {
                     .update_count
                     .set(u64::cast_from(size_metrics.num_updates));
                 shard_metrics
+                    .rollup_count
+                    .set(u64::cast_from(size_metrics.state_rollup_count));
+                shard_metrics
                     .largest_batch_size
                     .set(u64::cast_from(size_metrics.largest_batch_bytes));
                 shard_metrics
