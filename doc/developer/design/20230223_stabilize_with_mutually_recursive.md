@@ -95,7 +95,7 @@ transformation              | estimate | tracked in
 ----------------------------|----------|-------------------------------------------------
 `canonicalize_mfp`          | &check;  | MaterializeInc/materialize#18123
 `column_knowledge`          | &check;  | MaterializeInc/materialize#18161
-`demand`                    | L?       | MaterializeInc/materialize#18162
+`demand`                    | &check;  | MaterializeInc/materialize#18162
 `filter_fusion`             | &check;  | MaterializeInc/materialize#18123 (depends on type inference)
 `fixpoint`                  | &check;  | MaterializeInc/materialize#16561
 `flatmap_to_map`            | &check;  | MaterializeInc/materialize#18123
@@ -107,7 +107,7 @@ transformation              | estimate | tracked in
 `literal_constraints`       | &check;  | MaterializeInc/materialize#18123
 `literal_lifting`           | &check;  | MaterializeInc/materialize#18165
 `map_fusion`                | &check;  | MaterializeInc/materialize#18123
-`monotonic_flag`            | L?       | MaterializeInc/materialize#18472
+`monotonic_flag`            | &check;  | MaterializeInc/materialize#18472
 `negate_fusion`             | &check;  | MaterializeInc/materialize#18123
 `non_null_requirements`     | &check;  | MaterializeInc/materialize#18166
 `non_nullable`              | &check;  | MaterializeInc/materialize#18123 (somewhat restricted)
@@ -118,7 +118,7 @@ transformation              | estimate | tracked in
 `projection_extraction`     | &check;  | MaterializeInc/materialize#18123
 `projection_lifting`        | &check;  | MaterializeInc/materialize#18168
 `projection_pushdown`       | &check;  | MaterializeInc/materialize#18169
-`reduce_elision`            | M?       | MaterializeInc/materialize#18170
+`reduce_elision`            | &check;  | MaterializeInc/materialize#18170
 `reduce_fusion`             | &check;  | MaterializeInc/materialize#18123
 `reduction_pushdown`        | &check;  | MaterializeInc/materialize#18171
 `redundant_join`            | &check;  | MaterializeInc/materialize#18172
