@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
+
 statement ok
 create table foo_raw (a int4, b int8, u text)
 
@@ -37,7 +42,7 @@ statement ok
 create materialized view quux as select distinct on (c) c, x from quux_raw where c is not null
 
 # Demonstrate core semijoin idempotence simplification: semijoin removal.
-# The resulting plan should have one join and no distinct operators.
+# The resulting plan should have 1 join with 2 inputs and no distinct operators.
 query T multiline
 explain select * from (with keys as (
     select distinct foo.a from foo, bar where foo.a = bar.a
@@ -300,5 +305,135 @@ Explained Query:
 
 Source materialize.public.foo
   filter=((#0 = 7))
+
+EOF
+
+## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
+
+# Trivial test: Just marking SemijoinIdempotence recursion_safe should already handle this.
+# The resulting plan should have 1 join with 2 inputs.
+query T multiline
+explain
+with mutually recursive
+  c0(a int4, b int8, u text, key int4) as (
+    select * from (
+      with keys as (
+        select distinct foo.a from foo, bar where foo.a = bar.a
+      )
+      select * from foo, keys where foo.a = keys.a
+    )
+    union
+    select * from c0
+  )
+select * from c0;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0..=#3]
+        Union
+          Join on=(#0 = #3) type=differential
+            ArrangeBy keys=[[#0]]
+              Get materialize.public.foo
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter (#0) IS NOT NULL
+                  Get materialize.public.bar
+          Get l0
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# Pattern references an id that is defined inside the WMR. SemijoinIdempotence needs to collect info about ids inside a
+# LetRec.
+# The resulting plan should have 1 join with 2 inputs.
+# Doesn't work yet.
+query T multiline
+explain
+with mutually recursive
+  c0(a int4, b int8, u text, key int4) as (
+    select * from (
+      with keys as (
+        select distinct foo.a from foo, (select a, u from c0) as likebar where foo.a = likebar.a
+      )
+      select * from foo, keys where foo.a = keys.a
+    )
+    union
+    select * from c0
+  )
+select * from c0;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0..=#3]
+        Union
+          Project (#0..=#3)
+            Join on=(eq(#0, #3, #4)) type=delta
+              ArrangeBy keys=[[#0]]
+                Get materialize.public.foo
+              ArrangeBy keys=[[#0]]
+                Distinct group_by=[#0]
+                  Project (#0)
+                    Get materialize.public.foo
+              ArrangeBy keys=[[#0]]
+                Distinct group_by=[#0]
+                  Project (#0)
+                    Get l0
+          Get l0
+
+EOF
+
+# Ensure LEFT JOIN inside WMR is planned with only one join.
+# Doesn't work yet.
+query T multiline
+explain
+with mutually recursive
+  c0(a int4, b int8, u text, a_bar int4, v_bar text) as (
+    select * from
+    foo_raw left join bar on foo_raw.a = bar.a
+    union
+    select * from c0
+  )
+select * from c0
+----
+Explained Query:
+  Return
+    Get l1
+  With Mutually Recursive
+    cte l1 =
+      Distinct group_by=[#0..=#4]
+        Union
+          Map (null, null)
+            Union
+              Negate
+                Project (#0..=#2)
+                  Join on=(#0 = #3) type=differential
+                    ArrangeBy keys=[[#0]]
+                      Get materialize.public.foo_raw
+                    ArrangeBy keys=[[#0]]
+                      Distinct group_by=[#0]
+                        Project (#0)
+                          Get l0
+              Get materialize.public.foo_raw
+          Get l0
+          Get l1
+    cte l0 =
+      Join on=(#0 = #3) type=differential
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            Get materialize.public.foo_raw
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            Get materialize.public.bar
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
 
 EOF
