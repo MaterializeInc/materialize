@@ -940,19 +940,29 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
+        // How many times are we willing to evaluate the underlying function before giving up?
+        // This is here to protect us from exponential blowup when the argument list is long and
+        // there are multiple cases to consider per argument.
+        const MAX_EVALUATIONS: usize = 1000;
         fn eval_loop<'a>(
             is_monotonic: Monotonic,
             expr: &mut MirScalarExpr,
             args: &[ColumnSpec<'a>],
             index: usize,
             datum_map: &mut impl FnMut(&MirScalarExpr) -> ResultSpec<'a>,
+            evaluations: &mut usize,
         ) -> ResultSpec<'a> {
+            if *evaluations >= MAX_EVALUATIONS {
+                return ResultSpec::anything();
+            }
+
             if index >= args.len() {
+                *evaluations += 1;
                 datum_map(expr)
             } else {
                 args[index].range.flat_map(is_monotonic, |datum| {
                     ColumnSpecs::set_argument(expr, index, datum);
-                    eval_loop(is_monotonic, expr, args, index + 1, datum_map)
+                    eval_loop(is_monotonic, expr, args, index + 1, datum_map, evaluations)
                 })
             }
         }
@@ -970,6 +980,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             &args,
             0,
             &mut |expr| self.eval_result(expr.eval(&[], self.arena)),
+            &mut 0,
         );
 
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
