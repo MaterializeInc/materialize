@@ -925,6 +925,10 @@ class WhereExpression(Generator):
 
 
 class WhereConditionAnd(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Also runs into https://github.com/MaterializeInc/materialize/issues/19399
+    COUNT = min(Generator.COUNT, 75)
+
     @classmethod
     def body(cls) -> None:
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
@@ -939,6 +943,10 @@ class WhereConditionAnd(Generator):
 
 
 class WhereConditionAndSameColumn(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Also runs into https://github.com/MaterializeInc/materialize/issues/19399
+    COUNT = min(Generator.COUNT, 75)
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
@@ -951,6 +959,10 @@ class WhereConditionAndSameColumn(Generator):
 
 
 class WhereConditionOr(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Also runs into https://github.com/MaterializeInc/materialize/issues/19399
+    COUNT = min(Generator.COUNT, 75)
+
     @classmethod
     def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
@@ -965,6 +977,10 @@ class WhereConditionOr(Generator):
 
 
 class WhereConditionOrSameColumn(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    # Also runs into https://github.com/MaterializeInc/materialize/issues/19399
+    COUNT = min(Generator.COUNT, 75)
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
