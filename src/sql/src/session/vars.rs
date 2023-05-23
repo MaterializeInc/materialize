@@ -67,7 +67,6 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -306,14 +305,13 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
-pub static DEFAULT_INTERVAL_STYLE: Lazy<String> = Lazy::new(|| "postgres".to_string());
-pub static INTERVAL_STYLE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+pub static INTERVAL_STYLE: ServerVar<IntervalStyle> = ServerVar {
     // IntervalStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("IntervalStyle"),
-    value: &DEFAULT_INTERVAL_STYLE,
+    value: &IntervalStyle::Postgres,
     description: "Sets the display format for interval values (PostgreSQL).",
     internal: false,
-});
+};
 
 const MZ_VERSION_NAME: &UncasedStr = UncasedStr::new("mz_version");
 const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
@@ -1149,7 +1147,7 @@ impl SessionVars {
             .with_var(&EXTRA_FLOAT_DIGITS)
             .with_var(&FAILPOINTS)
             .with_value_constrained_var(&INTEGER_DATETIMES, ValueConstraint::Fixed)
-            .with_value_constrained_var(&INTERVAL_STYLE, ValueConstraint::Fixed)
+            .with_var(&INTERVAL_STYLE)
             .with_var(&SEARCH_PATH)
             .with_value_constrained_var(&SERVER_VERSION, ValueConstraint::ReadOnly)
             .with_value_constrained_var(&SERVER_VERSION_NUM, ValueConstraint::ReadOnly)
@@ -1250,7 +1248,7 @@ impl SessionVars {
             &*SERVER_VERSION,
             &STANDARD_CONFORMING_STRINGS,
             &TIMEZONE,
-            &*INTERVAL_STYLE,
+            &INTERVAL_STYLE,
         ]
         .into_iter()
         .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
@@ -1423,8 +1421,8 @@ impl SessionVars {
     }
 
     /// Returns the value of the `intervalstyle` configuration parameter.
-    pub fn intervalstyle(&self) -> &str {
-        self.expect_value(&*INTERVAL_STYLE).as_str()
+    pub fn intervalstyle(&self) -> &IntervalStyle {
+        self.expect_value(&INTERVAL_STYLE)
     }
 
     /// Returns the value of the `mz_version` configuration parameter.
@@ -3524,31 +3522,6 @@ impl ClientEncoding {
     }
 }
 
-impl FromStr for ClientEncoding {
-    type Err = VarError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = UncasedStr::new(s);
-        if s == "utf8" {
-            Ok(Self::Utf8)
-        } else {
-            Err(VarError::ConstrainedParameter {
-                parameter: (&CLIENT_ENCODING).into(),
-                values: vec![s.to_string()],
-                valid_values: Some(ClientEncoding::valid_values()),
-            })
-        }
-    }
-}
-
-impl std::fmt::Display for ClientEncoding {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            ClientEncoding::Utf8 => write!(f, "UTF8"),
-        }
-    }
-}
-
 impl Value for ClientEncoding {
     fn type_name() -> String {
         "string".to_string()
@@ -3559,10 +3532,63 @@ impl Value for ClientEncoding {
         input: VarInput,
     ) -> Result<Self::Owned, VarError> {
         let s = extract_single_value(param, input)?;
-        ClientEncoding::from_str(s)
+        let s = UncasedStr::new(s);
+        if s == Self::Utf8.as_str() {
+            Ok(Self::Utf8)
+        } else {
+            Err(VarError::ConstrainedParameter {
+                parameter: (&CLIENT_ENCODING).into(),
+                values: vec![s.to_string()],
+                valid_values: Some(ClientEncoding::valid_values()),
+            })
+        }
     }
 
     fn format(&self) -> String {
-        self.to_string()
+        self.as_str().to_string()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IntervalStyle {
+    Postgres,
+}
+
+impl IntervalStyle {
+    fn as_str(&self) -> &'static str {
+        match self {
+            IntervalStyle::Postgres => "postgres",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![IntervalStyle::Postgres.as_str()]
+    }
+}
+
+impl Value for IntervalStyle {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let s = UncasedStr::new(s);
+        if s == Self::Postgres.as_str() {
+            Ok(Self::Postgres)
+        } else {
+            Err(VarError::ConstrainedParameter {
+                parameter: (&INTERVAL_STYLE).into(),
+                values: vec![s.to_string()],
+                valid_values: Some(IntervalStyle::valid_values()),
+            })
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().to_string()
     }
 }
