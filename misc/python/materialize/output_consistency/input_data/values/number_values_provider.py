@@ -60,9 +60,21 @@ for num_data_type in NUMERIC_DATA_TYPES:
         )
 
     if num_data_type.is_decimal:
+        # only add this value for decimal types because 1 is always added
         values_of_type.add_raw_value(
-            num_data_type.tiny_value,
+            num_data_type.smallest_value,
             "TINY",
+            {
+                ExpressionCharacteristics.TINY_VALUE,
+                ExpressionCharacteristics.NON_EMPTY,
+                ExpressionCharacteristics.DECIMAL,
+            },
+        )
+
+    for index, tiny_value in enumerate(num_data_type.further_tiny_dec_values):
+        values_of_type.add_raw_value(
+            tiny_value,
+            f"TINY{index + 2}",
             {
                 ExpressionCharacteristics.TINY_VALUE,
                 ExpressionCharacteristics.NON_EMPTY,
