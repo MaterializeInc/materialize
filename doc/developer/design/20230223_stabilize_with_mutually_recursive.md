@@ -120,11 +120,11 @@ transformation              | estimate | tracked in
 `projection_pushdown`       | &check;  | MaterializeInc/materialize#18169
 `reduce_elision`            | M?       | MaterializeInc/materialize#18170
 `reduce_fusion`             | &check;  | MaterializeInc/materialize#18123
-`reduction_pushdown`        | L?       | MaterializeInc/materialize#18171
+`reduction_pushdown`        | &check;  | MaterializeInc/materialize#18171
 `redundant_join`            | &check;  | MaterializeInc/materialize#18172
-`relation_cse`              | L?       | MaterializeInc/materialize#18173
+`relation_cse`              | &check;  | MaterializeInc/materialize#18173
 `semijoin_idempotence`      | L?       | MaterializeInc/materialize#18174
-`threshold_elision`         | M?       | MaterializeInc/materialize#18175
+`threshold_elision`         | &check;  | MaterializeInc/materialize#18175
 `topk_elision`              | &check;  | MaterializeInc/materialize#18123
 `topk_fusion`               | &check;  | MaterializeInc/materialize#18123
 `union`                     | &check;  | MaterializeInc/materialize#18123

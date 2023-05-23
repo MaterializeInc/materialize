@@ -4032,6 +4032,9 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.catalog()
             .ensure_not_reserved_object(&object_id, session.conn_id())?;
+        for grantee in &grantees {
+            self.catalog().ensure_not_system_role(grantee)?;
+        }
 
         let privileges = self
             .catalog()

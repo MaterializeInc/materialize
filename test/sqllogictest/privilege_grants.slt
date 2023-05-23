@@ -1406,7 +1406,7 @@ t1  mz_system=arwd/mz_system
 ## Test ALL keyword
 
 simple conn=mz_system,user=mz_system
-GRANT ALL ON t1 TO joe, test_role, mz_system
+GRANT ALL ON t1 TO joe, test_role
 ----
 COMPLETE 0
 
@@ -1457,6 +1457,40 @@ query TT
 SELECT name, privilege FROM item_privileges WHERE name = 'v1'
 ----
 v1  mz_system=r/mz_system
+
+## Test system objects
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT on v1 TO mz_introspection
+----
+db error: ERROR: role name "mz_introspection" is reserved
+DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT on v1 FROM mz_introspection
+----
+db error: ERROR: role name "mz_introspection" is reserved
+DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
+
+simple conn=mz_system,user=mz_system
+GRANT INSERT on mz_tables TO joe
+----
+db error: ERROR: system item 'mz_catalog.mz_tables' cannot be modified
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT on mz_tables FROM joe
+----
+db error: ERROR: system item 'mz_catalog.mz_tables' cannot be modified
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE on CLUSTER mz_system TO JOE
+----
+db error: ERROR: system cluster 'mz_system' cannot be modified
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE on CLUSTER mz_introspection FROM PUBLIC
+----
+db error: ERROR: system cluster 'mz_introspection' cannot be modified
 
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system

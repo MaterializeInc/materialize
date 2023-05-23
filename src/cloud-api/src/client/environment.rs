@@ -43,7 +43,7 @@ impl Client {
     pub async fn get_environment(&self, region: Region) -> Result<Environment, Error> {
         // Send request to the subdomain
         let req = self
-            .build_region_request(Method::GET, ["api", "environment"], region)
+            .build_environment_request(Method::GET, ["api", "environment"], region)
             .await?;
 
         let environments: Vec<Environment> = self.send_request(req).await?;
@@ -78,7 +78,7 @@ impl Client {
         &self,
         version: Option<String>,
         environmentd_extra_args: Vec<String>,
-        region: Region,
+        cloud_provider: CloudProvider,
     ) -> Result<Region, Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -98,16 +98,24 @@ impl Client {
         };
 
         let req = self
-            .build_region_request(Method::POST, ["api", "environmentassignment"], region)
+            .build_region_request(
+                Method::POST,
+                ["api", "environmentassignment"],
+                cloud_provider,
+            )
             .await?;
         let req = req.json(&body);
         self.send_request(req).await
     }
 
     /// Deletes an environment in a particular region for the current user
-    pub async fn delete_environment(&self, region: Region) -> Result<Region, Error> {
+    pub async fn delete_environment(&self, cloud_provider: CloudProvider) -> Result<Region, Error> {
         let req = self
-            .build_region_request(Method::DELETE, ["api", "environmentassignment"], region)
+            .build_region_request(
+                Method::DELETE,
+                ["api", "environmentassignment"],
+                cloud_provider,
+            )
             .await?;
         self.send_request(req).await
     }

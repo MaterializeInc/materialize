@@ -126,6 +126,9 @@ struct Args {
     /// ported SQLite SLT files. Does not work generally, so don't use it for other tests.
     #[clap(long)]
     auto_transactions: bool,
+    /// Inject `ALTER SYSTEM SET enable_table_keys = true` before running the SLT file.
+    #[clap(long)]
+    enable_table_keys: bool,
 }
 
 #[tokio::main]
@@ -144,6 +147,7 @@ async fn main() -> ExitCode {
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
         auto_transactions: args.auto_transactions,
+        enable_table_keys: args.enable_table_keys,
     };
 
     if args.rewrite_results {

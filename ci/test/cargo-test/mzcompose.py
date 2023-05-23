@@ -56,7 +56,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         POSTGRES_URL=postgres_url,
         COCKROACH_URL=cockroach_url,
         MZ_SOFT_ASSERTIONS="1",
-        MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete",
+        MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
     )
 

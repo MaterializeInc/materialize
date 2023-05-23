@@ -143,7 +143,7 @@ steps:
       - "**/*.proto"
       - "**/testdata/**"
     env:
-      AWS_DEFAULT_REGION: "us-east-2"
+      AWS_DEFAULT_REGION: "us-east-1"
       # cargo-test's coverage is handled separately by cargo-llvm-cov
       BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
     plugins:
@@ -637,6 +637,54 @@ steps:
           composition: feature-benchmark
           args: [--scenario=KafkaUpsertUnique]
     coverage: skip
+
+  - id: sqlancer-pqs
+    label: "SQLancer PQS"
+    depends_on: build-x86_64
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=PQS, --no-qpg]
+
+  - id: sqlancer-norec
+    label: "SQLancer NoREC"
+    artifact_paths: junit_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=NOREC]
+
+  - id: sqlancer-query-partitioning
+    label: "SQLancer QueryPartitioning"
+    artifact_paths: junit_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=QUERY_PARTITIONING]
+
+  - id: sqlancer-having
+    label: "SQLancer Having"
+    artifact_paths: junit_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 15
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlancer
+          args: [--runtime=600, --oracle=HAVING]
 
   - id: deploy-website
     label: Deploy website

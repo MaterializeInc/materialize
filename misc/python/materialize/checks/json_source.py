@@ -24,13 +24,18 @@ class JsonSource(Check):
         return Testdrive(
             dedent(
                 """
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_format_json = true
+                """
+                if self.current_version >= MzVersion(0, 53, 0)
+                else ""
+            )
+            + dedent(
+                """
                 $ kafka-create-topic topic=format-json partitions=1
 
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
                 "object":{"a":"b","c":"d"}
-
-                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_format_json = true
 
                 > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
 

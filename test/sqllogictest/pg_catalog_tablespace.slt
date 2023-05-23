@@ -9,15 +9,10 @@
 
 mode cockroach
 
-statement ok
-CREATE TABLE t (a int)
+# Start from a pristine server
+reset-server
 
-statement ok
-INSERT INTO t (a) VALUES (1)
-
-# Test that demand analysis does not result in a 1/0 error for column
-# that is not demanded as a join output (column a from t).
-query I
-select x from (select x, 1/a from (select 2 as x), t)
+query ITTTT
+SELECT * FROM pg_tablespace ORDER BY oid
 ----
-2
+0 pg_default NULL NULL NULL

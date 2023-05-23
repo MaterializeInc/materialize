@@ -12,6 +12,7 @@ from typing import List
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.util import MzVersion
 
 
 def schema() -> str:
@@ -51,14 +52,19 @@ class AlterIndex(Check):
         return [
             Testdrive(schema() + dedent(s))
             for s in [
-                """
-                > INSERT INTO alter_index_table SELECT 'B' || generate_series FROM generate_series(1,10000);
-                $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
-                {"f1": "B${kafka-ingest.iteration}"}
-
+                (
+                    """
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_index_options = true
                 ALTER SYSTEM SET enable_logical_compaction_window = true
+                """
+                    if self.current_version >= MzVersion(0, 55, 0)
+                    else ""
+                )
+                + """
+                > INSERT INTO alter_index_table SELECT 'B' || generate_series FROM generate_series(1,10000);
+                $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
+                {"f1": "B${kafka-ingest.iteration}"}
 
                 > ALTER INDEX alter_index_table_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms');
                 > ALTER INDEX alter_index_source_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms');

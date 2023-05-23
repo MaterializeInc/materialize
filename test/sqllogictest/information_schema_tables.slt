@@ -597,6 +597,10 @@ pg_tables
 VIEW
 materialize
 pg_catalog
+pg_tablespace
+VIEW
+materialize
+pg_catalog
 pg_type
 VIEW
 materialize
