@@ -95,11 +95,6 @@ fn test_version() {
         .assert()
         .success()
         .stdout(format!("mz {}\n", expected_version));
-
-    // Test steps:
-    // --login
-    // --regions (list, create, get)
-    // --regions (delete)
 }
 
 #[test]

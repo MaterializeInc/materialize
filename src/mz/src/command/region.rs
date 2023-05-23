@@ -91,12 +91,12 @@ pub async fn show(cx: &mut RegionContext) -> Result<(), Error> {
             true => "yes",
             false => "no",
         },
-        Err(err) => "no",
+        Err(_) => "no",
     };
 
     let output_formatter = cx.output_formatter();
 
-    output_formatter.output_scalar(Some(&format!("Healthy: \t{}", environment_health)));
+    output_formatter.output_scalar(Some(&format!("Healthy: \t{}", environment_health)))?;
     output_formatter.output_scalar(Some(&format!(
         "SQL address: \t{}",
         environment.environmentd_pgwire_address

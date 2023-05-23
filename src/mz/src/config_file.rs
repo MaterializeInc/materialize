@@ -38,7 +38,7 @@ static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
         },
         "vault" => GlobalParam {
             get: |config_file| {
-                Some("TODO")
+                config_file.vault.as_deref().or(None)
             },
         }
     }
@@ -70,9 +70,6 @@ impl ConfigFile {
                 fs::create_dir_all(parent).await?;
             }
         }
-        // Best feature store features we need to call our selves
-        // Features store development kit.
-        // Streamlit way
 
         // Create the file if it doesn't exist
         let mut file = OpenOptions::new()
@@ -103,7 +100,6 @@ impl ConfigFile {
                 Some(parsed_profile) => Ok(Profile {
                     name,
                     parsed: parsed_profile,
-                    config_file: self,
                 }),
             },
             None => panic!("unknown profile {}", name.quoted()),
@@ -276,7 +272,6 @@ static PROFILE_PARAMS: Lazy<BTreeMap<&'static str, ProfileParam>> = Lazy::new(||
 pub struct Profile<'a> {
     name: &'a str,
     parsed: &'a TomlProfile,
-    config_file: &'a ConfigFile,
 }
 
 impl Profile<'_> {

@@ -89,8 +89,6 @@ use mz::error::Error;
 
 use mz::context::{Context, ContextLoadArgs};
 use mz_ore::cli::CliConfig;
-use once_cell::sync::Lazy;
-use serde::Deserialize;
 
 use crate::command::app_password::AppPasswordCommand;
 use crate::command::config::ConfigCommand;

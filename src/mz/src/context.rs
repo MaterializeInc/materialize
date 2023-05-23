@@ -63,7 +63,8 @@ impl Context {
         ContextLoadArgs {
             config_file_path,
             output_format,
-            no_color,
+            // TODO: Color
+            no_color: _,
         }: ContextLoadArgs,
     ) -> Result<Context, Error> {
         let config_file_path = match config_file_path {
