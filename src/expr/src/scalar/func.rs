@@ -2971,6 +2971,7 @@ impl BinaryFunc {
             | BinaryFunc::BitXorUInt16
             | BinaryFunc::BitXorUInt32
             | BinaryFunc::BitXorUInt64 => (false, false),
+            // The shift functions wrap, which means they are monotonic in neither argument.
             BinaryFunc::BitShiftLeftInt16
             | BinaryFunc::BitShiftLeftInt32
             | BinaryFunc::BitShiftLeftInt64
@@ -2982,7 +2983,7 @@ impl BinaryFunc {
             | BinaryFunc::BitShiftRightInt64
             | BinaryFunc::BitShiftRightUInt16
             | BinaryFunc::BitShiftRightUInt32
-            | BinaryFunc::BitShiftRightUInt64 => (true, true),
+            | BinaryFunc::BitShiftRightUInt64 => (false, false),
             BinaryFunc::SubInt16
             | BinaryFunc::SubInt32
             | BinaryFunc::SubInt64
