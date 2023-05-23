@@ -3973,10 +3973,10 @@ impl Coordinator {
         let ps = session
             .get_prepared_statement_unverified(&plan.name)
             .expect("known to exist");
-        let sql = ps.sql().cloned();
+        let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
         let revision = ps.catalog_revision;
-        session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
+        session.create_new_portal(stmt, desc, plan.params, Vec::new(), revision)
     }
 
     pub(super) async fn sequence_grant_privilege(

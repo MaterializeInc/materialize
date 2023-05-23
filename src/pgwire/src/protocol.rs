@@ -829,7 +829,7 @@ where
                     .await
             }
         };
-        if aborted_txn && !is_txn_exit_stmt(stmt.sql()) {
+        if aborted_txn && !is_txn_exit_stmt(stmt.stmt()) {
             return self.aborted_txn_error().await;
         }
         let buf = RowArena::new();
@@ -893,7 +893,7 @@ where
 
         let desc = stmt.desc().clone();
         let revision = stmt.catalog_revision;
-        let stmt = stmt.sql().cloned();
+        let stmt = stmt.stmt().cloned();
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
