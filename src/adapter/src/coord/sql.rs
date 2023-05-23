@@ -104,7 +104,7 @@ impl Coordinator {
         if let Some(revision) = Self::verify_statement_revision(
             catalog,
             session,
-            ps.sql(),
+            ps.stmt(),
             ps.desc(),
             ps.catalog_revision,
         )? {

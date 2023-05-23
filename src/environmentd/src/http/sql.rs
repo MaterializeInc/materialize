@@ -796,7 +796,7 @@ async fn execute_stmt<S: ResultSender>(
 
     let desc = prep_stmt.desc().clone();
     let revision = prep_stmt.catalog_revision;
-    let stmt = prep_stmt.sql().cloned();
+    let stmt = prep_stmt.stmt().cloned();
     if let Err(err) = client.session().set_portal(
         EMPTY_PORTAL.into(),
         desc,
