@@ -2588,6 +2588,7 @@ impl CatalogEntry {
                 DataSourceDesc::Ingestion(ingestion) => ingestion
                     .source_exports
                     .keys()
+                    .filter(|id| id != &&self.id)
                     .copied()
                     .chain(std::iter::once(ingestion.remap_collection_id))
                     .collect(),
@@ -2605,6 +2606,28 @@ impl CatalogEntry {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => BTreeSet::new(),
+        }
+    }
+
+    /// Returns the `GlobalId` of all of this entry's progress ID.
+    pub fn progress_id(&self) -> Option<GlobalId> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
+                DataSourceDesc::Introspection(_)
+                | DataSourceDesc::Progress
+                | DataSourceDesc::Source => None,
+            },
+            CatalogItem::Table(_)
+            | CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -8449,6 +8472,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn subsources(&self) -> BTreeSet<GlobalId> {
         self.subsources()
+    }
+
+    fn progress_id(&self) -> Option<GlobalId> {
+        self.progress_id()
     }
 
     fn owner_id(&self) -> RoleId {
