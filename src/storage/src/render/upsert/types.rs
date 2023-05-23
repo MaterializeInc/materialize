@@ -342,16 +342,6 @@ pub struct GetStats {
 /// the `upsert` operator.
 #[async_trait::async_trait(?Send)]
 pub trait UpsertStateBackend {
-    /// Unlike `multi_get` and `multi_put`, which require the implementer
-    /// to chunk large iterators as they please, `merge_snapshot_chunk` allows
-    /// the implementer to specify their preferred batch size. This batch size
-    /// refers to the number of keys being merged into the state.
-    ///
-    /// This is different from `multi_get` and `multi_put` because snapshots
-    /// are merged from asynchronous, batched timely iterators, as opposed to normal
-    /// sync iterators.
-    const SNAPSHOT_BATCH_SIZE: usize;
-
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
@@ -387,8 +377,6 @@ impl Default for InMemoryHashMap {
 
 #[async_trait::async_trait(?Send)]
 impl UpsertStateBackend for InMemoryHashMap {
-    const SNAPSHOT_BATCH_SIZE: usize = 1;
-
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,

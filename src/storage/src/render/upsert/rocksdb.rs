@@ -45,8 +45,6 @@ impl RocksDB {
 
 #[async_trait::async_trait(?Send)]
 impl UpsertStateBackend for RocksDB {
-    const SNAPSHOT_BATCH_SIZE: usize = BATCH_SIZE;
-
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,

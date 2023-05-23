@@ -17,8 +17,9 @@ use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
+use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_client::types::sources::UpsertEnvelope;
@@ -262,48 +263,51 @@ where
             upsert_metrics,
             source_config.source_statistics,
         );
-
-        let mut batch_key_counter = HashSet::with_capacity(US::SNAPSHOT_BATCH_SIZE);
-        let mut update_buf = Vec::with_capacity(US::SNAPSHOT_BATCH_SIZE * 10);
-        while let Some(event) = previous.next_mut().await {
-            match event {
-                AsyncEvent::Data(_cap, data) => {
-                    for ((key, value), ts, diff) in data.drain(..) {
-                        // In the first phase we consolidate updates from our output that are not beyond
-                        // resume_upper, in-place in `state`.
+        let mut events = vec![];
+        let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
+        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper) {
+            match previous.next_mut().await {
+                Some(AsyncEvent::Data(_cap, data)) => {
+                    events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
                         if !resume_upper.less_equal(&ts) {
-                            update_buf.push((key, value, diff));
-                            batch_key_counter.insert(key);
-
-                            // If the number of keys in this batch is >= the requested
-                            // size, flush it out. We also flush if there are >= `SNAPSHOT_BATCH_SIZE`*10
-                            // updates, with < SNAPSHOT_BATCH_SIZE keys.
-                            if batch_key_counter.len() >= US::SNAPSHOT_BATCH_SIZE
-                                || update_buf.len() >= US::SNAPSHOT_BATCH_SIZE * 10
-                            {
-                                batch_key_counter.clear();
-                                state
-                                    .merge_snapshot_chunk(update_buf.drain(..), false)
-                                    .await
-                                    .expect("hashmap impl to not fail");
-                            }
+                            Some((key, value, diff))
+                        } else {
+                            None
                         }
-                    }
+                    }))
                 }
-                AsyncEvent::Progress(upper) => {
-                    if PartialOrder::less_equal(&resume_upper, &upper) {
+                Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
+                None => snapshot_upper = Antichain::new(),
+            };
+            while let Some(event) = previous.next_mut().now_or_never() {
+                match event {
+                    Some(AsyncEvent::Data(_cap, data)) => {
+                        events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
+                            if !resume_upper.less_equal(&ts) {
+                                Some((key, value, diff))
+                            } else {
+                                None
+                            }
+                        }))
+                    }
+                    Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
+                    None => {
+                        snapshot_upper = Antichain::new();
                         break;
                     }
                 }
             }
+
+            state
+                .merge_snapshot_chunk(
+                    events.drain(..),
+                    PartialOrder::less_equal(&resume_upper, &snapshot_upper),
+                )
+                .await
+                .expect("hashmap impl to not fail");
         }
-        // Flush out the rest of the snapshot.
-        state
-            .merge_snapshot_chunk(update_buf.drain(..), true)
-            .await
-            .expect("hashmap impl to not fail");
-        drop(update_buf);
-        drop(batch_key_counter);
+
+        drop(events);
 
         drop(previous_token);
         while let Some(_event) = previous.next().await {
