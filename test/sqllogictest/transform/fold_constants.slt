@@ -101,11 +101,11 @@ Explained Query:
     Get l0 // { arity: 2 }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0, #1] // { arity: 2 }
+      Distinct group_by=[#0, #1] monotonic // { arity: 2 }
         Union // { arity: 2 }
-          Distinct group_by=[#0, #1] // { arity: 2 }
+          Distinct group_by=[#0, #1] monotonic // { arity: 2 }
             Union // { arity: 2 }
-              Distinct group_by=[#0, #1] // { arity: 2 }
+              Distinct group_by=[#0, #1] monotonic // { arity: 2 }
                 Union // { arity: 2 }
                   Get l0 // { arity: 2 }
                   Constant // { arity: 2 }

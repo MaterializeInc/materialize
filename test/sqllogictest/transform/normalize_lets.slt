@@ -28,7 +28,7 @@ Explained Query:
     cte l0 =
       Project (#1)
         Map (1)
-          Distinct group_by=[#0]
+          Distinct group_by=[#0] monotonic
             Union
               Project (#1)
                 Map (7)
@@ -190,10 +190,10 @@ Explained Query:
       Get l1
   With Mutually Recursive
     cte l1 =
-      Distinct group_by=[#0]
+      Distinct group_by=[#0] monotonic
         Get l1
     cte l0 =
-      Distinct group_by=[#0]
+      Distinct group_by=[#0] monotonic
         Get l0
 
 EOF
@@ -287,7 +287,7 @@ Explained Query:
     Get l0
   With Mutually Recursive [iteration_limit=10]
     cte l0 =
-      Distinct group_by=[#0]
+      Distinct group_by=[#0] monotonic
         Union
           Project (#1)
             Map ((#0 + 1))
@@ -319,10 +319,10 @@ Explained Query:
       Get l1
   With Mutually Recursive
     cte [iteration_limit=7] l1 =
-      Distinct group_by=[(#0 - 2)]
+      Distinct group_by=[(#0 - 2)] monotonic
         Get l1
     cte [iteration_limit=5] l0 =
-      Distinct group_by=[#0]
+      Distinct group_by=[#0] monotonic
         Get l0
 
 EOF
@@ -350,10 +350,10 @@ Explained Query:
       Get l1
   With Mutually Recursive [iteration_limit=27]
     cte l1 =
-      Distinct group_by=[(#0 - 2)]
+      Distinct group_by=[(#0 - 2)] monotonic
         Get l1
     cte l0 =
-      Distinct group_by=[#0]
+      Distinct group_by=[#0] monotonic
         Get l0
 
 EOF

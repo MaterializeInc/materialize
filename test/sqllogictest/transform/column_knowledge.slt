@@ -743,7 +743,7 @@ Explained Query:
                 Get l1 // { arity: 3, types: "(integer?, integer?, integer?)" }
     cte l0 =
       Map (1) // { arity: 1, types: "(integer)" }
-        Distinct // { arity: 0, types: "()" }
+        Distinct monotonic // { arity: 0, types: "()" }
           Union // { arity: 0, types: "()" }
             Project () // { arity: 0, types: "()" }
               Get l0 // { arity: 1, types: "(integer?)" }
@@ -792,7 +792,7 @@ Explained Query:
                 Get l1 // { arity: 3, types: "(boolean?, integer?, integer?)" }
     cte l0 =
       Map (1) // { arity: 1, types: "(integer)" }
-        Distinct // { arity: 0, types: "()" }
+        Distinct monotonic // { arity: 0, types: "()" }
           Union // { arity: 0, types: "()" }
             Project () // { arity: 0, types: "()" }
               Get l0 // { arity: 1, types: "(integer?)" }
