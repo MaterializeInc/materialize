@@ -189,7 +189,7 @@ where
                 rocksdb::RocksDB::new(
                     mz_rocksdb::RocksDBInstance::new(
                         &rocksdb_dir,
-                        mz_rocksdb::Options::defaults_with_env(env),
+                        mz_rocksdb::InstanceOptions::defaults_with_env(env),
                         tuning,
                         rocksdb_metrics,
                         // For now, just use the same config as the one used for

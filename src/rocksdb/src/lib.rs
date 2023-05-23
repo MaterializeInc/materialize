@@ -96,9 +96,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
-pub mod tuning;
-
-pub use tuning::{defaults, RocksDBTuningParameters};
+pub mod config;
+pub use config::{defaults, RocksDBConfig, RocksDBTuningParameters};
 
 /// An error using this RocksDB wrapper.
 #[derive(Debug, thiserror::Error)]
@@ -121,8 +120,9 @@ pub enum Error {
     TokioPanic(#[from] tokio::task::JoinError),
 }
 
-/// Options to configure a [`RocksDBInstance`].
-pub struct Options {
+/// Fixed options to configure a [`RocksDBInstance`]. These are not tuning parameters,
+/// see the `config` modules for tuning. These are generally fixed within the binary.
+pub struct InstanceOptions {
     /// Whether or not to clear state at the instance
     /// path before starting.
     pub cleanup_on_new: bool,
@@ -140,23 +140,10 @@ pub struct Options {
     pub env: Env,
 }
 
-/// Metrics about an instances usage of RocksDB. User-provided
-/// so the user can choose the labels.
-pub struct RocksDBMetrics {
-    /// Latency of multi_gets, in fractional seconds.
-    pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    /// Size of multi_get batches.
-    pub multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
-    /// Latency of write batch writes, in fractional seconds.
-    pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
-    /// Size of write batches.
-    pub multi_put_size: DeleteOnDropHistogram<'static, Vec<String>>,
-}
-
-impl Options {
+impl InstanceOptions {
     /// A new `Options` object with reasonable defaults.
     pub fn defaults_with_env(env: rocksdb::Env) -> Self {
-        Options {
+        InstanceOptions {
             cleanup_on_new: true,
             cleanup_on_drop: true,
             use_wal: false,
@@ -164,7 +151,7 @@ impl Options {
         }
     }
 
-    fn as_rocksdb_options(&self, tuning_config: &RocksDBTuningParameters) -> RocksDBOptions {
+    fn as_rocksdb_options(&self, tuning_config: &RocksDBConfig) -> RocksDBOptions {
         // Defaults + `create_if_missing`
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
@@ -184,8 +171,21 @@ impl Options {
     }
 }
 
+/// Metrics about an instances usage of RocksDB. User-provided
+/// so the user can choose the labels.
+pub struct RocksDBMetrics {
+    /// Latency of multi_gets, in fractional seconds.
+    pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    /// Size of multi_get batches.
+    pub multi_get_size: DeleteOnDropHistogram<'static, Vec<String>>,
+    /// Latency of write batch writes, in fractional seconds.
+    pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    /// Size of write batches.
+    pub multi_put_size: DeleteOnDropHistogram<'static, Vec<String>>,
+}
+
 /// The result type for `multi_get`.
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct MultiGetResult {
     /// The number of keys we fetched.
     pub processed_gets: u64,
@@ -202,7 +202,7 @@ pub struct GetResult<V> {
 }
 
 /// The result type for `multi_put`.
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct MultiPutResult {
     /// The number of keys we put or deleted.
     pub processed_puts: u64,
@@ -254,6 +254,9 @@ pub struct RocksDBInstance<K, V> {
     // Scratch vector to send updates to the RocksDB thread
     // during `MultiPut`.
     multi_put_scratch: Vec<(K, Option<V>)>,
+
+    // Configuration that can change dynamically.
+    dynamic_config: config::RocksDBDynamicConfig,
 }
 
 impl<K, V> RocksDBInstance<K, V>
@@ -270,8 +273,8 @@ where
     /// serialize and deserialize the keys and values.
     pub async fn new<M, O>(
         instance_path: &Path,
-        options: Options,
-        tuning_config: RocksDBTuningParameters,
+        options: InstanceOptions,
+        tuning_config: RocksDBConfig,
         metrics: M,
         enc_opts: O,
     ) -> Result<Self, Error>
@@ -279,6 +282,7 @@ where
         O: bincode::Options + Copy + Send + Sync + 'static,
         M: Deref<Target = RocksDBMetrics> + Send + 'static,
     {
+        let dynamic_config = tuning_config.dynamic.clone();
         if options.cleanup_on_new && instance_path.exists() {
             let instance_path_owned = instance_path.to_owned();
             mz_ore::task::spawn_blocking(
@@ -322,20 +326,53 @@ where
             multi_get_scratch: Vec::new(),
             multi_get_results_scratch: Vec::new(),
             multi_put_scratch: Vec::new(),
+            dynamic_config,
         })
     }
 
     /// For each _unique_ key in `gets`, place the stored value (if any) in `results_out`.
     ///
     /// Panics if `gets` and `results_out` are not the same length.
-    pub async fn multi_get<'r, G, R>(
+    pub async fn multi_get<'r, G, R, Ret, Placement>(
         &mut self,
         gets: G,
         results_out: R,
+        placement: Placement,
     ) -> Result<MultiGetResult, Error>
     where
         G: IntoIterator<Item = K>,
-        R: IntoIterator<Item = &'r mut Option<GetResult<V>>>,
+        R: IntoIterator<Item = &'r mut Ret>,
+        Ret: 'r,
+        Placement: Fn(Option<GetResult<V>>) -> Ret,
+    {
+        let batch_size = self.dynamic_config.batch_size();
+        let mut stats = MultiGetResult::default();
+
+        let mut gets = gets.into_iter().peekable();
+        if gets.peek().is_some() {
+            let gets = gets.chunks(batch_size);
+            let results_out = results_out.into_iter().chunks(batch_size);
+
+            for (gets, results_out) in gets.into_iter().zip_eq(results_out.into_iter()) {
+                let ret = self.multi_get_inner(gets, results_out, &placement).await?;
+                stats.processed_gets += ret.processed_gets;
+            }
+        }
+
+        Ok(stats)
+    }
+
+    async fn multi_get_inner<'r, G, R, Ret, Placement>(
+        &mut self,
+        gets: G,
+        results_out: R,
+        placement: &Placement,
+    ) -> Result<MultiGetResult, Error>
+    where
+        G: IntoIterator<Item = K>,
+        R: IntoIterator<Item = &'r mut Ret>,
+        Ret: 'r,
+        Placement: Fn(Option<GetResult<V>>) -> Ret,
     {
         let mut multi_get_vec = std::mem::take(&mut self.multi_get_scratch);
         let mut results_vec = std::mem::take(&mut self.multi_get_results_scratch);
@@ -363,7 +400,7 @@ where
         match rx.await.map_err(|_| Error::RocksDBThreadGoneAway)? {
             Ok((ret, get_scratch, mut results_scratch)) => {
                 for (place, get) in results_out.into_iter().zip_eq(results_scratch.drain(..)) {
-                    *place = get;
+                    *place = placement(get);
                 }
                 self.multi_get_scratch = get_scratch;
                 self.multi_get_results_scratch = results_scratch;
@@ -380,6 +417,27 @@ where
     /// the value is `None`. If the same `key` appears multiple times,
     /// the last value for the key wins.
     pub async fn multi_put<P>(&mut self, puts: P) -> Result<MultiPutResult, Error>
+    where
+        P: IntoIterator<Item = (K, Option<V>)>,
+    {
+        let batch_size = self.dynamic_config.batch_size();
+        let mut stats = MultiPutResult::default();
+
+        let mut puts = puts.into_iter().peekable();
+        if puts.peek().is_some() {
+            let puts = puts.chunks(batch_size);
+
+            for puts in puts.into_iter() {
+                let ret = self.multi_put_inner(puts).await?;
+                stats.processed_puts += ret.processed_puts;
+                stats.size_written += ret.size_written;
+            }
+        }
+
+        Ok(stats)
+    }
+
+    async fn multi_put_inner<P>(&mut self, puts: P) -> Result<MultiPutResult, Error>
     where
         P: IntoIterator<Item = (K, Option<V>)>,
     {
@@ -434,8 +492,8 @@ where
 
 // TODO(guswynn): retry retryable rocksdb errors.
 fn rocksdb_core_loop<K, V, M, O>(
-    options: Options,
-    tuning_config: RocksDBTuningParameters,
+    options: InstanceOptions,
+    tuning_config: RocksDBConfig,
     instance_path: PathBuf,
     mut cmd_rx: mpsc::Receiver<Command<K, V>>,
     metrics: M,

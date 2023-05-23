@@ -6998,6 +6998,7 @@ impl Catalog {
                     self.system_config().upsert_rocksdb_compression_type(),
                     self.system_config()
                         .upsert_rocksdb_bottommost_compression_type(),
+                    self.system_config().upsert_rocksdb_batch_size(),
                 ) {
                     Ok(u) => u,
                     Err(e) => {
