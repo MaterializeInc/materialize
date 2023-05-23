@@ -1865,6 +1865,20 @@ impl AstDisplay for ShowVariableStatement {
 }
 impl_display!(ShowVariableStatement);
 
+/// `INSPECT SHARD <id>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InspectShardStatement {
+    pub id: String,
+}
+
+impl AstDisplay for InspectShardStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("INSPECT SHARD ");
+        f.write_str(&self.id);
+    }
+}
+impl_display!(InspectShardStatement);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ShowObjectType<T: AstInfo> {
     MaterializedView {
@@ -2916,6 +2930,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateIndex(ShowCreateIndexStatement<T>),
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowVariable(ShowVariableStatement),
+    InspectShard(InspectShardStatement),
 }
 
 impl<T: AstInfo> AstDisplay for ShowStatement<T> {
@@ -2931,6 +2946,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
             ShowStatement::ShowVariable(stmt) => f.write_node(stmt),
+            ShowStatement::InspectShard(stmt) => f.write_node(stmt),
         }
     }
 }

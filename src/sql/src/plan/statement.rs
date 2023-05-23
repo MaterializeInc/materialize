@@ -215,6 +215,9 @@ pub fn describe(
 
         // Other statements.
         Statement::Raise(stmt) => raise::describe_raise(&scx, stmt)?,
+        Statement::Show(ShowStatement::InspectShard(stmt)) => {
+            scl::describe_inspect_shard(&scx, stmt)?
+        }
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -350,6 +353,7 @@ pub fn plan(
 
         // Other statements.
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
+        Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
     };
 
     if let Ok(plan) = &plan {

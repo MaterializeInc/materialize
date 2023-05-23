@@ -31,10 +31,11 @@ use mz_sql::plan::{
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
     CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
     ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
-    MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
-    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
-    SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SideEffectingFunc,
-    SourceSinkClusterConfig, StartTransactionPlan, SubscribePlan, UpdatePrivilege,
+    InspectShardPlan, MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan,
+    ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
+    RotateKeysPlan, SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan,
+    SideEffectingFunc, SourceSinkClusterConfig, StartTransactionPlan, SubscribePlan,
+    UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -327,6 +328,7 @@ pub fn generate_required_role_membership(
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
         | Plan::ShowVariable(_)
+        | Plan::InspectShard(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
         | Plan::SetTransaction(_)
@@ -430,6 +432,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
         | Plan::ShowVariable(_)
+        | Plan::InspectShard(_)
         | Plan::SetVariable(_)
         | Plan::ResetVariable(_)
         | Plan::SetTransaction(_)
@@ -590,6 +593,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::ShowAllVariables
         | Plan::ShowVariable(_)
         | Plan::SetVariable(_)
+        | Plan::InspectShard(_)
         | Plan::ResetVariable(_)
         | Plan::SetTransaction(_)
         | Plan::StartTransaction(_)
@@ -1211,6 +1215,7 @@ fn generate_required_privileges(
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowVariable(ShowVariablePlan { name: _ })
+        | Plan::InspectShard(InspectShardPlan { id: _ })
         | Plan::SetVariable(SetVariablePlan {
             name: _,
             value: _,
