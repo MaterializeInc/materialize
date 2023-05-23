@@ -4464,6 +4464,7 @@ derive_unary!(
     CastMapToString,
     CastInt2VectorToString,
     CastRangeToString,
+    TryToTimestampIso8601Monotone,
     CeilFloat32,
     CeilFloat64,
     CeilNumeric,
@@ -5204,6 +5205,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastMapToString(func) => CastMapToString(func.ty.into_proto()),
             UnaryFunc::CastInt2VectorToString(_) => CastInt2VectorToString(()),
             UnaryFunc::CastRangeToString(func) => CastRangeToString(func.ty.into_proto()),
+            UnaryFunc::TryToTimestampIso8601Monotone(_) => TryToTimestampIso8601Monotone(()),
             UnaryFunc::CeilFloat32(_) => CeilFloat32(()),
             UnaryFunc::CeilFloat64(_) => CeilFloat64(()),
             UnaryFunc::CeilNumeric(_) => CeilNumeric(()),
@@ -5612,6 +5614,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                     ty: ty.into_rust()?,
                 }
                 .into()),
+                TryToTimestampIso8601Monotone(_) => Ok(impls::TryToTimestampIso8601Monotone.into()),
                 CeilFloat32(_) => Ok(impls::CeilFloat32.into()),
                 CeilFloat64(_) => Ok(impls::CeilFloat64.into()),
                 CeilNumeric(_) => Ok(impls::CeilNumeric.into()),

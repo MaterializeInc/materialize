@@ -1,0 +1,56 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# TODO
+# - upper and lower case T and Z
+# - timestamp out of range
+# - fractional seconds
+# - non Z timezone
+
+mode cockroach
+
+query T
+select try_to_timestamp('2015-09-18T23:56:04', 'YYYY-MM-DDTHH:MI:SSZ');
+----
+NULL
+
+query T
+select try_to_timestamp('2015-09-18T23:56:04Z', 'YYYY-MM-DDTHH:MI:SSZ');
+----
+2015-09-18 23:56:04
+
+query T
+select try_to_timestamp('2015-09-18T23:56:04.001Z', 'YYYY-MM-DDTHH:MI:SSZ');
+----
+2015-09-18 23:56:04.001
+
+# WIP this should parse
+query T
+select try_to_timestamp('20150-09-18T23:56:04Z', 'YYYY-MM-DDTHH:MI:SSZ');
+----
+NULL
+
+query T
+select try_to_timestamp('-2015-09-18T23:56:04Z', 'YYYY-MM-DDTHH:MI:SSZ');
+----
+2016-09-18 23:56:04 BC
+
+query T
+select try_to_timestamp('nope', 'YYYY-MM-DDTHH:MI:SSZ');
+----
+NULL
+
+# WIP this shouldn't parse
+query T
+select try_to_timestamp('215-09-18T23:56:04Z', 'YYYY-MM-DDTHH:MI:SSZ');
+----
+0215-09-18 23:56:04
+
+query error db error: ERROR: unsupported try_to_timestamp format 'nope'
+select try_to_timestamp('2015-09-18T23:56:04Z', 'nope');

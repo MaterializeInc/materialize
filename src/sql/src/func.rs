@@ -2601,6 +2601,18 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Timestamp, String) => BinaryFunc::ToCharTimestamp => String, 2049;
             params!(TimestampTz, String) => BinaryFunc::ToCharTimestampTz => String, 1770;
         },
+        "try_to_timestamp" => Scalar {
+            params!(String, String) => Operation::binary(move |_ecx, ts, format| {
+                match format.into_literal_string() {
+                    None => {
+                        sql_bail!("try_to_timestamp only accepts literal strings for the format");
+                    },
+                    Some(x) if x == "YYYY-MM-DDTHH:MI:SSZ" => {},
+                    Some(x) => sql_bail!("unsupported try_to_timestamp format '{}'", x),
+                };
+                Ok(ts.call_unary(UnaryFunc::TryToTimestampIso8601Monotone(mz_expr::func::TryToTimestampIso8601Monotone)))
+            }) => Timestamp, 9;
+        },
         // > Returns the value as json or jsonb. Arrays and composites
         // > are converted (recursively) to arrays and objects;
         // > otherwise, if there is a cast from the type to json, the

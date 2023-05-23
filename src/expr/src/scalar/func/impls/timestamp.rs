@@ -108,6 +108,23 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "try_to_timestamp_iso_8601_monotone"]
+    #[is_monotone = true]
+    fn try_to_timestamp_iso_8601_monotone(a: &'a str) -> Option<CheckedTimestamp<NaiveDateTime>> {
+        if !a.ends_with('Z') {
+            return None;
+        }
+        let a = &a[..a.len()-1];
+        // WIP pretty sure we're gonna have to hand-roll a parser here?
+        // `parse_from_str` doesn't behave the way we want for 3 digit years and
+        // probably other things.
+        let ts = a.parse::<NaiveDateTime>().ok()?;
+        let ts = CheckedTimestamp::from_timestamplike(ts).ok()?;
+        Some(ts)
+    }
+);
+
 pub fn date_part_interval_inner<D>(units: DateTimeUnits, interval: Interval) -> Result<D, EvalError>
 where
     D: DecimalLike,
