@@ -651,6 +651,9 @@ pub trait CatalogItem {
     /// If this catalog item is a source, it return the IDs of its subsources
     fn subsources(&self) -> BTreeSet<GlobalId>;
 
+    /// If this catalog item is a source, it return the IDs of its progress collection.
+    fn progress_id(&self) -> Option<GlobalId>;
+
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
     fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)>;
