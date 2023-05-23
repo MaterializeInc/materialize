@@ -24,6 +24,8 @@ use serde::Deserialize;
 use crate::client::region::Region;
 use crate::error::{ApiError, Error};
 
+use self::cloud_provider::CloudProvider;
+
 /// Represents the structure for the client.
 pub struct Client {
     pub(crate) inner: reqwest::Client,
@@ -69,7 +71,28 @@ impl Client {
     }
 
     /// Builds a request towards the `Client`'s endpoint
+    /// The function requires a [CloudProvider] as parameter
+    /// since it contains the api url (region controller url)
+    /// to interact with the region.
     async fn build_region_request<P>(
+        &self,
+        method: Method,
+        path: P,
+        cloud_provider: CloudProvider,
+    ) -> Result<RequestBuilder, Error>
+    where
+        P: IntoIterator,
+        P::Item: AsRef<str>,
+    {
+        self.build_request(method, path, cloud_provider.api_url)
+            .await
+    }
+
+    /// Builds a request towards the `Client`'s endpoint.
+    /// The function requires a [Region] as parameter
+    /// since it contains the environment controller url
+    /// to interact with the environment.
+    async fn build_environment_request<P>(
         &self,
         method: Method,
         path: P,
