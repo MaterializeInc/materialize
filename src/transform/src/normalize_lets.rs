@@ -622,7 +622,7 @@ mod inlining {
     /// let A = ...;
     /// let B = A - C;
     /// let C = A;
-    ///```
+    /// ```
     /// The explanation is that `B` should always be the difference between the
     /// current and previous `A`, and that the substitution of `C` would instead
     /// make it always zero, changing its definition.

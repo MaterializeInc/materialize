@@ -310,7 +310,9 @@ EOF
 
 ## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
 
-# Trivial test: Just marking SemijoinIdempotence recursion_safe should already handle this.
+# Trivial test: Just marking SemijoinIdempotence recursion_safe should already handle this, because the semijoin pattern
+# in this test doesn't reference any ids that are defined inside the WMR. Therefore, SemijoinIdempotence doesn't need to
+# collect info about ids inside a LetRec.
 # The resulting plan should have 1 join with 2 inputs.
 query T multiline
 explain
@@ -334,13 +336,14 @@ Explained Query:
     cte l0 =
       Distinct group_by=[#0..=#3]
         Union
-          Join on=(#0 = #3) type=differential
-            ArrangeBy keys=[[#0]]
-              Get materialize.public.foo
-            ArrangeBy keys=[[#0]]
-              Project (#0)
-                Filter (#0) IS NOT NULL
-                  Get materialize.public.bar
+          Project (#0..=#2, #0)
+            Join on=(#0 = #3) type=differential
+              ArrangeBy keys=[[#0]]
+                Get materialize.public.foo
+              ArrangeBy keys=[[#0]]
+                Project (#0)
+                  Filter (#0) IS NOT NULL
+                    Get materialize.public.bar
           Get l0
 
 Source materialize.public.bar
@@ -348,12 +351,14 @@ Source materialize.public.bar
 
 EOF
 
-# Pattern references an id that is defined inside the WMR. SemijoinIdempotence needs to collect info about ids inside a
-# LetRec.
+# Manually written idempotent semijoin.
 # The resulting plan should have 1 join with 2 inputs.
-# Doesn't work yet.
+# Interestingly, SemijoinIdempotence is not able to do its work here yet, because our key inference is not so smart for
+# WMR: we don't propagate the key created by the DISTINCT to the recursive Get
+# (https://github.com/MaterializeInc/materialize/issues/18553). However, RedundantJoin steps in, and does the work for
+# us. (But see later a similar situation, but with a LEFT JOIN, where RedundantJoin is not able to save the day.)
 query T multiline
-explain
+explain with(keys)
 with mutually recursive
   c0(a int4, b int8, u text, key int4) as (
     select * from (
@@ -368,6 +373,44 @@ with mutually recursive
 select * from c0;
 ----
 Explained Query:
+  Return // { keys: "([0, 1, 2, 3])" }
+    Get l0 // { keys: "([0, 1, 2, 3])" }
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
+        Union // { keys: "()" }
+          Project (#0..=#2, #0) // { keys: "()" }
+            Join on=(#0 = #3) type=differential // { keys: "()" }
+              ArrangeBy keys=[[#0]] // { keys: "()" }
+                Get materialize.public.foo // { keys: "()" }
+              ArrangeBy keys=[[#0]] // { keys: "([0])" }
+                Distinct group_by=[#0] // { keys: "([0])" }
+                  Project (#0) // { keys: "()" }
+                    Get l0 // { keys: "()" }
+          Get l0 // { keys: "()" }
+
+EOF
+
+# Manually written idempotent semijoin.
+# Similar to the previous test, but the recursive Get is at the other input. This means that the input that should have
+# a known key is the static one, for which key inference works fine.
+# The resulting plan should have 1 join with 2 inputs.
+query T multiline
+explain
+with mutually recursive
+  c0(a int4, b int8, u text, key int4) as (
+    select * from (
+      with keys as (
+        select distinct c0.a from c0, bar where c0.a = bar.a
+      )
+      select c0.a, c0.b, c0.u, c0.key from c0, keys where c0.a = keys.a
+    )
+    union
+    select * from c0
+  )
+select * from c0;
+----
+Explained Query:
   Return
     Get l0
   With Mutually Recursive
@@ -375,29 +418,346 @@ Explained Query:
       Distinct group_by=[#0..=#3]
         Union
           Project (#0..=#3)
-            Join on=(eq(#0, #3, #4)) type=delta
+            Join on=(#0 = #4) type=differential
               ArrangeBy keys=[[#0]]
-                Get materialize.public.foo
+                Get l0
               ArrangeBy keys=[[#0]]
-                Distinct group_by=[#0]
-                  Project (#0)
-                    Get materialize.public.foo
-              ArrangeBy keys=[[#0]]
-                Distinct group_by=[#0]
-                  Project (#0)
-                    Get l0
+                Project (#0)
+                  Filter (#0) IS NOT NULL
+                    Get materialize.public.bar
           Get l0
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
 
 EOF
 
-# Ensure LEFT JOIN inside WMR is planned with only one join.
-# Doesn't work yet.
+# Manually written idempotent semijoin.
+# Similar to the previous test, but the CTE from inside c0 is manually lifted to the enclosing LetRec.
+# The resulting plan should have 1 join with 2 inputs.
+query T multiline
+explain
+with mutually recursive
+  keys(a int4) as (
+    select distinct c0.a from c0, bar where c0.a = bar.a
+  ),
+  c0(a int4, b int8, u text, key int4) as (
+    select c0.a, c0.b, c0.u, c0.key from c0, keys where c0.a = keys.a
+    union
+    select * from c0
+  )
+select * from c0;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0..=#3]
+        Union
+          Project (#0..=#3)
+            Join on=(#0 = #4) type=differential
+              ArrangeBy keys=[[#0]]
+                Get l0
+              ArrangeBy keys=[[#0]]
+                Project (#0)
+                  Filter (#0) IS NOT NULL
+                    Get materialize.public.bar
+          Get l0
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# Manually written idempotent semijoin.
+# Similar to the previous test, but instead of using bar directly, we add an extra cte (bar2), which will recursively
+# refer to `c0`. `keys` will refer to `bar2` instead of `c0`.
+# The resulting plan should have 1 join with 2 inputs.
+query T multiline
+explain
+with mutually recursive
+  bar2(a int4, v text) as (
+    select * from bar
+    union
+    select a, u from c0
+  ),
+  keys(a int4) as (
+    select distinct c0.a from c0, (select distinct on(a) * from bar2) as bar3 where c0.a = bar3.a
+  ),
+  c0(a int4, b int8, u text, key int4) as (
+    select c0.a, c0.b, c0.u, c0.key from c0, keys where c0.a = keys.a
+    union
+    select * from c0
+  )
+select * from c0;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive
+    cte l0 =
+      Distinct group_by=[#0..=#3]
+        Union
+          Project (#0..=#3)
+            Join on=(#0 = #4) type=differential
+              ArrangeBy keys=[[#0]]
+                Get l0
+              ArrangeBy keys=[[#0]]
+                TopK group_by=[#0] limit=1
+                  Project (#0)
+                    Distinct group_by=[#0, #1]
+                      Union
+                        Filter (#0) IS NOT NULL
+                          Get materialize.public.bar
+                        Project (#0, #2)
+                          Get l0
+          Get l0
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# Similar to the previous test, but SemijoinIdempotence should NOT kick in here! (That is, 2 joins should be in the
+# plan.) This is because we reordered the bindings compared to the previous test, and now the `bar2` reference in `keys`
+# changes meaning when `bar2` is being assigned after `key`. To correctly handle this situation, we need the expirations
+# in SemijoinIdempotence. To demonstrate this, if we comment out the two `do_expirations` lines, SemijoinIdempotence
+# incorrectly transforms this plan.
+query T multiline
+explain with(keys)
+with mutually recursive
+  keys(a int4) as (
+    select distinct c0.a from c0, (select distinct on(a) * from bar2) as bar3 where c0.a = bar3.a
+  ),
+  bar2(a int4, v text) as (
+    select * from bar
+    union
+    select a, u from c0
+  ),
+  c0(a int4, b int8, u text, key int4) as (
+    select c0.a, c0.b, c0.u, c0.key from c0, keys where c0.a = keys.a
+    union
+    select * from c0
+  )
+select * from c0;
+----
+Explained Query:
+  Return // { keys: "([0, 1, 2, 3])" }
+    Get l2 // { keys: "([0, 1, 2, 3])" }
+  With Mutually Recursive
+    cte l2 =
+      Distinct group_by=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
+        Union // { keys: "()" }
+          Project (#0..=#3) // { keys: "()" }
+            Join on=(#0 = #4) type=differential // { keys: "()" }
+              ArrangeBy keys=[[#0]] // { keys: "()" }
+                Get l2 // { keys: "()" }
+              ArrangeBy keys=[[#0]] // { keys: "([0])" }
+                Get l0 // { keys: "([0])" }
+          Get l2 // { keys: "()" }
+    cte l1 =
+      Distinct group_by=[#0, #1] // { keys: "([0, 1])" }
+        Union // { keys: "()" }
+          Get materialize.public.bar // { keys: "([0])" }
+          Project (#0, #2) // { keys: "()" }
+            Get l2 // { keys: "()" }
+    cte l0 =
+      Project (#0) // { keys: "([0])" }
+        Join on=(#0 = #1) type=differential // { keys: "([0])" }
+          ArrangeBy keys=[[#0]] // { keys: "([0])" }
+            Distinct group_by=[#0] // { keys: "([0])" }
+              Project (#0) // { keys: "()" }
+                Get l2 // { keys: "()" }
+          ArrangeBy keys=[[#0]] // { keys: "([0])" }
+            TopK group_by=[#0] limit=1 // { keys: "([0])" }
+              Project (#0) // { keys: "()" }
+                Filter (#0) IS NOT NULL // { keys: "()" }
+                  Get l1 // { keys: "()" }
+
+EOF
+
+# Manually written idempotent semijoin.
+# Another negative test. Similar to the first test with `bar2`, but both `keys` and `bar2` are being referenced from the
+# body, which means that SemijoinIdempotence can't kick in, as it would eliminate the intermediate Join's result, which
+# is now being referenced from the body.
+query T multiline
+explain
+with mutually recursive
+  bar2(a int4, v text) as (
+    select * from bar
+    union
+    select a, u from c0
+  ),
+  keys(a int4) as (
+    select distinct c0.a from c0, (select distinct on(a) * from bar2) as bar3 where c0.a = bar3.a
+  ),
+  c0(a int4, b int8, u text, key int4) as (
+    select c0.a, c0.b, c0.u, c0.key from c0, keys where c0.a = keys.a
+    union
+    select * from c0
+  )
+select * from c0
+union all
+select a, -1, v, a from bar2
+union all
+select a, -2, 'keys', a from keys;
+----
+Explained Query:
+  Return
+    Union
+      Get l2
+      Project (#0, #2, #1, #0)
+        Map (-1)
+          Get l0
+      Project (#0, #2, #1, #0)
+        Map ("keys", -2)
+          Get l1
+  With Mutually Recursive
+    cte l2 =
+      Distinct group_by=[#0..=#3]
+        Union
+          Project (#0..=#3)
+            Join on=(#0 = #4) type=differential
+              ArrangeBy keys=[[#0]]
+                Get l2
+              ArrangeBy keys=[[#0]]
+                TopK group_by=[#0] limit=1
+                  Project (#0)
+                    Filter (#0) IS NOT NULL
+                      Get l0
+          Get l2
+    cte l1 =
+      Project (#0)
+        Join on=(#0 = #1) type=differential
+          ArrangeBy keys=[[#0]]
+            Distinct group_by=[#0]
+              Project (#0)
+                Get l2
+          ArrangeBy keys=[[#0]]
+            TopK group_by=[#0] limit=1
+              Project (#0)
+                Filter (#0) IS NOT NULL
+                  Get l0
+    cte l0 =
+      Distinct group_by=[#0, #1]
+        Union
+          Get materialize.public.bar
+          Project (#0, #2)
+            Get l2
+
+EOF
+
+# Test that LEFT JOIN inside WMR is planned with only one join.
+# Doesn't work yet, because our key inference is not so smart for WMR: we don't propagate the key created by the
+# DISTINCT to the recursive Get (https://github.com/MaterializeInc/materialize/issues/18553).
+query T multiline
+explain with(keys)
+with mutually recursive
+  c0(a int4, b int8, u text, a2 int4, v2 text) as (
+    select foo_raw.a, foo_raw.b, foo_raw.u, c0.a, c0.u from
+    foo_raw left join c0 on foo_raw.a = c0.a
+    union
+    select *, a, u from foo_raw
+  )
+select * from c0
+----
+Explained Query:
+  Return // { keys: "([0, 1, 2, 3, 4])" }
+    Get l1 // { keys: "([0, 1, 2, 3, 4])" }
+  With Mutually Recursive
+    cte l1 =
+      Distinct group_by=[#0..=#4] // { keys: "([0, 1, 2, 3, 4])" }
+        Union // { keys: "()" }
+          Map (null, null) // { keys: "()" }
+            Union // { keys: "()" }
+              Negate // { keys: "()" }
+                Project (#0..=#2) // { keys: "()" }
+                  Join on=(#0 = #3) type=differential // { keys: "()" }
+                    ArrangeBy keys=[[#0]] // { keys: "()" }
+                      Get materialize.public.foo_raw // { keys: "()" }
+                    ArrangeBy keys=[[#0]] // { keys: "([0])" }
+                      Distinct group_by=[#0] // { keys: "([0])" }
+                        Project (#0) // { keys: "()" }
+                          Get l0 // { keys: "()" }
+              Get materialize.public.foo_raw // { keys: "()" }
+          Project (#0..=#2, #0, #3) // { keys: "()" }
+            Get l0 // { keys: "()" }
+          Project (#0..=#2, #0, #2) // { keys: "()" }
+            Get materialize.public.foo_raw // { keys: "()" }
+    cte l0 =
+      Project (#0..=#2, #4) // { keys: "()" }
+        Join on=(#0 = #3) type=differential // { keys: "()" }
+          ArrangeBy keys=[[#0]] // { keys: "()" }
+            Filter (#0) IS NOT NULL // { keys: "()" }
+              Get materialize.public.foo_raw // { keys: "()" }
+          ArrangeBy keys=[[#0]] // { keys: "()" }
+            Project (#0, #2) // { keys: "()" }
+              Filter (#0) IS NOT NULL // { keys: "()" }
+                Get l1 // { keys: "()" }
+
+EOF
+
+# Test that LEFT JOIN inside WMR is planned with only one join.
+# Similar to the previous test, but the recursive Get is at the other input. This means that the input that should have
+# a known key is the static one, for which key inference works fine.
 query T multiline
 explain
 with mutually recursive
   c0(a int4, b int8, u text, a_bar int4, v_bar text) as (
-    select * from
-    foo_raw left join bar on foo_raw.a = bar.a
+    (
+      select c0.a, c0.b, c0.u, bar.a, bar.v from
+      c0 left join bar on c0.a = bar.a
+    )
+    union
+    select *, a, u from foo_raw
+  )
+select * from c0
+----
+Explained Query:
+  Return
+    Get l1
+  With Mutually Recursive
+    cte l1 =
+      Distinct group_by=[#0..=#4]
+        Union
+          Map (null, null)
+            Union
+              Negate
+                Project (#0..=#2)
+                  Get l0
+              Project (#0..=#2)
+                Get l1
+          Project (#0..=#2, #0, #3)
+            Get l0
+          Project (#0..=#2, #0, #2)
+            Get materialize.public.foo_raw
+    cte l0 =
+      Project (#0..=#2, #4)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Project (#0..=#2)
+              Filter (#0) IS NOT NULL
+                Get l1
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              Get materialize.public.bar
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# Ensure LEFT JOIN inside WMR is planned with only one join.
+# A variation of the previous one.
+query T multiline
+explain
+with mutually recursive
+  c0(a int4, b int8, u text, a_bar int4, v_bar text) as (
+    (
+      select * from
+      foo_raw left join bar on foo_raw.a = bar.a
+    )
     union
     select * from c0
   )
@@ -414,24 +774,156 @@ Explained Query:
             Union
               Negate
                 Project (#0..=#2)
-                  Join on=(#0 = #3) type=differential
-                    ArrangeBy keys=[[#0]]
-                      Get materialize.public.foo_raw
-                    ArrangeBy keys=[[#0]]
-                      Distinct group_by=[#0]
-                        Project (#0)
-                          Get l0
+                  Get l0
               Get materialize.public.foo_raw
-          Get l0
+          Project (#0..=#2, #0, #3)
+            Get l0
           Get l1
     cte l0 =
-      Join on=(#0 = #3) type=differential
-        ArrangeBy keys=[[#0]]
-          Filter (#0) IS NOT NULL
-            Get materialize.public.foo_raw
-        ArrangeBy keys=[[#0]]
-          Filter (#0) IS NOT NULL
-            Get materialize.public.bar
+      Project (#0..=#2, #4)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              Get materialize.public.foo_raw
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              Get materialize.public.bar
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# Ensure that multiple left joins inside a WMR still produce one join operator each.
+query T multiline
+explain
+with mutually recursive
+  c0(a int4, b int8, u text) as (
+    (
+      select c0.a + bar.a, c0.b + baz.b, c0.u || cast(baz.c + quux.c as text) from
+      c0 left join bar on c0.a = bar.a
+         left join baz on c0.b = baz.b
+         left join quux on baz.c = quux.c
+    )
+    union
+    select * from foo
+  )
+select * from c0;
+----
+Explained Query:
+  Return
+    Get l5
+  With Mutually Recursive
+    cte l5 =
+      Distinct group_by=[#0..=#2]
+        Union
+          Project (#7..=#9)
+            Map ((#0 + #3), (#1 + #4), (#2 || smallint_to_text((#5 + #6))))
+              Union
+                Map (null)
+                  Union
+                    Negate
+                      Get l4
+                    Get l3
+                Project (#0..=#5, #5)
+                  Get l4
+          Get materialize.public.foo
+    cte l4 =
+      Project (#0..=#5)
+        Join on=(#5 = #6) type=differential
+          ArrangeBy keys=[[#5]]
+            Filter (#5) IS NOT NULL
+              Get l3
+          ArrangeBy keys=[[#0]]
+            Project (#0)
+              Get materialize.public.quux
+    cte l3 =
+      Union
+        Map (null, null)
+          Union
+            Negate
+              Project (#0..=#3)
+                Get l2
+            Get l1
+        Project (#0..=#3, #1, #4)
+          Get l2
+    cte l2 =
+      Project (#0..=#3, #5)
+        Join on=(#1 = #4) type=differential
+          ArrangeBy keys=[[#1]]
+            Filter (#1) IS NOT NULL
+              Get l1
+          ArrangeBy keys=[[#0]]
+            Project (#0, #1)
+              Get materialize.public.baz
+    cte l1 =
+      Union
+        Map (null)
+          Union
+            Negate
+              Get l0
+            Get l5
+        Project (#0..=#2, #0)
+          Get l0
+    cte l0 =
+      Project (#0..=#2)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              Get l5
+          ArrangeBy keys=[[#0]]
+            Project (#0)
+              Filter (#0) IS NOT NULL
+                Get materialize.public.bar
+
+Source materialize.public.bar
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# Ensure that when the info coming from the right side of a left join is not used, then the join is optimized out.
+# The plan currently has one join, but maybe that could be optimized out too: the join with baz is currently present,
+# because baz.c is used in the condition of the join with quux. However, the join with quux is optimized out.
+query T multiline
+explain with(arity)
+with mutually recursive
+  c0(a int4, b int8, u text) as (
+    (
+      select c0.a, c0.b, c0.u from
+      c0 left join bar on c0.a = bar.a
+         left join baz on c0.b = baz.b
+         left join quux on baz.c = quux.c
+    )
+    union
+    select * from foo
+  )
+select * from c0;
+----
+Explained Query:
+  Return // { arity: 3 }
+    Get l1 // { arity: 3 }
+  With Mutually Recursive
+    cte l1 =
+      Distinct group_by=[#0..=#2] // { arity: 3 }
+        Union // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            Union // { arity: 4 }
+              Map (null) // { arity: 4 }
+                Union // { arity: 3 }
+                  Negate // { arity: 3 }
+                    Project (#0..=#2) // { arity: 3 }
+                      Get l0 // { arity: 4 }
+                  Get l1 // { arity: 3 }
+              Get l0 // { arity: 4 }
+          Get materialize.public.foo // { arity: 3 }
+    cte l0 =
+      Project (#0..=#2, #4) // { arity: 4 }
+        Join on=(#1 = #3) type=differential // { arity: 5 }
+          ArrangeBy keys=[[#1]] // { arity: 3 }
+            Get l1 // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Project (#0, #1) // { arity: 2 }
+              Get materialize.public.baz // { arity: 3 }
 
 Source materialize.public.bar
   filter=((#0) IS NOT NULL)

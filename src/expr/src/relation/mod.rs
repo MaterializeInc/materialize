@@ -1897,6 +1897,8 @@ impl MirRelationExpr {
     /// `expire_whens` that when `id'` is redefined, then we should expire the information that
     /// we are holding about `id`. Call `do_expirations` with `expire_whens` at each Id
     /// redefinition.
+    ///
+    /// IMPORTANT: Relies on the numbering of Ids to be what `renumber_bindings` gives.
     pub fn collect_expirations(
         id: LocalId,
         expr: &MirRelationExpr,
@@ -1908,6 +1910,7 @@ impl MirRelationExpr {
                 ..
             } = e
             {
+                // The following check needs `renumber_bindings` to have run recently
                 if referenced_id >= &id {
                     expire_whens
                         .entry(*referenced_id)
@@ -1922,12 +1925,12 @@ impl MirRelationExpr {
     /// about such Ids whose information depended on the earlier definition of `id`, according to
     /// `expire_whens`. Also modifies `expire_whens`: it removes the currently processed entry.
     pub fn do_expirations<I>(
-        id: LocalId,
+        redefined_id: LocalId,
         expire_whens: &mut BTreeMap<LocalId, Vec<LocalId>>,
         id_infos: &mut BTreeMap<LocalId, I>,
     ) -> Vec<(LocalId, I)> {
         let mut expired_infos = Vec::new();
-        if let Some(expirations) = expire_whens.remove(&id) {
+        if let Some(expirations) = expire_whens.remove(&redefined_id) {
             for expired_id in expirations.into_iter() {
                 if let Some(offer) = id_infos.remove(&expired_id) {
                     expired_infos.push((expired_id, offer));
