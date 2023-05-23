@@ -204,7 +204,12 @@ impl StorageUsageClient {
 
     /// Computes [ShardUsage] for every shard in an env.
     pub async fn shards_usage(&self) -> ShardsUsage {
-        let blob_usage = self.blob_raw_usage(BlobKeyPrefix::All).await;
+        let prefix = if self.cfg.dynamic.usage_parallel_scans() {
+            BlobKeyPrefix::AllParallel
+        } else {
+            BlobKeyPrefix::All
+        };
+        let blob_usage = self.blob_raw_usage(prefix).await;
         self.metrics
             .audit
             .blob_batch_part_bytes

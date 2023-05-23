@@ -146,6 +146,7 @@ impl PersistConfig {
                     30 * Self::NEED_ROLLUP_THRESHOLD,
                 )),
                 usage_state_fetch_concurrency_limit: AtomicUsize::new(8),
+                usage_parallel_scans: AtomicBool::new(Self::DEFAULT_USAGE_PARALLEL_SCANS),
                 sink_minimum_batch_updates: AtomicUsize::new(
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
                 ),
@@ -230,6 +231,8 @@ impl PersistConfig {
     pub const DEFAULT_PUBSUB_CLIENT_ENABLED: bool = false;
     /// Default value for [`DynamicConfig::pubsub_push_diff_enabled`].
     pub const DEFAULT_PUBSUB_PUSH_DIFF_ENABLED: bool = true;
+    /// WIP
+    pub const DEFAULT_USAGE_PARALLEL_SCANS: bool = false;
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
@@ -319,6 +322,7 @@ pub struct DynamicConfig {
     gc_blob_delete_concurrency_limit: AtomicUsize,
     state_versions_recent_live_diffs_limit: AtomicUsize,
     usage_state_fetch_concurrency_limit: AtomicUsize,
+    usage_parallel_scans: AtomicBool,
     consensus_connect_timeout: RwLock<Duration>,
     consensus_tcp_user_timeout: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
@@ -537,6 +541,11 @@ impl DynamicConfig {
             .load(Self::LOAD_ORDERING)
     }
 
+    /// WIP
+    pub fn usage_parallel_scans(&self) -> bool {
+        self.usage_parallel_scans.load(Self::LOAD_ORDERING)
+    }
+
     /// Retry configuration for `next_listen_batch`.
     pub fn next_listen_batch_retry_params(&self) -> RetryParameters {
         *self
@@ -615,6 +624,8 @@ pub struct PersistParameters {
     pub pubsub_client_enabled: Option<bool>,
     /// Configures [`DynamicConfig::pubsub_push_diff_enabled`]
     pub pubsub_push_diff_enabled: Option<bool>,
+    /// WIP
+    pub usage_parallel_scans: Option<bool>,
 }
 
 impl PersistParameters {
@@ -635,6 +646,7 @@ impl PersistParameters {
             stats_filter_enabled: self_stats_filter_enabled,
             pubsub_client_enabled: self_pubsub_client_enabled,
             pubsub_push_diff_enabled: self_pubsub_push_diff_enabled,
+            usage_parallel_scans: self_usage_parallel_scans,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
@@ -649,6 +661,7 @@ impl PersistParameters {
             stats_filter_enabled: other_stats_filter_enabled,
             pubsub_client_enabled: other_pubsub_client_enabled,
             pubsub_push_diff_enabled: other_pubsub_push_diff_enabled,
+            usage_parallel_scans: other_usage_parallel_scans,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
@@ -686,6 +699,9 @@ impl PersistParameters {
         if let Some(v) = other_pubsub_push_diff_enabled {
             *self_pubsub_push_diff_enabled = Some(v)
         }
+        if let Some(v) = other_usage_parallel_scans {
+            *self_usage_parallel_scans = Some(v)
+        }
     }
 
     /// Return whether all parameters are unset.
@@ -707,6 +723,7 @@ impl PersistParameters {
             stats_filter_enabled,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
+            usage_parallel_scans,
         } = self;
         blob_target_size.is_none()
             && compaction_minimum_timeout.is_none()
@@ -720,6 +737,7 @@ impl PersistParameters {
             && stats_filter_enabled.is_none()
             && pubsub_client_enabled.is_none()
             && pubsub_push_diff_enabled.is_none()
+            && usage_parallel_scans.is_none()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -742,6 +760,7 @@ impl PersistParameters {
             stats_filter_enabled,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
+            usage_parallel_scans,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
@@ -811,6 +830,11 @@ impl PersistParameters {
                 .pubsub_push_diff_enabled
                 .store(*pubsub_push_diff_enabled, DynamicConfig::STORE_ORDERING);
         }
+        if let Some(usage_parallel_scans) = usage_parallel_scans {
+            cfg.dynamic
+                .usage_parallel_scans
+                .store(*usage_parallel_scans, DynamicConfig::STORE_ORDERING);
+        }
     }
 }
 
@@ -831,6 +855,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
             pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
             pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
+            usage_parallel_scans: self.usage_parallel_scans.into_proto(),
         }
     }
 
@@ -850,6 +875,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
             pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
             pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
+            usage_parallel_scans: proto.usage_parallel_scans.into_rust()?,
         })
     }
 }

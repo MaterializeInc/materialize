@@ -6912,6 +6912,7 @@ impl Catalog {
             stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
             pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
             pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
+            usage_parallel_scans: Some(config.persist_usage_parallel_scans()),
         }
     }
 

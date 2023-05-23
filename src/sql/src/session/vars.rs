@@ -795,6 +795,14 @@ const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+/// WIP
+const PERSIST_USAGE_PARALLEL_SCANS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("persist_usage_parallel_scans"),
+    value: &PersistConfig::DEFAULT_USAGE_PARALLEL_SCANS,
+    description: "WIP",
+    internal: true,
+};
+
 /// Boolean flag indicating that the remote configuration was synchronized at
 /// least once with the persistent [SessionVars].
 pub static CONFIG_HAS_SYNCED_ONCE: ServerVar<bool> = ServerVar {
@@ -1878,6 +1886,7 @@ impl SystemVars {
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
             .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
             .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
+            .with_var(&PERSIST_USAGE_PARALLEL_SCANS)
             .with_var(&METRICS_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_LD_RBAC_CHECKS)
@@ -2307,6 +2316,11 @@ impl SystemVars {
     /// Returns the `persist_pubsub_push_diff_enabled` configuration parameter.
     pub fn persist_pubsub_push_diff_enabled(&self) -> bool {
         *self.expect_value(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
+    }
+
+    /// WIP
+    pub fn persist_usage_parallel_scans(&self) -> bool {
+        *self.expect_value(&PERSIST_USAGE_PARALLEL_SCANS)
     }
 
     /// Returns the `metrics_retention` configuration parameter.
@@ -3446,4 +3460,5 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_FILTER_ENABLED.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
+        || name == PERSIST_USAGE_PARALLEL_SCANS.name()
 }
