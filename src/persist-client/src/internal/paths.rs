@@ -202,6 +202,8 @@ impl BlobKey {
 pub enum BlobKeyPrefix<'a> {
     /// For accessing all blobs
     All,
+    /// For accessing all blobs with parallel scans
+    AllParallel,
     /// Scoped to the batch and state rollup blobs of an individual shard
     Shard(&'a ShardId),
     /// Scoped to the batch blobs of an individual writer
@@ -212,17 +214,37 @@ pub enum BlobKeyPrefix<'a> {
     Rollups(&'a ShardId),
 }
 
-impl std::fmt::Display for BlobKeyPrefix<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            BlobKeyPrefix::All => "".into(),
-            BlobKeyPrefix::Shard(shard) => format!("{}", shard),
+impl BlobKeyPrefix<'_> {
+    pub(crate) fn to_blob_prefixes(&self) -> Vec<String> {
+        match self {
+            BlobKeyPrefix::All => vec!["".into()],
+            BlobKeyPrefix::AllParallel => vec![
+                // All blobs are prefixed by ShardId, which itself is a UUID prefixed by `s`.
+                // We can parallelize a blob scan by subdividing the keyspace into any valid
+                // UUID prefixes. To start, subdivide by the first hexadecimal character:
+                "s0".into(),
+                "s1".into(),
+                "s2".into(),
+                "s3".into(),
+                "s4".into(),
+                "s5".into(),
+                "s6".into(),
+                "s7".into(),
+                "s8".into(),
+                "s9".into(),
+                "sa".into(),
+                "sb".into(),
+                "sc".into(),
+                "sd".into(),
+                "se".into(),
+                "sf".into(),
+            ],
+            BlobKeyPrefix::Shard(shard) => vec![format!("{}", shard)],
             #[cfg(test)]
-            BlobKeyPrefix::Writer(shard, writer) => format!("{}/{}", shard, writer),
+            BlobKeyPrefix::Writer(shard, writer) => vec![format!("{}/{}", shard, writer)],
             #[cfg(test)]
-            BlobKeyPrefix::Rollups(shard) => format!("{}/v", shard),
-        };
-        f.write_str(&s)
+            BlobKeyPrefix::Rollups(shard) => vec![format!("{}/v", shard)],
+        }
     }
 }
 
