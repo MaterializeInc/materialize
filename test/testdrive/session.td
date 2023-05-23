@@ -37,7 +37,7 @@ enable_session_rbac_checks          off                     "User facing session
 mz_version                          <VARIES>                "Shows the Materialize server version (Materialize)."
 is_superuser                        off                     "Reports whether the current session is a superuser (PostgreSQL)."
 allowed_cluster_replica_sizes       ""                      "The allowed sizes when creating a new cluster replica (Materialize)."
-enable_rbac_checks                  on                      "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
+enable_rbac_checks                  <VARIES>                "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 max_aws_privatelink_connections     0                       "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
 max_clusters                        10                      "The maximum number of clusters in the region (Materialize)."
 max_connections                     1000                    "The maximum number of concurrent connections (Materialize)."
