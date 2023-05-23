@@ -29,7 +29,7 @@ Settings > Users.
 1. Click **Invite User** and fill in the user information.
 
 The **Organization Admin** and **Organization Member** roles refer to `SUPERUSER`
-privileges
+privileges.
 
 ## Step 2. Connect to Materialize
 
@@ -59,7 +59,7 @@ to this table.
     the role you created:
 
     ```sql
-    SELECT * FROM mz_roles WHERE 'name' = dev_role;
+    SELECT * FROM mz_roles WHERE name = 'dev_role';
     ```
 
     Your `dev_role` returns attributes similar to the following:
@@ -187,7 +187,7 @@ to a user in your Materialize organization.
    SELECT name, privileges FROM mz_tables WHERE name='dev_table';
    ```
 
-   The output should return the owner object ID, the level of permission, and the object ID of the role on the table.
+   The output should return the owner object ID, the level of permission, and the owner ID of the role on the table.
 
    ```nofmt
    name|privileges
@@ -195,7 +195,7 @@ to a user in your Materialize organization.
    (1 row)
    ```
 
-   In this example, object ID 'u1` has append, read, write, and delete
+   In this example, object ID `u1` has append, read, write, and delete
    privileges on the table. Object ID `u8` is the `dev_role` and has append, read, and write privileges,
    which were assigned by the `u1` user.
 

@@ -67,18 +67,15 @@ organization. You can edit these actions when you create the role:
 |-----------------|---------------------------------------------------------------------------------|
 | `CREATEDB`      | Can create a database.                                                          |
 | `CREATEROLE`    | Can create, alter, drop, grant membership to, and revoke membership from roles. |
-| `INHERIT`       | Can inherit the privileges of roles that it is a member of. On by default.      |
+| `INHERIT`       | **Read-only.** Can inherit the privileges of roles that it is a member of. On by default.      |
 | `CREATECLUSTER` | Can create a cluster.                                                           |
 
-Currently, `INHERIT` cannot be turned off.
 
 ### Privileges
 
 Privileges are the actions or operations a role is allowed to perform on a
-specific object. After you create a role, you can select specific privileges for that role based on the
-objects that role needs to access.
-
-Materialize supports the following privileges:
+specific object. After you create a role, you can grant it the following
+object-specific privileges in Materialize:
 
 | Privilege | Description                                                | `psql` |
 | --------- | ---------------------------------------------------------- | ------ |

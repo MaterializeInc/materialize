@@ -12,7 +12,7 @@ menu:
 Namespaces are a logical way to organize Materialize objects. In
 organizations with multiple objects, they help avoid naming conflicts and make
 it easier to manage objects. Namespaces allow you to refer to objects by a fully
-qualified name like `namespace.object_name`.
+qualified name like `database.schema.object_name`.
 
 ## Namespace hierarchy
 
