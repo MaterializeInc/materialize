@@ -1150,7 +1150,7 @@ dependencies = [
 [[package]]
 name = "columnation"
 version = "0.1.0"
-source = "git+https://github.com/frankmcsherry/columnation#eb8e20c10e748dcbfe6266be8e24e14422d3de0f"
+source = "git+https://github.com/MaterializeInc/columnation.git#16e53d69878847979457f3d5ae867ebf4922f1ee"
 dependencies = [
  "paste",
 ]
@@ -1664,7 +1664,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#438804d98d1888416ef20288570b804bdba8bea9"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7c79e0c1827eec2639aa628ab54722087c00ac86"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1741,7 +1741,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#438804d98d1888416ef20288570b804bdba8bea9"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7c79e0c1827eec2639aa628ab54722087c00ac86"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7489,7 +7489,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7507,12 +7507,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7528,7 +7528,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 dependencies = [
  "columnation",
  "serde",
@@ -7537,7 +7537,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 
 [[package]]
 name = "tiny-keccak"
@@ -8128,7 +8128,7 @@ checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 [[package]]
 name = "utf8parse"
 version = "0.2.0"
-source = "git+https://github.com/alacritty/vte#45670c47cebd7af050def2f80a307bdeec7caba3"
+source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
 
 [[package]]
 name = "uuid"
@@ -8168,7 +8168,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vte"
 version = "0.10.1"
-source = "git+https://github.com/alacritty/vte#45670c47cebd7af050def2f80a307bdeec7caba3"
+source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
 dependencies = [
  "arrayvec",
  "utf8parse",
@@ -8178,7 +8178,7 @@ dependencies = [
 [[package]]
 name = "vte_generate_state_changes"
 version = "0.1.1"
-source = "git+https://github.com/alacritty/vte#45670c47cebd7af050def2f80a307bdeec7caba3"
+source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
 dependencies = [
  "proc-macro2",
  "quote",

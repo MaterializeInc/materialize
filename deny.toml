@@ -177,64 +177,10 @@ license-files = [
 [sources]
 unknown-git = "deny"
 unknown-registry = "deny"
-allow-git = [
-    # Waiting for a new release of strip-ansi-escapes that avoids the indirect
-    # dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
-    "https://github.com/alacritty/vte",
-
-    # Waiting on v0.18.
-    # See: https://github.com/open-telemetry/opentelemetry-rust/pull/779
-    "https://github.com/MaterializeInc/opentelemetry-rust.git",
-
-    # Waiting on tracing-opentelemetry to upgrade to the as-yet unreleased
-    # v0.18 of opentelemetry.
-    "https://github.com/MaterializeInc/tracing.git",
-
-    # Waiting on https://github.com/AltSysrq/proptest/pull/264.
-    "https://github.com/MaterializeInc/proptest.git",
-
-    # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-    "https://github.com/MaterializeInc/rust-postgres.git",
-    "https://github.com/MaterializeInc/rust-postgres-array.git",
-
-    # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
-    "https://github.com/MaterializeInc/serde-value.git",
-
-    # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
-    "https://github.com/MaterializeInc/rust-rdkafka.git",
-
-    # Waiting for hashlink, indexmap, and lru to upgrade to hashbrown v0.13,
-    # which depends on ahash v0.8 instead of v0.7. In the meantime we've
-    # backported the ahash v0.8 bump into hashbrown v0.12.
-    "https://github.com/MaterializeInc/hashbrown.git",
-
-    # Dependencies that we control upstream whose official releases we don't
-    # care about.
-    "https://github.com/frankmcsherry/columnation",
-    "https://github.com/TimelyDataflow/timely-dataflow",
-    "https://github.com/TimelyDataflow/differential-dataflow.git",
-
-    # Waiting on https://github.com/launchdarkly/rust-eventsource-client/pull/43
-    # to make it into a release.
-    "https://github.com/MaterializeInc/rust-eventsource-client.git",
-
-    # Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
-    # it into a release.
-    "https://github.com/MaterializeInc/rust-server-sdk",
-
-    # Waiting on https://github.com/tokio-rs/prost/pull/833 to make it into a
-    # release.
-    "https://github.com/MaterializeInc/prost",
-
-    # Waiting on https://github.com/hyperium/tonic/pull/1398.
-    "https://github.com/MaterializeInc/tonic",
-
-    # Do not add personal GitHub forks here! Forks must be owned by the
-    # MaterializeInc organization so that maintainership is shared amongst
-    # Materialize employees. If you don't have permissions to create a fork in
-    # the MaterializeInc organization, ask in #eng-infra.
-    #
-    # Personal GitHub repositories are okay for projects where the true upstream
-    # is a personal GitHub account (e.g., frankmcsherry/columnation) rather than
-    # a fork.
-]
+# Do not allow non-MaterializeInc Git repositories here! Git repositories must
+# be owned by the MaterializeInc organization so that maintainership is shared
+# amongst Materialize employees and so that historical versions of Materialize
+# remain buildable even if upstream Git repositories disappear. If you don't
+# have permissions to create a fork in the MaterializeInc organization, ask in
+# #eng-infra on Slack.
+allow-org = { github = ["MaterializeInc"] }

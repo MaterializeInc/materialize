@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+differential-dataflow = "0.12.0"
 itertools = "0.10.5"
 mz-compute-client = { path = "../compute-client" }
 mz-expr = { path = "../expr" }

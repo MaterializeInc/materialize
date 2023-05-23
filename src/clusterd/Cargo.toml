@@ -29,7 +29,7 @@ mz-storage = { path = "../storage" }
 mz-storage-client = { path = "../storage-client" }
 mz-timely-util = { path = "../timely-util" }
 once_cell = { version = "1.16.0" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util"] }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

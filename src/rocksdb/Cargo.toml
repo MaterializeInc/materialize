@@ -15,8 +15,8 @@ mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 mz-proto = { path = "../proto" }
 num_cpus = "1.14.0"
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}
+proptest = { version = "1.0.0", default-features = false, features = ["std"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
 tokio = { version = "1.24.2", features = ["macros", "sync", "rt"] }
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
