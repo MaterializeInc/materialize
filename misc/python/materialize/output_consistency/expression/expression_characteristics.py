@@ -14,8 +14,8 @@ class ExpressionCharacteristics(Enum):
     """Characteristics describing an `Expression`"""
 
     NULL = 0
-    # not (NULL or ZERO)
     NON_EMPTY = 1
+    """not NULL and not ZERO"""
 
     ZERO = 100
     ONE = 101
@@ -25,8 +25,8 @@ class ExpressionCharacteristics(Enum):
 
     OVERSIZE = 120
     NEGATIVE = 121
-    # value is not an integer
     DECIMAL = 122
+    """value is not an integer"""
 
     DECIMAL_OR_FLOAT_TYPED = 150
     FLOAT_TYPED = 151

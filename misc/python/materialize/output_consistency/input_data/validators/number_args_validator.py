@@ -18,6 +18,8 @@ from materialize.output_consistency.operation.operation_args_validator import (
 
 
 class Uint8MixedWithTypedArgsValidator(OperationArgsValidator):
+    """To identify expressions that contain a value of UINT8 type and a value of an unsigned numeric type (heuristic to identify no matching operators)"""
+
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
         if len(args) < 2:
             return False
@@ -40,6 +42,8 @@ class Uint8MixedWithTypedArgsValidator(OperationArgsValidator):
 
 
 class SingleParamValueGrowsArgsValidator(OperationArgsValidator):
+    """To identify single-value expressions holding a large value (basic heuristic to predict numeric overflows)"""
+
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
         return self.has_any_characteristic(
             args[0],
@@ -51,8 +55,8 @@ class SingleParamValueGrowsArgsValidator(OperationArgsValidator):
 
 
 class MultiParamValueGrowsArgsValidator(OperationArgsValidator):
+    """To identify expressions that contain a MAX_VALUE and another non-empty value (basic heuristic to predict numeric overflows)"""
 
-    # error if one MAX_VALUE and a further NON_EMPTY value
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
         index_of_max_value = self.index_of_characteristic_combination(
             args, {ExpressionCharacteristics.MAX_VALUE}
@@ -71,8 +75,8 @@ class MultiParamValueGrowsArgsValidator(OperationArgsValidator):
 
 
 class MaxMinusNegMaxArgsValidator(OperationArgsValidator):
+    """To identify expressions that contain a MAX_VALUE and a negative MAX_VALUE (basic heuristic to predict numeric overflows)"""
 
-    # error if {MAX_VALUE} and {MAX_VALUE, NEGATIVE}
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
         if len(args) != 2:
             return False

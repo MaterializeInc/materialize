@@ -28,6 +28,12 @@ class OperationParam:
             List[Set[ExpressionCharacteristics]]
         ] = None,
     ):
+        """
+        Create a parameter for an operation.
+        :param optional: this parameter can be omitted
+        :param incompatibilities: a value annotated with any of these characteristics is considered invalid
+        :param incompatibility_combinations: a value annotated with all characteristics of any entry is considered invalid
+        """
         self.type_category = type_category
         self.optional = optional
 
