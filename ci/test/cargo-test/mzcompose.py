@@ -115,6 +115,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         clusterd_path = Path("target/build/debug")
         clusterd_path.mkdir(parents=True, exist_ok=True)
         c.cp("clusterd:/usr/local/bin/clusterd", clusterd_path)
+
         cmd = [
             "cargo",
             "nextest",
