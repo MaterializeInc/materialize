@@ -9,7 +9,7 @@
 
 use std::cmp::{self, Ordering};
 use std::convert::{TryFrom, TryInto};
-use std::ops::{BitOrAssign, Deref};
+use std::ops::Deref;
 use std::str::FromStr;
 use std::{fmt, iter, str};
 
@@ -1830,6 +1830,17 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
     }
 }
 
+/// Determines if an mz_aclitem contains one of the specified privileges. This will return true if
+/// any of the listed privileges are contained in the mz_aclitem.
+fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
+    let mz_acl_item = a.unwrap_mz_acl_item();
+    let privileges = b.unwrap_str();
+    let acl_mode = AclMode::parse_multiple_privileges(privileges)
+        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
+    let contains = !mz_acl_item.acl_mode.union(acl_mode).is_empty();
+    Ok(contains.into())
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     AddInt16,
@@ -2012,6 +2023,7 @@ pub enum BinaryFunc {
     RangeIntersection,
     RangeDifference,
     UuidGenerateV5,
+    MzAclItemContainsPrivilege,
 }
 
 impl BinaryFunc {
@@ -2335,6 +2347,7 @@ impl BinaryFunc {
             BinaryFunc::RangeIntersection => eager!(range_intersection, temp_storage),
             BinaryFunc::RangeDifference => eager!(range_difference, temp_storage),
             BinaryFunc::UuidGenerateV5 => Ok(eager!(uuid_generate_v5)),
+            BinaryFunc::MzAclItemContainsPrivilege => eager!(mz_acl_item_contains_privilege),
         }
     }
 
@@ -2508,6 +2521,8 @@ impl BinaryFunc {
                 );
                 input1_type.scalar_type.without_modifiers().nullable(true)
             }
+
+            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(false)
         }
     }
 
@@ -2701,7 +2716,8 @@ impl BinaryFunc {
             | RangeUnion
             | RangeIntersection
             | RangeDifference
-            | UuidGenerateV5 => false,
+            | UuidGenerateV5
+            | MzAclItemContainsPrivilege => false,
             // can produce nulls inside the resulting array for missing keys, but always produces an outer array
             MapGetValues => false,
 
@@ -2901,7 +2917,8 @@ impl BinaryFunc {
             | ListRemove
             | LikeEscape
             | UuidGenerateV5
-            | GetByte => false,
+            | GetByte
+            | MzAclItemContainsPrivilege => false,
         }
     }
 
@@ -3128,6 +3145,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeIntersection => f.write_str("*"),
             BinaryFunc::RangeDifference => f.write_str("-"),
             BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
+            BinaryFunc::MzAclItemContainsPrivilege => f.write_str("mz_aclitem_contains_privilege"),
         }
     }
 }
@@ -3534,6 +3552,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::RangeIntersection => RangeIntersection(()),
             BinaryFunc::RangeDifference => RangeDifference(()),
             BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
+            BinaryFunc::MzAclItemContainsPrivilege => MzAclItemContainsPrivilege(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3733,6 +3752,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeIntersection(()) => Ok(BinaryFunc::RangeIntersection),
                 RangeDifference(()) => Ok(BinaryFunc::RangeDifference),
                 UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
+                MzAclItemContainsPrivilege(()) => Ok(BinaryFunc::MzAclItemContainsPrivilege),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
@@ -4170,7 +4190,8 @@ derive_unary!(
     RangeUpperInf,
     MzAclItemGrantor,
     MzAclItemGrantee,
-    MzAclItemPrivileges
+    MzAclItemPrivileges,
+    MzValidatePrivileges
 );
 
 impl UnaryFunc {
@@ -4569,6 +4590,7 @@ impl Arbitrary for UnaryFunc {
             MzAclItemGrantor::arbitrary().prop_map_into().boxed(),
             MzAclItemGrantee::arbitrary().prop_map_into().boxed(),
             MzAclItemPrivileges::arbitrary().prop_map_into().boxed(),
+            MzValidatePrivileges::arbitrary().prop_map_into().boxed(),
         ])
     }
 }
@@ -4919,6 +4941,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::MzAclItemGrantor(_) => MzAclItemGrantor(()),
             UnaryFunc::MzAclItemGrantee(_) => MzAclItemGrantee(()),
             UnaryFunc::MzAclItemPrivileges(_) => MzAclItemPrivileges(()),
+            UnaryFunc::MzValidatePrivileges(_) => MzValidatePrivileges(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -5339,6 +5362,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 MzAclItemGrantor(_) => Ok(impls::MzAclItemGrantor.into()),
                 MzAclItemGrantee(_) => Ok(impls::MzAclItemGrantee.into()),
                 MzAclItemPrivileges(_) => Ok(impls::MzAclItemPrivileges.into()),
+                MzValidatePrivileges(_) => Ok(impls::MzValidatePrivileges.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
@@ -6585,12 +6609,8 @@ fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         ));
     }
     let privileges = datums[2].unwrap_str();
-    let mut acl_mode = AclMode::empty();
-    for privilege in privileges.split(',') {
-        let privilege = AclMode::parse_single_privilege(privilege)
-            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
-        acl_mode.bitor_assign(privilege);
-    }
+    let acl_mode = AclMode::parse_multiple_privileges(privileges)
+        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string()))?;
 
     Ok(Datum::MzAclItem(MzAclItem {
         grantee,

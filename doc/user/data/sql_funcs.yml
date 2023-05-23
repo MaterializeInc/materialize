@@ -773,3 +773,13 @@
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.
     unmaterializable: true
+
+- type: Access privilege inquiry
+  description: |
+    Functions that allow querying object access privileges.
+  functions:
+    - signature: 'has_table_privilege([role: text or oid, ]relation: text or oid, privileges: text) -> bool'
+      description: >-
+        Reports whether the role with the specified role name or OID has the privileges on
+        the relation with the specified relation name or OID. If the role is omitted then
+        the `current_role` is assumed.

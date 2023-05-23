@@ -68,6 +68,15 @@ impl AclMode {
             _ => Err(anyhow!("unrecognized privilege type: {}", s.quoted())),
         }
     }
+
+    pub fn parse_multiple_privileges(s: &str) -> Result<Self, Error> {
+        let mut acl_mode = AclMode::empty();
+        for privilege in s.split(',') {
+            let privilege = AclMode::parse_single_privilege(privilege)?;
+            acl_mode.bitor_assign(privilege);
+        }
+        Ok(acl_mode)
+    }
 }
 
 impl FromStr for AclMode {
