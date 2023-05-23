@@ -275,14 +275,13 @@ pub static DATABASE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     internal: false,
 });
 
-static DEFAULT_DATE_STYLE: Lazy<Vec<String>> = Lazy::new(|| vec!["ISO".into(), "MDY".into()]);
-static DATE_STYLE: Lazy<ServerVar<Vec<String>>> = Lazy::new(|| ServerVar {
+static DATE_STYLE: ServerVar<DateStyle> = ServerVar {
     // DateStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("DateStyle"),
-    value: &*DEFAULT_DATE_STYLE,
+    value: &DEFAULT_DATE_STYLE,
     description: "Sets the display format for date and time values (PostgreSQL).",
     internal: false,
-});
+};
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("extra_float_digits"),
@@ -1143,7 +1142,7 @@ impl SessionVars {
             .with_var(&CLUSTER)
             .with_var(&CLUSTER_REPLICA)
             .with_var(&DATABASE)
-            .with_value_constrained_var(&DATE_STYLE, ValueConstraint::Fixed)
+            .with_var(&DATE_STYLE)
             .with_var(&EXTRA_FLOAT_DIGITS)
             .with_var(&FAILPOINTS)
             .with_value_constrained_var(&INTEGER_DATETIMES, ValueConstraint::Fixed)
@@ -1243,7 +1242,7 @@ impl SessionVars {
         [
             &*APPLICATION_NAME as &dyn Var,
             &CLIENT_ENCODING,
-            &*DATE_STYLE,
+            &DATE_STYLE,
             &INTEGER_DATETIMES,
             &*SERVER_VERSION,
             &STANDARD_CONFORMING_STRINGS,
@@ -1401,8 +1400,8 @@ impl SessionVars {
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.
-    pub fn date_style(&self) -> &[String] {
-        self.expect_value(&*DATE_STYLE).as_slice()
+    pub fn date_style(&self) -> &[&str] {
+        &self.expect_value(&DATE_STYLE).0
     }
 
     /// Returns the value of the `database` configuration parameter.
@@ -3060,18 +3059,26 @@ impl Value for String {
     }
 }
 
-impl Value for Vec<String> {
+/// This style should actually be some more complex struct, but we only support this configuration
+/// of it, so this is fine for the time being.
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct DateStyle([&'static str; 2]);
+
+const DEFAULT_DATE_STYLE: DateStyle = DateStyle(["ISO", "MDY"]);
+
+impl Value for DateStyle {
     fn type_name() -> String {
         "string list".to_string()
     }
 
+    /// This impl is unlike most others because we have under-implemented its backing struct.
     fn parse<'a>(
         param: &'a (dyn Var + Send + Sync),
         input: VarInput,
-    ) -> Result<Vec<String>, VarError> {
-        match input {
+    ) -> Result<DateStyle, VarError> {
+        let input = match input {
             VarInput::Flat(v) => mz_sql_parser::parser::split_identifier_string(v)
-                .map_err(|_| VarError::InvalidParameterType(param.into())),
+                .map_err(|_| VarError::InvalidParameterType(param.into()))?,
             // Unlike parsing `Vec<Ident>`, we further split each element.
             // This matches PostgreSQL.
             VarInput::SqlSet(values) => {
@@ -3081,23 +3088,25 @@ impl Value for Vec<String> {
                         .map_err(|_| VarError::InvalidParameterType(param.into()))?;
                     out.extend(idents)
                 }
-                Ok(out)
+                out
+            }
+        };
+
+        for input in input {
+            if !DEFAULT_DATE_STYLE
+                .0
+                .iter()
+                .any(|valid| UncasedStr::new(valid) == &input)
+            {
+                return Err(VarError::FixedValueParameter((&DATE_STYLE).into()));
             }
         }
+
+        Ok(DEFAULT_DATE_STYLE.clone())
     }
 
     fn format(&self) -> String {
-        self.join(", ")
-    }
-
-    // Right now this logic works for the only parameters that use `Vec<String>` so this might need
-    // to change in the future.
-    fn canonicalize(v: &mut Self::Owned) {
-        v.sort();
-        v.dedup();
-        for v in v {
-            *v = v.to_ascii_uppercase();
-        }
+        self.0.join(", ")
     }
 }
 
