@@ -15,7 +15,7 @@ from materialize.output_consistency.common.configuration import (
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.output.format_constants import (
     COMMENT_PREFIX,
-    CONTENT_SEPARATOR_1,
+    OUTPUT_LINE_SEPARATOR_1,
 )
 
 
@@ -34,7 +34,7 @@ class OutputPrinter:
         self.__print_text(error_message)
 
     def print_separator(self) -> None:
-        self.__print_text(CONTENT_SEPARATOR_1)
+        self.__print_text(OUTPUT_LINE_SEPARATOR_1)
 
     def print_test_summary(self, summary: ConsistencyTestSummary) -> None:
         self.__print_text(f"Test summary: {summary}")
