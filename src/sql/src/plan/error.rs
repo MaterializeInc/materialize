@@ -106,6 +106,10 @@ pub enum PlanError {
         subsource: String,
         source: String,
     },
+    DropProgressCollection {
+        progress_collection: String,
+        source: String,
+    },
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
@@ -407,7 +411,8 @@ impl fmt::Display for PlanError {
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
             }
-            Self::DropSubsource{subsource, source: _} => write!(f, "SOURCE {subsource} is a subsource and cannot be dropped independently of its primary source"),
+            Self::DropSubsource { subsource, source: _} => write!(f, "SOURCE {} is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE", subsource.quoted()),
+            Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {

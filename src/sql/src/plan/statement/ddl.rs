@@ -3762,20 +3762,37 @@ fn plan_drop_item_inner(
 
             // Check if object is subsource if drop command doesn't allow dropping them, e.g. ALTER
             // SOURCE can drop subsources, but DROP SOURCE cannot.
-            if item_type == CatalogItemType::Source && !allow_dropping_subsources {
-                if let Some(source_id) = catalog_item
+            let primary_source = match item_type {
+                CatalogItemType::Source => catalog_item
                     .used_by()
                     .iter()
-                    .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source)
-                {
-                    return Err(PlanError::DropSubsource {
-                        subsource: scx
+                    .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source),
+                _ => None,
+            };
+
+            if let Some(source_id) = primary_source {
+                // Progress collections can never get dropped independently.
+                if Some(catalog_item.id()) == scx.catalog.get_item(source_id).progress_id() {
+                    return Err(PlanError::DropProgressCollection {
+                        progress_collection: scx
                             .catalog
-                            .resolve_full_name(catalog_item.name())
+                            .minimal_qualification(catalog_item.name())
                             .to_string(),
                         source: scx
                             .catalog
-                            .resolve_full_name(scx.catalog.get_item(source_id).name())
+                            .minimal_qualification(scx.catalog.get_item(source_id).name())
+                            .to_string(),
+                    });
+                }
+                if !allow_dropping_subsources {
+                    return Err(PlanError::DropSubsource {
+                        subsource: scx
+                            .catalog
+                            .minimal_qualification(catalog_item.name())
+                            .to_string(),
+                        source: scx
+                            .catalog
+                            .minimal_qualification(scx.catalog.get_item(source_id).name())
                             .to_string(),
                     });
                 }
@@ -3794,10 +3811,11 @@ fn plan_drop_item_inner(
 
                 for entry in dropped_items {
                     for id in entry.used_by() {
-                        // The catalog_entry we're trying to drop will appear in the used_by list of its
-                        // subsources so we need to exclude it from cascade checking since it will be
-                        // dropped
-                        if id == &entry_id {
+                        // The catalog_entry we're trying to drop will appear in the used_by list of
+                        // its subsources so we need to exclude it from cascade checking since it
+                        // will be dropped. Similarly, if we're dropping a subsource, the primary
+                        // source will show up in its dependents but should not prevent the drop.
+                        if id == &entry_id || Some(id) == primary_source {
                             continue;
                         }
 
@@ -3806,8 +3824,8 @@ fn plan_drop_item_inner(
                             // TODO: Add a hint to add cascade.
                             sql_bail!(
                                 "cannot drop {}: still depended upon by catalog item '{}'",
-                                scx.catalog.resolve_full_name(catalog_item.name()),
-                                scx.catalog.resolve_full_name(dep.name())
+                                scx.catalog.minimal_qualification(catalog_item.name()),
+                                scx.catalog.minimal_qualification(dep.name())
                             );
                         }
                     }
