@@ -100,7 +100,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"{replica_name} (SIZE '{materialized.default_replica_size}')"
                 for replica_name in replica_names
             )
-            c.sql(f"CREATE CLUSTER default REPLICAS ({replica_string})", user="mz_system", port=6877)
+            c.sql(
+                f"CREATE CLUSTER default REPLICAS ({replica_string})",
+                user="mz_system",
+                port=6877,
+            )
 
         try:
             junit_report = ci_util.junit_report_filename(c.name)

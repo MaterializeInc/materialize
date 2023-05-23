@@ -147,7 +147,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(
             """
-            $$[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET enable_unstable_dependencies = true;
             """
         ),

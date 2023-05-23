@@ -26,7 +26,7 @@ class JsonSource(Check):
                 """
                 $[version>=5300] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_format_json = true
-                
+
                 $ kafka-create-topic topic=format-json partitions=1
 
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
