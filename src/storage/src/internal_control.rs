@@ -18,17 +18,28 @@ use timely::progress::Antichain;
 use timely::synchronization::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
-/// Storage instance configuration parameters that can affect
-/// dataflow rendering, and as such must be applied to
-/// `StorageWorker`s in a consistent order with source and sink
-/// creation.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// Storage instance configuration parameters that are used during dataflow rendering.
+/// Changes to these parameters are applied to `StorageWorker`s in a consistent order
+/// with source and sink creation.
+#[derive(Debug, Default)]
 pub struct DataflowParameters {
     /// Configured PG replication timeouts,
     pub pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
     /// `None` means the defaults.
-    pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBTuningParameters,
+    pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBConfig,
+}
+
+impl DataflowParameters {
+    /// Update the `DataflowParameters` with new configuration.
+    pub fn update(
+        &mut self,
+        pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts,
+        rocksdb_params: mz_rocksdb::RocksDBTuningParameters,
+    ) {
+        self.pg_replication_timeouts = pg_replication_timeouts;
+        self.upsert_rocksdb_tuning_config.apply(rocksdb_params)
+    }
 }
 
 /// Internal commands that can be sent by individual operators/workers that will
@@ -63,7 +74,10 @@ pub enum InternalStorageCommand {
     DropDataflow(GlobalId),
 
     /// Update the configuration for rendering dataflows.
-    UpdateConfiguration(DataflowParameters),
+    UpdateConfiguration(
+        mz_postgres_util::ReplicationTimeouts,
+        mz_rocksdb::RocksDBTuningParameters,
+    ),
 }
 
 /// Allows broadcasting [`internal commands`](InternalStorageCommand) to all
