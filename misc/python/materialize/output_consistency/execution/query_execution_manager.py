@@ -11,10 +11,6 @@ from typing import List
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.common.format_constants import (
-    COMMENT_PREFIX,
-    CONTENT_SEPARATOR_1,
-)
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
@@ -26,6 +22,7 @@ from materialize.output_consistency.execution.sql_executor import (
     SqlExecutor,
 )
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
+from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
@@ -48,11 +45,13 @@ class QueryExecutionManager:
         config: ConsistencyTestConfiguration,
         executor: SqlExecutor,
         comparator: ResultComparator,
+        output_printer: OutputPrinter,
     ):
         self.evaluation_strategies = evaluation_strategies
         self.config = config
         self.executor = executor
         self.comparator = comparator
+        self.output_printer = output_printer
         self.query_counter = 0
 
     def setup_database_objects(
@@ -61,16 +60,20 @@ class QueryExecutionManager:
         evaluation_strategies: List[EvaluationStrategy],
     ) -> None:
         for strategy in evaluation_strategies:
-            print(f"{COMMENT_PREFIX} Setup for evaluation strategy '{strategy.name}'")
+            self.output_printer.print_info(
+                f"Setup for evaluation strategy '{strategy.name}'"
+            )
             ddl_statements = strategy.generate_source(data_type_with_values)
 
             for sql_statement in ddl_statements:
-                print(sql_statement)
+                self.output_printer.print_sql(sql_statement)
 
                 try:
                     self.executor.ddl(sql_statement)
                 except SqlExecutionError as e:
-                    print(f"Setting up data structures failed ({e.message})!")
+                    self.output_printer.print_error(
+                        f"Setting up data structures failed ({e.message})!"
+                    )
                     raise e
 
     def execute_query(
@@ -219,9 +222,9 @@ class QueryExecutionManager:
         ):
             return
 
-        print(CONTENT_SEPARATOR_1)
-        print(f"{COMMENT_PREFIX} Test query #{query_id}:")
-        print(query_execution.generic_sql)
+        self.output_printer.print_separator()
+        self.output_printer.print_info(f"Test query #{query_id}:")
+        self.output_printer.print_non_executable_sql(query_execution.generic_sql)
 
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
         success_reason = (
@@ -231,15 +234,21 @@ class QueryExecutionManager:
             else ""
         )
 
-        print(
-            f"{COMMENT_PREFIX} Test with query #{query_id} {result_desc}{success_reason}."
+        self.output_printer.print_info(
+            f"Test with query #{query_id} {result_desc}{success_reason}."
         )
 
         if validation_outcome.has_errors():
-            print(f"Errors:\n{validation_outcome.error_output()}")
+            self.output_printer.print_info(
+                f"Errors:\n{validation_outcome.error_output()}"
+            )
 
         if validation_outcome.has_warnings():
-            print(f"Warnings:\n{validation_outcome.warning_output()}")
+            self.output_printer.print_info(
+                f"Warnings:\n{validation_outcome.warning_output()}"
+            )
 
         if validation_outcome.has_remarks():
-            print(f"Remarks:\n{validation_outcome.remark_output()}")
+            self.output_printer.print_info(
+                f"Remarks:\n{validation_outcome.remark_output()}"
+            )

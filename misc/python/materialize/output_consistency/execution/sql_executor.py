@@ -15,6 +15,7 @@ from pg8000.exceptions import DatabaseError
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
+from materialize.output_consistency.output.output_printer import OutputPrinter
 
 
 class SqlExecutionError(Exception):
@@ -93,8 +94,11 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
 
 
 class DryRunSqlExecutor(SqlExecutor):
+    def __init__(self, output_printer: OutputPrinter):
+        self.output_printer = output_printer
+
     def consume_sql(self, sql: str) -> None:
-        print(f"> {sql}")
+        self.output_printer.print_sql(sql)
 
     def ddl(self, sql: str) -> None:
         self.consume_sql(sql)
@@ -114,9 +118,11 @@ class DryRunSqlExecutor(SqlExecutor):
 
 
 def create_sql_executor(
-    config: ConsistencyTestConfiguration, connection: Connection
+    config: ConsistencyTestConfiguration,
+    connection: Connection,
+    output_printer: OutputPrinter,
 ) -> SqlExecutor:
     if config.dry_run:
-        return DryRunSqlExecutor()
+        return DryRunSqlExecutor(output_printer)
     else:
         return PgWireDatabaseSqlExecutor(connection, config.use_autocommit)

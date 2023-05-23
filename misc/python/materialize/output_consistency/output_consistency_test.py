@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 import argparse
 
 import pg8000
@@ -14,7 +15,6 @@ from pg8000 import Connection
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.common.format_constants import CONTENT_SEPARATOR_1
 from materialize.output_consistency.execution.evaluation_strategy import (
     ConstantFoldingEvaluation,
     DataFlowRenderingEvaluation,
@@ -31,6 +31,7 @@ from materialize.output_consistency.input_data.test_input_data import (
 from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
     KnownOutputInconsistenciesFilter,
 )
+from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.runner.test_runner import ConsistencyTestRunner
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
@@ -93,6 +94,8 @@ def _run_output_consistency_tests_internal(
     max_iterations: int,
     avoid_expressions_expecting_db_error: bool,
 ) -> ConsistencyTestSummary:
+    output_printer = OutputPrinter()
+
     config = ConsistencyTestConfiguration(
         random_seed=random_seed,
         dry_run=dry_run,
@@ -108,7 +111,7 @@ def _run_output_consistency_tests_internal(
         skip_postgres_incompatible_types=False,
     )
 
-    print_config(config)
+    output_printer.print_config(config)
     config.validate()
 
     evaluation_strategies = [
@@ -125,7 +128,7 @@ def _run_output_consistency_tests_internal(
     )
     query_generator = QueryGenerator(config)
     output_comparator = ResultComparator()
-    sql_executor = create_sql_executor(config, connection)
+    sql_executor = create_sql_executor(config, connection, output_printer)
 
     if config.skip_postgres_incompatible_types:
         input_data.remove_postgres_incompatible_types()
@@ -138,26 +141,22 @@ def _run_output_consistency_tests_internal(
         query_generator,
         output_comparator,
         sql_executor,
+        output_printer,
     )
     test_runner.setup()
 
     if not config.verbose_output:
-        print(
+        output_printer.print_info(
             "Printing only queries with inconsistencies or warnings in non-verbose mode."
         )
+        output_printer.print_empty_line()
 
     test_summary = test_runner.start()
 
-    print(CONTENT_SEPARATOR_1)
-    print(f"Test summary: {test_summary}")
+    output_printer.print_separator()
+    output_printer.print_test_summary(test_summary)
 
     return test_summary
-
-
-def print_config(config: ConsistencyTestConfiguration) -> None:
-    config_properties = vars(config)
-    print("Configuration is:")
-    print("\n".join(f"  {item[0]} = {item[1]}" for item in config_properties.items()))
 
 
 def main() -> int:

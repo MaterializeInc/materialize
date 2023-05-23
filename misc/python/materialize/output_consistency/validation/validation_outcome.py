@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from typing import List, Optional, Sequence
 
-from materialize.output_consistency.common.format_constants import LI_PREFIX
+from materialize.output_consistency.output.format_constants import LI_PREFIX
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
     ValidationMessage,

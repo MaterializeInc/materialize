@@ -28,6 +28,7 @@ from materialize.output_consistency.generators.query_generator import QueryGener
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
+from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 
@@ -41,19 +42,25 @@ class ConsistencyTestRunner:
         evaluation_strategies: List[EvaluationStrategy],
         expression_generator: ExpressionGenerator,
         query_generator: QueryGenerator,
-        output_comparator: ResultComparator,
+        outcome_comparator: ResultComparator,
         sql_executor: SqlExecutor,
+        output_printer: OutputPrinter,
     ):
         self.config = config
         self.input_data = input_data
         self.evaluation_strategies = evaluation_strategies
         self.expression_generator = expression_generator
         self.query_generator = query_generator
-        self.output_comparator = output_comparator
+        self.outcome_comparator = outcome_comparator
         self.sql_executor = sql_executor
         self.execution_manager = QueryExecutionManager(
-            evaluation_strategies, config, sql_executor, output_comparator
+            evaluation_strategies,
+            config,
+            sql_executor,
+            outcome_comparator,
+            output_printer,
         )
+        self.output_printer = output_printer
 
     def setup(self) -> None:
         self.execution_manager.setup_database_objects(
@@ -69,7 +76,9 @@ class ConsistencyTestRunner:
 
         while True:
             if expression_count > 0 and expression_count % 200 == 0:
-                print(f"Status: Expression {expression_count}...")
+                self.output_printer.print_status(
+                    f"Status: Expression {expression_count}..."
+                )
 
             operation = self.expression_generator.pick_random_operation()
 
@@ -114,7 +123,7 @@ class ConsistencyTestRunner:
             success = self.execution_manager.execute_query(query, test_summary)
 
             if not success and self.config.fail_fast:
-                print(
+                self.output_printer.print_info(
                     "Ending test run because the first comparison mismatch has occurred (fail_fast mode)"
                 )
                 return True
@@ -126,11 +135,15 @@ class ConsistencyTestRunner:
             self.config.max_iterations != 0
             and iteration_count >= self.config.max_iterations
         ):
-            print("Ending test run because the iteration count limit has been reached")
+            self.output_printer.print_info(
+                "Ending test run because the iteration count limit has been reached"
+            )
             return True
 
         if self.config.max_runtime_in_sec != 0 and datetime.now() >= end_time:
-            print("Ending test run because the maximum runtime has been reached")
+            self.output_printer.print_info(
+                "Ending test run because the maximum runtime has been reached"
+            )
             return True
 
         return False
