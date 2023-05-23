@@ -177,9 +177,9 @@ impl ConfigFile {
             .clone();
 
         let out = vec![
-            ("admin_endpoint", profile.admin_endpoint),
+            ("admin-endpoint", profile.admin_endpoint),
             ("app-password", profile.app_password),
-            ("cloud_endpoint", profile.cloud_endpoint),
+            ("cloud-endpoint", profile.cloud_endpoint),
             ("region", profile.region),
             ("vault", profile.vault),
         ];
