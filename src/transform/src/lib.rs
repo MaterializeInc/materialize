@@ -489,7 +489,7 @@ impl Optimizer {
                 name: "fixpoint",
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence),
+                    Box::new(crate::semijoin_idempotence::SemijoinIdempotence::default()),
                     // Pushes aggregations down
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     // Replaces reduces with maps when the group keys are

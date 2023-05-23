@@ -27,13 +27,30 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformArgs;
 
 /// Remove redundant semijoin operators
 #[derive(Debug)]
-pub struct SemijoinIdempotence;
+pub struct SemijoinIdempotence {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for SemijoinIdempotence {
+    fn default() -> SemijoinIdempotence {
+        SemijoinIdempotence {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for SemijoinIdempotence {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for SemijoinIdempotence {
     #[tracing::instrument(
@@ -47,45 +64,60 @@ impl crate::Transform for SemijoinIdempotence {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        {
-            // Iteratively descend the expression, at each node attempting to simplify a join.
-            let mut let_replacements = BTreeMap::<Id, Vec<Replacement>>::new();
-            let mut gets_behind_gets = BTreeMap::<Id, Vec<(Id, Vec<MirScalarExpr>)>>::new();
-            let mut worklist = vec![&mut *relation];
-            while let Some(expr) = worklist.pop() {
-                match expr {
-                    MirRelationExpr::Let { id, value, .. } => {
-                        let_replacements.insert(
-                            Id::Local(*id),
-                            list_replacements(&*value, &let_replacements, &gets_behind_gets),
-                        );
-                        gets_behind_gets
-                            .insert(Id::Local(*id), as_filtered_get(value, &gets_behind_gets));
-                    }
-                    MirRelationExpr::Join {
-                        inputs,
-                        equivalences,
-                        implementation,
-                        ..
-                    } => {
-                        attempt_join_simplification(
-                            inputs,
-                            equivalences,
-                            implementation,
-                            &let_replacements,
-                            &gets_behind_gets,
-                        );
-                    }
-                    _ => {}
-                }
-
-                // Continue to process the children.
-                worklist.extend(expr.children_mut());
-            }
-        }
+        let mut let_replacements = BTreeMap::<Id, Vec<Replacement>>::new();
+        let mut gets_behind_gets = BTreeMap::<Id, Vec<(Id, Vec<MirScalarExpr>)>>::new();
+        self.action(relation, &mut let_replacements, &mut gets_behind_gets)?;
 
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
+    }
+}
+
+impl SemijoinIdempotence {
+    fn action(
+        &self,
+        expr: &mut MirRelationExpr,
+        let_replacements: &mut BTreeMap<Id, Vec<Replacement>>,
+        gets_behind_gets: &mut BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    ) -> Result<(), crate::TransformError> {
+        // At each node, either gather info about Let bindings or attempt to simplify a join.
+        Ok(self.checked_recur(|_| {
+            match expr {
+                MirRelationExpr::Let { id, value, body } => {
+                    let_replacements.insert(
+                        Id::Local(*id),
+                        list_replacements(&*value, &let_replacements, &gets_behind_gets),
+                    );
+                    gets_behind_gets
+                        .insert(Id::Local(*id), as_filtered_get(value, &gets_behind_gets));
+                    self.action(value, let_replacements, gets_behind_gets)?;
+                    self.action(body, let_replacements, gets_behind_gets)?;
+                }
+                MirRelationExpr::Join {
+                    inputs,
+                    equivalences,
+                    implementation,
+                    ..
+                } => {
+                    attempt_join_simplification(
+                        inputs,
+                        equivalences,
+                        implementation,
+                        &let_replacements,
+                        &gets_behind_gets,
+                    );
+                    for input in inputs {
+                        self.action(input, let_replacements, gets_behind_gets)?;
+                    }
+                }
+                _ => {
+                    for child in expr.children_mut() {
+                        self.action(child, let_replacements, gets_behind_gets)?;
+                    }
+                }
+            }
+            Ok::<(), crate::TransformError>(())
+        })?)
     }
 }
 
@@ -208,7 +240,7 @@ fn validate_replacement(
 
 /// A restricted form of a semijoin idempotence information.
 ///
-/// A `Replacement` may be offered up by any `MirRelationExpression`, meant to be `B` from above or similar,
+/// A `Replacement` may be offered up by any `MirRelationExpr`, meant to be `B` from above or similar,
 /// and indicates that the offered expression can be projected onto columns such that it then exactly equals
 /// a column projection of `Get{id} semijoin replacement`.
 
