@@ -2320,9 +2320,10 @@ pub(crate) mod tests {
         );
 
         // and ensure that after a fallback point, we assign every seqno work
-        let fallback_seqno = SeqNo(u64::cast_from(
-            rollup_seqno.0 * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
-        ));
+        let fallback_seqno = SeqNo(
+            rollup_seqno.0
+                * u64::cast_from(PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER),
+        );
         state.seqno = fallback_seqno;
         assert_eq!(
             state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
