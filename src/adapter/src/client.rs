@@ -306,17 +306,17 @@ impl SessionClient {
             .expect("must exist"))
     }
 
-    /// Saves the specified statement as a prepared statement.
+    /// Saves the parsed statement as a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`crate::session::Session`]
     /// under the specified name.
-    pub async fn describe(
+    pub async fn prepare(
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::Describe {
+        self.send(|tx, session| Command::Prepare {
             name,
             stmt,
             param_types,
@@ -516,7 +516,7 @@ impl SessionClient {
                 Command::Declare { .. } => typ = Some("declare"),
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::Startup { .. }
-                | Command::Describe { .. }
+                | Command::Prepare { .. }
                 | Command::VerifyPreparedStatement { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }

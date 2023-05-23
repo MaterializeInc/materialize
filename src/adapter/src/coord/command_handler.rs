@@ -89,7 +89,7 @@ impl Coordinator {
                 self.declare(tx, session, name, stmt, param_types);
             }
 
-            Command::Describe {
+            Command::Prepare {
                 name,
                 stmt,
                 param_types,
@@ -97,7 +97,7 @@ impl Coordinator {
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.handle_describe(tx, session, name, stmt, param_types);
+                self.handle_prepare(tx, session, name, stmt, param_types);
             }
 
             Command::CancelRequest {
@@ -551,7 +551,7 @@ impl Coordinator {
         }
     }
 
-    fn handle_describe(
+    fn handle_prepare(
         &self,
         tx: ClientTransmitter<()>,
         mut session: Session,
@@ -560,7 +560,7 @@ impl Coordinator {
         param_types: Vec<Option<ScalarType>>,
     ) {
         let catalog = self.owned_catalog();
-        mz_ore::task::spawn(|| "coord::handle_describe", async move {
+        mz_ore::task::spawn(|| "coord::handle_prepare", async move {
             let res = match Self::describe(&catalog, &session, stmt.clone(), param_types) {
                 Ok(desc) => {
                     session.set_prepared_statement(

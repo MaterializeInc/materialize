@@ -49,7 +49,7 @@ pub enum Command {
         tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
-    Describe {
+    Prepare {
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
@@ -116,7 +116,7 @@ impl Command {
         match self {
             Command::Startup { session, .. }
             | Command::Declare { session, .. }
-            | Command::Describe { session, .. }
+            | Command::Prepare { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
@@ -133,7 +133,7 @@ impl Command {
         match self {
             Command::Startup { session, .. }
             | Command::Declare { session, .. }
-            | Command::Describe { session, .. }
+            | Command::Prepare { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
@@ -156,7 +156,7 @@ impl Command {
         match self {
             Command::Startup { tx, session, .. } => send(tx, session, e),
             Command::Declare { tx, session, .. } => send(tx, session, e),
-            Command::Describe { tx, session, .. } => send(tx, session, e),
+            Command::Prepare { tx, session, .. } => send(tx, session, e),
             Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
             Command::Execute { tx, session, .. } => send(tx, session, e),
             Command::Commit { tx, session, .. } => send(tx, session, e),
