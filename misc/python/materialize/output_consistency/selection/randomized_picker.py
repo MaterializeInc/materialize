@@ -49,7 +49,7 @@ class RandomizedPicker:
     ) -> float:
         if relevance == OperationRelevance.HIGH:
             return 0.8
-        elif relevance == OperationRelevance.NORMAL:
+        elif relevance == OperationRelevance.DEFAULT:
             return 0.5
         elif relevance == OperationRelevance.LOW:
             return 0.2

@@ -24,9 +24,9 @@ EXPRESSION_PLACEHOLDER = "$"
 
 
 class OperationRelevance(Enum):
-    HIGH = 1
-    NORMAL = 2
-    LOW = 3
+    HIGH = 2
+    DEFAULT = 3
+    LOW = 4
 
 
 class DbOperationOrFunction:
@@ -40,7 +40,7 @@ class DbOperationOrFunction:
         return_type_category: DataTypeCategory,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         aggregation: bool = False,
-        relevance: OperationRelevance = OperationRelevance.NORMAL,
+        relevance: OperationRelevance = OperationRelevance.DEFAULT,
     ):
         if args_validators is None:
             args_validators = set()
@@ -104,7 +104,7 @@ class DbOperation(DbOperationOrFunction):
         params: List[OperationParam],
         return_type_category: DataTypeCategory,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
-        relevance: OperationRelevance = OperationRelevance.NORMAL,
+        relevance: OperationRelevance = OperationRelevance.DEFAULT,
     ):
         param_count = len(params)
         super().__init__(
@@ -141,7 +141,7 @@ class DbFunction(DbOperationOrFunction):
         return_type_category: DataTypeCategory,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         aggregation: bool = False,
-        relevance: OperationRelevance = OperationRelevance.NORMAL,
+        relevance: OperationRelevance = OperationRelevance.DEFAULT,
     ):
         self.validate_params(params)
 
