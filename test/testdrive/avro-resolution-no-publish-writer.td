@@ -18,7 +18,7 @@ $ kafka-create-topic topic=resolution-no-publish-writer
 $ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schema} timestamp=1
 {"f1": 123}
 
-$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 DROP SCHEMA IF EXISTS public CASCADE
 CREATE SCHEMA public
 GRANT CREATE, USAGE ON SCHEMA public TO materialize

@@ -387,7 +387,7 @@ contains:unknown catalog item 'v'
 # Dropping the public schema is okay, but dropping the catalog schemas is not.
 > DROP SCHEMA public
 
-$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO false
 
 ! DROP SCHEMA mz_catalog
@@ -395,7 +395,7 @@ contains:cannot drop schema mz_catalog because it is required by the database sy
 ! DROP SCHEMA pg_catalog
 contains:cannot drop schema pg_catalog because it is required by the database system
 
-$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO true
 
 # Schema names that start with "mz_" or "pg_" are reserved for future use by the

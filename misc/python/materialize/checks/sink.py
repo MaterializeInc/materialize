@@ -65,6 +65,11 @@ class SinkUpsert(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
+                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT SELECT ON sink_source_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
                 $ kafka-ingest format=avro key-format=avro topic=sink-source key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "I2${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
                 {"key1": "U2${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
@@ -80,6 +85,11 @@ class SinkUpsert(Check):
                   ENVELOPE DEBEZIUM
                 """,
                 """
+                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT SELECT ON sink_source_view TO materialize
+                GRANT USAGE ON CONNECTION kafka_conn TO materialize
+                GRANT USAGE ON CONNECTION csr_conn TO materialize
+
                 $ kafka-ingest format=avro key-format=avro topic=sink-source key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "I3${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
                 {"key1": "U3${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}

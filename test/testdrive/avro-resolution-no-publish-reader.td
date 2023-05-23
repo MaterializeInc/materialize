@@ -20,7 +20,7 @@ $ kafka-create-topic topic=resolution-no-publish-writer
 $ kafka-ingest format=bytes topic=resolution-no-publish-writer timestamp=1
 \\x00\x00\x00\x00\x01\xf6\x01
 
-$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 DROP SCHEMA IF EXISTS public CASCADE
 CREATE SCHEMA public
 GRANT CREATE, USAGE ON SCHEMA public TO materialize

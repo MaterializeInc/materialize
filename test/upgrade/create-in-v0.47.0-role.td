@@ -7,12 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE ROLE superuser_login;
-
-> CREATE ROLE "space role";
-
-> CREATE ROLE joe;
-
-> CREATE ROLE group;
-
-> GRANT group TO joe
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+CREATE ROLE superuser_login;
+CREATE ROLE "space role";
+CREATE ROLE joe;
+CREATE ROLE group;
+GRANT group TO joe;
