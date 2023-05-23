@@ -940,48 +940,74 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
-        // How many times are we willing to evaluate the underlying function before giving up?
-        // This is here to protect us from exponential blowup when the argument list is long and
-        // there are multiple cases to consider per argument.
-        const MAX_EVALUATIONS: usize = 1000;
-        fn eval_loop<'a>(
-            is_monotonic: Monotonic,
-            expr: &mut MirScalarExpr,
-            args: &[ColumnSpec<'a>],
-            index: usize,
-            datum_map: &mut impl FnMut(&MirScalarExpr) -> ResultSpec<'a>,
-            evaluations: &mut usize,
-        ) -> ResultSpec<'a> {
-            if *evaluations >= MAX_EVALUATIONS {
-                return ResultSpec::anything();
-            }
-
-            if index >= args.len() {
-                *evaluations += 1;
-                datum_map(expr)
-            } else {
-                args[index].range.flat_map(is_monotonic, |datum| {
-                    ColumnSpecs::set_argument(expr, index, datum);
-                    eval_loop(is_monotonic, expr, args, index + 1, datum_map, evaluations)
+        let mapped_spec = if func.is_associative() && !args.is_empty() {
+            // If the function is associative, like AND and OR, it's safe (and more efficient)
+            // to interpret it using a series of binary calls.
+            let col_type = func.output_type(args.iter().map(|cs| cs.col_type.clone()).collect());
+            let mut expr = MirScalarExpr::CallVariadic {
+                func: func.clone(),
+                exprs: vec![
+                    Self::placeholder(col_type.clone()),
+                    Self::placeholder(col_type),
+                ],
+            };
+            let is_monotone = variadic_monotonic(func);
+            args.iter()
+                .map(|cs| cs.range.clone())
+                .reduce(|left, right| {
+                    left.flat_map(is_monotone, |left_result| {
+                        Self::set_argument(&mut expr, 0, left_result);
+                        right.flat_map(is_monotone, |right_result| {
+                            Self::set_argument(&mut expr, 1, right_result);
+                            self.eval_result(expr.eval(&[], self.arena))
+                        })
+                    })
                 })
-            }
-        }
+                .expect("reduce over non-empty argument list")
+        } else {
+            // How many times are we willing to evaluate the underlying function before giving up?
+            // This is here to protect us from exponential blowup when the argument list is long and
+            // there are multiple cases to consider per argument.
+            const MAX_EVALUATIONS: usize = 1000;
+            fn eval_loop<'a>(
+                is_monotonic: Monotonic,
+                expr: &mut MirScalarExpr,
+                args: &[ColumnSpec<'a>],
+                index: usize,
+                datum_map: &mut impl FnMut(&MirScalarExpr) -> ResultSpec<'a>,
+                evaluations: &mut usize,
+            ) -> ResultSpec<'a> {
+                if *evaluations >= MAX_EVALUATIONS {
+                    return ResultSpec::anything();
+                }
 
-        let mut fn_expr = MirScalarExpr::CallVariadic {
-            func: func.clone(),
-            exprs: args
-                .iter()
-                .map(|spec| Self::placeholder(spec.col_type.clone()))
-                .collect(),
+                if index >= args.len() {
+                    *evaluations += 1;
+                    datum_map(expr)
+                } else {
+                    args[index].range.flat_map(is_monotonic, |datum| {
+                        ColumnSpecs::set_argument(expr, index, datum);
+                        eval_loop(is_monotonic, expr, args, index + 1, datum_map, evaluations)
+                    })
+                }
+            }
+
+            let mut fn_expr = MirScalarExpr::CallVariadic {
+                func: func.clone(),
+                exprs: args
+                    .iter()
+                    .map(|spec| Self::placeholder(spec.col_type.clone()))
+                    .collect(),
+            };
+            eval_loop(
+                variadic_monotonic(func),
+                &mut fn_expr,
+                &args,
+                0,
+                &mut |expr| self.eval_result(expr.eval(&[], self.arena)),
+                &mut 0,
+            )
         };
-        let mapped_spec = eval_loop(
-            variadic_monotonic(func),
-            &mut fn_expr,
-            &args,
-            0,
-            &mut |expr| self.eval_result(expr.eval(&[], self.arena)),
-            &mut 0,
-        );
 
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
         let col_type = func.output_type(col_types);
