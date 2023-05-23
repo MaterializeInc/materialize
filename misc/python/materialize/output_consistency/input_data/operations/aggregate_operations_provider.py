@@ -15,22 +15,35 @@ from materialize.output_consistency.input_data.params.number_operation_param imp
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperationOrFunction,
+    OperationRelevance,
 )
 
 AGGREGATE_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "SUM", [NumericOperationParam()], DataTypeCategory.NUMERIC, is_aggregation=True
+        "SUM",
+        [NumericOperationParam()],
+        DataTypeCategory.NUMERIC,
+        is_aggregation=True,
+        relevance=OperationRelevance.HIGH,
     ),
 )
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "MIN", [NumericOperationParam()], DataTypeCategory.NUMERIC, is_aggregation=True
+        "MIN",
+        [NumericOperationParam()],
+        DataTypeCategory.NUMERIC,
+        is_aggregation=True,
+        relevance=OperationRelevance.HIGH,
     )
 )
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "MAX", [NumericOperationParam()], DataTypeCategory.NUMERIC, is_aggregation=True
+        "MAX",
+        [NumericOperationParam()],
+        DataTypeCategory.NUMERIC,
+        is_aggregation=True,
+        relevance=OperationRelevance.HIGH,
     )
 )
