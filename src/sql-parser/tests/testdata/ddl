@@ -1023,6 +1023,47 @@ ALTER SOURCE name RESET (SIZE)
 =>
 AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("name")]), if_exists: false, action: ResetOptions([Size]) })
 
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE x, y, z
+----
+ALTER SOURCE n DROP SUBSOURCE x, y, z
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: false, cascade: false, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE n DROP TABLE x, y, z
+----
+ALTER SOURCE n DROP SUBSOURCE x, y, z
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: false, cascade: false, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z
+----
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: true, cascade: false, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE x, y, z CASCADE
+----
+ALTER SOURCE n DROP SUBSOURCE x, y, z CASCADE
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: false, cascade: true, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z CASCADE
+----
+ALTER SOURCE n DROP SUBSOURCE IF EXISTS x, y, z CASCADE
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: false, action: DropSubsources { if_exists: true, cascade: true, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
+
+parse-statement
+ALTER SOURCE IF EXISTS n DROP SUBSOURCE IF EXISTS x, y, z CASCADE
+----
+ALTER SOURCE IF EXISTS n DROP SUBSOURCE IF EXISTS x, y, z CASCADE
+=>
+AlterSource(AlterSourceStatement { source_name: UnresolvedItemName([Ident("n")]), if_exists: true, action: DropSubsources { if_exists: true, cascade: true, names: [UnresolvedItemName([Ident("x")]), UnresolvedItemName([Ident("y")]), UnresolvedItemName([Ident("z")])] } })
 
 parse-statement
 ALTER VIEW name SET (property = true)

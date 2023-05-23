@@ -1644,7 +1644,22 @@ impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
-            _ => todo!(),
+            AlterSourceAction::DropSubsources {
+                if_exists,
+                cascade,
+                names,
+            } => {
+                f.write_str("DROP SUBSOURCE ");
+                if *if_exists {
+                    f.write_str("IF EXISTS ");
+                }
+
+                f.write_node(&display::comma_separated(names));
+
+                if *cascade {
+                    f.write_str(" CASCADE");
+                }
+            }
         }
     }
 }
