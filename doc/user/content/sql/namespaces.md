@@ -39,7 +39,7 @@ example, databases can contain schemas.
 Objects within the schema layer are not in a hierarchy and do not necessarily
 share a relationship with one another.
 
-## Independent objects
+## Other objects
 
 The Materialize objects that exist outside the standard namespace hierarchy
 are:
@@ -48,8 +48,7 @@ are:
 - Cluster replicas
 - Roles
 
-These objects are independent of other objects and are not referenced by the
-standard SQL namespace.
+These objects are not referenced by the standard SQL namespace.
 
 For example, to create a materialized view in a specific cluster, your SQL
 statement would be:

@@ -11,7 +11,7 @@ This guide walks you through creating a new user and new role in Materialize. By
 the end of this tutorial you will:
 
 * Invite a new user in the Materialize Console
-* Create a new role in your Materialize account using `psql`
+* Create a new role in your Materialize
 * Apply privileges to the new role
 * Assign the new role to the new user
 
@@ -33,8 +33,8 @@ privileges.
 
 ## Step 2. Connect to Materialize
 
-In this example, you need to connect to your Materialize instance with `psql` to add roles
-to this table.
+To manage roles, you need to connect to your Materialize instance with `psql` or
+other external tools.
 
 1. In the [Materialize UI](https://console.materialize.com/), go to the **Connect** screen.
 
@@ -42,11 +42,11 @@ to this table.
 
     The app password will be displayed only once, so be sure to copy the password somewhere safe. If you forget your password, you can create a new one.
 
-1. Copy the `psql` command.
+1. Copy the `psql` command or the **External tools** connection information.
 
 ## Step 3. Create a new role
 
-1. Open a new terminal window, run the `psql` command, and enter your app password.
+1. Open a new terminal window, run the `psql` command or use the external tool connection information, and enter your app password.
 
 1. Now that you're logged in, you can create a new role:
 
