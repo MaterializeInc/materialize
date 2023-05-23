@@ -4644,6 +4644,53 @@ pub fn plan_alter_source(
 
             crate::plan::AlterSourceAction::Resize(size)
         }
+        AlterSourceAction::DropSubsources {
+            if_exists,
+            names,
+            cascade,
+        } => {
+            let mut to_drop = BTreeSet::new();
+            let subsources = entry.subsources();
+            for name in names {
+                match plan_drop_subsource(scx, if_exists, name.clone(), cascade)? {
+                    Some(dropped_id) => {
+                        if !subsources.contains(&dropped_id) {
+                            let dropped_entry = scx.catalog.get_item(&dropped_id);
+                            return Err(PlanError::DropNonSubsource {
+                                non_subsource: scx
+                                    .catalog
+                                    .minimal_qualification(dropped_entry.name())
+                                    .to_string(),
+                                source: scx.catalog.minimal_qualification(entry.name()).to_string(),
+                            });
+                        }
+
+                        to_drop.insert(dropped_id);
+                    }
+                    None => {
+                        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                            name: name.to_string(),
+                            object_type: ObjectType::Source,
+                        });
+                    }
+                }
+            }
+
+            // Cannot drop last non-progress subsource
+            if subsources.len().saturating_sub(to_drop.len()) <= 1 {
+                return Err(PlanError::DropLastSubsource {
+                    source: scx.catalog.minimal_qualification(entry.name()).to_string(),
+                });
+            }
+
+            if to_drop.is_empty() {
+                return Ok(Plan::AlterNoop(AlterNoopPlan {
+                    object_type: ObjectType::Source,
+                }));
+            } else {
+                crate::plan::AlterSourceAction::DropSubsourceExports { to_drop }
+            }
+        }
     };
 
     Ok(Plan::AlterSource(AlterSourcePlan { id, action }))

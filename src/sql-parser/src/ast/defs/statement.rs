@@ -1610,6 +1610,11 @@ impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
 pub enum AlterSourceAction<T: AstInfo> {
     SetOptions(Vec<CreateSourceOption<T>>),
     ResetOptions(Vec<CreateSourceOptionName>),
+    DropSubsources {
+        if_exists: bool,
+        cascade: bool,
+        names: Vec<UnresolvedItemName>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1639,6 +1644,7 @@ impl<T: AstInfo> AstDisplay for AlterSourceStatement<T> {
                 f.write_node(&display::comma_separated(options));
                 f.write_str(")");
             }
+            _ => todo!(),
         }
     }
 }

@@ -110,6 +110,13 @@ pub enum PlanError {
         progress_collection: String,
         source: String,
     },
+    DropNonSubsource {
+        non_subsource: String,
+        source: String,
+    },
+    DropLastSubsource {
+        source: String,
+    },
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
@@ -216,8 +223,11 @@ impl PlanError {
             Self::DropViewOnMaterializedView(_) => {
                 Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
             }
-            Self::DropSubsource { source, .. } => Some(format!(
-                "Use DROP SOURCE {source} to drop this subsource's primary source and all of its other subsources"
+            Self::DropSubsource { source, subsource } => Some(format!(
+                "Use ALTER SOURCE {source} DROP SUBSOURCE {subsource}"
+            )),
+            Self::DropLastSubsource { source } | Self::DropProgressCollection { source, .. } => Some(format!(
+                "Use DROP SOURCE {source} to drop the primary source along with all subsources"
             )),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
@@ -412,7 +422,9 @@ impl fmt::Display for PlanError {
                 write!(f, "invalid protobuf schema")
             }
             Self::DropSubsource { subsource, source: _} => write!(f, "SOURCE {} is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE", subsource.quoted()),
+            Self::DropLastSubsource { source } => write!(f, "SOURCE {} must retain at least one non-progress subsource", source.quoted()),
             Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
+            Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is a not a subsource of {}", non_subsource.quoted(), source.quoted()),
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
