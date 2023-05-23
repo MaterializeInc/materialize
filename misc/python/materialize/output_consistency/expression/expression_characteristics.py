@@ -32,6 +32,7 @@ class ExpressionCharacteristics(Enum):
     FLOAT_TYPED = 151
     UNSIGNED_TYPED = 152
 
-    LARGER_THAN_INT4_SIZED = 160
-    # INT8 or UINT8
-    INT8_SIZED = 161
+    TYPE_LARGER_INT4_SIZED = 160
+    """INT8 or UINT4 or UINT8"""
+    TYPE_INT8_SIZED = 161
+    """INT8 or UINT8"""

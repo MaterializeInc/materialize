@@ -27,7 +27,7 @@ class Uint8MixedWithTypedArgsValidator(OperationArgsValidator):
         index_of_uint8 = self.index_of_characteristic_combination(
             args,
             {
-                ExpressionCharacteristics.INT8_SIZED,
+                ExpressionCharacteristics.TYPE_INT8_SIZED,
                 ExpressionCharacteristics.UNSIGNED_TYPED,
             },
         )

@@ -152,7 +152,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(
                 incompatibilities={
                     ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED,
-                    ExpressionCharacteristics.LARGER_THAN_INT4_SIZED,
+                    ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED,
                 }
             ),
         ],
@@ -172,7 +172,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(
                 incompatibilities={
                     ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED,
-                    ExpressionCharacteristics.LARGER_THAN_INT4_SIZED,
+                    ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED,
                 }
             ),
         ],
@@ -309,7 +309,7 @@ NUMERIC_OPERATION_TYPES.append(
                 optional=True,
                 incompatibilities={
                     ExpressionCharacteristics.DECIMAL_OR_FLOAT_TYPED,
-                    ExpressionCharacteristics.LARGER_THAN_INT4_SIZED,
+                    ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED,
                     ExpressionCharacteristics.LARGE_VALUE,
                 },
             ),
