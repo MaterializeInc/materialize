@@ -41,8 +41,10 @@ def header(test_name: str, drop_schema: bool) -> str:
     if drop_schema:
         header += dedent(
             f"""
-            > DROP SCHEMA IF EXISTS public CASCADE;
-            > CREATE SCHEMA public /* {test_name} */;
+            $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            DROP SCHEMA IF EXISTS public CASCADE;
+            CREATE SCHEMA public /* {test_name} */;
+            GRANT ALL PRIVILEGES ON SCHEMA public TO materialize;
             """
         )
     # Create connections.
@@ -319,9 +321,9 @@ def run_test(c: Composition, args: argparse.Namespace) -> None:
 
         materialized = Materialized(
             unsafe_mode=False,
-            additional_system_parameter_defaults=[
-                "{}=on".format(scenario.feature_name()),
-            ],
+            additional_system_parameter_defaults={
+                scenario.feature_name(): "on",
+            },
         )
 
         with c.override(materialized):
@@ -357,9 +359,9 @@ def run_test(c: Composition, args: argparse.Namespace) -> None:
         # Create MZ config with all features set on by default
         materialized = Materialized(
             unsafe_mode=False,
-            additional_system_parameter_defaults=list(
-                map(lambda scenario: "{}=on".format(scenario.feature_name()), scenarios)
-            ),
+            additional_system_parameter_defaults={
+                scenario.feature_name(): "on" for scenario in scenarios
+            },
         )
         with c.override(materialized):
             c.stop("materialized")

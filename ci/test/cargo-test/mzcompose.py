@@ -26,7 +26,7 @@ SERVICES = [
         # conflict with a Kafka cluster running on the local machine.
         port="30123:30123",
         allow_host_ports=True,
-        extra_environment=[
+        environment_extra=[
             "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
             "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],

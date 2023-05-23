@@ -227,8 +227,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.testdrive(
             dedent(
                 """
-                > DROP SCHEMA IF EXISTS public CASCADE;
-                > CREATE SCHEMA public
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                DROP SCHEMA IF EXISTS public CASCADE;
+                CREATE SCHEMA public;
+                GRANT ALL PRIVILEGES ON SCHEMA public TO materialize;
                 """
             )
         )

@@ -23,6 +23,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
+use mz_sql::ast::ObjectType as AstObjectType;
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError as SqlCatalogError, CatalogItemType,
     CatalogSchema, RoleAttributes,
@@ -432,7 +433,10 @@ async fn migrate(
                         role: SerializedRole {
                             name: bootstrap_role.clone(),
                             attributes: Some(
-                                RoleAttributes::new().with_create_db().with_create_cluster(),
+                                RoleAttributes::new()
+                                    .with_create_db()
+                                    .with_create_cluster()
+                                    .with_create_role(),
                             ),
                             membership: Some(RoleMembership::new()),
                         },
@@ -466,7 +470,7 @@ async fn migrate(
                             .push(MzAclItem {
                                 grantee: role_id,
                                 grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::CREATE,
+                                acl_mode: rbac::all_object_privileges(AstObjectType::Database),
                             });
                         Some(value)
                     } else {
@@ -483,7 +487,7 @@ async fn migrate(
                             .push(MzAclItem {
                                 grantee: role_id,
                                 grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::CREATE,
+                                acl_mode: rbac::all_object_privileges(AstObjectType::Schema),
                             });
                         Some(value)
                     } else {
@@ -500,7 +504,7 @@ async fn migrate(
                             .push(MzAclItem {
                                 grantee: role_id,
                                 grantor: MZ_SYSTEM_ROLE_ID,
-                                acl_mode: AclMode::CREATE,
+                                acl_mode: rbac::all_object_privileges(AstObjectType::Cluster),
                             });
                         Some(value)
                     } else {

@@ -18,8 +18,10 @@ $ kafka-create-topic topic=resolution-no-publish-writer
 $ kafka-ingest format=avro topic=resolution-no-publish-writer schema=${int-schema} timestamp=1
 {"f1": 123}
 
-> DROP SCHEMA IF EXISTS public CASCADE
-> CREATE SCHEMA public
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+DROP SCHEMA IF EXISTS public CASCADE
+CREATE SCHEMA public
+GRANT CREATE, USAGE ON SCHEMA public TO materialize
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
