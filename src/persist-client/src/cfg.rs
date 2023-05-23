@@ -243,6 +243,8 @@ impl PersistConfig {
         clamp: Duration::from_secs(16),
     };
 
+    pub(crate) const DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER: usize = 3;
+
     // Move this to a PersistConfig field when we actually have read leases.
     //
     // MIGRATION: Remove this once we remove the ReaderState <->

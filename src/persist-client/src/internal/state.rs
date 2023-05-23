@@ -1353,12 +1353,26 @@ where
     pub fn need_rollup(&self, threshold: usize) -> Option<SeqNo> {
         let (latest_rollup_seqno, _) = self.latest_rollup();
         let seqnos_since_last_rollup = self.seqno.0.saturating_sub(latest_rollup_seqno.0);
+
+        // every `threshold` seqnos since the latest rollup, assign rollup maintenance.
+        // we avoid assigning rollups to every seqno past the threshold to avoid handles
+        // racing / performing redundant work.
         if seqnos_since_last_rollup > 0 && seqnos_since_last_rollup % u64::cast_from(threshold) == 0
         {
-            Some(self.seqno)
-        } else {
-            None
+            return Some(self.seqno);
         }
+
+        // however, since maintenance is best-effort and could fail, do assign rollup
+        // work to every seqno after a fallback threshold to ensure one is written.
+        if seqnos_since_last_rollup
+            > u64::cast_from(
+                threshold * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
+            )
+        {
+            return Some(self.seqno);
+        }
+
+        None
     }
 
     pub(crate) fn map_blobs<F: for<'a> FnMut(HollowBlobRef<'a, T>)>(&self, mut f: F) {
@@ -2303,6 +2317,21 @@ pub(crate) mod tests {
         assert_eq!(
             state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
             SeqNo(9)
+        );
+
+        // and ensure that after a fallback point, we assign every seqno work
+        let fallback_seqno = SeqNo(u64::cast_from(
+            rollup_seqno.0 * PersistConfig::DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER,
+        ));
+        state.seqno = fallback_seqno;
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            fallback_seqno
+        );
+        state.seqno = fallback_seqno.next();
+        assert_eq!(
+            state.need_rollup(ROLLUP_THRESHOLD).expect("rollup"),
+            fallback_seqno.next()
         );
     }
 
