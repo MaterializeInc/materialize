@@ -27,7 +27,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformArgs;
@@ -68,8 +68,8 @@ impl crate::Transform for SemijoinIdempotence {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        let mut let_replacements = BTreeMap::<Id, Vec<Replacement>>::new();
-        let mut gets_behind_gets = BTreeMap::<Id, Vec<(Id, Vec<MirScalarExpr>)>>::new();
+        let mut let_replacements = BTreeMap::<LocalId, Vec<Replacement>>::new();
+        let mut gets_behind_gets = BTreeMap::<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>::new();
         self.action(relation, &mut let_replacements, &mut gets_behind_gets)?;
 
         mz_repr::explain::trace_plan(&*relation);
@@ -81,19 +81,19 @@ impl SemijoinIdempotence {
     fn action(
         &self,
         expr: &mut MirRelationExpr,
-        let_replacements: &mut BTreeMap<Id, Vec<Replacement>>,
-        gets_behind_gets: &mut BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+        let_replacements: &mut BTreeMap<LocalId, Vec<Replacement>>,
+        gets_behind_gets: &mut BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
     ) -> Result<(), crate::TransformError> {
         // At each node, either gather info about Let bindings or attempt to simplify a join.
         Ok(self.checked_recur(|_| {
             match expr {
                 MirRelationExpr::Let { id, value, body } => {
                     let_replacements.insert(
-                        Id::Local(*id),
+                        *id,
                         list_replacements(&*value, &let_replacements, &gets_behind_gets),
                     );
                     gets_behind_gets
-                        .insert(Id::Local(*id), as_filtered_get(value, &gets_behind_gets));
+                        .insert(*id, as_filtered_get(value, &gets_behind_gets));
                     self.action(value, let_replacements, gets_behind_gets)?;
                     self.action(body, let_replacements, gets_behind_gets)?;
                 }
@@ -130,8 +130,8 @@ fn attempt_join_simplification(
     inputs: &mut [MirRelationExpr],
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
     implementation: &mut mz_expr::JoinImplementation,
-    let_replacements: &BTreeMap<Id, Vec<Replacement>>,
-    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    let_replacements: &BTreeMap<LocalId, Vec<Replacement>>,
+    gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) {
     // Useful join manipulation helper.
     let input_mapper = JoinInputMapper::new(inputs);
@@ -266,14 +266,14 @@ struct Replacement {
 /// looking for a `Join` operator, at which point it defers to the `list_replacements_join` method.
 fn list_replacements(
     expr: &MirRelationExpr,
-    let_replacements: &BTreeMap<Id, Vec<Replacement>>,
-    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    let_replacements: &BTreeMap<LocalId, Vec<Replacement>>,
+    gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) -> Vec<Replacement> {
     let mut results = Vec::new();
     match expr {
-        MirRelationExpr::Get { id, .. } => {
+        MirRelationExpr::Get { id: Id::Local(lid), .. } => {
             // The `Get` may reference an `id` that offers semijoin replacements.
-            if let Some(replacements) = let_replacements.get(id) {
+            if let Some(replacements) = let_replacements.get(lid) {
                 results.extend(replacements.iter().cloned());
             }
         }
@@ -349,7 +349,7 @@ fn list_replacements(
 fn list_replacements_join(
     inputs: &[MirRelationExpr],
     equivalences: &Vec<Vec<MirScalarExpr>>,
-    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) -> Vec<Replacement> {
     // Result replacements.
     let mut results = Vec::new();
@@ -434,7 +434,7 @@ fn distinct_on_keys_of(expr: &MirRelationExpr, map: &BTreeMap<usize, usize>) -> 
 /// Returns a list of such interpretations, potentially spanning `Let` bindings.
 fn as_filtered_get(
     mut expr: &MirRelationExpr,
-    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) -> Vec<(Id, Vec<MirScalarExpr>)> {
     let mut results = Vec::new();
     while let MirRelationExpr::Filter { input, predicates } = expr {
@@ -443,11 +443,13 @@ fn as_filtered_get(
     }
     if let MirRelationExpr::Get { id, .. } = expr {
         let mut output = Vec::new();
-        if let Some(bound) = gets_behind_gets.get(id) {
-            for (id, list) in bound.iter() {
-                let mut predicates = list.clone();
-                predicates.extend(results.iter().cloned());
-                output.push((*id, predicates));
+        if let Id::Local(lid) = id {
+            if let Some(bound) = gets_behind_gets.get(lid) {
+                for (id, list) in bound.iter() {
+                    let mut predicates = list.clone();
+                    predicates.extend(results.iter().cloned());
+                    output.push((*id, predicates));
+                }
             }
         }
         output.push((*id, results));
