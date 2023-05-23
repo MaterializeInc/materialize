@@ -104,6 +104,7 @@ class DbOperation(DbOperationOrFunction):
         params: List[OperationParam],
         return_type_category: DataTypeCategory,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
+        relevance: OperationRelevance = OperationRelevance.NORMAL,
     ):
         param_count = len(params)
         super().__init__(
@@ -113,6 +114,7 @@ class DbOperation(DbOperationOrFunction):
             return_type_category=return_type_category,
             args_validators=args_validators,
             aggregation=False,
+            relevance=relevance,
         )
         self.pattern = pattern
 
@@ -139,6 +141,7 @@ class DbFunction(DbOperationOrFunction):
         return_type_category: DataTypeCategory,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         aggregation: bool = False,
+        relevance: OperationRelevance = OperationRelevance.NORMAL,
     ):
         self.validate_params(params)
 
@@ -149,6 +152,7 @@ class DbFunction(DbOperationOrFunction):
             return_type_category=return_type_category,
             args_validators=args_validators,
             aggregation=aggregation,
+            relevance=relevance,
         )
         self.function_name = function_name
 

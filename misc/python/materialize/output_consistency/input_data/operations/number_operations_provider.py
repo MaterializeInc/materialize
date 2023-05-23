@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from typing import List
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -25,11 +26,10 @@ from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperation,
     DbOperationOrFunction,
+    OperationRelevance,
 )
 
 NUMERIC_OPERATION_TYPES: List[DbOperationOrFunction] = []
-
-# ===== BEGIN NUMBER OPERATORS =====
 
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(
@@ -63,6 +63,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
         ],
         DataTypeCategory.NUMERIC,
+        relevance=OperationRelevance.HIGH,
     )
 )
 NUMERIC_OPERATION_TYPES.append(
@@ -73,6 +74,7 @@ NUMERIC_OPERATION_TYPES.append(
             NumericOperationParam(incompatibilities={ExpressionCharacteristics.ZERO}),
         ],
         DataTypeCategory.NUMERIC,
+        relevance=OperationRelevance.HIGH,
     )
 )
 # Bitwise AND
@@ -89,6 +91,7 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
+        OperationRelevance.LOW,
     )
 )
 # Bitwise OR
@@ -105,6 +108,7 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
+        OperationRelevance.LOW,
     )
 )
 # Bitwise XOR
@@ -121,6 +125,7 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
+        OperationRelevance.LOW,
     )
 )
 # Bitwise NOT
@@ -133,6 +138,7 @@ NUMERIC_OPERATION_TYPES.append(
             )
         ],
         DataTypeCategory.NUMERIC,
+        relevance=OperationRelevance.LOW,
     )
 )
 # Bitwise left shift
@@ -152,6 +158,7 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
+        OperationRelevance.LOW,
     )
 )
 # Bitwise right shift
@@ -171,6 +178,7 @@ NUMERIC_OPERATION_TYPES.append(
         ],
         DataTypeCategory.NUMERIC,
         {Uint8MixedWithTypedArgsValidator()},
+        OperationRelevance.LOW,
     )
 )
 
@@ -323,139 +331,3 @@ NUMERIC_OPERATION_TYPES.append(
         DataTypeCategory.NUMERIC,
     )
 )
-
-# ===== END NUMBER FUNCTIONS =====
-
-# ===== BEGIN TRIGONOMETRIC =====
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "COS",
-        [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
-    )
-)
-# only for numbers [-1, +1]
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "ACOS",
-        [
-            NumericOperationParam(
-                incompatibilities={
-                    ExpressionCharacteristics.LARGE_VALUE,
-                }
-            )
-        ],
-        DataTypeCategory.NUMERIC,
-    )
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "COSH",
-        [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
-        {SingleParamValueGrowsArgsValidator()},
-    )
-)
-# only for numbers [1,)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "ACOSH",
-        [
-            NumericOperationParam(
-                incompatibilities={
-                    ExpressionCharacteristics.ZERO,
-                    ExpressionCharacteristics.NEGATIVE,
-                },
-                incompatibility_combinations=[
-                    {
-                        ExpressionCharacteristics.DECIMAL,
-                        ExpressionCharacteristics.TINY_VALUE,
-                    }
-                ],
-            )
-        ],
-        DataTypeCategory.NUMERIC,
-    )
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction("COT", [NumericOperationParam()], DataTypeCategory.NUMERIC)
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction("SIN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
-)
-# only for numbers [-1, +1]
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "ASIN",
-        [
-            NumericOperationParam(
-                incompatibilities={
-                    ExpressionCharacteristics.LARGE_VALUE,
-                }
-            )
-        ],
-        DataTypeCategory.NUMERIC,
-    )
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "SINH",
-        [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
-        {SingleParamValueGrowsArgsValidator()},
-    )
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "ASINH",
-        [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
-    )
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction("TAN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "ATAN",
-        [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
-    )
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "TANH",
-        [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
-    )
-)
-# only for numbers [-1, +1]
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "ATANH",
-        [
-            NumericOperationParam(
-                incompatibilities={
-                    ExpressionCharacteristics.LARGE_VALUE,
-                }
-            )
-        ],
-        DataTypeCategory.NUMERIC,
-    )
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "RADIANS",
-        [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
-    )
-)
-NUMERIC_OPERATION_TYPES.append(
-    DbFunction(
-        "DEGREES",
-        [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
-    )
-)
-
-# ===== END TRIGONOMETRIC =====
