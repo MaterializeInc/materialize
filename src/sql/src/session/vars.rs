@@ -2373,9 +2373,8 @@ where
     }
 
     fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
-        let mut v = V::parse(self, input)?;
+        let v = V::parse(self, input)?;
 
-        V::canonicalize(&mut v);
         self.check_constraints(&v)?;
 
         if self.persisted_value() != Some(v.borrow()) {
@@ -2647,9 +2646,8 @@ where
 
     /// Parse the input and update the stored value to match.
     fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
-        let mut v = V::parse(self, input)?;
+        let v = V::parse(self, input)?;
 
-        V::canonicalize(&mut v);
         self.check_constraints(&v)?;
 
         if local {
@@ -2731,6 +2729,7 @@ impl Var for User {
 pub trait Value: ToOwned + Send + Sync {
     /// The name of the value type.
     fn type_name() -> String;
+
     /// Parses a value of this type from a [`VarInput`].
     fn parse<'a>(
         param: &'a (dyn Var + Send + Sync),
@@ -2741,10 +2740,6 @@ pub trait Value: ToOwned + Send + Sync {
     /// The resulting string is guaranteed to be parsable if provided to
     /// [`Value::parse`] as a [`VarInput::Flat`].
     fn format(&self) -> String;
-
-    /// Mutate the provided value into the canonical form that should be stored
-    /// or compared against the stored value.
-    fn canonicalize(_: &mut Self::Owned) {}
 }
 
 fn extract_single_value<'var, 'input: 'var>(
@@ -3052,10 +3047,6 @@ impl Value for String {
 
     fn format(&self) -> String {
         self.to_owned()
-    }
-
-    fn canonicalize(v: &mut Self::Owned) {
-        *v = v.to_ascii_lowercase();
     }
 }
 
