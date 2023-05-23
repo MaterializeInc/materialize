@@ -3886,10 +3886,29 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_source(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_item_name()?;
+        let source_name = self.parse_item_name()?;
 
         Ok(
-            match self.expect_one_of_keywords(&[RESET, SET, RENAME, OWNER])? {
+            match self.expect_one_of_keywords(&[DROP, RESET, SET, RENAME, OWNER])? {
+                DROP => {
+                    self.expect_one_of_keywords(&[SUBSOURCE, TABLE])?;
+
+                    let if_exists_inner = self.parse_if_exists()?;
+
+                    let names = self.parse_comma_separated(Parser::parse_item_name)?;
+
+                    let cascade = self.parse_keyword(CASCADE);
+
+                    Statement::AlterSource(AlterSourceStatement {
+                        source_name,
+                        if_exists,
+                        action: AlterSourceAction::DropSubsources {
+                            if_exists: if_exists_inner,
+                            cascade,
+                            names,
+                        },
+                    })
+                }
                 RESET => {
                     self.expect_token(&Token::LParen)?;
                     let reset_options =
@@ -3897,7 +3916,7 @@ impl<'a> Parser<'a> {
                     self.expect_token(&Token::RParen)?;
 
                     Statement::AlterSource(AlterSourceStatement {
-                        source_name: name,
+                        source_name,
                         if_exists,
                         action: AlterSourceAction::ResetOptions(reset_options),
                     })
@@ -3907,7 +3926,7 @@ impl<'a> Parser<'a> {
                     let set_options = self.parse_comma_separated(Parser::parse_source_option)?;
                     self.expect_token(&Token::RParen)?;
                     Statement::AlterSource(AlterSourceStatement {
-                        source_name: name,
+                        source_name,
                         if_exists,
                         action: AlterSourceAction::SetOptions(set_options),
                     })
@@ -3919,7 +3938,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterObjectRename(AlterObjectRenameStatement {
                         object_type: ObjectType::Source,
                         if_exists,
-                        name: UnresolvedObjectName::Item(name),
+                        name: UnresolvedObjectName::Item(source_name),
                         to_item_name,
                     })
                 }
@@ -3930,7 +3949,7 @@ impl<'a> Parser<'a> {
                     Statement::AlterOwner(AlterOwnerStatement {
                         object_type: ObjectType::Source,
                         if_exists,
-                        name: UnresolvedObjectName::Item(name),
+                        name: UnresolvedObjectName::Item(source_name),
                         new_owner,
                     })
                 }
