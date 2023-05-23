@@ -67,6 +67,7 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -236,13 +237,12 @@ pub static APPLICATION_NAME: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     internal: false,
 });
 
-pub static DEFAULT_CLIENT_ENCODING: Lazy<String> = Lazy::new(|| "UTF8".to_string());
-pub static CLIENT_ENCODING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+pub static CLIENT_ENCODING: ServerVar<ClientEncoding> = ServerVar {
     name: UncasedStr::new("client_encoding"),
-    value: &DEFAULT_CLIENT_ENCODING,
+    value: &ClientEncoding::Utf8,
     description: "Sets the client's character set encoding (PostgreSQL).",
     internal: false,
-});
+};
 
 const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     name: UncasedStr::new("client_min_messages"),
@@ -1140,7 +1140,7 @@ impl SessionVars {
         };
 
         s.with_var(&APPLICATION_NAME)
-            .with_value_constrained_var(&CLIENT_ENCODING, ValueConstraint::Fixed)
+            .with_var(&CLIENT_ENCODING)
             .with_var(&CLIENT_MIN_MESSAGES)
             .with_var(&CLUSTER)
             .with_var(&CLUSTER_REPLICA)
@@ -1244,7 +1244,7 @@ impl SessionVars {
         #[allow(clippy::as_conversions)]
         [
             &*APPLICATION_NAME as &dyn Var,
-            &*CLIENT_ENCODING,
+            &CLIENT_ENCODING,
             &*DATE_STYLE,
             &INTEGER_DATETIMES,
             &*SERVER_VERSION,
@@ -1383,8 +1383,8 @@ impl SessionVars {
     }
 
     /// Returns the value of the `client_encoding` configuration parameter.
-    pub fn client_encoding(&self) -> &str {
-        self.expect_value(&*CLIENT_ENCODING).as_str()
+    pub fn client_encoding(&self) -> &ClientEncoding {
+        self.expect_value(&CLIENT_ENCODING)
     }
 
     /// Returns the value of the `client_min_messages` configuration parameter.
@@ -3505,4 +3505,64 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_FILTER_ENABLED.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ClientEncoding {
+    Utf8,
+}
+
+impl ClientEncoding {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ClientEncoding::Utf8 => "UTF8",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![ClientEncoding::Utf8.as_str()]
+    }
+}
+
+impl FromStr for ClientEncoding {
+    type Err = VarError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = UncasedStr::new(s);
+        if s == "utf8" {
+            Ok(Self::Utf8)
+        } else {
+            Err(VarError::ConstrainedParameter {
+                parameter: (&CLIENT_ENCODING).into(),
+                values: vec![s.to_string()],
+                valid_values: Some(ClientEncoding::valid_values()),
+            })
+        }
+    }
+}
+
+impl std::fmt::Display for ClientEncoding {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            ClientEncoding::Utf8 => write!(f, "UTF8"),
+        }
+    }
+}
+
+impl Value for ClientEncoding {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        ClientEncoding::from_str(s)
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
 }
