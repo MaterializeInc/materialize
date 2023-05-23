@@ -385,8 +385,9 @@ contains:unknown catalog item 'v'
 > CREATE DATABASE d
 
 # Dropping the public schema is okay, but dropping the catalog schemas is not.
+> DROP SCHEMA public
+
 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-DROP SCHEMA public CASCADE
 ALTER SYSTEM SET enable_rbac_checks TO false
 
 ! DROP SCHEMA mz_catalog
@@ -647,15 +648,13 @@ $ psql-execute command="\dt *.test_table"
  tester  | test_table | table | materialize
  tester2 | test_table | table | materialize
 
-# TODO: Reenable when #19388 is fixed
-! CREATE TYPE type1 AS LIST (ELEMENT TYPE = text)
-contains:no schema has been selected to create in
+> CREATE TYPE type1 AS LIST (ELEMENT TYPE = text)
 
-#> SHOW TYPES
-#type1
-#
-#$ psql-execute command="\dT"
-#\      List of data types
-# Schema | Name  | Description
-#--------+-------+-------------
-# public | type1 |
+> SHOW TYPES
+type1
+
+$ psql-execute command="\dT"
+\      List of data types
+ Schema | Name  | Description
+--------+-------+-------------
+ public | type1 |
