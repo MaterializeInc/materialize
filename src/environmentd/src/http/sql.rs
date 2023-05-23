@@ -736,7 +736,7 @@ async fn execute_stmt<S: ResultSender>(
 ) -> Result<StatementResult, anyhow::Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
-        .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
         .await
     {
         return Ok(SqlResult::err(client, e).into());

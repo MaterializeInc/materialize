@@ -747,7 +747,7 @@ where
         }
         match self
             .adapter_client
-            .describe(name, maybe_stmt, param_types)
+            .prepare(name, maybe_stmt, param_types)
             .await
         {
             Ok(()) => {
