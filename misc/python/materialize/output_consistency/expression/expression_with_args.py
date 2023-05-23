@@ -6,9 +6,12 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
+from typing import List, Optional
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.execution.value_storage_layout import (
+    ValueStorageLayout,
+)
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.operation.operation import (
     EXPRESSION_PLACEHOLDER,
@@ -23,9 +26,15 @@ class ExpressionWithArgs(Expression):
         self,
         operation: DbOperationOrFunction,
         args: List[Expression],
+        is_aggregate: bool,
         is_expect_error: bool,
     ):
-        super().__init__(operation.derive_characteristics(args), is_expect_error)
+        super().__init__(
+            operation.derive_characteristics(args),
+            _get_storage_layout(args),
+            is_aggregate,
+            is_expect_error,
+        )
         self.pattern = operation.to_pattern(len(args))
         self.return_type_category = operation.return_type_category
         self.args = args
@@ -64,3 +73,21 @@ class ExpressionWithArgs(Expression):
     def __str__(self) -> str:
         args_desc = ", ".join(arg.__str__() for arg in self.args)
         return f"ExpressionWithArgs with pattern {self.pattern} and args {args_desc}"
+
+
+def _get_storage_layout(args: List[Expression]) -> ValueStorageLayout:
+    storage_layout: Optional[ValueStorageLayout] = None
+
+    for arg in args:
+        if storage_layout is None:
+            storage_layout = arg.storage_layout
+        elif storage_layout != arg.storage_layout:
+            raise RuntimeError(
+                "It is not allowed to mix storage layouts in an expression"
+            )
+
+    if storage_layout is None:
+        # use this as default (but it should not matter as expressions are expected to always have at least one arg)
+        return ValueStorageLayout.HORIZONTAL
+
+    return storage_layout

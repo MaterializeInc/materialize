@@ -39,7 +39,7 @@ class DbOperationOrFunction:
         max_param_count: int,
         return_type_category: DataTypeCategory,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
-        aggregation: bool = False,
+        is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
     ):
         if args_validators is None:
@@ -50,7 +50,7 @@ class DbOperationOrFunction:
         self.max_param_count = max_param_count
         self.return_type_category = return_type_category
         self.args_validators: Set[OperationArgsValidator] = args_validators
-        self.aggregation = aggregation
+        self.is_aggregation = is_aggregation
         self.relevance = relevance
 
     def to_pattern(self, args_count: int) -> str:
@@ -113,7 +113,7 @@ class DbOperation(DbOperationOrFunction):
             max_param_count=param_count,
             return_type_category=return_type_category,
             args_validators=args_validators,
-            aggregation=False,
+            is_aggregation=False,
             relevance=relevance,
         )
         self.pattern = pattern
@@ -140,7 +140,7 @@ class DbFunction(DbOperationOrFunction):
         params: List[OperationParam],
         return_type_category: DataTypeCategory,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
-        aggregation: bool = False,
+        is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
     ):
         self.validate_params(params)
@@ -151,7 +151,7 @@ class DbFunction(DbOperationOrFunction):
             max_param_count=len(params),
             return_type_category=return_type_category,
             args_validators=args_validators,
-            aggregation=aggregation,
+            is_aggregation=is_aggregation,
             relevance=relevance,
         )
         self.function_name = function_name

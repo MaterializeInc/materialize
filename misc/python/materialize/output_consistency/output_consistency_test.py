@@ -106,6 +106,7 @@ def _run_output_consistency_tests_internal(
         max_iterations=max_iterations,
         avoid_expressions_expecting_db_error=avoid_expressions_expecting_db_error,
         queries_per_tx=20,
+        max_pending_expressions=100,
         use_autocommit=True,
         split_and_retry_on_db_error=True,
         skip_postgres_incompatible_types=False,

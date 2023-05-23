@@ -9,6 +9,9 @@
 from typing import Set
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.execution.value_storage_layout import (
+    ValueStorageLayout,
+)
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -18,10 +21,16 @@ class Expression:
     """An expression is either a `DataValue` or a `ExpressionWithArgs`"""
 
     def __init__(
-        self, characteristics: Set[ExpressionCharacteristics], is_expect_error: bool
+        self,
+        characteristics: Set[ExpressionCharacteristics],
+        storage_layout: ValueStorageLayout,
+        is_aggregate: bool,
+        is_expect_error: bool,
     ):
-        self.is_expect_error = is_expect_error
         self.characteristics = characteristics
+        self.storage_layout = storage_layout
+        self.is_aggregate = is_aggregate
+        self.is_expect_error = is_expect_error
 
     def to_sql(self) -> str:
         raise RuntimeError("Not implemented")

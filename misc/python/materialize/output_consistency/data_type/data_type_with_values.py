@@ -9,6 +9,7 @@
 from typing import List, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
+from materialize.output_consistency.data_value.data_column import DataColumn
 from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -24,7 +25,10 @@ class DataTypeWithValues:
         self.null_value = self._create_raw_value(
             "NULL", "NULL", {ExpressionCharacteristics.NULL}
         )
+        # values (and implicitly a column for each value for horizontal storage)
         self.raw_values: List[DataValue] = [self.null_value]
+        # column for vertical storage (with all values)
+        self.vertical_storage_data_column = DataColumn(data_type)
 
     def _create_raw_value(
         self,

@@ -21,16 +21,16 @@ AGGREGATE_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "SUM", [NumericOperationParam()], DataTypeCategory.NUMERIC, aggregation=True
+        "SUM", [NumericOperationParam()], DataTypeCategory.NUMERIC, is_aggregation=True
     ),
 )
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "MIN", [NumericOperationParam()], DataTypeCategory.NUMERIC, aggregation=True
+        "MIN", [NumericOperationParam()], DataTypeCategory.NUMERIC, is_aggregation=True
     )
 )
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "MAX", [NumericOperationParam()], DataTypeCategory.NUMERIC, aggregation=True
+        "MAX", [NumericOperationParam()], DataTypeCategory.NUMERIC, is_aggregation=True
     )
 )

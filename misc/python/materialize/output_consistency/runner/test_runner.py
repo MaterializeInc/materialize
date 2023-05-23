@@ -80,7 +80,7 @@ class ConsistencyTestRunner:
                     f"Status: Expression {expression_count}..."
                 )
 
-            operation = self.expression_generator.pick_random_operation()
+            operation = self.expression_generator.pick_random_operation(True)
 
             shall_abort_after_iteration = self._shall_abort(expression_count, end_time)
 
