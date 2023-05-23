@@ -23,6 +23,7 @@ class QueryExecution:
         self.generic_sql = query.to_sql(DummyEvaluation(), QueryOutputFormat.MULTI_LINE)
         self.query_id = query_id
         self.outcomes: List[QueryOutcome] = []
+        self.error_was_expected = query.expect_error
 
     def __str__(self) -> str:
         return f"QueryExecution with {len(self.outcomes)} outcomes for template query: {self.generic_sql})"

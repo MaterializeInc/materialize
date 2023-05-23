@@ -29,7 +29,7 @@ from materialize.output_consistency.validation.validation_outcome import (
 
 
 class ResultComparator:
-    """Compares the outcome (resuult or failure) of multiple query executions"""
+    """Compares the outcome (result or failure) of multiple query executions"""
 
     def compare_results(self, query_execution: QueryExecution) -> ValidationOutcome:
         validation_outcome = ValidationOutcome()
@@ -39,6 +39,9 @@ class ResultComparator:
 
         if len(query_execution.outcomes) == 1:
             raise RuntimeError("Contains only one outcome, nothing to compare against!")
+
+        if query_execution.error_was_expected:
+            validation_outcome.add_remark(ValidationRemark("DB error was expected"))
 
         self.validate_outcomes_metadata(query_execution.outcomes, validation_outcome)
 
