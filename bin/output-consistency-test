@@ -9,6 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# output-consistency - Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).
+# output-consistency-test - Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).
 
-exec "$(dirname "$0")"/pyactivate -m materialize.output_consistency.output_consistency "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.output_consistency.output_consistency_test "$@"

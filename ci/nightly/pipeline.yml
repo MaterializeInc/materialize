@@ -60,7 +60,7 @@ steps:
           - { value: launchdarkly }
           - { value: bounded-memory }
           - { value: cloud-canary }
-          - { value: output-consistency }
+          - { value: output-consistency-test }
           - { value: sqlsmith }
           - { value: sqlsmith-explain }
           - { value: sqlancer-pqs }
@@ -591,8 +591,8 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
 
-  - id: output-consistency
-    label: "Output consistency"
+  - id: output-consistency-test
+    label: "Output consistency test"
     timeout_in_minutes: 58
     agents:
       queue: linux-x86_64

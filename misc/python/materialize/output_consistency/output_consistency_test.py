@@ -162,7 +162,7 @@ def print_config(config: ConsistencyTestConfiguration) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="output-consistency",
+        prog="output-consistency-test",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Test the output consistency of different query evaluation strategies (e.g., dataflow rendering "
         "and constant folding).",

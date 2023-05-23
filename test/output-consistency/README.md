@@ -18,7 +18,7 @@ bin/mzcompose --find output-consistency down -v && bin/mzcompose --find output-c
 ```
 To start the tests from a shell, use
 ```
-bin/output-consistency --max-runtime-in-sec 60
+bin/output-consistency-test --max-runtime-in-sec 60
 ```
 
 Possible parameters are:

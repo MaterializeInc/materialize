@@ -9,7 +9,7 @@
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Cockroach, Materialized
-from materialize.output_consistency.output_consistency import (
+from materialize.output_consistency.output_consistency_test import (
     parse_output_consistency_input_args,
     run_output_consistency_tests,
 )
