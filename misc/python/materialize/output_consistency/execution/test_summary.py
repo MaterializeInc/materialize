@@ -30,7 +30,7 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         count_with_warning_query_templates: int = 0,
     ):
         super().__init__()
-        self.mode = "DB" if not dry_run else "DRY_RUN"
+        self.mode = "LIVE_DATABASE" if not dry_run else "DRY_RUN"
         self.count_executed_query_templates = count_executed_query_templates
         self.count_successful_query_templates = count_successful_query_templates
         self.count_with_warning_query_templates = count_with_warning_query_templates
