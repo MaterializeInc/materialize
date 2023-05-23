@@ -130,6 +130,7 @@ weight= 14
 name = "User management"
 parent = "manage"
 identifier = "user-management"
+url = "/manage/user-management/"
 weight = 15
 
 #
