@@ -33,7 +33,7 @@ privileges.
 
 ## Step 2. Connect to Materialize
 
-Materialize stores role names and role IDs in the mz_roles catalog table. You need to connect to your Materialize instance with `psql` to add roles
+In this example, you need to connect to your Materialize instance with `psql` to add roles
 to this table.
 
 1. In the [Materialize UI](https://console.materialize.com/), go to the **Connect** screen.
@@ -48,7 +48,7 @@ to this table.
 
 1. Open a new terminal window, run the `psql` command, and enter your app password.
 
-1. Now that you're logged in, you can create a new role in the `mz_roles` table:
+1. Now that you're logged in, you can create a new role:
 
     ```sql
     CREATE ROLE dev_role;
@@ -212,6 +212,7 @@ DROP DATABASE dev_db CASCADE;
 DROP TABLE dev_table;
 ```
 
+## Related pages
 
 For more information on RBAC in Materialize, review the reference documentation:
 

@@ -1,6 +1,6 @@
 ---
-title: "Role-based access management"
-description: "How Materialize implements RBAC"
+title: "Role-based access control"
+description: "Manage roles, permissions, and other access control options in Materialize"
 menu:
   main:
     parent: user-management
@@ -86,7 +86,7 @@ object-specific privileges in Materialize:
 | `CREATE`  | Allows creating a new object within another object.        | `C`    |
 | `USAGE`   | Allows using an object or looking up members of an object. | `U`    |
 
-Note that `psql` returns an abbreviation of the privilege name.
+Note that the system catalog uses the abbreviation of the privilege name.
 
 Objects in Materialize have different levels of privileges available to them.
 Materialize supports the following object type privileges:
