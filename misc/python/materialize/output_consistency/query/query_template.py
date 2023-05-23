@@ -11,6 +11,9 @@ from typing import List, Optional
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
+from materialize.output_consistency.execution.value_storage_layout import (
+    ValueStorageLayout,
+)
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 
@@ -45,7 +48,7 @@ class QueryTemplate:
 
         sql = f"""
 SELECT{space_separator}{column_sql}
-FROM{space_separator}{strategy.db_object_name};""".strip()
+FROM{space_separator}{strategy.get_db_object_name(ValueStorageLayout.HORIZONTAL)};""".strip()
 
         if output_format == QueryOutputFormat.SINGLE_LINE:
             sql = sql.replace("\n", " ")

@@ -30,6 +30,7 @@ class DataValue(Expression):
         self.value = value
         self.data_type = data_type
         self.column_name = f"{data_type.identifier.lower()}_{value_identifier.lower()}"
+        """Column name if used with HORIZONTAL storage layout"""
 
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category

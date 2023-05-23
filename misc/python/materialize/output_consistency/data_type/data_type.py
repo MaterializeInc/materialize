@@ -15,5 +15,7 @@ class DataType:
 
     def __init__(self, identifier: str, type_name: str, category: DataTypeCategory):
         self.identifier = identifier
+        self.column_name = f"{identifier.lower()}_val"
+        """Column name if used with VERTICAL storage layout"""
         self.type_name = type_name
         self.category = category
