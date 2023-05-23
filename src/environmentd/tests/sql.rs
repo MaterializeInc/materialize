@@ -3175,9 +3175,29 @@ fn test_max_connections() {
             .batch_execute("SELECT 1")
             .expect("super users are still allowed to do queries");
     }
-    // after a client disconnects we can connect
-    let mut client1 = server.connect(postgres::NoTls).unwrap();
-    let _ = client1.batch_execute("SELECT 1").unwrap();
+    // after a client disconnects we can connect once the server notices the close
+    Retry::default()
+        .max_tries(10)
+        .retry(|_state| {
+            let mut client = match server.connect(postgres::NoTls) {
+                Err(e) => {
+                    let e = e
+                        .as_db_error()
+                        .unwrap_or_else(|| panic!("expect db error: {}", e));
+                    assert!(
+                        e.message()
+                            .starts_with("creating connection would violate max_connections limit"),
+                        "e={}",
+                        e
+                    );
+                    return Err(());
+                }
+                Ok(client) => client,
+            };
+            let _ = client.batch_execute("SELECT 1").unwrap();
+            Ok(())
+        })
+        .unwrap();
 
     mz_client
         .batch_execute("ALTER SYSTEM RESET max_connections")
