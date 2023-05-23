@@ -13,3 +13,5 @@
 
 mod delta_join;
 mod linear_join;
+
+pub use linear_join::LinearJoinImpl;

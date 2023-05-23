@@ -1,4 +1,3 @@
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -8,9 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
 # Check that a long-running cross join does not prevent other queries
 # from making progress.
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_mz_join_core = true
 
 > CREATE CLUSTER linear_join REPLICAS (r1 (SIZE '1'))
 

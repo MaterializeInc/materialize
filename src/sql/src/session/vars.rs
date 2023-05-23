@@ -874,6 +874,17 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+/// Whether compute rendering should use Materialize's custom linear join implementation rather
+/// than the one from Differential Dataflow.
+const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_mz_join_core"),
+    value: &false,
+    description:
+        "Feature flag indicating whether compute rendering should use Materialize's custom linear \
+         join implementation rather than the one from Differential Dataflow. (Materialize).",
+    internal: true,
+};
+
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
     value: &true,
@@ -1878,7 +1889,8 @@ impl SystemVars {
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
-            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES);
+            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+            .with_var(&ENABLE_MZ_JOIN_CORE);
         vars.refresh_internal_state();
         vars
     }
@@ -2324,6 +2336,11 @@ impl SystemVars {
 
     pub fn keep_n_source_status_history_entries(&self) -> usize {
         *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+    }
+
+    /// Returns the `enable_mz_join_core` configuration parameter.
+    pub fn enable_mz_join_core(&self) -> bool {
+        *self.expect_value(&ENABLE_MZ_JOIN_CORE)
     }
 }
 
@@ -3388,6 +3405,7 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == ENABLE_MZ_JOIN_CORE.name()
         || is_persist_config_var(name)
 }
 

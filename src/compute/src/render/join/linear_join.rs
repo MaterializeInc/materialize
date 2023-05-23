@@ -38,6 +38,57 @@ use crate::render::context::{
 };
 use crate::typedefs::RowSpine;
 
+/// Available linear join implementations.
+///
+/// Currently, compute rendering knows two implementations for linear joins:
+///
+///  * DD's `JoinCore::join_core`
+///  * `mz_join_core`, a Materialize fork of DD's `JoinCore::join_core`
+///
+/// The Materialize fork is less sophisticated than the DD version, omitting the merge-join
+/// matching strategy. As a result:
+///
+///  * `mz_join_core` is significantly slower for workloads that have a large amount of edits at
+///    different times. We consider these niche workloads for Materialize today, due to the way
+///    source ingestion works, but that might change in the future.
+///  * `mz_join_core` is able to yield within keys, making it much less likely to render the
+///    replica unresponsive than the DD implementation, which can only yield between keys.
+///
+/// TODO(teskje): Replace this with a single join implementation that supports a fueled
+/// merge-join strategy.
+#[derive(Clone, Copy, Default)]
+pub enum LinearJoinImpl {
+    #[default]
+    DifferentialDataflow,
+    Materialize,
+}
+
+impl LinearJoinImpl {
+    /// Run this join implementation on the provided arrangements.
+    fn run<G, Tr1, Tr2, L, I>(
+        &self,
+        arranged1: &Arranged<G, Tr1>,
+        arranged2: &Arranged<G, Tr2>,
+        result: L,
+    ) -> Collection<G, I::Item, Diff>
+    where
+        G: Scope,
+        G::Timestamp: Lattice,
+        Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
+        I: IntoIterator,
+        I::Item: Data,
+    {
+        match self {
+            Self::DifferentialDataflow => {
+                differential_dataflow::operators::JoinCore::join_core(arranged1, arranged2, result)
+            }
+            Self::Materialize => mz_join_core(arranged1, arranged2, result),
+        }
+    }
+}
+
 /// Different forms the streamed data might take.
 enum JoinedFlavor<G, T>
 where
@@ -126,6 +177,7 @@ where
                 // Different variants of `joined` implement this differently,
                 // and the logic is centralized there.
                 let stream = differential_join(
+                    self.linear_join_impl,
                     joined,
                     inputs[stage_plan.lookup_relation].enter_region(inner),
                     stage_plan,
@@ -176,6 +228,7 @@ where
 /// version of the join of previous inputs. This is split into its own method
 /// to enable reuse of code with different types of `prev_keyed`.
 fn differential_join<G, T>(
+    join_impl: LinearJoinImpl,
     mut joined: JoinedFlavor<G, T>,
     lookup_relation: CollectionBundle<G, Row, T>,
     LinearStagePlan {
@@ -230,13 +283,13 @@ where
         }
         JoinedFlavor::Local(local) => match arrangement {
             ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(local, oks, closure);
+                let (oks, errs2) = differential_join_inner(join_impl, local, oks, closure);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
             }
             ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(local, oks, closure);
+                let (oks, errs2) = differential_join_inner(join_impl, local, oks, closure);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
@@ -244,13 +297,13 @@ where
         },
         JoinedFlavor::Trace(trace) => match arrangement {
             ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(trace, oks, closure);
+                let (oks, errs2) = differential_join_inner(join_impl, trace, oks, closure);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
             }
             ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(trace, oks, closure);
+                let (oks, errs2) = differential_join_inner(join_impl, trace, oks, closure);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
@@ -266,6 +319,7 @@ where
 /// The return type includes an optional error collection, which may be
 /// `None` if we can determine that `closure` cannot error.
 fn differential_join_inner<G, T, Tr1, Tr2>(
+    join_impl: LinearJoinImpl,
     prev_keyed: Arranged<G, Tr1>,
     next_input: Arranged<G, Tr2>,
     closure: JoinClosure,
@@ -285,26 +339,27 @@ where
     let mut row_builder = Row::default();
 
     if closure.could_error() {
-        let (oks, err) = join_core(&prev_keyed, &next_input, move |key, old, new| {
-            let temp_storage = RowArena::new();
-            let mut datums_local = datums.borrow_with_many(&[key, old, new]);
-            closure
-                .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                .map_err(DataflowError::from)
-                .transpose()
-        })
-        .inner
-        .ok_err(|(x, t, d)| {
-            // TODO(mcsherry): consider `ok_err()` for `Collection`.
-            match x {
-                Ok(x) => Ok((x, t, d)),
-                Err(x) => Err((x, t, d)),
-            }
-        });
+        let (oks, err) = join_impl
+            .run(&prev_keyed, &next_input, move |key, old, new| {
+                let temp_storage = RowArena::new();
+                let mut datums_local = datums.borrow_with_many(&[key, old, new]);
+                closure
+                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                    .map_err(DataflowError::from)
+                    .transpose()
+            })
+            .inner
+            .ok_err(|(x, t, d)| {
+                // TODO(mcsherry): consider `ok_err()` for `Collection`.
+                match x {
+                    Ok(x) => Ok((x, t, d)),
+                    Err(x) => Err((x, t, d)),
+                }
+            });
 
         (oks.as_collection(), Some(err.as_collection()))
     } else {
-        let oks = join_core(&prev_keyed, &next_input, move |key, old, new| {
+        let oks = join_impl.run(&prev_keyed, &next_input, move |key, old, new| {
             let temp_storage = RowArena::new();
             let mut datums_local = datums.borrow_with_many(&[key, old, new]);
             closure
@@ -321,7 +376,7 @@ where
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
 /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
 /// every value returned by the iterator.
-fn join_core<G, Tr1, Tr2, L, I>(
+fn mz_join_core<G, Tr1, Tr2, L, I>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
     mut result: L,
