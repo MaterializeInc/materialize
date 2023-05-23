@@ -38,6 +38,8 @@
 //! - <http://smalldatum.blogspot.com/2015/11/read-write-space-amplification-pick-2_23.html>
 
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
@@ -46,9 +48,11 @@ use rocksdb::{DBCompactionStyle, DBCompressionType};
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
-include!(concat!(env!("OUT_DIR"), "/mz_rocksdb.tuning.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_rocksdb.config.rs"));
 
-/// A set of parameters to tune RocksDB.
+/// A set of parameters to tune RocksDB. This struct is plain-old-data, and is
+/// used to update `RocksDBConfig`, which contains some dynamic value for some
+/// parameters.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug, Arbitrary)]
 pub struct RocksDBTuningParameters {
     /// RocksDB has 2 primary styles of compaction:
@@ -117,6 +121,9 @@ pub struct RocksDBTuningParameters {
 
     /// See `compression_type` for more information.
     pub bottommost_compression_type: CompressionType,
+
+    /// The size of the `multi_get` and `multi_put` batches sent to RocksDB. The default is 1024.
+    pub batch_size: usize,
 }
 
 impl Default for RocksDBTuningParameters {
@@ -131,6 +138,7 @@ impl Default for RocksDBTuningParameters {
             parallelism: defaults::DEFAULT_PARALLELISM,
             compression_type: defaults::DEFAULT_COMPRESSION_TYPE,
             bottommost_compression_type: defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+            batch_size: defaults::DEFAULT_BATCH_SIZE,
         }
     }
 }
@@ -145,6 +153,7 @@ impl RocksDBTuningParameters {
         parallelism: Option<i32>,
         compression_type: CompressionType,
         bottommost_compression_type: CompressionType,
+        batch_size: usize,
     ) -> Result<Self, anyhow::Error> {
         Ok(Self {
             compaction_style,
@@ -172,60 +181,8 @@ impl RocksDBTuningParameters {
             },
             compression_type,
             bottommost_compression_type,
+            batch_size,
         })
-    }
-
-    /// Apply these tuning parameters to a `rocksdb::Options`. Some may
-    /// be applied to a shared `Env` underlying the `Options`.
-    pub fn apply_to_options(&self, options: &mut rocksdb::Options) {
-        let RocksDBTuningParameters {
-            compaction_style,
-            optimize_compaction_memtable_budget,
-            level_compaction_dynamic_level_bytes,
-            universal_compaction_target_ratio,
-            parallelism,
-            compression_type,
-            bottommost_compression_type,
-        } = self;
-
-        options.set_compression_type((*compression_type).into());
-
-        if *bottommost_compression_type != CompressionType::None {
-            options.set_bottommost_compression_type((*bottommost_compression_type).into())
-        }
-
-        options.set_compaction_style((*compaction_style).into());
-        match compaction_style {
-            CompactionStyle::Level => {
-                options.optimize_level_style_compaction(*optimize_compaction_memtable_budget);
-                options.set_level_compaction_dynamic_level_bytes(
-                    *level_compaction_dynamic_level_bytes,
-                );
-            }
-            CompactionStyle::Universal => {
-                options.optimize_universal_style_compaction(*optimize_compaction_memtable_budget);
-                options.set_level_compaction_dynamic_level_bytes(
-                    *level_compaction_dynamic_level_bytes,
-                );
-
-                let mut universal_options = rocksdb::UniversalCompactOptions::default();
-                universal_options
-                    .set_max_size_amplification_percent(*universal_compaction_target_ratio);
-
-                options.set_universal_compaction_options(&universal_options);
-            }
-        }
-
-        let parallelism = if let Some(parallelism) = parallelism {
-            *parallelism
-        } else {
-            // TODO(guswynn): it's unclear if this should be `get_physical`. The
-            // RocksDB docs do not make it clear.
-            num_cpus::get()
-                .try_into()
-                .expect("More than 3 billion cores")
-        };
-        options.increase_parallelism(parallelism);
     }
 }
 
@@ -357,6 +314,7 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             bottommost_compression_type: Some(compression_into_proto(
                 &self.bottommost_compression_type,
             )),
+            batch_size: u64::cast_from(self.batch_size),
         }
     }
 
@@ -417,7 +375,148 @@ impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
             parallelism: proto.parallelism,
             compression_type: compression_from_proto(proto.compression_type)?,
             bottommost_compression_type: compression_from_proto(proto.bottommost_compression_type)?,
+            batch_size: usize::cast_from(proto.batch_size),
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RocksDBDynamicConfig {
+    batch_size: Arc<AtomicUsize>,
+}
+
+impl RocksDBDynamicConfig {
+    pub(crate) fn batch_size(&self) -> usize {
+        // SeqCst is probably not required here, but its the easiest to reason about
+        self.batch_size.load(Ordering::SeqCst)
+    }
+}
+
+/// Configurable options for a `RocksDBInstance`. Some can be updated
+/// dynamically, as cloned instances of this object will shared dynamic values.
+#[derive(Debug, Clone)]
+pub struct RocksDBConfig {
+    compaction_style: CompactionStyle,
+    optimize_compaction_memtable_budget: usize,
+    level_compaction_dynamic_level_bytes: bool,
+    universal_compaction_target_ratio: i32,
+    parallelism: Option<i32>,
+    compression_type: CompressionType,
+    bottommost_compression_type: CompressionType,
+    pub(crate) dynamic: RocksDBDynamicConfig,
+}
+
+impl Default for RocksDBConfig {
+    fn default() -> Self {
+        RocksDBConfig::new(RocksDBTuningParameters::default())
+    }
+}
+
+impl RocksDBConfig {
+    fn new(params: RocksDBTuningParameters) -> Self {
+        let RocksDBTuningParameters {
+            compaction_style,
+            optimize_compaction_memtable_budget,
+            level_compaction_dynamic_level_bytes,
+            universal_compaction_target_ratio,
+            parallelism,
+            compression_type,
+            bottommost_compression_type,
+            batch_size,
+        } = params;
+
+        Self {
+            compaction_style,
+            optimize_compaction_memtable_budget,
+            level_compaction_dynamic_level_bytes,
+            universal_compaction_target_ratio,
+            parallelism,
+            compression_type,
+            bottommost_compression_type,
+            dynamic: RocksDBDynamicConfig {
+                batch_size: Arc::new(AtomicUsize::new(batch_size)),
+            },
+        }
+    }
+
+    /// Apply the new parameters to the config. Dynamic parameters
+    /// are updated in place.
+    pub fn apply(&mut self, params: RocksDBTuningParameters) {
+        let RocksDBTuningParameters {
+            compaction_style,
+            optimize_compaction_memtable_budget,
+            level_compaction_dynamic_level_bytes,
+            universal_compaction_target_ratio,
+            parallelism,
+            compression_type,
+            bottommost_compression_type,
+            batch_size,
+        } = params;
+
+        self.compaction_style = compaction_style;
+        self.optimize_compaction_memtable_budget = optimize_compaction_memtable_budget;
+        self.level_compaction_dynamic_level_bytes = level_compaction_dynamic_level_bytes;
+        self.universal_compaction_target_ratio = universal_compaction_target_ratio;
+        self.parallelism = parallelism;
+        self.compression_type = compression_type;
+        self.bottommost_compression_type = bottommost_compression_type;
+
+        // SeqCst is probably not required here, but its the easiest to reason about
+        self.dynamic.batch_size.store(batch_size, Ordering::SeqCst);
+    }
+
+    /// Apply these tuning parameters to a `rocksdb::Options`. Some may
+    /// be applied to a shared `Env` underlying the `Options`.
+    pub fn apply_to_options(&self, options: &mut rocksdb::Options) {
+        let RocksDBConfig {
+            compaction_style,
+            optimize_compaction_memtable_budget,
+            level_compaction_dynamic_level_bytes,
+            universal_compaction_target_ratio,
+            parallelism,
+            compression_type,
+            bottommost_compression_type,
+            dynamic: _,
+        } = self;
+
+        options.set_compression_type((*compression_type).into());
+
+        if *bottommost_compression_type != CompressionType::None {
+            options.set_bottommost_compression_type((*bottommost_compression_type).into())
+        }
+
+        options.set_compaction_style((*compaction_style).into());
+        match compaction_style {
+            CompactionStyle::Level => {
+                options.optimize_level_style_compaction(*optimize_compaction_memtable_budget);
+                options.set_level_compaction_dynamic_level_bytes(
+                    *level_compaction_dynamic_level_bytes,
+                );
+            }
+            CompactionStyle::Universal => {
+                options.optimize_universal_style_compaction(*optimize_compaction_memtable_budget);
+                options.set_level_compaction_dynamic_level_bytes(
+                    *level_compaction_dynamic_level_bytes,
+                );
+
+                let mut universal_options = rocksdb::UniversalCompactOptions::default();
+                universal_options
+                    .set_max_size_amplification_percent(*universal_compaction_target_ratio);
+
+                options.set_universal_compaction_options(&universal_options);
+            }
+        }
+
+        let parallelism = if let Some(parallelism) = parallelism {
+            *parallelism
+        } else {
+            // TODO(guswynn): it's unclear if this should be `get_physical`. The
+            // RocksDB docs do not make it clear.
+            num_cpus::get()
+                .try_into()
+                .expect("More than 3 billion cores")
+        };
+        options.increase_parallelism(parallelism);
     }
 }
 
@@ -441,6 +540,10 @@ pub mod defaults {
     pub const DEFAULT_COMPRESSION_TYPE: CompressionType = CompressionType::Lz4;
 
     pub const DEFAULT_BOTTOMMOST_COMPRESSION_TYPE: CompressionType = CompressionType::Zstd;
+
+    /// A reasonable default batch size for gets and puts in RocksDB. Based
+    /// on advice here: <https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ>.
+    pub const DEFAULT_BATCH_SIZE: usize = 1024;
 }
 
 #[cfg(test)]
@@ -460,10 +563,22 @@ mod tests {
             defaults::DEFAULT_PARALLELISM,
             defaults::DEFAULT_COMPRESSION_TYPE,
             defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+            defaults::DEFAULT_BATCH_SIZE,
         )
         .unwrap();
 
         assert_eq!(r, RocksDBTuningParameters::default());
+    }
+
+    #[mz_ore::test]
+    fn dynamic_defaults() {
+        assert_eq!(
+            RocksDBConfig::default()
+                .dynamic
+                .batch_size
+                .load(Ordering::SeqCst),
+            defaults::DEFAULT_BATCH_SIZE
+        )
     }
 
     #[mz_ore::test]

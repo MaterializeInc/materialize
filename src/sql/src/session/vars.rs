@@ -588,7 +588,7 @@ const UPSERT_SOURCE_DISK_DEFAULT: ServerVar<bool> = ServerVar {
 mod upsert_rocksdb {
     use std::str::FromStr;
 
-    use mz_rocksdb::tuning::{CompactionStyle, CompressionType};
+    use mz_rocksdb::config::{CompactionStyle, CompressionType};
 
     use super::*;
 
@@ -632,7 +632,7 @@ mod upsert_rocksdb {
         name: UncasedStr::new("upsert_rocksdb_compaction_style"),
         value: &mz_rocksdb::defaults::DEFAULT_COMPACTION_STYLE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  sources. Described in the `mz_rocksdb::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
@@ -640,7 +640,7 @@ mod upsert_rocksdb {
         name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
         value: &mz_rocksdb::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  sources. Described in the `mz_rocksdb::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
@@ -648,7 +648,7 @@ mod upsert_rocksdb {
         name: UncasedStr::new("upsert_rocksdb_level_compaction_dynamic_level_bytes"),
         value: &mz_rocksdb::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  sources. Described in the `mz_rocksdb::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
@@ -656,7 +656,7 @@ mod upsert_rocksdb {
         name: UncasedStr::new("upsert_rocksdb_universal_compaction_ratio"),
         value: &mz_rocksdb::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  sources. Described in the `mz_rocksdb::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
@@ -664,7 +664,7 @@ mod upsert_rocksdb {
         name: UncasedStr::new("upsert_rocksdb_parallelism"),
         value: &mz_rocksdb::defaults::DEFAULT_PARALLELISM,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  sources. Described in the `mz_rocksdb::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
@@ -672,7 +672,7 @@ mod upsert_rocksdb {
         name: UncasedStr::new("upsert_rocksdb_compression_type"),
         value: &mz_rocksdb::defaults::DEFAULT_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  sources. Described in the `mz_rocksdb::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
@@ -680,8 +680,17 @@ mod upsert_rocksdb {
         name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
         value: &mz_rocksdb::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
-                  sources. Described in the `mz_rocksdb::tuning` module. \
+                  sources. Described in the `mz_rocksdb::config` module. \
                   Only takes effect on source restart (Materialize).",
+        internal: true,
+    };
+
+    pub static UPSERT_ROCKSDB_BATCH_SIZE: ServerVar<usize> = ServerVar {
+        name: UncasedStr::new("upsert_rocksdb_batch_size"),
+        value: &mz_rocksdb::defaults::DEFAULT_BATCH_SIZE,
+        description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
+                  sources. Described in the `mz_rocksdb::config` module. \
+                  Can be changed dynamically (Materialize).",
         internal: true,
     };
 }
@@ -1660,6 +1669,7 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
+            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
             .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
@@ -1994,7 +2004,7 @@ impl SystemVars {
         *self.expect_value(&UPSERT_SOURCE_DISK_DEFAULT)
     }
 
-    pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb::tuning::CompactionStyle {
+    pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb::config::CompactionStyle {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
     }
 
@@ -2014,14 +2024,18 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
     }
 
-    pub fn upsert_rocksdb_compression_type(&self) -> mz_rocksdb::tuning::CompressionType {
+    pub fn upsert_rocksdb_compression_type(&self) -> mz_rocksdb::config::CompressionType {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
     }
 
     pub fn upsert_rocksdb_bottommost_compression_type(
         &self,
-    ) -> mz_rocksdb::tuning::CompressionType {
+    ) -> mz_rocksdb::config::CompressionType {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
+    }
+
+    pub fn upsert_rocksdb_batch_size(&self) -> usize {
+        *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE)
     }
 
     /// Returns the `persist_blob_target_size` configuration parameter.
@@ -3514,6 +3528,7 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE.name()
         || name == upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE.name()
+        || name == upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE.name()
 }
 
 /// Returns whether the named variable is a persist configuration parameter.

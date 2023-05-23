@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use itertools::Itertools;
 use mz_rocksdb::RocksDBInstance;
 
 use crate::render::upsert::types::{
@@ -15,31 +14,15 @@ use crate::render::upsert::types::{
 };
 use crate::render::upsert::UpsertKey;
 
-/// The maximum batch size we will write to rocksdb.
-///
-/// This value was derived from testing with the `upsert_open_loop` example,
-/// and advice here: <https://github.com/facebook/rocksdb/wiki/RocksDB-FAQ>.
-// TODO(guswynn|moulimukherjee): Make this configurable.
-pub const BATCH_SIZE: usize = 1024;
-
 /// A `UpsertStateBackend` implementation backed by RocksDB.
 /// This is currently untested, and simply compiles.
 pub struct RocksDB {
     rocksdb: RocksDBInstance<UpsertKey, StateValue>,
-
-    // scratch vector used in the `multi_get` implementation.
-    multi_get_scratch: Vec<UpsertKey>,
-    // scratch vector used in the `multi_get` implementation.
-    multi_get_result_scratch: Vec<Option<mz_rocksdb::GetResult<StateValue>>>,
 }
 
 impl RocksDB {
     pub fn new(rocksdb: RocksDBInstance<UpsertKey, StateValue>) -> Self {
-        Self {
-            rocksdb,
-            multi_get_scratch: Vec::new(),
-            multi_get_result_scratch: Vec::new(),
-        }
+        Self { rocksdb }
     }
 }
 
@@ -50,43 +33,37 @@ impl UpsertStateBackend for RocksDB {
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
     {
         let mut p_stats = PutStats::default();
-        let mut puts = puts.into_iter().peekable();
+        let stats = self
+            .rocksdb
+            .multi_put(puts.into_iter().map(
+                |(
+                    k,
+                    PutValue {
+                        value,
+                        previous_persisted_size,
+                    },
+                )| {
+                    match (&value, previous_persisted_size) {
+                        (Some(_), Some(ps)) => {
+                            p_stats.size_diff -= ps;
+                        }
+                        (None, Some(ps)) => {
+                            p_stats.size_diff -= ps;
+                            p_stats.values_diff -= 1;
+                        }
+                        (Some(_), None) => {
+                            p_stats.values_diff += 1;
+                        }
+                        (None, None) => {}
+                    }
+                    (k, value)
+                },
+            ))
+            .await?;
+        p_stats.processed_puts += stats.processed_puts;
+        let size: i64 = stats.size_written.try_into().expect("less than i64 size");
+        p_stats.size_diff += size;
 
-        if puts.peek().is_some() {
-            let puts = puts.chunks(BATCH_SIZE);
-            for puts in puts.into_iter() {
-                let stats = self
-                    .rocksdb
-                    .multi_put(puts.map(
-                        |(
-                            k,
-                            PutValue {
-                                value,
-                                previous_persisted_size,
-                            },
-                        )| {
-                            match (&value, previous_persisted_size) {
-                                (Some(_), Some(ps)) => {
-                                    p_stats.size_diff -= ps;
-                                }
-                                (None, Some(ps)) => {
-                                    p_stats.size_diff -= ps;
-                                    p_stats.values_diff -= 1;
-                                }
-                                (Some(_), None) => {
-                                    p_stats.values_diff += 1;
-                                }
-                                (None, None) => {}
-                            }
-                            (k, value)
-                        },
-                    ))
-                    .await?;
-                p_stats.processed_puts += stats.processed_puts;
-                let size: i64 = stats.size_written.try_into().expect("less than i64 size");
-                p_stats.size_diff += size;
-            }
-        }
         Ok(p_stats)
     }
 
@@ -100,42 +77,23 @@ impl UpsertStateBackend for RocksDB {
         R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
     {
         let mut g_stats = GetStats::default();
-        let mut gets = gets.into_iter().peekable();
-        if gets.peek().is_some() {
-            let gets = gets.chunks(BATCH_SIZE);
-            let results_out = results_out.into_iter().chunks(BATCH_SIZE);
+        let stats = self
+            .rocksdb
+            .multi_get(gets, results_out, |value| {
+                value.map_or(
+                    UpsertValueAndSize {
+                        value: None,
+                        size: None,
+                    },
+                    |v| UpsertValueAndSize {
+                        value: Some(v.value),
+                        size: Some(v.size),
+                    },
+                )
+            })
+            .await?;
 
-            for (gets, results_out) in gets.into_iter().zip_eq(results_out.into_iter()) {
-                self.multi_get_scratch.clear();
-                self.multi_get_result_scratch.clear();
-                self.multi_get_scratch.extend(gets);
-                self.multi_get_result_scratch
-                    .extend((0..self.multi_get_scratch.len()).map(|_| None));
-
-                let stats = self
-                    .rocksdb
-                    .multi_get(
-                        self.multi_get_scratch.drain(..),
-                        self.multi_get_result_scratch.iter_mut(),
-                    )
-                    .await?;
-
-                for (get, result_out) in self.multi_get_result_scratch.drain(..).zip_eq(results_out)
-                {
-                    *result_out = get.map_or(
-                        UpsertValueAndSize {
-                            value: None,
-                            size: None,
-                        },
-                        |v| UpsertValueAndSize {
-                            value: Some(v.value),
-                            size: Some(v.size),
-                        },
-                    )
-                }
-                g_stats.processed_gets += stats.processed_gets;
-            }
-        }
+        g_stats.processed_gets += stats.processed_gets;
         Ok(g_stats)
     }
 }

@@ -74,7 +74,7 @@
 // END LINT CONFIG
 
 use mz_ore::metrics::HistogramVecExt;
-use mz_rocksdb::{Options, RocksDBInstance, RocksDBMetrics, RocksDBTuningParameters};
+use mz_rocksdb::{InstanceOptions, RocksDBConfig, RocksDBInstance, RocksDBMetrics};
 use prometheus::{HistogramOpts, HistogramVec};
 
 fn metrics_for_tests() -> Result<Box<RocksDBMetrics>, anyhow::Error> {
@@ -96,8 +96,8 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     let mut instance = RocksDBInstance::<String, String>::new(
         t.path(),
-        Options::defaults_with_env(rocksdb::Env::new()?),
-        RocksDBTuningParameters::default(),
+        InstanceOptions::defaults_with_env(rocksdb::Env::new()?),
+        RocksDBConfig::default(),
         metrics_for_tests()?,
         bincode::DefaultOptions::new(),
     )
@@ -105,7 +105,7 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     let mut ret = vec![Default::default(); 1];
     instance
-        .multi_get(vec!["one".to_string()], ret.iter_mut())
+        .multi_get(vec!["one".to_string()], ret.iter_mut(), |value| value)
         .await?;
 
     assert_eq!(
@@ -125,7 +125,11 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     let mut ret = vec![Default::default(); 2];
     instance
-        .multi_get(vec!["one".to_string(), "two".to_string()], ret.iter_mut())
+        .multi_get(
+            vec!["one".to_string(), "two".to_string()],
+            ret.iter_mut(),
+            |value| value,
+        )
         .await?;
 
     assert_eq!(
@@ -145,7 +149,11 @@ async fn basic() -> Result<(), anyhow::Error> {
 
     let mut ret = vec![Default::default(); 2];
     instance
-        .multi_get(vec!["one".to_string(), "two".to_string()], ret.iter_mut())
+        .multi_get(
+            vec!["one".to_string(), "two".to_string()],
+            ret.iter_mut(),
+            |value| value,
+        )
         .await?;
 
     assert_eq!(
