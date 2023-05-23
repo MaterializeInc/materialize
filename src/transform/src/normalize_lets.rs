@@ -699,22 +699,9 @@ mod inlining {
                 // Determine the first `id'` at which any inlining offer must expire.
                 // An inlining offer expires because it references an `id'` that is not yet bound,
                 // indicating a reference to the *prior* iterate of that identifier. Inlining the
-                // expression once `id'` becomes bound would advance the reference to be to the
+                // expression once `id'` becomes bound would advance the reference to be the
                 // *current* iterate of the identifier.
-                expr.visit_pre(|e| {
-                    if let MirRelationExpr::Get {
-                        id: Id::Local(referenced_id),
-                        ..
-                    } = e
-                    {
-                        if referenced_id >= &id {
-                            expire_offers
-                                .entry(*referenced_id)
-                                .or_insert_with(Vec::new)
-                                .push(id);
-                        }
-                    }
-                });
+                MirRelationExpr::collect_expirations(id, &expr, &mut expire_offers);
 
                 // Gets for `id` only occur in later expressions, so this should still be correct.
                 let num_gets = counts.get(&id).map(|x| *x).unwrap_or(0);
@@ -746,13 +733,11 @@ mod inlining {
                 // We must now discard any offers that reference `id`, as it is no longer correct
                 // to inline such an offer as it would have access to this iteration's binding of
                 // `id` rather than the prior iteration's binding of `id`.
-                if let Some(expirations) = expire_offers.remove(&id) {
-                    for expired_id in expirations.into_iter() {
-                        if let Some(offer) = inline_offers.remove(&expired_id) {
-                            expired_offers.push((expired_id, offer));
-                        }
-                    }
-                }
+                expired_offers.extend(MirRelationExpr::do_expirations(
+                    id,
+                    &mut expire_offers,
+                    &mut inline_offers,
+                ));
             }
             // Complete the inlining in `body`.
             inline_lets_helper(body, &mut inline_offers)?;
