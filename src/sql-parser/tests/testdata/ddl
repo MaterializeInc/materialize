@@ -1228,6 +1228,13 @@ CREATE CLUSTER REPLICA default.replica IDLE ARRANGEMENT MERGE EFFORT = 0
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Number("0"))) }] } })
 
 parse-statement
+CREATE CLUSTER REPLICA default.replica IDLE ARRANGEMENT MERGE EFFORT NULL
+----
+CREATE CLUSTER REPLICA default.replica IDLE ARRANGEMENT MERGE EFFORT = NULL
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: IdleArrangementMergeEffort, value: Some(Value(Null)) }] } })
+
+parse-statement
 CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESSES ('1', '2'), COMPUTECTL ADDRESSES ('1', '2'), COMPUTE ADDRESSES ('3', '4'), WORKERS 2, INTROSPECTION INTERVAL = NULL
 ----
 CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESSES = ('1', '2'), COMPUTECTL ADDRESSES = ('1', '2'), COMPUTE ADDRESSES = ('3', '4'), WORKERS = 2, INTROSPECTION INTERVAL = NULL

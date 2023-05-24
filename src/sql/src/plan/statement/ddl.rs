@@ -17,7 +17,10 @@ use std::fmt::Write;
 use std::iter;
 
 use itertools::Itertools;
-use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
+use mz_controller::clusters::{
+    ClusterId, ReplicaId, DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT,
+    DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS,
+};
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::AvroSchemaGenerator;
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
@@ -100,7 +103,7 @@ use crate::plan::query::{ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
-use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
+use crate::plan::with_options::{self, OptionalInterval, OptionalU32, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
@@ -2761,7 +2764,7 @@ generate_extracted_config!(
     (Workers, u16),
     (IntrospectionInterval, OptionalInterval),
     (IntrospectionDebugging, bool, Default(false)),
-    (IdleArrangementMergeEffort, u32)
+    (IdleArrangementMergeEffort, OptionalU32)
 );
 
 fn plan_replica_config(
@@ -2795,6 +2798,9 @@ fn plan_replica_config(
         }
         None => None,
     };
+    let idle_arrangement_merge_effort = idle_arrangement_merge_effort
+        .map(|OptionalU32(i)| i)
+        .unwrap_or(Some(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT));
     let compute = ComputeReplicaConfig {
         introspection,
         idle_arrangement_merge_effort,

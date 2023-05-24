@@ -334,6 +334,33 @@ impl ImpliedValue for u32 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+pub struct OptionalU32(pub Option<u32>);
+
+impl From<u32> for OptionalU32 {
+    fn from(i: u32) -> OptionalU32 {
+        OptionalU32(Some(i))
+    }
+}
+
+impl TryFromValue<Value> for OptionalU32 {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        Ok(match v {
+            Value::Null => OptionalU32(None),
+            v => u32::try_from_value(v)?.into(),
+        })
+    }
+    fn name() -> String {
+        "optional uint4".to_string()
+    }
+}
+
+impl ImpliedValue for OptionalU32 {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an integer value or NULL")
+    }
+}
+
 impl TryFromValue<Value> for u64 {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {

@@ -35,7 +35,7 @@ use crate::service::{ComputeClient, ComputeGrpcClient};
 pub(super) struct ReplicaConfig {
     pub location: ClusterReplicaLocation,
     pub logging: LoggingConfig,
-    pub idle_arrangement_merge_effort: u32,
+    pub idle_arrangement_merge_effort: Option<u32>,
 }
 
 /// State for a single replica.

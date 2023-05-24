@@ -160,11 +160,10 @@ where
         .await?;
 
         let mut worker_config = WorkerConfig::default();
+        let idle_merge_effort = config.idle_arrangement_merge_effort.map(isize::cast_from);
         differential_dataflow::configure(
             &mut worker_config,
-            &differential_dataflow::Config {
-                idle_merge_effort: Some(isize::cast_from(config.idle_arrangement_merge_effort)),
-            },
+            &differential_dataflow::Config { idle_merge_effort },
         );
 
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {

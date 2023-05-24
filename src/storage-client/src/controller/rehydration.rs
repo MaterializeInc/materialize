@@ -255,7 +255,7 @@ where
                 //
                 // TODO(guswynn): cluster-unification: ensure this is cleaned up when
                 // the compute and storage command streams are merged.
-                idle_arrangement_merge_effort: 1337,
+                idle_arrangement_merge_effort: Some(1337),
             };
             let dests = location
                 .ctl_addrs

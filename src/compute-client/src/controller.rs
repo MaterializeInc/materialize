@@ -402,7 +402,7 @@ impl<T> ActiveComputeController<'_, T> {
 
 /// Default value for `idle_arrangement_merge_effort` if none is supplied.
 // TODO(#16906): Test if 1000 is a good default.
-const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: u32 = 1000;
+pub const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: u32 = 1000;
 
 impl<T> ActiveComputeController<'_, T>
 where
@@ -422,10 +422,6 @@ where
             None => (false, Duration::from_secs(1)),
         };
 
-        let idle_arrangement_merge_effort = config
-            .idle_arrangement_merge_effort
-            .unwrap_or(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT);
-
         let replica_config = ReplicaConfig {
             location,
             logging: LoggingConfig {
@@ -434,7 +430,7 @@ where
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
             },
-            idle_arrangement_merge_effort,
+            idle_arrangement_merge_effort: config.idle_arrangement_merge_effort,
         };
 
         self.instance(instance_id)?
