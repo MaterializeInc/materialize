@@ -80,7 +80,7 @@ impl Handle {
 pub struct Client {
     build_info: &'static BuildInfo,
     inner_cmd_tx: mpsc::UnboundedSender<Command>,
-    id_alloc: Arc<IdAllocator<ConnectionId>>,
+    id_alloc: IdAllocator<ConnectionId>,
     now: NowFn,
     metrics: Metrics,
 }
@@ -95,7 +95,7 @@ impl Client {
         Client {
             build_info,
             inner_cmd_tx: cmd_tx,
-            id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
+            id_alloc: IdAllocator::new(1, 1 << 16),
             now,
             metrics,
         }
