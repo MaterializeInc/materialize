@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{process::Command, path::{PathBuf, Path}, env};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use mz_cloud_api::client::environment::Environment;
 use mz_frontegg_auth::AppPassword;
@@ -69,17 +73,20 @@ impl Client {
     }
 
     fn find<P>(&self, exe_name: P) -> Option<PathBuf>
-    where P: AsRef<Path>,
+    where
+        P: AsRef<Path>,
     {
         env::var_os("PATH").and_then(|paths| {
-            env::split_paths(&paths).filter_map(|dir| {
-                let full_path = dir.join(&exe_name);
-                if full_path.is_file() {
-                    Some(full_path)
-                } else {
-                    None
-                }
-            }).next()
+            env::split_paths(&paths)
+                .filter_map(|dir| {
+                    let full_path = dir.join(&exe_name);
+                    if full_path.is_file() {
+                        Some(full_path)
+                    } else {
+                        None
+                    }
+                })
+                .next()
         })
     }
 

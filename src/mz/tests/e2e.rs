@@ -75,7 +75,7 @@
 
 use std::{fs, time::Duration};
 
-use assert_cmd::{Command, assert::Assert};
+use assert_cmd::{assert::Assert, Command};
 use mz::{config_file::ConfigFile, ui::OptionalStr};
 use serde::{Deserialize, Serialize};
 use tabled::{Style, Table, Tabled};
@@ -106,7 +106,6 @@ fn test_version() {
         .success()
         .stdout(format!("mz {}\n", expected_version));
 }
-
 
 fn init_config_file() {
     let main_config_file = format!(
@@ -243,7 +242,7 @@ fn test_e2e() {
             value: "<unset>",
         },
     ];
-    let command_output = Table::new(vec).with(Style::psql()).to_string();
+    let expected_command_output = Table::new(vec).with(Style::psql()).to_string();
     let binding = cmd()
         .arg("profile")
         .arg("config")
@@ -251,10 +250,9 @@ fn test_e2e() {
         .assert()
         .success();
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let output = output_to_string(binding);
 
-    assert!(stdout.trim() == command_output.trim());
+    assert!(output.trim() == expected_command_output.trim());
 
     // Assert `mz profile config get region`
     let binding = cmd()
@@ -265,10 +263,9 @@ fn test_e2e() {
         .assert()
         .success();
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let output = output_to_string(binding);
 
-    assert!(stdout.trim() == "aws/us-east-1");
+    assert!(output.trim() == "aws/us-east-1");
 
     // Assert `mz profile config set region`
     cmd()
@@ -288,10 +285,9 @@ fn test_e2e() {
         .assert()
         .success();
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let output = output_to_string(binding);
 
-    assert!(stdout.trim() == "aws/eu-west-1");
+    assert!(output.trim() == "aws/eu-west-1");
 
     // Test - `mz app-password`
     //
@@ -304,20 +300,16 @@ fn test_e2e() {
         .arg(&description.to_string())
         .assert()
         .success();
+    let output = output_to_string(binding);
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
-    assert!(stdout.starts_with("mzp_"));
+    assert!(output.starts_with("mzp_"));
 
     // Assert `mz app-password list`
 
     let binding = cmd().arg("app-password").arg("list").assert().success();
+    let output = output_to_string(binding);
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
-    assert!(stdout.contains(&description.to_string()));
+    assert!(output.contains(&description.to_string()));
 
     // Test - `mz secrets`
     //
@@ -363,11 +355,9 @@ fn test_e2e() {
         .args(vec!["--format", "json"])
         .assert()
         .success();
+    let output = output_to_string(binding);
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
-    assert!(stdout.contains(&email.to_string()));
+    assert!(output.contains(&email.to_string()));
 
     // Assert `mz user remove` + `mz user list`
     cmd()
@@ -384,15 +374,14 @@ fn test_e2e() {
         .assert()
         .success();
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let output = output_to_string(binding);
 
-    assert!(!stdout.contains(&email.to_string()));
+    assert!(!output.contains(&email.to_string()));
 
     // Test - `mz region`
     //
     // Assert `mz region list`
-    #[derive(Deserialize, Serialize, Tabled)]
+    #[derive(Clone, Copy, Deserialize, Serialize, Tabled)]
     pub struct Region<'a> {
         #[tabled(rename = "Region")]
         region: &'a str,
@@ -410,40 +399,63 @@ fn test_e2e() {
             status: "enabled",
         },
     ];
-    let command_output = Table::new(vec).with(Style::psql()).to_string();
+    let expected_command_output = Table::new(vec.clone()).with(Style::psql()).to_string();
+
     let binding = cmd().arg("region").arg("list").assert().success();
+    let output = output_to_string(binding);
 
-    let output = binding.get_output();
+    assert!(output.trim() == expected_command_output.trim());
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // Assert `mz region list` using JSON
+    let binding = cmd()
+        .args(vec!["--format", "json"])
+        .arg("region")
+        .arg("list")
+        .assert()
+        .success();
+    let output = output_to_string(binding);
+    let expected_command_output = serde_json::to_string(&vec).unwrap();
 
-    assert!(stdout.trim() == command_output.trim());
+    assert!(output.trim() == expected_command_output.trim());
+
+    // TODO:
+    // Assert `mz region list` using CSV
+    // let binding = cmd().args(vec!["--format", "CSV"]).arg("region").arg("list").assert().success();
+    // let output = output_to_string(binding);
 
     // Assert `mz region show`
     // The path does not always contains the pg_isready binary.
     // let binding = cmd().arg("region").arg("show").env("PATH", "/opt/homebrew/bin/").assert().success();
-    let binding = cmd().arg("region").arg("show").env("PATH", "/opt/homebrew/bin/").assert().success();
+    cmd()
+        .arg("region")
+        .arg("enable")
+        .env("PATH", "/opt/homebrew/bin/")
+        .assert()
+        .success();
 
-    let output = binding.get_output();
+    let binding = cmd()
+        .arg("region")
+        .arg("show")
+        .env("PATH", "/opt/homebrew/bin/")
+        .assert()
+        .success();
+    let output = output_to_string(binding);
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    println!("{}", stdout.trim());
-    assert!(stdout.trim().starts_with(&format!("Healthy: \t{}", "yes")));
+    assert!(output.trim().starts_with(&format!("Healthy: \tyes")));
 
-    // TODO:
-    //  cmd()
-    //     .arg("region")
-    //     .arg("enable")
-    //     .assert()
-    //     .success();
+    // Test - `mz sql`
+    //
+    // Assert `mz sql -- -q -c "SELECT 1"
+    cmd()
+        .arg("sql")
+        .arg("--")
+        .arg("-q")
+        .arg("-c")
+        .arg("\"SELECT 1\"")
+        .assert()
+        .success();
 
-    let binding = cmd().arg("sql").arg("--").arg("-c").arg("\"SELECT 1\"").assert().success();
     // TODO: Remove an app-password. Breaks the CLI config. The same if the app-password is invalid.
     // TODO: Add more tests for config_set and config_remove when you implement the actual commands.
     // TODO: Profile init + Profile remove
-    // TODO: Add more interactions with Materialize
-    //  cmd()
-    //      .arg("sql")
-    //      .assert()
-    //      .success();
 }
