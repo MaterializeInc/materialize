@@ -419,8 +419,15 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "expf64"]
-    fn exp(a: f64) -> f64 {
-        a.exp()
+    fn exp(a: f64) -> Result<f64, EvalError> {
+        let r = a.exp();
+        if r.is_infinite() {
+            return Err(EvalError::FloatOverflow);
+        }
+        if r == 0.0 {
+            return Err(EvalError::FloatUnderflow);
+        }
+        Ok(r)
     }
 );
 
