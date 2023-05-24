@@ -208,11 +208,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     as reported in the mz_storage_usage table are as expected.
     """
     parser.add_argument("tests", nargs="*", default=None, help="run specified tests")
+    parser.add_argument("--partitioned-scan", default=False, action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
     c.up("redpanda", "postgres", "materialized")
 
     c.up("testdrive", persistent=True)
+
+    if args.partitioned_scan:
+        c.sql(
+            "ALTER SYSTEM SET persist_usage_parallel_scans = 'on'",
+            user="mz_system",
+            port=6877,
+        )
 
     for database_object in database_objects:
         if (
