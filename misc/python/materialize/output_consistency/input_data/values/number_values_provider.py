@@ -31,7 +31,6 @@ for num_data_type in NUMERIC_DATA_TYPES:
     values_of_type = DataTypeWithValues(num_data_type)
     VALUES_PER_NUMERIC_DATA_TYPE[num_data_type] = values_of_type
 
-    values_of_type.add_raw_value("NULL", "NULL", {ExpressionCharacteristics.NULL})
     values_of_type.add_raw_value("0", "ZERO", {ExpressionCharacteristics.ZERO})
     values_of_type.add_raw_value(
         "1",
