@@ -184,14 +184,13 @@ fn filter_may_match(
 
     let total_count = stats.len();
     for (id, _) in relation_type.column_types.iter().enumerate() {
-        let min = stats.col_min(id, &arena);
-        let max = stats.col_max(id, &arena);
+        let min_max = stats.col_min_max(id, &arena);
         let nulls = stats.col_null_count(id);
         let json_range = stats.col_json(id, &arena);
 
-        let value_range = match (total_count, min, max, nulls) {
-            (Some(total_count), _, _, Some(nulls)) if total_count == nulls => ResultSpec::nothing(),
-            (_, Some(min), Some(max), _) => ResultSpec::value_between(min, max),
+        let value_range = match (total_count, min_max, nulls) {
+            (Some(total_count), _, Some(nulls)) if total_count == nulls => ResultSpec::nothing(),
+            (_, Some((min, max)), _) => ResultSpec::value_between(min, max),
             _ => ResultSpec::value_all(),
         };
 
@@ -502,14 +501,20 @@ impl PersistSourceDataStats<'_> {
         num_oks.map(|num_oks| num_results - num_oks)
     }
 
-    fn col_min<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<Datum<'a>> {
-        struct ColMin<'a>(&'a dyn DynStats, &'a RowArena);
-        impl<'a> DatumToPersistFn<Option<Datum<'a>>> for ColMin<'a> {
-            fn call<T: DatumToPersist>(self) -> Option<Datum<'a>> {
-                let ColMin(stats, arena) = self;
-                downcast_stats::<T::Data>(stats)?
-                    .lower()
-                    .map(|val| arena.make_datum(|packer| T::decode(val, packer)))
+    fn col_min_max<'a>(
+        &'a self,
+        idx: usize,
+        arena: &'a RowArena,
+    ) -> Option<(Datum<'a>, Datum<'a>)> {
+        struct ColMinMax<'a>(&'a dyn DynStats, &'a RowArena);
+        impl<'a> DatumToPersistFn<Option<(Datum<'a>, Datum<'a>)>> for ColMinMax<'a> {
+            fn call<T: DatumToPersist>(self) -> Option<(Datum<'a>, Datum<'a>)> {
+                let ColMinMax(stats, arena) = self;
+                let stats = downcast_stats::<T::Data>(stats)?;
+                let make_datum = |lower| arena.make_datum(|packer| T::decode(lower, packer));
+                let min = make_datum(stats.lower()?);
+                let max = make_datum(stats.upper()?);
+                Some((min, max))
             }
         }
 
@@ -524,32 +529,7 @@ impl PersistSourceDataStats<'_> {
             .col::<Option<DynStruct>>("ok")
             .expect("ok column should be a struct")?;
         let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColMin(stats.as_ref(), arena))?
-    }
-
-    fn col_max<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<Datum<'a>> {
-        struct ColMax<'a>(&'a dyn DynStats, &'a RowArena);
-        impl<'a> DatumToPersistFn<Option<Datum<'a>>> for ColMax<'a> {
-            fn call<T: DatumToPersist>(self) -> Option<Datum<'a>> {
-                let ColMax(stats, arena) = self;
-                downcast_stats::<T::Data>(stats)?
-                    .upper()
-                    .map(|val| arena.make_datum(|packer| T::decode(val, packer)))
-            }
-        }
-
-        if self.len() <= self.col_null_count(idx) {
-            return None;
-        }
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
-        let ok_stats = self
-            .stats
-            .key
-            .col::<Option<DynStruct>>("ok")
-            .expect("ok column should be a struct")?;
-        let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColMax(stats.as_ref(), arena))?
+        typ.to_persist(ColMinMax(stats.as_ref(), arena))?
     }
 
     fn col_null_count(&self, idx: usize) -> Option<usize> {
@@ -599,10 +579,8 @@ mod tests {
         impl<'a> DatumToPersistFn<()> for ValidateStatsSome<'a> {
             fn call<T: DatumToPersist>(self) -> () {
                 let ValidateStatsSome(stats, arena, datum) = self;
-                if let Some(lower) = stats.col_min(0, arena) {
+                if let Some((lower, upper)) = stats.col_min_max(0, arena) {
                     assert!(lower <= datum, "{} vs {} stats={:?}", lower, datum, stats);
-                }
-                if let Some(upper) = stats.col_max(0, arena) {
                     assert!(upper >= datum, "{} vs {}", upper, datum);
                 }
                 assert_eq!(stats.col_null_count(0), Some(0));
@@ -613,8 +591,7 @@ mod tests {
         impl<'a> DatumToPersistFn<()> for ValidateStatsNone<'a> {
             fn call<T: DatumToPersist>(self) -> () {
                 let ValidateStatsNone(stats, arena) = self;
-                assert_eq!(stats.col_min(0, arena), None);
-                assert_eq!(stats.col_max(0, arena), None);
+                assert_eq!(stats.col_min_max(0, arena), None);
                 assert_eq!(stats.col_null_count(0), Some(1));
             }
         }
