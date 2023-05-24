@@ -429,12 +429,8 @@ pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow
 
     let mut blob_counts = BTreeMap::new();
     let () = blob
-        .list_keys_and_metadata(
-            &BlobKeyPrefix::All
-                .to_blob_prefixes()
-                .first()
-                .expect("prefix"),
-            &mut |metadata| match BlobKey::parse_ids(metadata.key) {
+        .list_keys_and_metadata(&BlobKeyPrefix::All.to_string(), &mut |metadata| {
+            match BlobKey::parse_ids(metadata.key) {
                 Ok((shard, PartialBlobKey::Batch(_, _))) => {
                     let blob_count = blob_counts.entry(shard).or_insert_with(BlobCounts::default);
                     blob_count.batch_part_count += 1;
@@ -448,8 +444,8 @@ pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow
                 Err(err) => {
                     eprintln!("error parsing blob: {}", err);
                 }
-            },
-        )
+            }
+        })
         .await?;
 
     Ok(blob_counts)
@@ -463,29 +459,23 @@ pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
 
     // Collect the latest rollup for every shard with the given blob_uri
     let mut rollup_keys = BTreeMap::new();
-    blob.list_keys_and_metadata(
-        &BlobKeyPrefix::All
-            .to_blob_prefixes()
-            .first()
-            .expect("prefix"),
-        &mut |metadata| {
-            if let Ok((shard, PartialBlobKey::Rollup(seqno, rollup_id))) =
-                BlobKey::parse_ids(metadata.key)
-            {
-                let key = (seqno, rollup_id);
-                match rollup_keys.entry(shard) {
-                    Entry::Vacant(v) => {
-                        v.insert(key);
+    blob.list_keys_and_metadata(&BlobKeyPrefix::All.to_string(), &mut |metadata| {
+        if let Ok((shard, PartialBlobKey::Rollup(seqno, rollup_id))) =
+            BlobKey::parse_ids(metadata.key)
+        {
+            let key = (seqno, rollup_id);
+            match rollup_keys.entry(shard) {
+                Entry::Vacant(v) => {
+                    v.insert(key);
+                }
+                Entry::Occupied(o) => {
+                    if key.0 > o.get().0 {
+                        *o.into_mut() = key;
                     }
-                    Entry::Occupied(o) => {
-                        if key.0 > o.get().0 {
-                            *o.into_mut() = key;
-                        }
-                    }
-                };
-            }
-        },
-    )
+                }
+            };
+        }
+    })
     .await?;
 
     println!("shard,bytes,parts,runs,batches,empty_batches,longest_run,byte_width,leased_readers,critical_readers,writers");
@@ -551,10 +541,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     let () = state_versions
         .blob
         .list_keys_and_metadata(
-            &BlobKeyPrefix::Shard(&shard_id)
-                .to_blob_prefixes()
-                .first()
-                .expect("prefix"),
+            &BlobKeyPrefix::Shard(&shard_id).to_string(),
             &mut |metadata| match BlobKey::parse_ids(metadata.key) {
                 Ok((_, PartialBlobKey::Batch(writer, part))) => {
                     all_parts.push((PartialBatchKey::new(&writer, &part), writer.clone()));

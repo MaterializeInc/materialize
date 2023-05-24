@@ -204,12 +204,22 @@ impl StorageUsageClient {
 
     /// Computes [ShardUsage] for every shard in an env.
     pub async fn shards_usage(&self) -> ShardsUsage {
-        let prefix = if self.cfg.dynamic.usage_parallel_scans() {
-            BlobKeyPrefix::AllParallel
+        let prefixes = if self.cfg.dynamic.usage_parallel_scans() {
+            BlobKeyPrefix::All.granular_prefixes()
         } else {
-            BlobKeyPrefix::All
+            vec![BlobKeyPrefix::All.to_string()]
         };
-        let blob_usage = self.blob_raw_usage(prefix).await;
+
+        let raw_usage_by_prefix = FuturesUnordered::new();
+        for prefix in prefixes {
+            raw_usage_by_prefix.push(self.blob_raw_usage(prefix));
+        }
+        let blob_usage = raw_usage_by_prefix
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .fold(BlobUsage::default(), |accum, usage| accum.merge(usage));
+
         self.metrics
             .audit
             .blob_batch_part_bytes
@@ -252,83 +262,66 @@ impl StorageUsageClient {
         }
     }
 
-    async fn blob_raw_usage(&self, prefix: BlobKeyPrefix<'_>) -> BlobUsage {
-        let mut blob_usage_tasks = vec![];
-        for prefix in prefix.to_blob_prefixes() {
-            let blob = Arc::clone(&self.blob);
-            let metrics = Arc::clone(&self.metrics);
-            let name = format!("blob_raw_usage::prefix({})", prefix);
-            let task = mz_ore::task::spawn(|| name, async move {
-                retry_external(
-                    &metrics.retries.external.storage_usage_shard_size,
-                    || async {
-                        let mut start = Instant::now();
-                        let mut keys = 0;
-                        let mut usage = BlobUsage::default();
-                        blob.list_keys_and_metadata(&prefix.to_string(), &mut |metadata| {
-                            // Increment the step timing metrics as we go, so it
-                            // doesn't all show up at the end.
-                            keys += 1;
-                            if keys % 100 == 0 {
-                                let now = Instant::now();
-                                metrics
-                                    .audit
-                                    .step_blob_metadata
-                                    .inc_by(now.duration_since(start).as_secs_f64());
-                                start = now;
-                            }
+    async fn blob_raw_usage<P>(&self, prefix: P) -> BlobUsage
+    where
+        P: Into<String>,
+    {
+        let prefix = prefix.into();
+        retry_external(
+            &self.metrics.retries.external.storage_usage_shard_size,
+            || async {
+                let mut start = Instant::now();
+                let mut keys = 0;
+                let mut usage = BlobUsage::default();
+                self.blob
+                    .list_keys_and_metadata(&prefix, &mut |metadata| {
+                        // Increment the step timing metrics as we go, so it
+                        // doesn't all show up at the end.
+                        keys += 1;
+                        if keys % 100 == 0 {
+                            let now = Instant::now();
+                            self.metrics
+                                .audit
+                                .step_blob_metadata
+                                .inc_by(now.duration_since(start).as_secs_f64());
+                            start = now;
+                        }
 
-                            match BlobKey::parse_ids(metadata.key) {
-                                Ok((shard, partial_blob_key)) => {
-                                    let shard_usage = usage.by_shard.entry(shard).or_default();
+                        match BlobKey::parse_ids(metadata.key) {
+                            Ok((shard, partial_blob_key)) => {
+                                let shard_usage = usage.by_shard.entry(shard).or_default();
 
-                                    match partial_blob_key {
-                                        PartialBlobKey::Batch(writer_id, _) => {
-                                            usage.batch_part_bytes += metadata.size_in_bytes;
-                                            usage.batch_part_count += 1;
-                                            *shard_usage.by_writer.entry(writer_id).or_default() +=
-                                                metadata.size_in_bytes;
-                                        }
-                                        PartialBlobKey::Rollup(_, _) => {
-                                            usage.rollup_size += metadata.size_in_bytes;
-                                            usage.rollup_count += 1;
-                                            shard_usage.rollup_bytes += metadata.size_in_bytes;
-                                        }
+                                match partial_blob_key {
+                                    PartialBlobKey::Batch(writer_id, _) => {
+                                        usage.batch_part_bytes += metadata.size_in_bytes;
+                                        usage.batch_part_count += 1;
+                                        *shard_usage.by_writer.entry(writer_id).or_default() +=
+                                            metadata.size_in_bytes;
+                                    }
+                                    PartialBlobKey::Rollup(_, _) => {
+                                        usage.rollup_size += metadata.size_in_bytes;
+                                        usage.rollup_count += 1;
+                                        shard_usage.rollup_bytes += metadata.size_in_bytes;
                                     }
                                 }
-                                _ => {
-                                    info!(
-                                        "unknown blob: {}: {}",
-                                        metadata.key, metadata.size_in_bytes
-                                    );
-                                    usage.unattributable_bytes += metadata.size_in_bytes;
-                                }
                             }
-                            usage.total_size += metadata.size_in_bytes;
-                            usage.total_count += 1;
-                        })
-                        .await?;
-                        metrics
-                            .audit
-                            .step_blob_metadata
-                            .inc_by(start.elapsed().as_secs_f64());
-                        Ok(usage)
-                    },
-                )
-                .await
-            });
-
-            blob_usage_tasks.push(task);
-        }
-
-        let mut blob_usage = Vec::with_capacity(blob_usage_tasks.len());
-        for task in blob_usage_tasks {
-            blob_usage.push(task.await.expect("completed"));
-        }
-
-        blob_usage
-            .into_iter()
-            .fold(BlobUsage::default(), |accum, usage| accum.merge(usage))
+                            _ => {
+                                info!("unknown blob: {}: {}", metadata.key, metadata.size_in_bytes);
+                                usage.unattributable_bytes += metadata.size_in_bytes;
+                            }
+                        }
+                        usage.total_size += metadata.size_in_bytes;
+                        usage.total_count += 1;
+                    })
+                    .await?;
+                self.metrics
+                    .audit
+                    .step_blob_metadata
+                    .inc_by(start.elapsed().as_secs_f64());
+                Ok(usage)
+            },
+        )
+        .await
     }
 
     async fn shard_usage_given_blob_usage(
@@ -466,12 +459,9 @@ impl StorageUsageClient {
     ) -> Result<u64, mz_persist::location::ExternalError> {
         let mut total_size = 0;
         self.blob
-            .list_keys_and_metadata(
-                &prefix.to_blob_prefixes().first().expect("WIP"),
-                &mut |metadata| {
-                    total_size += metadata.size_in_bytes;
-                },
-            )
+            .list_keys_and_metadata(&prefix.to_string(), &mut |metadata| {
+                total_size += metadata.size_in_bytes;
+            })
             .await?;
         Ok(total_size)
     }
@@ -699,7 +689,7 @@ mod tests {
             parameters.usage_parallel_scans = Some(true);
             parameters.apply(&client.cfg);
             assert_eq!(client.cfg.dynamic.usage_parallel_scans(), true);
-            let all_parallelized = usage.blob_raw_usage(BlobKeyPrefix::AllParallel).await;
+            let all_parallelized = usage.blob_raw_usage(BlobKeyPrefix::All).await;
 
             assert_eq!(all, all_parallelized);
         }
@@ -768,10 +758,6 @@ mod tests {
             .expect("must have shard size");
         let all_size = usage
             .size(BlobKeyPrefix::All)
-            .await
-            .expect("must have shard size");
-        let all_size_parallel = usage
-            .size(BlobKeyPrefix::AllParallel)
             .await
             .expect("must have shard size");
 

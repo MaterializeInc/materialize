@@ -1171,10 +1171,7 @@ pub mod datadriven {
         datadriven: &mut MachineState,
         _args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
-        let key_prefix = BlobKeyPrefix::Shard(&datadriven.shard_id)
-            .to_blob_prefixes()
-            .pop()
-            .expect("WIP");
+        let key_prefix = BlobKeyPrefix::Shard(&datadriven.shard_id).to_string();
 
         let mut s = String::new();
         let () = datadriven
