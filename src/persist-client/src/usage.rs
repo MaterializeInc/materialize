@@ -139,7 +139,7 @@ impl BlobUsage {
 
         let self_shards: BTreeSet<ShardId> = self_by_shard.keys().copied().collect();
         let other_shards: BTreeSet<ShardId> = other_by_shard.keys().copied().collect();
-        assert_eq!(self_shards.symmetric_difference(&other_shards).count(), 0);
+        assert!(self_shards.intersection(&other_shards).next().is_none());
 
         self_by_shard.append(&mut other_by_shard);
 
