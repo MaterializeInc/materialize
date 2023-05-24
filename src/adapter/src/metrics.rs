@@ -8,11 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
-use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
+use prometheus::{Gauge, HistogramVec, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -22,7 +22,8 @@ pub struct Metrics {
     pub queue_busy_seconds: HistogramVec,
     pub determine_timestamp: IntCounterVec,
     pub commands: IntCounterVec,
-    pub storage_usage_collection_time_seconds: HistogramVec,
+    pub storage_usage_collection_last_run_duration: Gauge,
+    pub storage_usage_collection_last_run_timestamp: UIntGauge,
     pub subscribe_outputs: IntCounterVec,
 }
 
@@ -59,10 +60,13 @@ impl Metrics {
                 help: "The total number of adapter commands issued of the given type since process start.",
                 var_labels: ["command_type", "status", "application_name"],
             )),
-            storage_usage_collection_time_seconds: registry.register(metric!(
-                name: "mz_storage_usage_collection_time_seconds",
-                help: "The number of seconds the coord spends collecting usage metrics from storage.",
-                buckets: histogram_seconds_buckets(0.000_128, 8.0)
+            storage_usage_collection_last_run_duration: registry.register(metric!(
+                name: "mz_storage_usage_collection_last_run_duration",
+                help: "The number of seconds the coord spent collecting usage metrics from storage on its last run.",
+            )),
+            storage_usage_collection_last_run_timestamp: registry.register(metric!(
+                name: "mz_storage_usage_collection_last_run_timestamp",
+                help: "The timestamp (in epoch millis) of when the last run of storage usage collection completed.",
             )),
             subscribe_outputs: registry.register(metric!(
                 name: "mz_subscribe_outputs",

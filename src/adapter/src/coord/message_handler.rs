@@ -11,7 +11,7 @@
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::DurationRound;
 use mz_controller::clusters::ClusterEvent;
@@ -127,15 +127,20 @@ impl Coordinator {
             .filter_map(|shard| shard)
             .collect();
 
-        let collection_metric = self
+        let duration_metric = self
             .metrics
-            .storage_usage_collection_time_seconds
-            .with_label_values(&[]);
+            .storage_usage_collection_last_run_duration
+            .clone();
+        let completed_at_metric = self
+            .metrics
+            .storage_usage_collection_last_run_timestamp
+            .clone();
+        let now_fn = self.catalog.config().now.clone();
 
         // Spawn an asynchronous task to compute the storage usage, which
         // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
-            let collection_metric_timer = collection_metric.start_timer();
+            let start = Instant::now();
             let mut shard_sizes = client.shards_usage().await;
 
             // Don't record usage for shards that are no longer live.
@@ -146,7 +151,8 @@ impl Coordinator {
             shard_sizes
                 .by_shard
                 .retain(|shard_id, _| live_shards.contains(shard_id));
-            collection_metric_timer.observe_duration();
+            duration_metric.set(start.elapsed().as_secs_f64());
+            completed_at_metric.set(now_fn());
 
             // It is not an error for shard sizes to become ready after
             // `internal_cmd_rx` is dropped.
