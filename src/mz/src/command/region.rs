@@ -16,16 +16,14 @@
 //! Implementation of the `mz region` command.
 //!
 //! Consult the user-facing documentation for details.
-
+//!
 use crate::{context::RegionContext, error::Error};
 
 use mz_cloud_api::client::cloud_provider::CloudProvider;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 
-use super::sql::check_environment_health;
-
-pub async fn enable(cx: &mut RegionContext) -> Result<(), Error> {
+pub async fn enable(cx: RegionContext) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
         .loading_spinner("Retrieving information...");
@@ -41,7 +39,7 @@ pub async fn enable(cx: &mut RegionContext) -> Result<(), Error> {
     let environment = cx.get_environment(region.clone()).await?;
 
     loop {
-        if check_environment_health(cx, &environment).await? {
+        if cx.sql_client().is_ready(&environment, cx.admin_client().claims().await?.email)? {
             break;
         }
     }
@@ -50,7 +48,10 @@ pub async fn enable(cx: &mut RegionContext) -> Result<(), Error> {
     Ok(())
 }
 
-pub async fn list(cx: &mut RegionContext) -> Result<(), Error> {
+pub async fn list(cx: RegionContext) -> Result<(), Error> {
+    let output_formatter = cx.output_formatter();
+    let loading_spinner = output_formatter.loading_spinner("Retrieving regions...");
+
     #[derive(Deserialize, Serialize, Tabled)]
     pub struct Region<'a> {
         #[tabled(rename = "Region")]
@@ -78,24 +79,34 @@ pub async fn list(cx: &mut RegionContext) -> Result<(), Error> {
         }
     }
 
-    let output_formatter = cx.output_formatter();
+    loading_spinner.finish_and_clear();
     output_formatter.output_table(regions)?;
     Ok(())
 }
 
-pub async fn show(cx: &mut RegionContext) -> Result<(), Error> {
+pub async fn show(cx: RegionContext) -> Result<(), Error> {
+    // Sharing the reference of the context in multiple places makes
+    // it necesarry to wrap in an `alloc::rc`.
+
+    let output_formatter = cx.output_formatter();
+    let loading_spinner = output_formatter.loading_spinner("Retrieving region...");
+
     let region = cx.get_region().await?;
+
+    loading_spinner.set_message("Checking environment health...");
     let environment = cx.get_environment(region.clone()).await?;
-    let environment_health = match check_environment_health(cx, &environment).await {
+    let claims = cx.admin_client().claims().await?;
+    let sql_client = cx.sql_client();
+    let environment_health = match sql_client.is_ready(&environment, claims.email)
+    {
         Ok(healthy) => match healthy {
             true => "yes",
             _ => "no",
         },
-        _ => "no",
+        Err(_) => "no",
     };
 
-    let output_formatter = cx.output_formatter();
-
+    loading_spinner.finish_and_clear();
     output_formatter.output_scalar(Some(&format!("Healthy: \t{}", environment_health)))?;
     output_formatter.output_scalar(Some(&format!(
         "SQL address: \t{}",
@@ -105,5 +116,6 @@ pub async fn show(cx: &mut RegionContext) -> Result<(), Error> {
         "HTTP URL: \t{}",
         environment.environmentd_https_address
     )))?;
+
     Ok(())
 }

@@ -17,6 +17,8 @@ use mz_cloud_api::client::environment::Environment;
 use mz_frontegg_auth::AppPassword;
 use url::Url;
 
+use crate::error::Error;
+
 /// The [application_name](https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
 /// which gets reported to the Postgres server we're connecting to.
 const PG_APPLICATION_NAME: &str = "mz_psql";
@@ -91,19 +93,20 @@ impl Client {
     }
 
     /// Runs pg_isready to check if an environment is healthy
-    pub fn is_ready(&self, environment: &Environment, email: String) -> Command {
+    pub fn is_ready(&self, environment: &Environment, email: String) -> Result<bool, Error> {
         if let Some(_) = self.find("pg_isready") {
             let mut command = Command::new("pg_isready");
-            command
+            Ok(command
                 .args(vec![
                     "-q",
                     "-d",
                     self.build_psql_url(environment, email).as_str(),
                 ])
                 .env("PGPASSWORD", &self.app_password.to_string())
-                .env("PGAPPNAME", PG_APPLICATION_NAME);
-
-            command
+                .env("PGAPPNAME", PG_APPLICATION_NAME)
+                .output()?
+                .status
+                .success())
         } else {
             panic!("the pg_isready program is not present. Make sure it is available in the $PATH.")
         }

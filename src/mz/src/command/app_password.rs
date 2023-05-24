@@ -33,12 +33,15 @@ pub async fn create(
     params: CreateAppPasswordRequest<'_>,
 ) -> Result<(), Error> {
     let app_password = cx.admin_client().create_app_password(params).await?;
-
     println!("{}", app_password);
     Ok(())
 }
 
 pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
+    let loading_spinner = cx
+        .output_formatter()
+        .loading_spinner("Retrieving app-passwords...");
+
     #[derive(Deserialize, Serialize, Tabled)]
     pub struct AppPassword {
         #[tabled(rename = "Name")]
@@ -48,6 +51,8 @@ pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
     }
 
     let passwords = cx.admin_client().list_app_passwords().await?;
+    loading_spinner.finish_and_clear();
+
     let output_formatter = cx.output_formatter();
     output_formatter.output_table(passwords.iter().map(|x| AppPassword {
         description: x.description.clone(),

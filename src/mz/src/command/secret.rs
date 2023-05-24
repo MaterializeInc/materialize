@@ -49,6 +49,8 @@ pub async fn create(
     buffer = buffer.trim().to_string();
 
     // Retrieve information to open the psql shell sessions.
+    let loading_spinner = cx.output_formatter().loading_spinner("Creating secret...");
+
     let claims = cx.admin_client().claims();
     let region = cx.get_region().await?;
     let enviornment = cx.get_environment(region).await?;
@@ -96,6 +98,8 @@ pub async fn create(
         client.args(vec!["-c", c]);
     });
     let _error = client.arg("-q").exec();
+    // TODO: Check error.
 
+    loading_spinner.finish_and_clear();
     Ok(())
 }

@@ -17,9 +17,7 @@
 //!
 //! Consult the user-facing documentation for details.
 
-use std::os::unix::process::CommandExt;
-
-use mz_cloud_api::client::environment::Environment;
+use std::{os::unix::process::CommandExt};
 
 use crate::{context::RegionContext, error::Error};
 
@@ -37,20 +35,4 @@ pub async fn run(cx: &mut RegionContext, RunArgs { psql_args }: RunArgs) -> Resu
     let _error = sql_client.shell(&enviornment, email).args(psql_args).exec();
 
     Ok(())
-}
-
-/// Runs pg_isready to check if an environment is healthy
-pub(crate) async fn check_environment_health(
-    cx: &mut RegionContext,
-    enviornment: &Environment,
-) -> Result<bool, Error> {
-    let sql_client = cx.sql_client();
-    let claims = cx.admin_client().claims();
-    let email = claims.await?.email;
-
-    Ok(sql_client
-        .is_ready(enviornment, email)
-        .output()?
-        .status
-        .success())
 }

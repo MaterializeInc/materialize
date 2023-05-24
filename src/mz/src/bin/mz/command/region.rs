@@ -42,13 +42,13 @@ pub enum RegionSubcommand {
 }
 
 pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
-    let mut cx = cx
+    let cx = cx
         .activate_profile(cmd.profile.profile)
         .await?
         .activate_region(cmd.region.region)?;
     match cmd.subcommand {
-        RegionSubcommand::Enable => mz::command::region::enable(&mut cx).await,
-        RegionSubcommand::List => mz::command::region::list(&mut cx).await,
-        RegionSubcommand::Show => mz::command::region::show(&mut cx).await,
+        RegionSubcommand::Enable => mz::command::region::enable(cx).await,
+        RegionSubcommand::List => mz::command::region::list(cx).await,
+        RegionSubcommand::Show => mz::command::region::show(cx).await,
     }
 }

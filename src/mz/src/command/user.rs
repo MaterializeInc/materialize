@@ -32,6 +32,7 @@ pub async fn create(
     cx: &mut ProfileContext,
     CreateArgs { email, name }: CreateArgs<'_>,
 ) -> Result<(), Error> {
+    let loading_spinner = cx.output_formatter().loading_spinner("Creating user...");
     let roles = cx.admin_client().list_roles().await?;
     let role_ids = roles.into_iter().map(|role| role.id).collect();
 
@@ -44,10 +45,14 @@ pub async fn create(
         })
         .await?;
 
+    loading_spinner.finish_with_message("User created.");
     Ok(())
 }
 
 pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
+    let output_formatter = cx.output_formatter();
+
+    let loading_spinner = output_formatter.loading_spinner("Retrieving users...");
     #[derive(Deserialize, Serialize, Tabled)]
     pub struct User {
         #[tabled(rename = "Email")]
@@ -57,7 +62,8 @@ pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
     }
 
     let users = cx.admin_client().list_users().await?;
-    let output_formatter = cx.output_formatter();
+
+    loading_spinner.finish_and_clear();
     output_formatter.output_table(users.into_iter().map(|x| User {
         email: x.email,
         name: x.name,
@@ -74,6 +80,8 @@ pub async fn remove(
     cx: &mut ProfileContext,
     RemoveArgs { email }: RemoveArgs<'_>,
 ) -> Result<(), Error> {
+    let loading_spinner = cx.output_formatter().loading_spinner("Removing user...");
+
     let users = cx.admin_client().list_users().await?;
     let user = users
         .into_iter()
@@ -84,5 +92,6 @@ pub async fn remove(
         .remove_user(RemoveUserRequest { user_id: user.id })
         .await?;
 
+    loading_spinner.finish_with_message(format!("User {} removed.", email));
     Ok(())
 }
