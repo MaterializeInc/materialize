@@ -84,9 +84,7 @@ class ConsistencyTestRunner:
 
             shall_abort_after_iteration = self._shall_abort(expression_count, end_time)
 
-            expression = self.expression_generator.generate_expression(
-                operation, test_summary
-            )
+            expression = self.expression_generator.generate_expression(operation)
 
             if expression is None:
                 test_summary.global_warnings.append(
@@ -117,7 +115,7 @@ class ConsistencyTestRunner:
     def _consume_and_process_queries(
         self, test_summary: ConsistencyTestSummary
     ) -> bool:
-        queries = self.query_generator.consume_queries()
+        queries = self.query_generator.consume_queries(test_summary)
 
         for query in queries:
             success = self.execution_manager.execute_query(query, test_summary)

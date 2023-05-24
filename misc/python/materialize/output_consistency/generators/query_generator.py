@@ -12,12 +12,16 @@ from typing import List, Optional, Set
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
+from materialize.output_consistency.execution.test_summary import ConsistencyTestLogger
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
+)
+from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
+    KnownOutputInconsistenciesFilter,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
@@ -31,10 +35,12 @@ class QueryGenerator:
         config: ConsistencyTestConfiguration,
         randomized_picker: RandomizedPicker,
         input_data: ConsistencyTestInputData,
+        known_inconsistencies_filter: KnownOutputInconsistenciesFilter,
     ):
         self.config = config
         self.randomized_picker = randomized_picker
         self.vertical_storage_row_count = input_data.max_value_count
+        self.known_inconsistencies_filter = known_inconsistencies_filter
 
         self.count_pending_expressions = 0
         # ONE query PER expression using the storage layout specified in the expression, expressions presumably fail
@@ -75,10 +81,14 @@ class QueryGenerator:
     def shall_consume_queries(self) -> bool:
         return self.count_pending_expressions > self.config.max_pending_expressions
 
-    def consume_queries(self) -> List[QueryTemplate]:
+    def consume_queries(
+        self,
+        logger: ConsistencyTestLogger,
+    ) -> List[QueryTemplate]:
         queries = []
         queries.extend(
             self._create_multi_column_queries(
+                logger,
                 self.horizontal_layout_normal_expressions,
                 False,
                 ValueStorageLayout.HORIZONTAL,
@@ -87,6 +97,7 @@ class QueryGenerator:
         )
         queries.extend(
             self._create_multi_column_queries(
+                logger,
                 self.horizontal_layout_aggregate_expressions,
                 False,
                 ValueStorageLayout.HORIZONTAL,
@@ -95,6 +106,7 @@ class QueryGenerator:
         )
         queries.extend(
             self._create_multi_column_queries(
+                logger,
                 self.vertical_layout_normal_expressions,
                 False,
                 ValueStorageLayout.VERTICAL,
@@ -103,6 +115,7 @@ class QueryGenerator:
         )
         queries.extend(
             self._create_multi_column_queries(
+                logger,
                 self.vertical_layout_aggregate_expressions,
                 False,
                 ValueStorageLayout.VERTICAL,
@@ -111,7 +124,7 @@ class QueryGenerator:
         )
         queries.extend(
             self._create_single_column_queries(
-                self.any_layout_presumably_failing_expressions
+                logger, self.any_layout_presumably_failing_expressions
             )
         )
 
@@ -121,6 +134,7 @@ class QueryGenerator:
 
     def _create_multi_column_queries(
         self,
+        logger: ConsistencyTestLogger,
         expressions: List[Expression],
         expect_error: bool,
         storage_layout: ValueStorageLayout,
@@ -140,6 +154,13 @@ class QueryGenerator:
                 storage_layout
             )
 
+            expression_chunk = self._remove_known_inconsistencies(
+                logger, expression_chunk, restriction_to_row_indices
+            )
+
+            if len(expression_chunk) == 0:
+                continue
+
             query = QueryTemplate(
                 expect_error,
                 expression_chunk,
@@ -153,7 +174,7 @@ class QueryGenerator:
         return queries
 
     def _create_single_column_queries(
-        self, expressions: List[Expression]
+        self, logger: ConsistencyTestLogger, expressions: List[Expression]
     ) -> List[QueryTemplate]:
         """Creates one query per expression"""
 
@@ -162,6 +183,12 @@ class QueryGenerator:
             restriction_to_row_indices = self._select_row_indices_selection(
                 expression.storage_layout
             )
+
+            if self.known_inconsistencies_filter.matches(
+                expression, restriction_to_row_indices
+            ):
+                self._log_skipped_expression(logger, expression)
+                continue
 
             queries.append(
                 QueryTemplate(
@@ -187,6 +214,34 @@ class QueryGenerator:
             )
         else:
             raise RuntimeError(f"Unknown storage layout: {storage_layout}")
+
+    def _remove_known_inconsistencies(
+        self,
+        logger: ConsistencyTestLogger,
+        expressions: List[Expression],
+        restriction_to_row_indices: Optional[Set[int]],
+    ) -> List[Expression]:
+        indices_to_remove = []
+
+        for index, expression in enumerate(expressions):
+            if self.known_inconsistencies_filter.matches(
+                expression, restriction_to_row_indices
+            ):
+                self._log_skipped_expression(logger, expression)
+                indices_to_remove.append(index)
+
+        for index_to_remove in sorted(indices_to_remove, reverse=True):
+            del expressions[index_to_remove]
+
+        return expressions
+
+    def _log_skipped_expression(
+        self, logger: ConsistencyTestLogger, expression: Expression
+    ) -> None:
+        if self.config.verbose_output:
+            logger.add_global_warning(
+                f"Skipping expression with known inconsistency: {expression}"
+            )
 
     def reset_state(self) -> None:
         self.count_pending_expressions = 0

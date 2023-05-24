@@ -127,10 +127,10 @@ def _run_output_consistency_tests_internal(
 
     input_data = ConsistencyTestInputData()
 
-    expression_generator = ExpressionGenerator(
+    expression_generator = ExpressionGenerator(config, randomized_picker, input_data)
+    query_generator = QueryGenerator(
         config, randomized_picker, input_data, known_inconsistencies_filter
     )
-    query_generator = QueryGenerator(config, randomized_picker, input_data)
     output_comparator = ResultComparator()
     sql_executor = create_sql_executor(config, connection, output_printer)
 

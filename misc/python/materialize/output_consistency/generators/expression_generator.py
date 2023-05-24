@@ -16,7 +16,6 @@ from materialize.output_consistency.data_type.data_type_category import DataType
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
-from materialize.output_consistency.execution.test_summary import ConsistencyTestLogger
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -26,9 +25,6 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
-)
-from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
-    KnownOutputInconsistenciesFilter,
 )
 from materialize.output_consistency.operation.operation import DbOperationOrFunction
 from materialize.output_consistency.operation.operation_param import OperationParam
@@ -43,12 +39,10 @@ class ExpressionGenerator:
         config: ConsistencyTestConfiguration,
         randomized_picker: RandomizedPicker,
         input_data: ConsistencyTestInputData,
-        known_inconsistencies_filter: KnownOutputInconsistenciesFilter,
     ):
         self.config = config
         self.randomized_picker = randomized_picker
         self.input_data = input_data
-        self.known_inconsistencies_filter = known_inconsistencies_filter
         self.selectable_operations: List[DbOperationOrFunction] = []
         self.operation_weights: List[float] = []
         self.operation_weights_no_aggregates: List[float] = []
@@ -92,8 +86,6 @@ class ExpressionGenerator:
     def generate_expression(
         self,
         operation: DbOperationOrFunction,
-        logger: ConsistencyTestLogger,
-        try_number: int = 1,
     ) -> Optional[Expression]:
         storage_layout = self._select_storage_layout(operation)
         try:
@@ -104,23 +96,6 @@ class ExpressionGenerator:
         is_aggregate = operation.is_aggregation or self._contains_aggregate_arg(args)
         is_expect_error = operation.is_expected_to_cause_db_error(args)
         expression = ExpressionWithArgs(operation, args, is_aggregate, is_expect_error)
-
-        if self.known_inconsistencies_filter.matches(expression):
-            if try_number <= 5:
-                if self.config.verbose_output:
-                    logger.add_global_warning(
-                        f"Skipping expression with known inconsistency: {expression}"
-                    )
-
-                return self.generate_expression(
-                    operation, logger, try_number=try_number + 1
-                )
-            else:
-                logger.add_global_warning(
-                    f"Aborting expression generation for {operation},"
-                    f" all tries resulted in known inconsistencies (e.g., {expression})"
-                )
-                return None
 
         return expression
 
