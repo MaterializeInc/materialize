@@ -56,7 +56,11 @@ def test_upgrade(
         log_filter=log_filter,
         release_mode=(not dev),
     )
-    wait(condition="condition=Ready", resource="pod/cluster-u1-replica-u1-0")
+    wait(
+        condition="condition=Ready",
+        resource="pod",
+        label="cluster.environmentd.materialize.cloud/cluster-id=u1",
+    )
 
     executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
     scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)
