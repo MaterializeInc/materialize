@@ -28,12 +28,13 @@ class QueryTemplate:
         select_expressions: List[Expression],
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
+        restrict_to_row_indices: Optional[Set[int]],
     ) -> None:
         self.expect_error = expect_error
         self.select_expressions: List[Expression] = select_expressions
         self.storage_layout = storage_layout
         self.contains_aggregations = contains_aggregations
-        self.included_row_indices: Optional[Set[int]] = None
+        self.restrict_to_row_indices = restrict_to_row_indices
 
     def add_select_expression(self, expression: Expression) -> None:
         self.select_expressions.append(expression)
@@ -66,10 +67,12 @@ FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
         return f",{space_separator}".join(expressions_as_sql)
 
     def _create_where_clause(self) -> str:
-        if self.included_row_indices is None:
+        if self.restrict_to_row_indices is None:
             return ""
 
-        row_index_string = ", ".join(str(index) for index in self.included_row_indices)
+        row_index_string = ", ".join(
+            str(index) for index in self.restrict_to_row_indices
+        )
         return f"WHERE {VERTICAL_LAYOUT_ROW_INDEX_COL_NAME} IN ({row_index_string})"
 
     def _create_order_by_clause(self) -> str:

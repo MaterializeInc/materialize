@@ -136,20 +136,23 @@ class QueryGenerator:
                 offset_index : offset_index + self.config.max_cols_per_query
             ]
 
-            query = QueryTemplate(
-                expect_error,
-                expression_chunk,
-                storage_layout,
-                contains_aggregations,
-            )
+            restrict_to_row_indices = None
 
             if storage_layout == ValueStorageLayout.VERTICAL:
                 max_number_of_rows_to_select = self.randomized_picker.random_number(
                     2, 3
                 )
-                query.included_row_indices = self.randomized_picker.random_row_indices(
+                restrict_to_row_indices = self.randomized_picker.random_row_indices(
                     self.vertical_storage_row_count, max_number_of_rows_to_select
                 )
+
+            query = QueryTemplate(
+                expect_error,
+                expression_chunk,
+                storage_layout,
+                contains_aggregations,
+                restrict_to_row_indices,
+            )
 
             queries.append(query)
 
@@ -168,6 +171,7 @@ class QueryGenerator:
                     [expression],
                     expression.storage_layout,
                     False,
+                    None,
                 )
             )
 
