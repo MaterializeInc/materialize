@@ -101,7 +101,7 @@ pub struct ShardsUsage {
     pub unattributable_bytes: u64,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct BlobUsage {
     by_shard: BTreeMap<ShardId, ShardBlobUsage>,
     unattributable_bytes: u64,
@@ -156,7 +156,7 @@ impl BlobUsage {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct ShardBlobUsage {
     by_writer: BTreeMap<WriterId, u64>,
     rollup_bytes: u64,
@@ -466,9 +466,12 @@ impl StorageUsageClient {
     ) -> Result<u64, mz_persist::location::ExternalError> {
         let mut total_size = 0;
         self.blob
-            .list_keys_and_metadata(&prefix.to_string(), &mut |metadata| {
-                total_size += metadata.size_in_bytes;
-            })
+            .list_keys_and_metadata(
+                &prefix.to_blob_prefixes().first().expect("WIP"),
+                &mut |metadata| {
+                    total_size += metadata.size_in_bytes;
+                },
+            )
             .await?;
         Ok(total_size)
     }
@@ -654,15 +657,57 @@ impl std::fmt::Display for HumanBytes {
 
 #[cfg(test)]
 mod tests {
+    use crate::cfg::PersistParameters;
     use bytes::Bytes;
     use mz_persist::location::{Atomicity, SeqNo};
+    use proptest::prelude::*;
+    use proptest::proptest;
     use timely::progress::Antichain;
+    use tokio::runtime::Runtime;
 
     use crate::internal::paths::{PartialRollupKey, RollupId};
     use crate::tests::new_test_client;
     use crate::ShardId;
 
     use super::*;
+
+    #[test]
+    fn all() {
+        let runtime = Runtime::new().expect("runtime");
+
+        let client = runtime.block_on(new_test_client());
+        let usage = StorageUsageClient::open(client.clone());
+
+        async fn testcase(client: &PersistClient, usage: &StorageUsageClient, shard_id: ShardId) {
+            let (mut write, _) = client
+                .expect_open::<String, String, u64, i64>(shard_id)
+                .await;
+            write
+                .expect_append(
+                    &[(("1".to_owned(), "2".to_owned()), 1, 1)],
+                    vec![0],
+                    vec![2],
+                )
+                .await;
+
+            let mut parameters = PersistParameters::default();
+            parameters.usage_parallel_scans = Some(false);
+            parameters.apply(&client.cfg);
+            assert_eq!(client.cfg.dynamic.usage_parallel_scans(), false);
+            let all = usage.blob_raw_usage(BlobKeyPrefix::All).await;
+
+            parameters.usage_parallel_scans = Some(true);
+            parameters.apply(&client.cfg);
+            assert_eq!(client.cfg.dynamic.usage_parallel_scans(), true);
+            let all_parallelized = usage.blob_raw_usage(BlobKeyPrefix::AllParallel).await;
+
+            assert_eq!(all, all_parallelized);
+        }
+
+        proptest!(|(shard_id in any::<ShardId>())| {
+            runtime.block_on(testcase(&client, &usage, shard_id))
+        });
+    }
 
     #[tokio::test]
     async fn size() {
@@ -725,6 +770,10 @@ mod tests {
             .size(BlobKeyPrefix::All)
             .await
             .expect("must have shard size");
+        let all_size_parallel = usage
+            .size(BlobKeyPrefix::AllParallel)
+            .await
+            .expect("must have shard size");
 
         assert!(shard_one_size > 0);
         assert!(shard_two_size > 0);
@@ -734,6 +783,7 @@ mod tests {
             writer_one_size + writer_two_size + rollups_size
         );
         assert_eq!(all_size, shard_one_size + shard_two_size);
+        assert_eq!(all_size, all_size_parallel);
 
         assert_eq!(
             usage.shard_usage(shard_id_one).await.total_bytes(),

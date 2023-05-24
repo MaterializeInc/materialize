@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c4803b97b30315f9155ddf25001aa7652454b6d48a22cf238c8e6fe77b74b55e # shrinks to shard_id = ShardId(00000000-0000-0000-0000-000000000000)
+cc a54646c1ba9c2c58e52a880ca362172dbebec58a1ca5fc0ee306bc93d5d5636b # shrinks to shard_id = ShardId(00000000-0000-0000-0000-000000000000)
+cc 21e417c9be306189c7925e1afcffa7194e0dd6a2a6d3bd85ff10cfd30082690c # shrinks to shard_id = ShardId(1dde866c-02f5-a9b6-0cad-53b2f440d454)
