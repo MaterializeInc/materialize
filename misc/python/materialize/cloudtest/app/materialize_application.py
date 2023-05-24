@@ -122,7 +122,11 @@ class MaterializeApplication(Application):
         self.wait_create_completed()
 
     def wait_create_completed(self) -> None:
-        wait(condition="condition=Ready", resource="pod/cluster-u1-replica-u1-0")
+        wait(
+            condition="condition=Ready",
+            resource="pod",
+            label="cluster.environmentd.materialize.cloud/cluster-id=u1",
+        )
 
     def acquire_images(self) -> None:
         repo = mzbuild.Repository(
@@ -149,9 +153,12 @@ class MaterializeApplication(Application):
         # NOTE[btv] - This will need to change if the order of
         # creating clusters/replicas changes, but it seemed fine to
         # assume this order, since we already assume it in `create`.
-        wait(condition="condition=Ready", resource="pod/cluster-u1-replica-u1-0")
-        wait(condition="condition=Ready", resource="pod/cluster-s1-replica-s1-0")
-        wait(condition="condition=Ready", resource="pod/cluster-s2-replica-s2-0")
+        for cluster_id in ("u1", "s1", "s2"):
+            wait(
+                condition="condition=Ready",
+                resource="pod",
+                label=f"cluster.environmentd.materialize.cloud/cluster-id={cluster_id}",
+            )
 
     def wait_for_sql(self) -> None:
         """Wait until environmentd pod is ready and can accept SQL connections"""
