@@ -41,13 +41,14 @@ class ExpressionGenerator:
     def __init__(
         self,
         config: ConsistencyTestConfiguration,
+        randomized_picker: RandomizedPicker,
         input_data: ConsistencyTestInputData,
         known_inconsistencies_filter: KnownOutputInconsistenciesFilter,
     ):
         self.config = config
+        self.randomized_picker = randomized_picker
         self.input_data = input_data
         self.known_inconsistencies_filter = known_inconsistencies_filter
-        self.randomized_picker = RandomizedPicker(self.config)
         self.selectable_operations: List[DbOperationOrFunction] = []
         self.operation_weights: List[float] = []
         self.operation_weights_no_aggregates: List[float] = []

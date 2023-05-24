@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
+from typing import List, Optional, Set
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -33,6 +33,7 @@ class QueryTemplate:
         self.select_expressions: List[Expression] = select_expressions
         self.storage_layout = storage_layout
         self.contains_aggregations = contains_aggregations
+        self.included_row_indices: Optional[Set[int]] = None
 
     def add_select_expression(self, expression: Expression) -> None:
         self.select_expressions.append(expression)
@@ -46,11 +47,13 @@ class QueryTemplate:
         space_separator = self._get_space_separator(output_format)
 
         column_sql = self._create_column_sql(space_separator)
+        where_clause = self._create_where_clause()
         order_by_clause = self._create_order_by_clause()
 
         sql = f"""
 SELECT{space_separator}{column_sql}
 FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
+{where_clause}
 {order_by_clause};""".strip()
 
         return self._post_format_sql(sql, output_format)
@@ -62,6 +65,13 @@ FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
         expressions_as_sql = [expr.to_sql() for expr in self.select_expressions]
         return f",{space_separator}".join(expressions_as_sql)
 
+    def _create_where_clause(self) -> str:
+        if self.included_row_indices is None:
+            return ""
+
+        row_index_string = ", ".join(str(index) for index in self.included_row_indices)
+        return f"WHERE {VERTICAL_LAYOUT_ROW_INDEX_COL_NAME} IN ({row_index_string})"
+
     def _create_order_by_clause(self) -> str:
         if (
             self.storage_layout == ValueStorageLayout.VERTICAL
@@ -72,6 +82,7 @@ FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
         return ""
 
     def _post_format_sql(self, sql: str, output_format: QueryOutputFormat) -> str:
+        sql = sql.replace("\n\n", "\n")
         sql = sql.replace("\n;", ";")
 
         if output_format == QueryOutputFormat.SINGLE_LINE:

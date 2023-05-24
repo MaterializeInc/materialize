@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import List
+from typing import List, Set
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -40,6 +40,14 @@ class RandomizedPicker:
         self, types_with_values: List[DataTypeWithValues]
     ) -> DataTypeWithValues:
         return random.choice(types_with_values)
+
+    def random_row_indices(
+        self, vertical_storage_row_count: int, max_number_of_rows_to_select: int
+    ) -> Set[int]:
+        selected_rows = random.choices(
+            range(0, vertical_storage_row_count), k=max_number_of_rows_to_select
+        )
+        return set(selected_rows)
 
     def random_value(self, values: List[DataValue]) -> DataValue:
         return random.choice(values)

@@ -33,6 +33,7 @@ from materialize.output_consistency.known_inconsistencies.known_deviation_filter
 )
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.runner.test_runner import ConsistencyTestRunner
+from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 
@@ -120,14 +121,16 @@ def _run_output_consistency_tests_internal(
         ConstantFoldingEvaluation(),
     ]
 
+    randomized_picker = RandomizedPicker(config)
+
     known_inconsistencies_filter = KnownOutputInconsistenciesFilter()
 
     input_data = ConsistencyTestInputData()
 
     expression_generator = ExpressionGenerator(
-        config, input_data, known_inconsistencies_filter
+        config, randomized_picker, input_data, known_inconsistencies_filter
     )
-    query_generator = QueryGenerator(config)
+    query_generator = QueryGenerator(config, randomized_picker, input_data)
     output_comparator = ResultComparator()
     sql_executor = create_sql_executor(config, connection, output_printer)
 

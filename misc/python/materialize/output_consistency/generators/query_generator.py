@@ -16,14 +16,26 @@ from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
+)
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 
 
 class QueryGenerator:
     """Generates query templates based on expressions"""
 
-    def __init__(self, config: ConsistencyTestConfiguration):
+    def __init__(
+        self,
+        config: ConsistencyTestConfiguration,
+        randomized_picker: RandomizedPicker,
+        input_data: ConsistencyTestInputData,
+    ):
         self.config = config
+        self.randomized_picker = randomized_picker
+        self.vertical_storage_row_count = input_data.max_value_count
+
         self.count_pending_expressions = 0
         # ONE query PER expression using the storage layout specified in the expression, expressions presumably fail
         self.any_layout_presumably_failing_expressions: List[Expression] = []
@@ -123,14 +135,23 @@ class QueryGenerator:
             expression_chunk = expressions[
                 offset_index : offset_index + self.config.max_cols_per_query
             ]
-            queries.append(
-                QueryTemplate(
-                    expect_error,
-                    expression_chunk,
-                    storage_layout,
-                    contains_aggregations,
-                )
+
+            query = QueryTemplate(
+                expect_error,
+                expression_chunk,
+                storage_layout,
+                contains_aggregations,
             )
+
+            if storage_layout == ValueStorageLayout.VERTICAL:
+                max_number_of_rows_to_select = self.randomized_picker.random_number(
+                    2, 3
+                )
+                query.included_row_indices = self.randomized_picker.random_row_indices(
+                    self.vertical_storage_row_count, max_number_of_rows_to_select
+                )
+
+            queries.append(query)
 
         return queries
 
