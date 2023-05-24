@@ -110,7 +110,7 @@ create_source_kafka ::=
 create_source_load_generator ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
-  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'TPCH')
+  'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'MARKETING' | 'TPCH')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
   (
     'FOR ALL TABLES' |

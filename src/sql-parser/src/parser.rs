@@ -2704,14 +2704,16 @@ impl<'a> Parser<'a> {
             }
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
-                let generator =
-                    match self.expect_one_of_keywords(&[COUNTER, AUCTION, TPCH, DATUMS])? {
-                        COUNTER => LoadGenerator::Counter,
-                        AUCTION => LoadGenerator::Auction,
-                        TPCH => LoadGenerator::Tpch,
-                        DATUMS => LoadGenerator::Datums,
-                        _ => unreachable!(),
-                    };
+                let generator = match self
+                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS])?
+                {
+                    COUNTER => LoadGenerator::Counter,
+                    AUCTION => LoadGenerator::Auction,
+                    TPCH => LoadGenerator::Tpch,
+                    DATUMS => LoadGenerator::Datums,
+                    MARKETING => LoadGenerator::Marketing,
+                    _ => unreachable!(),
+                };
                 let options = if self.consume_token(&Token::LParen) {
                     let options =
                         self.parse_comma_separated(Parser::parse_load_generator_option)?;
