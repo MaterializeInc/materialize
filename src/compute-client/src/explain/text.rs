@@ -334,11 +334,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         write!(f, "{}Threshold::Basic", ctx.indent)?;
                         writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
                     }
-                    ThresholdPlan::Retractions(plan) => {
-                        let ensure_arrangement = Arrangement::from(&plan.ensure_arrangement);
-                        write!(f, "{}Threshold::Retractions", ctx.indent)?;
-                        writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
-                    }
                 };
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
