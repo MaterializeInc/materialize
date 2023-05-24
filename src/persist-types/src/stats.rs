@@ -14,6 +14,8 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 
+use serde::ser::{SerializeMap, SerializeStruct};
+
 use crate::columnar::Data;
 use crate::part::DynColumnRef;
 use crate::stats::private::StatsCost;
@@ -133,6 +135,31 @@ pub struct StructStats {
     /// This will often be all of the columns, but it's not guaranteed. Persist
     /// reserves the right to prune statistics about some or all of the columns.
     pub cols: BTreeMap<String, Box<dyn DynStats>>,
+}
+
+impl serde::Serialize for StructStats {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let StructStats { len, cols } = self;
+        let mut s = s.serialize_struct("StructStats", 2)?;
+        let () = s.serialize_field("len", len)?;
+        let () = s.serialize_field("cols", &DynStatsCols(cols))?;
+        s.end()
+    }
+}
+
+struct DynStatsCols<'a>(&'a BTreeMap<String, Box<dyn DynStats>>);
+
+impl serde::Serialize for DynStatsCols<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut s = s.serialize_map(Some(self.0.len()))?;
+        for (k, v) in self.0.iter() {
+            // TODO: Consider adding an `as_json(&self) -> serde_json::Value`
+            // method to `DynStats` so we can make it easier to use them.
+            let v = v.into_proto();
+            let () = s.serialize_entry(k, &v)?;
+        }
+        s.end()
+    }
 }
 
 impl StructStats {
@@ -381,6 +408,7 @@ mod impls {
     use arrow2::types::NativeType;
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
     use proptest::prelude::*;
+    use serde::Serialize;
 
     use crate::columnar::Data;
     use crate::stats::private::StatsCost;
@@ -539,6 +567,7 @@ mod impls {
 
     impl<T> DynStats for PrimitiveStats<T>
     where
+        T: Serialize,
         PrimitiveStats<T>:
             StatsCost + RustType<ProtoPrimitiveStats> + std::fmt::Debug + Send + Sync + 'static,
     {
