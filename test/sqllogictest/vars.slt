@@ -287,7 +287,7 @@ COMPLETE 0
 ISO, MDY
 COMPLETE 1
 
-statement error parameter "database" requires a "string" value
+statement error parameter "database" cannot have value "one","two": expects a single value
 set database = one, two
 
 # Test invalid values for float vars
@@ -297,12 +297,12 @@ set database = one, two
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET max_credit_consumption_rate = '-100.5'
 ----
-db error: ERROR: parameter "max_credit_consumption_rate" requires a "numeric" value
+db error: ERROR: parameter "max_credit_consumption_rate" cannot have value "-100.5": only supports non-negative, non-NaN numeric values
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET max_credit_consumption_rate = NaN
 ----
-db error: ERROR: parameter "max_credit_consumption_rate" requires a "numeric" value
+db error: ERROR: parameter "max_credit_consumption_rate" cannot have value "NaN": only supports non-negative, non-NaN numeric values
 
 statement ok
 SET SCHEMA 'non-resolvable-name'
