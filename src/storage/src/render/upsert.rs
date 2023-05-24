@@ -14,12 +14,11 @@ use std::convert::AsRef;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
 
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::{consolidation, AsCollection, Collection};
+use differential_dataflow::{AsCollection, Collection};
+use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
@@ -32,7 +31,9 @@ use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
-use crate::render::upsert::types::{InMemoryHashMap, StatsState, UpsertState};
+use crate::render::upsert::types::{
+    upsert_bincode_opts, InMemoryHashMap, UpsertState, UpsertStateBackend,
+};
 use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 
@@ -46,6 +47,9 @@ pub struct UpsertKey([u8; 32]);
 
 impl AsRef<[u8]> for UpsertKey {
     #[inline(always)]
+    // Note we do 1 `multi_get` and 1 `multi_put` while processing a _batch of updates_. Within the
+    // batch, we effectively consolidate each key, before persisting that consolidated value.
+    // Easy!!
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
@@ -122,74 +126,6 @@ impl<H: Digest> Hasher for DigestHasher<H> {
     }
 }
 
-/// Struct to keep a row value along with its calculated size in bytes and updates
-/// per UpsertKey. This will be used to keep track of the initial size and diffs
-/// when we get new data and eventually emit source envelope metrics.
-#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
-struct ValueData {
-    // This will hold the row value state corresponding to an UpsertKey
-    value: Option<UpsertValue>,
-    // This is the size of the initial row value when populated from state.
-    // `initial_bytes` will be `None` if `value` is None.
-    initial_bytes: Option<i64>,
-    // `diff_bytes` will contain the diff in bytes between incoming and existing data.
-    // It will be positive if new data size is greater than old data and vice versa.
-    diff_bytes: i64,
-    // `diff_record` will hold only the following values
-    // -1 for a removed record,
-    // 0 for when a record is updated i.e. no change in count, and
-    // 1 for when a record is added.
-    diff_record: i8,
-}
-
-impl ValueData {
-    fn new() -> Self {
-        ValueData {
-            value: None,
-            initial_bytes: None,
-            diff_bytes: 0,
-            diff_record: 0,
-        }
-    }
-
-    // This is used to populate the corresponding `initial_bytes`
-    // after value is fetched from the upsert state in `commands_state`
-    fn populate_initial_size(&mut self) {
-        self.initial_bytes = self.value.as_ref().map(Self::calculate_size);
-    }
-
-    // Updates the value and sets corresponding values for `diff_bytes` and `diff_records`.
-    fn update_value(&mut self, new_value: Option<UpsertValue>) -> Option<UpsertValue> {
-        let new_bytes = &new_value.as_ref().map(Self::calculate_size).unwrap_or(0);
-
-        self.diff_record = match (&self.initial_bytes, &new_value) {
-            (Some(_), None) => -1,
-            (None, Some(_)) => 1,
-            _ => 0,
-        };
-
-        let old_value = match new_value {
-            Some(new_value) => self.value.replace(new_value),
-            None => self.value.take(),
-        };
-        self.diff_bytes = new_bytes - self.initial_bytes.unwrap_or(0);
-
-        old_value
-    }
-
-    // Utility method to calculate bytes for a given `UpsertValue`
-    fn calculate_size(value: &UpsertValue) -> i64 {
-        let bytes: i64 = match value {
-            Ok(row) => row
-                .byte_len()
-                .try_into()
-                .expect("Unexpected error while converting usize to i64"),
-            Err(_) => 0, // this will be fixed when we switch to bin-coding to serialize for rocksdb
-        };
-        bytes
-    }
-}
-
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
 pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
@@ -245,6 +181,9 @@ where
                         mz_rocksdb::Options::defaults_with_env(env),
                         tuning,
                         rocksdb_metrics,
+                        // For now, just use the same config as the one used for
+                        // merging snapshots.
+                        upsert_bincode_opts(),
                     )
                     .await
                     .unwrap(),
@@ -284,7 +223,7 @@ where
     G::Timestamp: TotalOrder,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertState,
+    US: UpsertStateBackend,
 {
     // Sort key indices to ensure we can construct the key by iterating over the datums of the row
     key_indices.sort_unstable();
@@ -318,74 +257,69 @@ where
     builder.build(move |caps| async move {
         let mut output_cap = caps.into_element();
 
-        let mut snapshot = vec![];
-
-        // In the first phase we will collect all the updates from our output that are not beyond
-        // resume_upper. This will be the seed state for the command processing below.
-        while let Some(event) = previous.next_mut().await {
-            match event {
-                AsyncEvent::Data(_cap, data) => {
-                    snapshot.extend(
-                        data.drain(..)
-                            .filter(|(_row, ts, _diff)| !resume_upper.less_equal(ts))
-                            .map(|(row, _ts, diff)| (row, diff)),
-                    );
+        let mut state = UpsertState::new(
+            state().await,
+            upsert_shared_metrics,
+            upsert_metrics,
+            source_config.source_statistics,
+        );
+        let mut events = vec![];
+        let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
+        while !PartialOrder::less_equal(&resume_upper, &snapshot_upper) {
+            match previous.next_mut().await {
+                Some(AsyncEvent::Data(_cap, data)) => {
+                    events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
+                        if !resume_upper.less_equal(&ts) {
+                            Some((key, value, diff))
+                        } else {
+                            None
+                        }
+                    }))
                 }
-                AsyncEvent::Progress(upper) => {
-                    if PartialOrder::less_equal(&resume_upper, &upper) {
+                Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
+                None => snapshot_upper = Antichain::new(),
+            };
+            while let Some(event) = previous.next_mut().now_or_never() {
+                match event {
+                    Some(AsyncEvent::Data(_cap, data)) => {
+                        events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
+                            if !resume_upper.less_equal(&ts) {
+                                Some((key, value, diff))
+                            } else {
+                                None
+                            }
+                        }))
+                    }
+                    Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
+                    None => {
+                        snapshot_upper = Antichain::new();
                         break;
                     }
                 }
             }
+
+            state
+                .merge_snapshot_chunk(
+                    events.drain(..),
+                    PartialOrder::less_equal(&resume_upper, &snapshot_upper),
+                )
+                .await
+                .expect("hashmap impl to not fail");
         }
+
+        drop(events);
+
         drop(previous_token);
         while let Some(_event) = previous.next().await {
             // Exchaust the previous input. It is expected to immediately reach the empty
             // antichain since we have dropped its token.
         }
 
-        consolidation::consolidate(&mut snapshot);
-
-        // The main key->value used to store previous values.
-        let mut state = StatsState::new(state().await, upsert_shared_metrics);
-
-        // A re-usable buffer of changes, per key. This is
-        // an `IndexMap` because it has to be `drain`-able
+        // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
-        let mut commands_state = indexmap::IndexMap::new();
+        let mut commands_state: indexmap::IndexMap<_, types::UpsertValueAndSize> =
+            indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
-
-        let mut initial_state_bytes = 0;
-        let mut initial_state_records = 0;
-
-        // Rehydrate the upsert state (and bump some stats), even if the snapshot is empty.
-        let snapshot = snapshot.into_iter().map(|((key, value), diff)| {
-            assert_eq!(diff, 1, "invalid upsert state");
-            initial_state_bytes = initial_state_bytes + ValueData::calculate_size(&value);
-            initial_state_records = initial_state_records + 1;
-
-            (key, Some(value))
-        });
-
-        let now = Instant::now();
-        let snapshot_size = snapshot.len();
-        state
-            .multi_put(snapshot)
-            .await
-            .expect("hashmap impl to not error");
-        upsert_metrics
-            .rehydration_latency
-            .set(now.elapsed().as_secs_f64());
-        upsert_metrics
-            .rehydration_total
-            .set(u64::cast_from(snapshot_size));
-
-        source_config
-            .source_statistics
-            .set_envelope_state_bytes(initial_state_bytes);
-        source_config
-            .source_statistics
-            .set_envelope_state_count(initial_state_records);
 
         // Now can can resume consuming the collection
         let mut stash = vec![];
@@ -413,7 +347,7 @@ where
                     // along with the value with the _latest timestamp for that key_.
                     commands_state.clear();
                     for (_, key, _, _) in stash.iter().take(idx) {
-                        commands_state.entry(*key).or_insert(ValueData::new());
+                        commands_state.entry(*key).or_default();
                     }
 
                     // These iterators iterate in the same order because `commands_state`
@@ -421,17 +355,9 @@ where
                     multi_get_scratch.clear();
                     multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
                     state
-                        .multi_get(
-                            multi_get_scratch.drain(..),
-                            commands_state.values_mut().map(|v| &mut v.value),
-                        )
+                        .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
                         .await
                         .expect("hashmap impl to not fail");
-
-                    // Update state with calculated sizes in bytes
-                    commands_state
-                        .values_mut()
-                        .for_each(|v| v.populate_initial_size());
 
                     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
                     // order to only process the command with the maximum order within the (ts,
@@ -441,41 +367,59 @@ where
                         a_ts == b_ts && a_key == b_key
                     });
 
+                    let bincode_opts = types::upsert_bincode_opts();
                     // Upsert the values into `commands_state`, by recording the latest
                     // value (or deletion). These will be synced at the end to the `state`.
+                    //
+                    // Note that we are effectively doing "mini-upsert" here, using
+                    // `command_state`. This "mini-upsert" is seeded with data from `state`, using
+                    // a single `multi_get` above, and the final state is written out into
+                    // `state` using a single `multi_put`. This simplifies `UpsertStateBackend`
+                    // implementations, and reduces the number of reads and write we need to do.
+                    //
+                    // This "mini-upsert" technique is actually useful in `UpsertState`'s
+                    // `merge_snapshot_chunk` implementation, minimizing gets and puts on
+                    // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
                     while let Some((ts, key, _, value)) = commands.next() {
                         let command_state = commands_state
                             .get_mut(&key)
                             .expect("key missing from commands_state");
 
-                        if let Some(old_value) = command_state.update_value(value.clone()) {
-                            output_updates.push((old_value, ts.clone(), -1));
+                        if let Some(cs) = command_state.value.as_mut() {
+                            cs.ensure_decoded(bincode_opts);
                         }
 
-                        if let Some(new_value) = value {
-                            output_updates.push((new_value, ts, 1));
+                        match value {
+                            Some(value) => {
+                                if let Some(old_value) =
+                                    command_state.value.replace(value.clone().into())
+                                {
+                                    output_updates.push((old_value.to_decoded(), ts.clone(), -1));
+                                }
+                                output_updates.push((value, ts, 1));
+                            }
+                            None => {
+                                if let Some(old_value) = command_state.value.take() {
+                                    output_updates.push((old_value.to_decoded(), ts, -1));
+                                }
+                            }
                         }
                     }
 
-                    let mut total_diff_records = 0;
-                    let mut total_diff_bytes = 0;
-                    // Record the changes in `state` and accumulating metrics while draining
                     state
-                        .multi_put(commands_state.drain(..).map(|(k, v)| {
-                            total_diff_records += Into::<i64>::into(v.diff_record);
-                            total_diff_bytes += v.diff_bytes;
-                            (k, v.value)
+                        .multi_put(commands_state.drain(..).map(|(k, cv)| {
+                            (
+                                k,
+                                types::PutValue {
+                                    value: cv.value.map(|cv| cv.to_decoded()),
+                                    previous_persisted_size: cv
+                                        .size
+                                        .map(|v| v.try_into().expect("less than i64 size")),
+                                },
+                            )
                         }))
                         .await
                         .expect("hashmap impl to not fail");
-
-                    // Emitting metrics only after updating state
-                    source_config
-                        .source_statistics
-                        .update_envelope_state_bytes_by(total_diff_bytes);
-                    source_config
-                        .source_statistics
-                        .update_envelope_state_count_by(total_diff_records);
 
                     // Emit the _consolidated_ changes to the output.
                     output_handle
