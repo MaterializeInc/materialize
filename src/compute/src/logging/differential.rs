@@ -18,7 +18,6 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::logging::{
     BatchEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
-use differential_dataflow::operators::arrange::arrangement::Arrange;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
@@ -30,6 +29,7 @@ use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
 
+use crate::extensions::operator::MzArrange;
 use crate::logging::{DifferentialLog, EventQueue, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -163,7 +163,7 @@ pub(super) fn construct<A: Allocate>(
                             (row_key, row_val)
                         }
                     })
-                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
                 traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }

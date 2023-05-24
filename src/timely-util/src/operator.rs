@@ -224,14 +224,25 @@ where
     /// the provided token can be upgraded. Once the token cannot be upgraded anymore, all data
     /// flowing into the operator is dropped.
     fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
-
+}
+/// Extension methods for differential [`Collection`]s.
+pub trait ConsolidateExt<G, D1, R>
+where
+    D1: differential_dataflow::ExchangeData + Hash,
+    R: Semigroup + differential_dataflow::ExchangeData,
+    G::Timestamp: Lattice,
+    G: Scope,
+{
     /// Consolidates the collection if `must_consolidate` is `true` and leaves it
     /// untouched otherwise.
-    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+    fn mz_consolidate_if<Tr>(&self, must_consolidate: bool, name: &str) -> Self
     where
-        D1: differential_dataflow::ExchangeData + Hash,
-        R: Semigroup + differential_dataflow::ExchangeData,
-        G::Timestamp: Lattice,
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr::Batch: Batch;
+
+    /// Consolidates the collection.
+    fn mz_consolidate<Tr>(&self, name: &str) -> Self
+    where
         Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch;
 }
@@ -539,38 +550,54 @@ where
     fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R> {
         self.inner.with_token(token).as_collection()
     }
+}
 
-    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+impl<G, D1, R> ConsolidateExt<G, D1, R> for Collection<G, D1, R>
+where
+    D1: differential_dataflow::ExchangeData + Hash,
+    R: Semigroup + differential_dataflow::ExchangeData,
+    G::Timestamp: Lattice,
+    G: Scope,
+{
+    fn mz_consolidate_if<Tr>(&self, must_consolidate: bool, name: &str) -> Self
     where
-        D1: differential_dataflow::ExchangeData + Hash,
-        R: Semigroup + differential_dataflow::ExchangeData,
-        G::Timestamp: Lattice + Ord,
         Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch,
     {
         if must_consolidate {
-            // We employ AHash below instead of the default hasher in DD to obtain
-            // a better distribution of data to workers. AHash claims empirically
-            // both speed and high quality, according to
-            // https://github.com/tkaitchuck/aHash/blob/master/compare/readme.md.
-            // TODO(vmarcos): Consider here if it is worth it to spend the time to
-            // implement twisted tabulation hashing as proposed in Mihai Patrascu,
-            // Mikkel Thorup: Twisted Tabulation Hashing. SODA 2013: 209-228, available
-            // at https://epubs.siam.org/doi/epdf/10.1137/1.9781611973105.16. The latter
-            // would provide good bounds for balls-into-bins problems when the number of
-            // bins is small (as is our case), so we'd have a theoretical guarantee.
-            let random_state = ahash::RandomState::new();
-            let mut h = random_state.build_hasher();
-            let exchange = Exchange::new(move |update: &((D1, _), G::Timestamp, R)| {
-                let data = &(update.0).0;
-                data.hash(&mut h);
-                h.finish()
-            });
-            self.arrange_core::<_, Tr>(exchange, name)
-                .as_collection(|k, _v| k.clone())
+            self.mz_consolidate::<Tr>(name)
         } else {
-            self
+            self.clone()
         }
+    }
+
+    fn mz_consolidate<Tr>(&self, name: &str) -> Self
+    where
+        Tr: Trace + TraceReader<Key = D1, Val = (), Time = G::Timestamp, R = R> + 'static,
+        Tr::Batch: Batch,
+    {
+        // We employ AHash below instead of the default hasher in DD to obtain
+        // a better distribution of data to workers. AHash claims empirically
+        // both speed and high quality, according to
+        // https://github.com/tkaitchuck/aHash/blob/master/compare/readme.md.
+        // TODO(vmarcos): Consider here if it is worth it to spend the time to
+        // implement twisted tabulation hashing as proposed in Mihai Patrascu,
+        // Mikkel Thorup: Twisted Tabulation Hashing. SODA 2013: 209-228, available
+        // at https://epubs.siam.org/doi/epdf/10.1137/1.9781611973105.16. The latter
+        // would provide good bounds for balls-into-bins problems when the number of
+        // bins is small (as is our case), so we'd have a theoretical guarantee.
+        let random_state = ahash::RandomState::new();
+        let mut h = random_state.build_hasher();
+        let exchange = Exchange::new(move |update: &((D1, _), G::Timestamp, R)| {
+            let data = &(update.0).0;
+            data.hash(&mut h);
+            h.finish()
+        });
+        // We allow access to `Arrange::arrange_core` here until `MzArrange` will be accessible.
+        #[allow(clippy::disallowed_methods)]
+        self.map(|k| (k, ()))
+            .arrange_core::<_, Tr>(exchange, name)
+            .as_collection(|d: &D1, _| d.clone())
     }
 }
 

@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::logging::DifferentialEvent;
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::Collection;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_repr::{Diff, Timestamp};
@@ -20,6 +19,7 @@ use timely::logging::{Logger, TimelyEvent};
 use timely::progress::reachability::logging::TrackerEvent;
 
 use crate::arrangement::manager::TraceBundle;
+use crate::extensions::operator::MzArrange;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::reachability::ReachabilityEvent;
 use crate::logging::{BatchLogger, EventQueue};
@@ -111,7 +111,7 @@ impl<A: Allocate> LoggingContext<'_, A> {
             .worker
             .dataflow_named("Dataflow: logging errors", |scope| {
                 Collection::<_, DataflowError, Diff>::empty(scope)
-                    .arrange_named("Arrange logging err")
+                    .mz_arrange("Arrange logging err")
                     .trace
             });
 

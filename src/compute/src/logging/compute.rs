@@ -15,7 +15,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::TraceReader;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
@@ -34,6 +33,7 @@ use timely::Container;
 use tracing::error;
 use uuid::Uuid;
 
+use crate::extensions::operator::MzArrange;
 use crate::logging::{ComputeLog, EventQueue, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -285,7 +285,7 @@ pub(super) fn construct<A: Allocate>(
                             (row_key, row_val)
                         }
                     })
-                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
                 traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
