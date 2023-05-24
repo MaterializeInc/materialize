@@ -6841,6 +6841,7 @@ impl Catalog {
         ComputeParameters {
             max_result_size: Some(config.max_result_size()),
             dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
+            enable_mz_join_core: Some(config.enable_mz_join_core()),
             persist: self.persist_config(),
         }
     }

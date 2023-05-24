@@ -39,6 +39,7 @@ use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
+use crate::render::LinearJoinImpl;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -81,6 +82,8 @@ pub struct ComputeState {
     pub max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: usize,
+    /// Implementation to use for rendering linear joins.
+    pub linear_join_impl: LinearJoinImpl,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
 }
@@ -155,6 +158,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            enable_mz_join_core,
             persist,
         } = params;
 
@@ -163,6 +167,12 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
+        }
+        if let Some(v) = enable_mz_join_core {
+            self.compute_state.linear_join_impl = match v {
+                false => LinearJoinImpl::DifferentialDataflow,
+                true => LinearJoinImpl::Materialize,
+            };
         }
 
         persist.apply(self.compute_state.persist_clients.cfg())

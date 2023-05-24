@@ -403,6 +403,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     command_history: ComputeCommandHistory::default(),
                     max_result_size: u32::MAX,
                     dataflow_max_inflight_bytes: usize::MAX,
+                    linear_join_impl: Default::default(),
                     metrics: self.compute_metrics.clone(),
                 });
             }
