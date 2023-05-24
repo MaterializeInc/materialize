@@ -189,11 +189,11 @@ mz_arrangement_batches_raw
 SOURCE
 materialize
 mz_internal
-mz_arrangement_heap_capacity_raw
+mz_arrangement_heap_allocations_raw
 SOURCE
 materialize
 mz_internal
-mz_arrangement_heap_allocations_raw
+mz_arrangement_heap_capacity_raw
 SOURCE
 materialize
 mz_internal
