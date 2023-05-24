@@ -183,61 +183,68 @@ def workflow_rehydration(c: Composition) -> None:
 
 def workflow_failpoint(c: Composition) -> None:
     """Test behaviour when upsert state errors"""
+    print("Running failpoint workflow")
 
-    with c.override(
-        Testdrive(no_reset=True, consistent_seed=True, default_timeout="10s"),
-    ):
-        print("Running failpoint workflow")
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.run("testdrive", "failpoint/01-setup.td")
 
-        for failpoint in [
-            (
-                "fail_merge_snapshot_chunk",
-                "failure while rehydrating state: Error merging snapshot values",
-            ),
-            (
-                "fail_state_multi_put",
-                "failure while updating records in state: Error putting values into state",
-            ),
-            (
-                "fail_state_multi_get",
-                "failure while fetching records from state: Error getting values from state",
-            ),
-        ]:
-            run_one_failpoint(c, failpoint[0], failpoint[1])
+    for failpoint in [
+        (
+            "fail_merge_snapshot_chunk",
+            "failure while rehydrating state: Error merging snapshot values",
+        ),
+        (
+            "fail_state_multi_put",
+            "failure while updating records in state: Error putting values into state",
+        ),
+        (
+            "fail_state_multi_get",
+            "failure while fetching records from state: Error getting values from state",
+        ),
+    ]:
+        run_one_failpoint(c, failpoint[0], failpoint[1])
 
 
 def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> None:
-    failpoint_env = "FAILPOINTS={}=return".format(failpoint)
-    print(f">>> Running failpoint test for failpoint {failpoint_env}")
-
-    c.down(destroy_volumes=True)
-    dependencies = ["zookeeper", "kafka"]
-    c.up("clusterd1", "materialized", *dependencies)
-    c.run("testdrive", "failpoint/01-setup.td")
+    print(f">>> Running failpoint test for failpoint {failpoint}")
 
     with c.override(
-        # Start clusterd with failpoint
-        Clusterd(
-            name="clusterd1",
-            options=[
-                "--scratch-directory=/mzdata/source_data",
-            ],
-            environment_extra=[failpoint_env],
-        ),
+        Testdrive(no_reset=True, consistent_seed=True),
     ):
+
+        dependencies = ["zookeeper", "kafka", "clusterd1", "materialized"]
+        c.up(*dependencies)
+        c.run("testdrive", "failpoint/02-source.td")
         c.kill("clusterd1", "materialized")
-        c.up("clusterd1", "materialized")
-        c.run("testdrive", f"--var=error={error_message}", "failpoint/02-failpoint.td")
 
         with c.override(
-            # Turn off the failpoint
+            # Start clusterd with failpoint
             Clusterd(
                 name="clusterd1",
                 options=[
                     "--scratch-directory=/mzdata/source_data",
                 ],
-            )
+                environment_extra=[f"FAILPOINTS={failpoint}=return"],
+            ),
         ):
-            c.kill("clusterd1", "materialized")
             c.up("clusterd1", "materialized")
-            c.run("testdrive", "failpoint/03-recover.td")
+            c.run(
+                "testdrive", f"--var=error={error_message}", "failpoint/03-failpoint.td"
+            )
+            c.kill("clusterd1", "materialized")
+
+            with c.override(
+                # Turn off the failpoint
+                Clusterd(
+                    name="clusterd1",
+                    options=[
+                        "--scratch-directory=/mzdata/source_data",
+                    ],
+                )
+            ):
+                c.up("clusterd1", "materialized")
+                c.run("testdrive", "failpoint/04-recover.td")
+
+    c.run("testdrive", "failpoint/05-reset.td")
+    c.kill("clusterd1", "materialized")

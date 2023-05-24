@@ -7,12 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE CLUSTER storage_cluster REPLICAS (
-    r1 (
-      STORAGECTL ADDRESSES ['clusterd1:2100'],
-      STORAGE ADDRESSES ['clusterd1:2103'],
-      COMPUTECTL ADDRESSES ['clusterd1:2101'],
-      COMPUTE ADDRESSES ['clusterd1:2102'],
-      WORKERS 4
-    )
-  )
+# Empty testdrive file to reset
