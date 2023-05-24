@@ -336,10 +336,12 @@ pub fn plan_explain(
         .iter()
         .map(|ident| ident.to_string().to_lowercase())
         .collect::<BTreeSet<_>>();
-    let config = ExplainConfig::try_from(config_flags)?;
+    let mut config = ExplainConfig::try_from(config_flags)?;
 
     if config.mfp_pushdown {
         scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
+        // If filtering is disabled, explain plans should not include pushdown info.
+        config.mfp_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
     }
 
     let format = match format {
