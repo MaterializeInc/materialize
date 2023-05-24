@@ -411,27 +411,12 @@ impl PersistSourceDataStats<'_> {
     }
 
     fn col_stats<'a>(&'a self, id: usize, arena: &'a RowArena) -> ResultSpec<'a> {
-        let total_count = self.len();
-        let min_max = self.col_min_max(id, &arena);
-        let nulls = self.col_null_count(id);
-        let json_range = self.col_json(id, &arena);
-
-        let value_range = match (total_count, min_max, nulls) {
-            (Some(total_count), _, Some(nulls)) if total_count == nulls => ResultSpec::nothing(),
-            (_, Some((min, max)), _) => ResultSpec::value_between(min, max),
-            _ => ResultSpec::value_all(),
-        };
+        let value_range = self.col_values(id, arena).unwrap_or(ResultSpec::anything());
+        let json_range = self.col_json(id, arena);
 
         // If this is not a JSON column or we don't have JSON stats, json_range is
         // [ResultSpec::anything] and this is a noop.
-        let value_range = value_range.intersect(json_range);
-
-        let null_range = match nulls {
-            Some(0) => ResultSpec::nothing(),
-            _ => ResultSpec::null(),
-        };
-
-        value_range.union(null_range)
+        value_range.intersect(json_range)
     }
 
     fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> ResultSpec<'a> {
@@ -507,44 +492,27 @@ impl PersistSourceDataStats<'_> {
         num_oks.map(|num_oks| num_results - num_oks)
     }
 
-    fn col_min_max<'a>(
-        &'a self,
-        idx: usize,
-        arena: &'a RowArena,
-    ) -> Option<(Datum<'a>, Datum<'a>)> {
-        struct ColMinMax<'a>(&'a dyn DynStats, &'a RowArena);
-        impl<'a> DatumToPersistFn<Option<(Datum<'a>, Datum<'a>)>> for ColMinMax<'a> {
-            fn call<T: DatumToPersist>(self) -> Option<(Datum<'a>, Datum<'a>)> {
-                let ColMinMax(stats, arena) = self;
+    fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
+        struct ColValues<'a>(&'a dyn DynStats, &'a RowArena, Option<usize>);
+        impl<'a> DatumToPersistFn<Option<ResultSpec<'a>>> for ColValues<'a> {
+            fn call<T: DatumToPersist>(self) -> Option<ResultSpec<'a>> {
+                let ColValues(stats, arena, total_count) = self;
                 let stats = downcast_stats::<T::Data>(stats)?;
                 let make_datum = |lower| arena.make_datum(|packer| T::decode(lower, packer));
-                let min = make_datum(stats.lower()?);
-                let max = make_datum(stats.upper()?);
-                Some((min, max))
-            }
-        }
-
-        if self.len() <= self.col_null_count(idx) {
-            return None;
-        }
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
-        let ok_stats = self
-            .stats
-            .key
-            .col::<Option<DynStruct>>("ok")
-            .expect("ok column should be a struct")?;
-        let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColMinMax(stats.as_ref(), arena))?
-    }
-
-    fn col_null_count(&self, idx: usize) -> Option<usize> {
-        struct ColNullCount<'a>(&'a dyn DynStats);
-        impl<'a> DatumToPersistFn<Option<usize>> for ColNullCount<'a> {
-            fn call<T: DatumToPersist>(self) -> Option<usize> {
-                let ColNullCount(stats) = self;
-                let stats = downcast_stats::<T::Data>(stats)?;
-                Some(stats.none_count())
+                let min = stats.lower().map(make_datum);
+                let max = stats.upper().map(make_datum);
+                let null_count = stats.none_count();
+                let values = match (total_count, min, max) {
+                    (Some(total_count), _, _) if total_count == null_count => ResultSpec::nothing(),
+                    (_, Some(min), Some(max)) => ResultSpec::value_between(min, max),
+                    _ => ResultSpec::value_all(),
+                };
+                let nulls = if null_count > 0 {
+                    ResultSpec::null()
+                } else {
+                    ResultSpec::nothing()
+                };
+                Some(values.union(nulls))
             }
         }
 
@@ -556,7 +524,7 @@ impl PersistSourceDataStats<'_> {
             .col::<Option<DynStruct>>("ok")
             .expect("ok column should be a struct")?;
         let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColNullCount(stats.as_ref()))?
+        typ.to_persist(ColValues(stats.as_ref(), arena, self.len()))?
     }
 }
 
@@ -581,24 +549,13 @@ mod tests {
             return;
         }
 
-        struct ValidateStatsSome<'a>(PersistSourceDataStats<'a>, &'a RowArena, Datum<'a>);
-        impl<'a> DatumToPersistFn<()> for ValidateStatsSome<'a> {
+        struct ValidateStats<'a>(PersistSourceDataStats<'a>, &'a RowArena, Datum<'a>);
+        impl<'a> DatumToPersistFn<()> for ValidateStats<'a> {
             fn call<T: DatumToPersist>(self) -> () {
-                let ValidateStatsSome(stats, arena, datum) = self;
-                if let Some((lower, upper)) = stats.col_min_max(0, arena) {
-                    assert!(lower <= datum, "{} vs {} stats={:?}", lower, datum, stats);
-                    assert!(upper >= datum, "{} vs {}", upper, datum);
+                let ValidateStats(stats, arena, datum) = self;
+                if let Some(spec) = stats.col_values(0, arena) {
+                    assert!(spec.may_contain(datum));
                 }
-                assert_eq!(stats.col_null_count(0), Some(0));
-            }
-        }
-
-        struct ValidateStatsNone<'a>(PersistSourceDataStats<'a>, &'a RowArena);
-        impl<'a> DatumToPersistFn<()> for ValidateStatsNone<'a> {
-            fn call<T: DatumToPersist>(self) -> () {
-                let ValidateStatsNone(stats, arena) = self;
-                assert_eq!(stats.col_min_max(0, arena), None);
-                assert_eq!(stats.col_null_count(0), Some(1));
             }
         }
 
@@ -621,11 +578,7 @@ mod tests {
                 desc: &schema,
             };
             let arena = RowArena::default();
-            if datum.is_null() {
-                column_type.to_persist(ValidateStatsNone(stats, &arena));
-            } else {
-                column_type.to_persist(ValidateStatsSome(stats, &arena, datum));
-            }
+            column_type.to_persist(ValidateStats(stats, &arena, datum));
             Ok(())
         }
 
