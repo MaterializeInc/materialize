@@ -224,9 +224,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     ReducePlan::Distinct => {
                         writeln!(f, "{}Reduce::Distinct", ctx.indent)?;
                     }
-                    ReducePlan::DistinctNegated => {
-                        writeln!(f, "{}Reduce::DistinctNegated", ctx.indent)?;
-                    }
                     ReducePlan::Accumulable(plan) => {
                         writeln!(f, "{}Reduce::Accumulable", ctx.indent)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
