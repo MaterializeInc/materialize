@@ -84,31 +84,34 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
     ) -> Result<(), TransformError> {
-        if let MirRelationExpr::Let { id, value, body } = relation {
-            self.action_recursive(value, indexes)?;
-            match &**value {
-                MirRelationExpr::ArrangeBy { keys, .. } => {
-                    for key in keys {
-                        indexes.add_local(*id, key.clone());
+        self.checked_recur(|_| {
+            if let MirRelationExpr::Let { id, value, body } = relation {
+                self.action_recursive(value, indexes)?;
+                match &**value {
+                    MirRelationExpr::ArrangeBy { keys, .. } => {
+                        for key in keys {
+                            indexes.add_local(*id, key.clone());
+                        }
                     }
+                    MirRelationExpr::Reduce { group_key, .. } => {
+                        indexes.add_local(
+                            *id,
+                            (0..group_key.len()).map(MirScalarExpr::Column).collect(),
+                        );
+                    }
+                    _ => {}
                 }
-                MirRelationExpr::Reduce { group_key, .. } => {
-                    indexes.add_local(
-                        *id,
-                        (0..group_key.len()).map(MirScalarExpr::Column).collect(),
-                    );
-                }
-                _ => {}
+                self.action_recursive(body, indexes)?;
+                indexes.remove_local(*id);
+                Ok(())
+            } else {
+                let (mfp, mfp_input) =
+                    MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
+                mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes))?;
+                self.action(mfp_input, mfp, indexes)?;
+                Ok(())
             }
-            self.action_recursive(body, indexes)?;
-            indexes.remove_local(*id);
-            Ok(())
-        } else {
-            let (mfp, mfp_input) = MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
-            mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes))?;
-            self.action(mfp_input, mfp, indexes)?;
-            Ok(())
-        }
+        })
     }
 
     /// Determines the join implementation for join operators.
