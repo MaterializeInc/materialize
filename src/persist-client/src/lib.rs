@@ -151,6 +151,7 @@ mod internal {
     pub mod metrics;
     pub mod paths;
     pub mod service;
+    pub mod sim;
     pub mod state;
     pub mod state_diff;
     pub mod state_versions;
