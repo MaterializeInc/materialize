@@ -9,10 +9,10 @@
 
 > CREATE CLUSTER storage_cluster REPLICAS (
     r1 (
-      STORAGECTL ADDRESSES ['storage_cluster:2100'],
-      STORAGE ADDRESSES ['storage_cluster:2103'],
-      COMPUTECTL ADDRESSES ['storage_cluster:2101'],
-      COMPUTE ADDRESSES ['storage_cluster:2102'],
+      STORAGECTL ADDRESSES ['clusterd1:2100'],
+      STORAGE ADDRESSES ['clusterd1:2103'],
+      COMPUTECTL ADDRESSES ['clusterd1:2101'],
+      COMPUTE ADDRESSES ['clusterd1:2102'],
       WORKERS 4
     )
   )

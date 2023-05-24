@@ -308,13 +308,23 @@ where
                 }
             }
 
-            state
+            match state
                 .merge_snapshot_chunk(
                     events.drain(..),
                     PartialOrder::less_equal(&resume_upper, &snapshot_upper),
                 )
                 .await
-                .expect("hashmap impl to not fail");
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    let update = get_health_update(e, "failure while rehydrating state");
+                    health_output
+                        .give(&health_cap, (source_config.worker_id, 0, update))
+                        .await;
+                    std::future::pending::<()>().await;
+                    unreachable!("pending future never returns");
+                }
+            }
         }
 
         drop(events);

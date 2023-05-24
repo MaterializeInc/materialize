@@ -185,15 +185,18 @@ def workflow_failpoint(c: Composition) -> None:
     """Test behaviour when upsert state errors"""
 
     with c.override(
-        Clusterd(name="storage_cluster"),
         Testdrive(no_reset=True, consistent_seed=True, default_timeout="10s"),
     ):
         print("Running failpoint workflow")
 
         for failpoint in [
             (
+                "fail_merge_snapshot_chunk",
+                "failure while rehydrating state: Error merging snapshot values",
+            ),
+            (
                 "fail_state_multi_put",
-                "failure while rehydrating state: Error putting values into state",
+                "failure while updating records in state: Error putting values into state",
             ),
             (
                 "fail_state_multi_get",
@@ -209,21 +212,32 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
 
     c.down(destroy_volumes=True)
     dependencies = ["zookeeper", "kafka"]
-    c.up("storage_cluster", "materialized", *dependencies)
+    c.up("clusterd1", "materialized", *dependencies)
     c.run("testdrive", "failpoint/01-setup.td")
 
     with c.override(
         # Start clusterd with failpoint
-        Clusterd(name="storage_cluster", environment_extra=[failpoint_env]),
+        Clusterd(
+            name="clusterd1",
+            options=[
+                "--scratch-directory=/mzdata/source_data",
+            ],
+            environment_extra=[failpoint_env],
+        ),
     ):
-        c.kill("storage_cluster", "materialized")
-        c.up("storage_cluster", "materialized")
+        c.kill("clusterd1", "materialized")
+        c.up("clusterd1", "materialized")
         c.run("testdrive", f"--var=error={error_message}", "failpoint/02-failpoint.td")
 
         with c.override(
             # Turn off the failpoint
-            Clusterd(name="storage_cluster")
+            Clusterd(
+                name="clusterd1",
+                options=[
+                    "--scratch-directory=/mzdata/source_data",
+                ],
+            )
         ):
-            c.kill("storage_cluster", "materialized")
-            c.up("storage_cluster", "materialized")
+            c.kill("clusterd1", "materialized")
+            c.up("clusterd1", "materialized")
             c.run("testdrive", "failpoint/03-recover.td")

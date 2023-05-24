@@ -520,6 +520,10 @@ where
     where
         M: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)>,
     {
+        fail::fail_point!("fail_merge_snapshot_chunk", |_| {
+            Err(anyhow::anyhow!("Error merging snapshot values"))
+        });
+
         if completed && self.snapshot_completed {
             panic!("attempted completion of already completed upsert snapshot")
         }
