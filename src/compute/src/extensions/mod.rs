@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Rendering of `MirRelationExpr::Join` operators, and supporting types.
-//!
-//! Consult [mz_compute_client::plan::join::JoinPlan] documentation for details.
+//! Operator extensions to Timely and Differential
 
 pub(crate) mod collection;
 pub(crate) mod operator;

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Extensions to Differential collections.
+
 use std::hash::{BuildHasher, Hash, Hasher};
 
 use differential_dataflow::difference::Semigroup;

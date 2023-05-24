@@ -17,7 +17,7 @@ use mz_repr::Row;
 use mz_storage_client::types::errors::DataflowError;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 use timely::progress::{Antichain, Timestamp};
 
@@ -132,7 +132,8 @@ where
 
 // A type that can log its heap size.
 pub(crate) trait ArrangementSize {
-    fn log_arrangement_size(&self) -> Self;
+    /// Install a logger to track the heap size of the target.
+    fn log_arrangement_size(self) -> Self;
 }
 
 /// Helper to compute the size of a vector in memory.
@@ -146,7 +147,14 @@ fn vec_size<T>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
 }
 
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
-fn log_arrangement_size_inner<G, Tr, L>(arranged: &Arranged<G, TraceAgent<Tr>>, mut logic: L)
+///
+/// * `arranged`: The arrangement to inspect.
+/// * `logic`: Closure that calculates the heap size/capacity/allocations for a trace. The return
+///    value are size and capacity in bytes, and number of allocations.
+fn log_arrangement_size_inner<G, Tr, L>(
+    arranged: Arranged<G, TraceAgent<Tr>>,
+    mut logic: L,
+) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope,
     G::Timestamp: Timestamp + Lattice + Ord,
@@ -155,57 +163,65 @@ where
     L: FnMut(&TraceAgent<Tr>) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
-    let Some(logger) = scope.log_register().get::<ComputeEvent>("materialize/compute") else {return};
+    let Some(logger) = scope.log_register().get::<ComputeEvent>("materialize/compute") else {return arranged};
     let mut trace = arranged.trace.clone();
     let operator = trace.operator().global_id;
 
     let (mut old_size, mut old_capacity, mut old_allocations) = (0isize, 0isize, 0isize);
 
-    let mut builder = OperatorBuilder::new("ArrangementSize".to_owned(), scope);
-    let mut input = builder.new_input(&arranged.stream, Pipeline);
-    let address = builder.operator_info().address;
-    logger.log(ComputeEvent::ArrangementHeapSizeOperator { operator, address });
-    builder.build(|_cap| {
-        move |_frontiers| {
-            input.for_each(|_time, _data| {});
+    let stream = arranged
+        .stream
+        .unary(Pipeline, "ArrangementSize", |_cap, info| {
+            let mut buffer = Default::default();
+            let address = info.address;
+            logger.log(ComputeEvent::ArrangementHeapSizeOperator { operator, address });
+            move |input, output| {
+                while let Some((time, data)) = input.next() {
+                    data.swap(&mut buffer);
+                    output.session(&time).give_container(&mut buffer);
+                }
 
-            // We don't want to block compaction.
-            let mut upper = Antichain::new();
-            trace.read_upper(&mut upper);
-            trace.set_logical_compaction(upper.borrow());
-            trace.set_physical_compaction(upper.borrow());
+                // We don't want to block compaction.
+                let mut upper = Antichain::new();
+                trace.read_upper(&mut upper);
+                trace.set_logical_compaction(upper.borrow());
+                trace.set_physical_compaction(upper.borrow());
 
-            let (size, capacity, allocations) = logic(&trace);
+                let (size, capacity, allocations) = logic(&trace);
 
-            let size = size.try_into().expect("must fit");
-            if size != old_size {
-                logger.log(ComputeEvent::ArrangementHeapSize {
-                    operator,
-                    size: size - old_size,
-                });
+                let size = size.try_into().expect("must fit");
+                if size != old_size {
+                    logger.log(ComputeEvent::ArrangementHeapSize {
+                        operator,
+                        size: size - old_size,
+                    });
+                }
+
+                let capacity = capacity.try_into().expect("must fit");
+                if capacity != old_capacity {
+                    logger.log(ComputeEvent::ArrangementHeapCapacity {
+                        operator,
+                        capacity: capacity - old_capacity,
+                    });
+                }
+
+                let allocations = allocations.try_into().expect("must fit");
+                if allocations != old_allocations {
+                    logger.log(ComputeEvent::ArrangementHeapAllocations {
+                        operator,
+                        allocations: allocations - old_allocations,
+                    });
+                }
+
+                old_size = size;
+                old_capacity = capacity;
+                old_allocations = allocations;
             }
-
-            let capacity = capacity.try_into().expect("must fit");
-            if capacity != old_capacity {
-                logger.log(ComputeEvent::ArrangementHeapCapacity {
-                    operator,
-                    capacity: capacity - old_capacity,
-                });
-            }
-
-            let allocations = allocations.try_into().expect("must fit");
-            if allocations != old_allocations {
-                logger.log(ComputeEvent::ArrangementHeapAllocations {
-                    operator,
-                    allocations: allocations - old_allocations,
-                });
-            }
-
-            old_size = size;
-            old_capacity = capacity;
-            old_allocations = allocations;
-        }
-    });
+        });
+    Arranged {
+        trace: arranged.trace,
+        stream,
+    }
 }
 
 impl<G, K, V, T, R> ArrangementSize for Arranged<G, TraceAgent<RowSpine<K, V, T, R>>>
@@ -217,7 +233,7 @@ where
     T: Lattice + Timestamp,
     R: Semigroup,
 {
-    fn log_arrangement_size(&self) -> Self {
+    fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
@@ -233,8 +249,33 @@ where
                 vec_size(&batch.layer.vals.vals.vals, &mut callback);
             });
             (size, capacity, allocations)
-        });
-        self.clone()
+        })
+    }
+}
+
+impl<G, K, T, R> ArrangementSize for Arranged<G, TraceAgent<RowKeySpine<K, T, R>>>
+where
+    G: Scope<Timestamp = T>,
+    G::Timestamp: Lattice + Ord,
+    K: Data + Columnation,
+    T: Lattice + Timestamp,
+    R: Semigroup,
+{
+    fn log_arrangement_size(self) -> Self {
+        log_arrangement_size_inner(self, |trace| {
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback = |siz, cap| {
+                allocations += 1;
+                size += siz;
+                capacity += cap
+            };
+            trace.map_batches(|batch| {
+                batch.layer.keys.heap_size(&mut callback);
+                vec_size(&batch.layer.offs, &mut callback);
+                vec_size(&batch.layer.vals.vals, &mut callback);
+            });
+            (size, capacity, allocations)
+        })
     }
 }
 
@@ -245,7 +286,7 @@ where
     T: Lattice + Timestamp,
     R: Semigroup,
 {
-    fn log_arrangement_size(&self) -> Self {
+    fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
@@ -261,8 +302,7 @@ where
                 vec_size(&batch.layer.vals.vals.vals, &mut callback);
             });
             (size, capacity, allocations)
-        });
-        self.clone()
+        })
     }
 }
 
@@ -273,7 +313,7 @@ where
     T: Lattice + Timestamp,
     R: Semigroup,
 {
-    fn log_arrangement_size(&self) -> Self {
+    fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
@@ -287,39 +327,10 @@ where
                 vec_size(&batch.layer.vals.vals, &mut callback);
             });
             (size, capacity, allocations)
-        });
-        self.clone()
+        })
     }
 }
 
-impl<G, K, T, R> ArrangementSize for Arranged<G, TraceAgent<RowKeySpine<K, T, R>>>
-where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord,
-    K: Data + Columnation,
-    T: Lattice + Timestamp,
-    R: Semigroup,
-{
-    fn log_arrangement_size(&self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                allocations += 1;
-                size += siz;
-                capacity += cap
-            };
-            trace.map_batches(|batch| {
-                batch.layer.keys.heap_size(&mut callback);
-                vec_size(&batch.layer.offs, &mut callback);
-                vec_size(&batch.layer.vals.vals, &mut callback);
-            });
-            (size, capacity, allocations)
-        });
-        self.clone()
-    }
-}
-
-// TODO: `reduce_pair`, `consolidate_named_if`
 /// Extension trait for the `reduce_core` differential dataflow method.
 pub(crate) trait MzReduce<G: Scope, K: Data, V: Data, R: Semigroup>:
     ReduceCore<G, K, V, R>

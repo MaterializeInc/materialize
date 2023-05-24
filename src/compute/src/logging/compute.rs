@@ -301,48 +301,26 @@ pub(super) fn construct<A: Allocate + 'static>(
 
         let arrangement_heap_allocations = arrangement_heap_allocations
             .as_collection()
-            .map(arrangement_heap_datum_to_row.clone());
+            .map(arrangement_heap_datum_to_row);
 
+        use ComputeLog::*;
         let logs = [
-            (
-                LogVariant::Compute(ComputeLog::DataflowCurrent),
-                dataflow_current,
-            ),
-            (
-                LogVariant::Compute(ComputeLog::DataflowDependency),
-                dataflow_dependency,
-            ),
-            (
-                LogVariant::Compute(ComputeLog::FrontierCurrent),
-                frontier_current,
-            ),
-            (
-                LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
-                import_frontier_current,
-            ),
-            (
-                LogVariant::Compute(ComputeLog::FrontierDelay),
-                frontier_delay,
-            ),
-            (LogVariant::Compute(ComputeLog::PeekCurrent), peek_current),
-            (LogVariant::Compute(ComputeLog::PeekDuration), peek_duration),
-            (
-                LogVariant::Compute(ComputeLog::ArrangementHeapSize),
-                arrangement_heap_size,
-            ),
-            (
-                LogVariant::Compute(ComputeLog::ArrangementHeapCapacity),
-                arrangement_heap_capacity,
-            ),
-            (
-                LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
-                arrangement_heap_allocations,
-            ),
+            (DataflowCurrent, dataflow_current),
+            (DataflowDependency, dataflow_dependency),
+            (FrontierCurrent, frontier_current),
+            (ImportFrontierCurrent, import_frontier_current),
+            (FrontierDelay, frontier_delay),
+            (PeekCurrent, peek_current),
+            (PeekDuration, peek_duration),
+            (ArrangementHeapSize, arrangement_heap_size),
+            (ArrangementHeapCapacity, arrangement_heap_capacity),
+            (ArrangementHeapAllocations, arrangement_heap_allocations),
         ];
 
         // Build the output arrangements.
         let mut traces = BTreeMap::new();
         for (variant, collection) in logs {
+            let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
                 let key = variant.index_by();
                 let (_, value) = permutation_for_arrangement(
