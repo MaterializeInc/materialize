@@ -154,7 +154,7 @@ class DbFunction(DbOperationOrFunction):
             is_aggregation=is_aggregation,
             relevance=relevance,
         )
-        self.function_name = function_name
+        self.function_name = function_name.lower()
 
     def validate_params(self, params: List[OperationParam]) -> None:
         optional_param_seen = False
