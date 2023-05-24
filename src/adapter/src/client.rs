@@ -456,18 +456,24 @@ impl SessionClient {
 
     /// Terminates the client session.
     pub async fn terminate(&mut self) {
-        let res = self
-            .send(|tx, session| Command::Terminate {
+        // Prevent any communication with Coordinator after session is terminated.
+        // It's important to take the inner and session before sending the terminate command. If we
+        // panic and unwind after sending the Terminate command but before taking the inner and
+        // session, then we might try and send another Terminate command when we drop the client
+        // during unwinding.
+        let mut inner = self.inner.take().expect("inner invariant violated");
+        let session = self.session.take().expect("session invariant violated");
+        let res = inner
+            .send(|tx| Command::Terminate {
                 session,
                 tx: Some(tx),
             })
             .await;
-        if let Err(e) = res {
+        if let Err(e) = res.result {
             // Nothing we can do to handle a failed terminate so we just log and ignore it.
             error!("Unable to terminate session: {e:?}");
         }
-        // Prevent any communication with Coordinator after session is terminated.
-        self.inner = None;
+        self.session = Some(res.session);
     }
 
     /// Returns a mutable reference to the session bound to this client.
@@ -600,7 +606,7 @@ impl Drop for SessionClient {
         if let Some(session) = self.session.take() {
             // We may not have a connection to the Coordinator if the session was
             // prematurely terminated, for example due to a timeout.
-            if let Some(inner) = &self.inner {
+            if let Some(inner) = self.inner.take() {
                 inner.inner.send(Command::Terminate { session, tx: None })
             }
         }
