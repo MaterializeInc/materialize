@@ -25,7 +25,7 @@ sections below.
 
 To get data into Materialize, you need a connection to allow your data source to
 communicate with Materialize. One option to connect securely to Materialize is
-AWS PrivateLink. 
+AWS PrivateLink.
 
 The [AWS MSK PrivateLink](https://github.com/MaterializeInc/terraform-aws-msk-privatelink) and [AWS Kafka PrivateLink](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink) modules allow you to manage
 your connection to Materialize in a single configuration. With these modules,
@@ -37,7 +37,7 @@ Materialize to communicate with the PrivateLink endpoint.
 Another method for source connection is to use a bastion host to allow SSH
 communication to and from Materialize.
 
-The [EC2 SSH bastion module](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion) allows you to configure an EC2 instance with security groups and an SSH keypair. After using the module, you can configure the `materialize_connection_ssh_tunnel` resource, allowing Materialize an end-to-end connection to your source. 
+The [EC2 SSH bastion module](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion) allows you to configure an EC2 instance with security groups and an SSH keypair. After using the module, you can configure the `materialize_connection_ssh_tunnel` resource, allowing Materialize an end-to-end connection to your source.
 
 ### Postgres RDS
 
@@ -61,7 +61,7 @@ terraform {
 ```
 
 The Materialize provider is hosted on the [Terraform provider
-registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest). 
+registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest).
 
 ### Authentication
 
