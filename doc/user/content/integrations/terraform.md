@@ -8,7 +8,7 @@ menu:
     name: "Terraform Materialize Provider"
 ---
 
-Terraform is an infrastructure-as-code tool that allows you to manage your
+[Terraform](https://www.terraform.io/) is an infrastructure-as-code tool that allows you to manage your
 resources in a declarative configuration language. Materialize maintains a
 Terraform provider to help you configure Materialize resources like
 connections, sources, and database objects.
@@ -17,8 +17,9 @@ connections, sources, and database objects.
 
 Materialize objects can be created through standard SQL queries, but managing
 more than a few components can be difficult to maintain. The Terraform
-Materialize provider allows users who are not well-versed in SQL to maintain
-objects in an organization. A few specific use cases are captured in the
+Materialize provider allows users to manage their resources in a programmatic
+way. Using Terraform can be helpful when you manage other cloud resources in
+collaboration with Materialize. A few specific use cases are captured in the
 sections below.
 
 ### MSK or self-managed Kafka and PrivateLink
