@@ -979,6 +979,10 @@ pub enum StorageError {
     },
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
+    /// Response to an invalid/unsupported `ALTER SOURCE` command.
+    ///
+    /// n.b. when returning this error, you should log details about the error.
+    InvalidAlterSource { id: GlobalId },
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
@@ -1000,6 +1004,7 @@ impl Error for StorageError {
             Self::ExportInstanceMissing { .. } => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
+            Self::InvalidAlterSource { .. } => None,
             Self::InvalidUsage(_) => None,
             Self::Generic(err) => err.source(),
         }
@@ -1057,6 +1062,9 @@ impl fmt::Display for StorageError {
             // N.B. For these errors, the underlying error is reported in `source()`, and it
             // is the responsibility of the caller to print the chain of errors, when desired.
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
+            Self::InvalidAlterSource { id } => {
+                write!(f, "{id} cannot be altered in the requested way")
+            }
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
