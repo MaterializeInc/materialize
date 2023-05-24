@@ -213,11 +213,13 @@ pub enum BlobKeyPrefix<'a> {
 }
 
 impl BlobKeyPrefix<'_> {
-    pub(crate) fn granular_prefixes(&self) -> Vec<String> {
+    /// Optionally partitions the [BlobKeyPrefix] into more granular prefixes
+    /// that in total span the same keyspace.
+    pub(crate) fn partitioned(&self) -> Vec<String> {
         match self {
             BlobKeyPrefix::All => vec![
                 // All blobs are prefixed by ShardId, which itself is a UUID prefixed by `s`.
-                // We can parallelize a blob scan by subdividing the keyspace into any valid
+                // We can partition a blob scan by subdividing the keyspace into any valid
                 // UUID prefixes. To start, subdivide by the first hexadecimal character:
                 "s0".into(),
                 "s1".into(),

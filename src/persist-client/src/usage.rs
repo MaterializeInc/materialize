@@ -32,7 +32,7 @@ use crate::{retry_external, Metrics, PersistClient, ShardId};
 /// This is structured as a "funnel", in which the steps are additive.
 /// Specifically `1=2a+2b`, `2a=3a+3b`, `3a=4a+4b`, `4a=5a+5b` (so the "a"s are
 /// the funnel and the "b"s are places where data splits out of the funnel).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShardUsage {
     /// 5a: Data in batches/parts referenced by the most recent version of
     /// state.
@@ -91,7 +91,7 @@ impl ShardUsage {
 }
 
 /// The blob (S3) usage of all shards in an environment.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShardsUsage {
     /// The data for each shard.
     pub by_shard: BTreeMap<ShardId, ShardUsage>,
@@ -205,7 +205,7 @@ impl StorageUsageClient {
     /// Computes [ShardUsage] for every shard in an env.
     pub async fn shards_usage(&self) -> ShardsUsage {
         let prefixes = if self.cfg.dynamic.usage_parallel_scans() {
-            BlobKeyPrefix::All.granular_prefixes()
+            BlobKeyPrefix::All.partitioned()
         } else {
             vec![BlobKeyPrefix::All.to_string()]
         };
@@ -650,8 +650,7 @@ mod tests {
     use crate::cfg::PersistParameters;
     use bytes::Bytes;
     use mz_persist::location::{Atomicity, SeqNo};
-    use proptest::prelude::*;
-    use proptest::proptest;
+    use std::time::Duration;
     use timely::progress::Antichain;
     use tokio::runtime::Runtime;
 
@@ -660,44 +659,6 @@ mod tests {
     use crate::ShardId;
 
     use super::*;
-
-    #[test]
-    fn all() {
-        let runtime = Runtime::new().expect("runtime");
-
-        let client = runtime.block_on(new_test_client());
-        let usage = StorageUsageClient::open(client.clone());
-
-        async fn testcase(client: &PersistClient, usage: &StorageUsageClient, shard_id: ShardId) {
-            let (mut write, _) = client
-                .expect_open::<String, String, u64, i64>(shard_id)
-                .await;
-            write
-                .expect_append(
-                    &[(("1".to_owned(), "2".to_owned()), 1, 1)],
-                    vec![0],
-                    vec![2],
-                )
-                .await;
-
-            let mut parameters = PersistParameters::default();
-            parameters.usage_parallel_scans = Some(false);
-            parameters.apply(&client.cfg);
-            assert_eq!(client.cfg.dynamic.usage_parallel_scans(), false);
-            let all = usage.blob_raw_usage(BlobKeyPrefix::All).await;
-
-            parameters.usage_parallel_scans = Some(true);
-            parameters.apply(&client.cfg);
-            assert_eq!(client.cfg.dynamic.usage_parallel_scans(), true);
-            let all_parallelized = usage.blob_raw_usage(BlobKeyPrefix::All).await;
-
-            assert_eq!(all, all_parallelized);
-        }
-
-        proptest!(|(shard_id in any::<ShardId>())| {
-            runtime.block_on(testcase(&client, &usage, shard_id))
-        });
-    }
 
     #[tokio::test]
     async fn size() {
@@ -769,7 +730,6 @@ mod tests {
             writer_one_size + writer_two_size + rollups_size
         );
         assert_eq!(all_size, shard_one_size + shard_two_size);
-        assert_eq!(all_size, all_size_parallel);
 
         assert_eq!(
             usage.shard_usage(shard_id_one).await.total_bytes(),
@@ -1141,5 +1101,57 @@ mod tests {
             shards_usage.by_shard.get(&shard_id).unwrap().leaked_bytes,
             3
         );
+    }
+
+    #[test]
+    fn shards_usage_partitioned() {
+        const NUM_SHARDS: usize = 200;
+        // Create two runtimes, 1 for the write handles and for 1 for the usage client.
+        // We shutdown the writer runtime at the end of our writes to avoid any races
+        // with maintenance tasks.
+        let usage_runtime = Runtime::new().expect("usage runtime");
+        let writer_runtime = Runtime::new().expect("writer runtime");
+
+        let client = usage_runtime.block_on(new_test_client());
+        let usage = StorageUsageClient::open(client.clone());
+
+        let shards = (0..NUM_SHARDS)
+            .map(|_| ShardId::new())
+            .collect::<BTreeSet<_>>();
+
+        for shard in &shards {
+            let (mut write, _) =
+                writer_runtime.block_on(client.expect_open::<String, String, u64, i64>(*shard));
+            writer_runtime.block_on(write.expect_append(
+                &[(("1".to_owned(), "2".to_owned()), 1, 1)],
+                vec![0],
+                vec![2],
+            ));
+        }
+
+        // ensure no maintenance tasks could sneak in a blob while calculating shard usage
+        writer_runtime.shutdown_timeout(Duration::ZERO);
+
+        let mut parameters = PersistParameters::default();
+        parameters.usage_parallel_scans = Some(false);
+        parameters.apply(&client.cfg);
+        assert_eq!(client.cfg.dynamic.usage_parallel_scans(), false);
+        let single_scan = usage_runtime.block_on(usage.shards_usage());
+
+        // ensure our scan got blobs for exactly all/only shards written
+        let keys = single_scan
+            .by_shard
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(keys, shards);
+
+        parameters.usage_parallel_scans = Some(true);
+        parameters.apply(&client.cfg);
+        assert_eq!(client.cfg.dynamic.usage_parallel_scans(), true);
+        let partitioned_scans = usage_runtime.block_on(usage.shards_usage());
+
+        // ensure that calculating shards usage is identical with a single scan vs partitioned scans
+        assert_eq!(single_scan, partitioned_scans);
     }
 }
