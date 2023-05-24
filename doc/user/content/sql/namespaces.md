@@ -1,6 +1,6 @@
 ---
 title: "Namespaces"
-description: "SQL namespaces let you create a taxonomy of objects in your Materialize instances."
+description: "SQL namespaces let you create a taxonomy of objects in Materialize."
 weight: 40
 menu:
   main:
@@ -36,7 +36,7 @@ use:
 ### Database details
 
 - Unlike PostgreSQL, Materialize allows cross-database queries.
-- By default, Materialize instances have a database named `materialize`.
+- By default, Materialize regions have a database named `materialize`.
 - By default, each database has a schema called `public`.
 - You can specify which database you connect to either when you connect (e.g.
   `psql -d my_db ...`) or within SQL using `SET` (e.g. `SET DATABASE = my_db`).
