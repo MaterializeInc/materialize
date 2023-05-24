@@ -17,7 +17,7 @@ the end of this tutorial you will:
 
 ## Before you begin
 
-* Make sure you have `psql` installed locally.
+* Make sure you have `psql` or another client installed locally.
 
 * Make sure you have a [Materialize account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
@@ -149,15 +149,16 @@ In this example, let's say your `dev_role` needs the following permissions:
 2. Grant schema privileges to the `dev_role`:
 
    ```sql
-   GRANT USAGE, CREATE ON SCHEMA dev_db.schema TO dev_role;
+   GRANT USAGE ON SCHEMA dev_db.schema TO dev_role;
    ```
 
    Schemas have `USAGE` and `CREATE` privileges available to grant.
 
-3. Grant database privileges to the `dev_role`:
+3. Grant database privileges to the `dev_role`. You can use the `GRANT ALL`
+   statement to grant all available privileges on an object.
 
    ```sql
-   GRANT USAGE, CREATE ON DATABASE dev_db TO dev_role;
+   GRANT ALL ON DATABASE dev_db TO dev_role;
    ```
 
 4. Grant cluster privileges to the `dev_role`:
