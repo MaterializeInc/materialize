@@ -1456,6 +1456,12 @@ SELECT exp(ln(2::decimal(15, 5)))
 ----
 2
 
+query error value out of range: overflow
+SELECT exp(10000::float)
+
+query error value out of range: underflow
+SELECT exp(-10000::float)
+
 query R
 SELECT power(382, 5);
 ----
@@ -1491,6 +1497,17 @@ query T
 SELECT pow(9::decimal(15, 5), 0.5::decimal(15, 5));
 ----
 3
+
+query error value out of range: overflow
+SELECT pow(3::float, 10000)
+
+query T
+SELECT pow(0::float, 10000)
+----
+0.000
+
+query error value out of range: underflow
+SELECT pow(3::float, -10000)
 
 query T
 SELECT pg_column_size(NULL)

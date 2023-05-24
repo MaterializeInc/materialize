@@ -1237,7 +1237,14 @@ fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         // > a negative number raised to a non-integer power yields a complex result
         return Err(EvalError::ComplexOutOfRange("pow".to_owned()));
     }
-    Ok(Datum::from(a.powf(b)))
+    let res = a.powf(b);
+    if res.is_infinite() {
+        return Err(EvalError::FloatOverflow);
+    }
+    if res == 0.0 && a != 0.0 {
+        return Err(EvalError::FloatUnderflow);
+    }
+    Ok(Datum::from(res))
 }
 
 fn uuid_generate_v5<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
