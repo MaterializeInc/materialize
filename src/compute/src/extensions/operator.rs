@@ -159,10 +159,6 @@ where
     let mut trace = arranged.trace.clone();
     let operator = trace.operator().global_id;
 
-    // We don't want to block compaction.
-    trace.set_logical_compaction(Antichain::new().borrow());
-    trace.set_physical_compaction(Antichain::new().borrow());
-
     let (mut old_size, mut old_capacity, mut old_allocations) = (0isize, 0isize, 0isize);
 
     let mut builder = OperatorBuilder::new("ArrangementSize".to_owned(), scope);
@@ -172,6 +168,13 @@ where
     builder.build(|_cap| {
         move |_frontiers| {
             input.for_each(|_time, _data| {});
+
+            // We don't want to block compaction.
+            let mut upper = Antichain::new();
+            trace.read_upper(&mut upper);
+            trace.set_logical_compaction(upper.borrow());
+            trace.set_physical_compaction(upper.borrow());
+
             let (size, capacity, allocations) = logic(&trace);
 
             let size = size.try_into().expect("must fit");
