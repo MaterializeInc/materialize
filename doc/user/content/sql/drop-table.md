@@ -1,17 +1,17 @@
 ---
 title: "DROP TABLE"
-description: "`DROP TABLE` removes a table from your Materialize instance."
+description: "`DROP TABLE` removes a table from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP TABLE` removes a table from your Materialize instance.
+`DROP TABLE` removes a table from Materialize.
 
 ## Conceptual framework
 
 [Tables](../create-table) store non-streaming data that is inserted via [INSERT](../insert)
-statements. `DROP TABLE` removes tables from your Materialize instance.
+statements. `DROP TABLE` removes a table from Materialize.
 
 ## Syntax
 

@@ -7,9 +7,9 @@ menu:
     weight: 1
 ---
 
-The following sections describe the available relations in the `mz_catalog` schema.
-These relations which contain metadata about objects within the Materialize instance.
-This incudes descriptions of each database, schema, source, table, view, sink, and
+The following sections describe the available relations in the `mz_catalog`
+schema. These relations contain metadata about objects in Materialize,
+including descriptions of each database, schema, source, table, view, sink, and
 index in the system.
 
 {{< warning >}}

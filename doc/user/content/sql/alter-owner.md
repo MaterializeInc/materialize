@@ -38,7 +38,7 @@ ALTER CLUSTER REPLICA production.r1 OWNER TO admin;
 
 ## See also
 
-- [REASSIGN OWNER](../reassign-owned)
+- [REASSIGN OWNED](../reassign-owned)
 - [CREATE ROLE](../create-role)
 - [ALTER ROLE](../alter-role)
 - [DROP ROLE](../drop-role)

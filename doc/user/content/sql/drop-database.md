@@ -1,12 +1,12 @@
 ---
 title: "DROP DATABASE"
-description: "`DROP DATABASE` removes a database from your Materialize instances."
+description: "`DROP DATABASE` removes a database from Materialize."
 menu:
   main:
     parent: 'commands'
 ---
 
-`DROP DATABASE` removes a database from your Materialize instances.
+`DROP DATABASE` removes a database from Materialize.
 
 {{< warning >}} `DROP DATABASE` immediately removes all objects within the
 database without confirmation. Use with care! {{< /warning >}}
