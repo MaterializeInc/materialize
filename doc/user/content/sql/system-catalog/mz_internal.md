@@ -324,11 +324,14 @@ The `mz_arrangement_sharing` view describes how many times each [arrangement] in
 
 The `mz_arrangement_sizes` view describes the size of each [arrangement] in the system.
 
-| Field          | Type         | Meaning                                                                                                                   |
-| -------------- | ------------ | --------                                                                                                                  |
-| `operator_id`  | [`bigint`]   | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `records`      | [`bigint`]   | The number of records in the arrangement.                                                                                 |
-| `batches`      | [`bigint`]   | The number of batches in the arrangement.                                                                                 |
+| Field         | Type       | Meaning                                                                                                                   |
+|---------------|------------|---------------------------------------------------------------------------------------------------------------------------|
+| `operator_id` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
+| `records`     | [`bigint`] | The number of records in the arrangement.                                                                                 |
+| `batches`     | [`bigint`] | The number of batches in the arrangement.                                                                                 |
+| `size`        | [`bigint`] | The utilized size in bytes of the arrangement.                                                                            |
+| `capacity`    | [`bigint`] | The capacity in bytes of the arrangement. Can be larger than the size.                                                    |
+| `allocations` | [`bigint`] | The number of separate memory allocations backing the arrangement.                                                        |
 
 ### `mz_compute_delays_histogram`
 

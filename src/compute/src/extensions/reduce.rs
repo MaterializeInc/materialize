@@ -16,14 +16,15 @@
 use differential_dataflow::difference::{Abelian, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::Data;
 use timely::dataflow::Scope;
 
+use crate::extensions::operator::{ArrangementSize, MzReduce};
+
 /// Extension trait for `ReduceCore`, currently providing a reduction based
 /// on an operator-pair approach.
-pub trait ReduceExt<G: Scope, K: Data, V: Data, R: Semigroup>
+pub(crate) trait ReduceExt<G: Scope, K: Data, V: Data, R: Semigroup>
 where
     G::Timestamp: Lattice + Ord,
 {
@@ -49,7 +50,9 @@ where
         T2::Val: Data,
         T2::R: Abelian,
         T2::Batch: Batch,
-        L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static;
+        L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
+        Arranged<G, TraceAgent<T1>>: ArrangementSize,
+        Arranged<G, TraceAgent<T2>>: ArrangementSize;
 }
 
 impl<G: Scope, K: Data, V: Data, Tr, R: Semigroup> ReduceExt<G, K, V, R> for Arranged<G, Tr>
@@ -75,9 +78,11 @@ where
         T2::R: Abelian,
         T2::Batch: Batch,
         L2: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
+        Arranged<G, TraceAgent<T1>>: ArrangementSize,
+        Arranged<G, TraceAgent<T2>>: ArrangementSize,
     {
-        let arranged1 = self.reduce_abelian::<L1, T1>(name1, logic1);
-        let arranged2 = self.reduce_abelian::<L2, T2>(name2, logic2);
+        let arranged1 = self.mz_reduce_abelian::<L1, T1>(name1, logic1);
+        let arranged2 = self.mz_reduce_abelian::<L2, T2>(name2, logic2);
         (arranged1, arranged2)
     }
 }

@@ -15,12 +15,14 @@ mod initialize;
 mod reachability;
 mod timely;
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
 use ::timely::logging::WorkerIdentifier;
 use ::timely::progress::Timestamp as TimelyTimestamp;
+use ::timely::scheduling::Activator;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_repr::Timestamp;
 use mz_timely_util::activator::RcActivator;
@@ -141,4 +143,9 @@ impl<E> EventQueue<E> {
             activator: RcActivator::new(activator_name, activate_after),
         }
     }
+}
+
+#[derive(Default)]
+struct SharedLoggingState {
+    arrangement_size_activators: BTreeMap<usize, Activator>,
 }

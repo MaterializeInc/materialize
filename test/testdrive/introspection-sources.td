@@ -282,9 +282,9 @@ mv1_primary_idx mv1
 
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 
-> SELECT records >= 300 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_arr' OR name='mv_arr'
-true
-true
+> SELECT records >= 300, size >= 300*96, capacity >= 300*96 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_arr' OR name='mv_arr'
+true true true
+true true true
 
 # Test that non-arranging dataflows show up in `mz_dataflow_arrangement_sizes`
 
@@ -292,5 +292,5 @@ true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
-0 0
+> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
+0 0 0 0 0

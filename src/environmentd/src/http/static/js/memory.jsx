@@ -164,7 +164,7 @@ function Views(props) {
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
-          id, name, records
+          id, name, records, size, capacity, allocations
         FROM
           mz_internal.mz_records_per_dataflow
         ${whereFragment}
@@ -215,6 +215,9 @@ function Views(props) {
                 <th>dataflow id</th>
                 <th>index name</th>
                 <th>records</th>
+                <th>size [KiB]</th>
+                <th>capacity [KiB]</th>
+                <th>allocations</th>
               </tr>
             </thead>
             <tbody>
@@ -230,6 +233,9 @@ function Views(props) {
                     {v[1]}
                   </td>
                   <td>{v[2]}</td>
+                  <td>{Math.round(v[3]/1024)}</td>
+                  <td>{Math.round(v[4]/1024)}</td>
+                  <td>{v[5]}</td>
                 </tr>
               ))}
             </tbody>
