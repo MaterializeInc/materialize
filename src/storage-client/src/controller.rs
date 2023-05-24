@@ -318,6 +318,24 @@ pub trait StorageController: Debug + Send {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
+    /// Check that the collection associated with `id` can be altered to represent the given
+    /// `ingestion`.
+    ///
+    /// Note that this check is optimistic and its return of `Ok(())` does not guarantee that
+    /// subsequent calls to `alter_collection` are guaranteed to succeed.
+    fn check_alter_collection(
+        &mut self,
+        id: GlobalId,
+        desc: IngestionDescription,
+    ) -> Result<(), StorageError>;
+
+    /// Alter the identified collection to use the described ingestion.
+    async fn alter_collection(
+        &mut self,
+        id: GlobalId,
+        desc: IngestionDescription,
+    ) -> Result<(), StorageError>;
+
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(&self, id: GlobalId) -> Result<&ExportState<Self::Timestamp>, StorageError>;
 
@@ -980,8 +998,6 @@ pub enum StorageError {
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
     /// Response to an invalid/unsupported `ALTER SOURCE` command.
-    ///
-    /// n.b. when returning this error, you should log details about the error.
     InvalidAlterSource { id: GlobalId },
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
@@ -1620,6 +1636,68 @@ where
                 DataSource::Progress | DataSource::Other => {}
             }
         }
+
+        Ok(())
+    }
+
+    fn check_alter_collection(
+        &mut self,
+        id: GlobalId,
+        ingestion: IngestionDescription,
+    ) -> Result<(), StorageError> {
+        self.check_alter_collection_inner(id, ingestion)
+    }
+
+    async fn alter_collection(
+        &mut self,
+        id: GlobalId,
+        ingestion: IngestionDescription,
+    ) -> Result<(), StorageError> {
+        self.check_alter_collection_inner(id, ingestion.clone())
+            .expect("error avoided by calling check_alter_collection first");
+
+        // Describe the ingestion in terms of collection metadata.
+        let description = self
+            .enrich_ingestion(id, ingestion.clone())
+            .expect("verified valid in check_alter_collection_inner");
+
+        let collection = self.collection_mut(id).expect("validated exists");
+
+        // Install new ingestion here rather than in `check_alter_collection_inner` because of
+        // mutability; making check_alter_collection_inner take a mutable reference is possible but
+        // renders the code even harder to reason about.
+        let new_source_exports = match &mut collection.description.data_source {
+            DataSource::Ingestion(active_ingestion) => {
+                let new_source_exports: Vec<_> = description
+                    .source_exports
+                    .keys()
+                    .filter(|id| !active_ingestion.source_exports.contains_key(id))
+                    .cloned()
+                    .collect();
+                *active_ingestion = ingestion;
+
+                new_source_exports
+            }
+            _ => unreachable!("verified collection refers to ingestion"),
+        };
+
+        let storage_dependencies = collection.description.get_storage_dependencies();
+
+        // Install read capability for all dependencies on new source exports.
+        self.install_dependency_read_holds(new_source_exports.into_iter(), &storage_dependencies)?;
+
+        // Fetch the client for this ingestion's instance.
+        let client = self
+            .state
+            .clients
+            .get_mut(&description.instance_id)
+            .expect("verified exists");
+
+        client.send(StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            id,
+            description,
+            update: true,
+        }]));
 
         Ok(())
     }
@@ -3042,6 +3120,63 @@ where
         }
     }
 
+    /// Determines if an `ALTER` is valid.
+    fn check_alter_collection_inner(
+        &self,
+        id: GlobalId,
+        ingestion: IngestionDescription,
+    ) -> Result<(), StorageError> {
+        // Check that the client exists.
+        self.state.clients.get(&ingestion.instance_id).ok_or(
+            StorageError::IngestionInstanceMissing {
+                storage_instance_id: ingestion.instance_id,
+                ingestion_id: id,
+            },
+        )?;
+
+        // Describe the ingestion in terms of collection metadata.
+        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
+
+        // Take a cloned copy of the description because we are going to treat it as a "scratch
+        // space".
+        let mut collection_description = self.collection(id)?.description.clone();
+
+        // Get the previous storage dependencies; we need these to understand if something has
+        // changed in what we depend upon.
+        let prev_storage_dependencies = collection_description.get_storage_dependencies();
+
+        // Check compatibility between current and new ingestions and install new ingestion in
+        // collection description.
+        match &mut collection_description.data_source {
+            DataSource::Ingestion(cur_ingestion) => {
+                let prev_ingestion = self.enrich_ingestion(id, cur_ingestion.clone())?;
+                prev_ingestion.alter_compatible(id, &described_ingestion)?;
+
+                *cur_ingestion = ingestion;
+            }
+            o => {
+                tracing::info!(
+                    "{id:?} inalterable because its data source is {:?} and not an ingestion",
+                    o
+                );
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        };
+
+        let new_storage_dependencies = collection_description.get_storage_dependencies();
+
+        if prev_storage_dependencies != new_storage_dependencies {
+            tracing::info!(
+                    "{id:?} inalterable because its storage dependencies have changed: were {:?} but are now {:?}",
+                    prev_storage_dependencies,
+                    new_storage_dependencies
+                );
+            return Err(StorageError::InvalidAlterSource { id });
+        }
+
+        Ok(())
+    }
+
     /// On each element of `collections`, install a read hold on all of the `storage_dependencies`.
     fn install_dependency_read_holds<I: Iterator<Item = GlobalId>>(
         &mut self,
@@ -3124,7 +3259,7 @@ where
 
     /// Converts an `IngestionDescription<()>` into `IngestionDescription<CollectionMetadata>`.
     fn enrich_ingestion(
-        &mut self,
+        &self,
         id: GlobalId,
         ingestion: IngestionDescription,
     ) -> Result<IngestionDescription<CollectionMetadata>, StorageError> {
