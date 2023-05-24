@@ -182,27 +182,9 @@ fn filter_may_match(
         return true;
     }
 
-    let total_count = stats.len();
     for (id, _) in relation_type.column_types.iter().enumerate() {
-        let min_max = stats.col_min_max(id, &arena);
-        let nulls = stats.col_null_count(id);
-        let json_range = stats.col_json(id, &arena);
-
-        let value_range = match (total_count, min_max, nulls) {
-            (Some(total_count), _, Some(nulls)) if total_count == nulls => ResultSpec::nothing(),
-            (_, Some((min, max)), _) => ResultSpec::value_between(min, max),
-            _ => ResultSpec::value_all(),
-        };
-
-        // If this is not a JSON column or we don't have JSON stats, json_range is
-        // [ResultSpec::anything] and this is a noop.
-        let value_range = value_range.intersect(json_range);
-
-        let null_range = match nulls {
-            Some(0) => ResultSpec::nothing(),
-            _ => ResultSpec::null(),
-        };
-        ranges.push_column(id, value_range.union(null_range));
+        let result_spec = stats.col_stats(id, &arena);
+        ranges.push_column(id, result_spec);
     }
     let result = ranges.mfp_plan_filter(plan).range;
     result.may_contain(Datum::True) || result.may_fail()
@@ -426,6 +408,30 @@ impl PersistSourceDataStats<'_> {
             JsonStats::None => ResultSpec::nothing(),
             JsonStats::Lists | JsonStats::Mixed => ResultSpec::anything(),
         }
+    }
+
+    fn col_stats<'a>(&'a self, id: usize, arena: &'a RowArena) -> ResultSpec<'a> {
+        let total_count = self.len();
+        let min_max = self.col_min_max(id, &arena);
+        let nulls = self.col_null_count(id);
+        let json_range = self.col_json(id, &arena);
+
+        let value_range = match (total_count, min_max, nulls) {
+            (Some(total_count), _, Some(nulls)) if total_count == nulls => ResultSpec::nothing(),
+            (_, Some((min, max)), _) => ResultSpec::value_between(min, max),
+            _ => ResultSpec::value_all(),
+        };
+
+        // If this is not a JSON column or we don't have JSON stats, json_range is
+        // [ResultSpec::anything] and this is a noop.
+        let value_range = value_range.intersect(json_range);
+
+        let null_range = match nulls {
+            Some(0) => ResultSpec::nothing(),
+            _ => ResultSpec::null(),
+        };
+
+        value_range.union(null_range)
     }
 
     fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> ResultSpec<'a> {
