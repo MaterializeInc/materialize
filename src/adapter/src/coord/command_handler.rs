@@ -11,6 +11,7 @@
 //! client via some external Materialize API (ex: HTTP and psql).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
@@ -561,6 +562,16 @@ impl Coordinator {
     ) {
         let catalog = self.owned_catalog();
         mz_ore::task::spawn(|| "coord::handle_prepare", async move {
+            let mut async_pause = false;
+            (|| {
+                fail::fail_point!("async_prepare", |val| {
+                    async_pause = val.map_or(false, |val| val.parse().unwrap_or(false))
+                });
+            })();
+            if async_pause {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            };
+
             let res = match Self::describe(&catalog, &session, stmt.clone(), param_types) {
                 Ok(desc) => {
                     session.set_prepared_statement(
