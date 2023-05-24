@@ -186,7 +186,7 @@ where
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
 {
     let cfg = clients.cfg().clone();
-    let metrics = clients.metrics.shards.shard(&shard_id);
+    let metrics = Arc::clone(&clients.metrics);
     let worker_index = scope.index();
     let num_workers = scope.peers();
 
@@ -468,6 +468,8 @@ where
                                                 usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
                                             };
                                             if should_audit {
+                                                metrics.pushdown.parts_audited_count.inc();
+                                                metrics.pushdown.parts_audited_bytes.inc_by(bytes);
                                                 part_desc.request_filter_pushdown_audit();
                                             } else {
                                                 debug!("skipping part because of stats filter {:?}", part_desc.stats);
