@@ -187,7 +187,6 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
             return Poll::Ready(Some(Event::Progress(frontier.clone())));
         } else if frontier.is_empty() {
             // If the frontier is empty and is not pending it means that there is no more data left
-            println!("EMPTY FRONTIER");
             return Poll::Ready(None);
         };
         drop(shared_frontiers);
