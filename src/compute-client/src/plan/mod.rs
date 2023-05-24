@@ -1459,8 +1459,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } else {
                     input
                 };
-                let (threshold_plan, required_arrangement) =
-                    ThresholdPlan::create_from(arity, false);
+                let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let input = if !keys
                     .arranged
                     .iter()
