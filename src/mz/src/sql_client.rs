@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::process::Command;
+use std::{process::Command, path::{PathBuf, Path}, env};
 
 use mz_cloud_api::client::environment::Environment;
 use mz_frontegg_auth::AppPassword;
@@ -68,19 +68,37 @@ impl Client {
         command
     }
 
+    fn find<P>(&self, exe_name: P) -> Option<PathBuf>
+    where P: AsRef<Path>,
+    {
+        env::var_os("PATH").and_then(|paths| {
+            env::split_paths(&paths).filter_map(|dir| {
+                let full_path = dir.join(&exe_name);
+                if full_path.is_file() {
+                    Some(full_path)
+                } else {
+                    None
+                }
+            }).next()
+        })
+    }
+
     /// Runs pg_isready to check if an environment is healthy
     pub fn is_ready(&self, environment: &Environment, email: String) -> Command {
-        let mut command = Command::new("pg_isready");
-        command
-            .arg("-q")
-            .args(vec![
-                "-q",
-                "-d",
-                self.build_psql_url(environment, email).as_str(),
-            ])
-            .env("PGPASSWORD", &self.app_password.to_string())
-            .env("PGAPPNAME", PG_APPLICATION_NAME);
+        if let Some(_) = self.find("pg_isready") {
+            let mut command = Command::new("pg_isready");
+            command
+                .args(vec![
+                    "-q",
+                    "-d",
+                    self.build_psql_url(environment, email).as_str(),
+                ])
+                .env("PGPASSWORD", &self.app_password.to_string())
+                .env("PGAPPNAME", PG_APPLICATION_NAME);
 
-        command
+            command
+        } else {
+            panic!("the pg_isready program is not present. Make sure it is available in the $PATH.")
+        }
     }
 }

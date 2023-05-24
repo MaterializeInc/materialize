@@ -89,9 +89,9 @@ pub async fn show(cx: &mut RegionContext) -> Result<(), Error> {
     let environment_health = match check_environment_health(cx, &environment).await {
         Ok(healthy) => match healthy {
             true => "yes",
-            false => "no",
+            _ => "no",
         },
-        Err(_) => "no",
+        _ => "no",
     };
 
     let output_formatter = cx.output_formatter();

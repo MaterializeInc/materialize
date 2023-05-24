@@ -75,16 +75,22 @@
 
 use std::{fs, time::Duration};
 
-use assert_cmd::Command;
+use assert_cmd::{Command, assert::Assert};
 use mz::{config_file::ConfigFile, ui::OptionalStr};
 use serde::{Deserialize, Serialize};
 use tabled::{Style, Table, Tabled};
-use uuid::{uuid, Uuid};
 
 fn cmd() -> Command {
     let mut cmd = Command::cargo_bin("mz").unwrap();
     cmd.env_clear().timeout(Duration::from_secs(10));
     cmd
+}
+
+fn output_to_string(assert: Assert) -> String {
+    let output = assert.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    stdout
 }
 
 #[test]
@@ -101,9 +107,8 @@ fn test_version() {
         .stdout(format!("mz {}\n", expected_version));
 }
 
-#[tokio::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
-async fn set_config_file() {
+
+fn init_config_file() {
     let main_config_file = format!(
         r#"
             "profile" = "default"
@@ -115,11 +120,34 @@ async fn set_config_file() {
         // TODO: Replace with CI PASSWORD
         std::env!("CI_PASSWORD")
     );
+
     fs::write(ConfigFile::default_path().unwrap(), main_config_file).unwrap();
 }
 
 #[test]
-fn test_config_params() {
+fn test_e2e() {
+    init_config_file();
+
+    // Test - `mz config`
+    //
+    // Assert `mz config get profile`
+    let assert = cmd()
+        .arg("config")
+        .arg("get")
+        .arg("profile")
+        .assert()
+        .success();
+
+    let output = output_to_string(assert);
+    assert!(output.trim() == "default");
+
+    // Assert `mz config get list` output:
+    //
+    //  Name    | Value
+    // ---------+---------
+    //  profile | default
+    //  vault   | <unset>
+    //
     #[derive(Deserialize, Serialize, Tabled)]
     pub struct ConfigParam<'a> {
         #[tabled(rename = "Name")]
@@ -138,26 +166,13 @@ fn test_config_params() {
             value: mz::ui::OptionalStr(Some("<unset>")),
         },
     ];
-    let command_output = Table::new(vec).with(Style::psql()).to_string();
+    let expected_command_output = Table::new(vec).with(Style::psql()).to_string();
+    let assert = cmd().arg("config").arg("list").assert().success();
 
-    let binding = cmd().arg("config").arg("list").assert().success();
+    let output = output_to_string(assert);
+    assert!(output.trim() == expected_command_output.trim());
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-
-    assert!(stdout.trim() == command_output.trim());
-
-    let binding = cmd()
-        .arg("config")
-        .arg("get")
-        .arg("profile")
-        .assert()
-        .success();
-
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(stdout.trim() == "default");
-
+    // Assert `mz config set profile` + `mz config get profile output:
     cmd()
         .arg("config")
         .arg("set")
@@ -166,18 +181,17 @@ fn test_config_params() {
         .assert()
         .success();
 
-    let binding = cmd()
+    let assert = cmd()
         .arg("config")
         .arg("get")
         .arg("profile")
         .assert()
         .success();
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let output = output_to_string(assert);
+    assert!(output.trim() == "random");
 
-    assert!(stdout.trim() == "random");
-
+    // Assert `mz config remove profile`
     cmd()
         .arg("config")
         .arg("remove")
@@ -185,21 +199,20 @@ fn test_config_params() {
         .assert()
         .success();
 
-    let binding = cmd()
+    let assert = cmd()
         .arg("config")
         .arg("get")
         .arg("profile")
         .assert()
         .success();
 
-    let output = binding.get_output();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let output = output_to_string(assert);
+    assert!(output.trim() == "default");
 
-    assert!(stdout.trim() == "default");
-}
+    // Test - `mz profile`
+    //
+    // Assert `mz profile list`
 
-#[tokio::test]
-async fn test_profile_commands() {
     #[derive(Deserialize, Serialize, Tabled)]
     pub struct ProfileConfigParam<'a> {
         #[tabled(rename = "Name")]
@@ -209,11 +222,26 @@ async fn test_profile_commands() {
     }
 
     let vec = vec![
-        ProfileConfigParam { name: "admin-endpoint", value: "<unset>" },
-        ProfileConfigParam { name: "app-password", value: std::env!("CI_PASSWORD") },
-        ProfileConfigParam { name: "cloud-endpoint", value: "<unset>" },
-        ProfileConfigParam { name: "region", value: "aws/us-east-1" },
-        ProfileConfigParam { name: "vault", value: "<unset>" },
+        ProfileConfigParam {
+            name: "admin-endpoint",
+            value: "<unset>",
+        },
+        ProfileConfigParam {
+            name: "app-password",
+            value: std::env!("CI_PASSWORD"),
+        },
+        ProfileConfigParam {
+            name: "cloud-endpoint",
+            value: "<unset>",
+        },
+        ProfileConfigParam {
+            name: "region",
+            value: "aws/us-east-1",
+        },
+        ProfileConfigParam {
+            name: "vault",
+            value: "<unset>",
+        },
     ];
     let command_output = Table::new(vec).with(Style::psql()).to_string();
     let binding = cmd()
@@ -228,6 +256,7 @@ async fn test_profile_commands() {
 
     assert!(stdout.trim() == command_output.trim());
 
+    // Assert `mz profile config get region`
     let binding = cmd()
         .arg("profile")
         .arg("config")
@@ -241,6 +270,7 @@ async fn test_profile_commands() {
 
     assert!(stdout.trim() == "aws/us-east-1");
 
+    // Assert `mz profile config set region`
     cmd()
         .arg("profile")
         .arg("config")
@@ -263,21 +293,9 @@ async fn test_profile_commands() {
 
     assert!(stdout.trim() == "aws/eu-west-1");
 
-    // TODO: Remove an app-password. Breaks the CLI config. The same if the app-password is invalid.
-    // TODO: Add more tests for config_set and config_remove when you implement the actual commands.
-    // TODO: Profile init + Profile remove
-}
-
-#[tokio::test]
-async fn test_app_password_commands() {
-    #[derive(Deserialize, Serialize, Tabled)]
-    pub struct AppPassword {
-        #[tabled(rename = "Name")]
-        description: String,
-        #[tabled(rename = "Created At")]
-        created_at: String,
-    }
-
+    // Test - `mz app-password`
+    //
+    // Assert `mz app-password create`
     let description = uuid::Uuid::new_v4();
 
     let binding = cmd()
@@ -292,21 +310,18 @@ async fn test_app_password_commands() {
 
     assert!(stdout.starts_with("mzp_"));
 
-    let binding = cmd()
-        .arg("app-password")
-        .arg("list")
-        .assert()
-        .success();
+    // Assert `mz app-password list`
+
+    let binding = cmd().arg("app-password").arg("list").assert().success();
 
     let output = binding.get_output();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
     assert!(stdout.contains(&description.to_string()));
-}
 
-#[cfg(test)]
-#[tokio::test]
-async fn test_create_secret() {
+    // Test - `mz secrets`
+    //
+    // Assert `mz secret create`
     let description = format!("SAFE_TO_DELETE_{}", uuid::Uuid::new_v4());
 
     // Secrets
@@ -318,7 +333,7 @@ async fn test_create_secret() {
         .assert()
         .success();
 
-    // Force
+    // Assert `mz secret create -f`
     cmd()
         .arg("secret")
         .arg("create")
@@ -327,16 +342,13 @@ async fn test_create_secret() {
         .write_stdin("decode('c2VjcmV0Cg==', 'base64')")
         .assert()
         .success();
-}
 
-#[cfg(test)]
-#[tokio::test]
-async fn test_users() {
+    // Test - `mz user`
+    //
+    // Assert `mz user create` + `mz user list`
     let name = format!("SAFE_TO_DELETE_+{}", uuid::Uuid::new_v4());
     let email = format!("{}@materialize.com", name);
 
-    // Users:
-    // TODO: Check if the user exists first.
     cmd()
         .arg("user")
         .arg("create")
@@ -357,6 +369,7 @@ async fn test_users() {
 
     assert!(stdout.contains(&email.to_string()));
 
+    // Assert `mz user remove` + `mz user list`
     cmd()
         .arg("user")
         .arg("remove")
@@ -375,10 +388,10 @@ async fn test_users() {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
     assert!(!stdout.contains(&email.to_string()));
-}
 
-#[test]
-fn test_regions() {
+    // Test - `mz region`
+    //
+    // Assert `mz region list`
     #[derive(Deserialize, Serialize, Tabled)]
     pub struct Region<'a> {
         #[tabled(rename = "Region")]
@@ -387,46 +400,50 @@ fn test_regions() {
         status: &'a str,
     }
 
-    let vec = vec![Region {region:"aws/eu-west-1", status: "enabled" }, Region {region:"aws/us-east-1", status: "enabled" }];
+    let vec = vec![
+        Region {
+            region: "aws/eu-west-1",
+            status: "enabled",
+        },
+        Region {
+            region: "aws/us-east-1",
+            status: "enabled",
+        },
+    ];
     let command_output = Table::new(vec).with(Style::psql()).to_string();
-    let binding = cmd()
-        .arg("region")
-        .arg("list")
-        .assert()
-        .success();
+    let binding = cmd().arg("region").arg("list").assert().success();
 
-    let output = binding
-        .get_output();
+    let output = binding.get_output();
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
     assert!(stdout.trim() == command_output.trim());
 
-    let binding = cmd()
-        .arg("region")
-        .arg("show")
-        .assert()
-        .success();
+    // Assert `mz region show`
+    // The path does not always contains the pg_isready binary.
+    // let binding = cmd().arg("region").arg("show").env("PATH", "/opt/homebrew/bin/").assert().success();
+    let binding = cmd().arg("region").arg("show").env("PATH", "/opt/homebrew/bin/").assert().success();
 
-    let output = binding
-        .get_output();
+    let output = binding.get_output();
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     println!("{}", stdout.trim());
-    assert!(stdout.trim().starts_with(&format!("Healthy: \t{}", "yes")))
+    assert!(stdout.trim().starts_with(&format!("Healthy: \t{}", "yes")));
 
     // TODO:
-    // cmd()
+    //  cmd()
     //     .arg("region")
     //     .arg("enable")
     //     .assert()
     //     .success();
+
+    let binding = cmd().arg("sql").arg("--").arg("-c").arg("\"SELECT 1\"").assert().success();
+    // TODO: Remove an app-password. Breaks the CLI config. The same if the app-password is invalid.
+    // TODO: Add more tests for config_set and config_remove when you implement the actual commands.
+    // TODO: Profile init + Profile remove
+    // TODO: Add more interactions with Materialize
+    //  cmd()
+    //      .arg("sql")
+    //      .assert()
+    //      .success();
 }
-
-// #[test]
-// #[cfg_attr(miri, ignore)]
-// fn test_e2e() {
-
-//     // TODO: Add more interactions with Materialize
-//     cmd().arg("sql").assert().success();
-
