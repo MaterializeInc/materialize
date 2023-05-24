@@ -24,7 +24,7 @@ cluster_replica                     ""                      "Sets a target clust
 database                            materialize             "Sets the current database (CockroachDB)."
 DateStyle                           "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
 extra_float_digits                  3                       "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
-failpoints                          ""                      "Allows failpoints to be dynamically activated."
+failpoints                          <omitted>               "Allows failpoints to be dynamically activated."
 integer_datetimes                   on                      "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
 IntervalStyle                       postgres                "Sets the display format for interval values (PostgreSQL)."
 search_path                         public                  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
@@ -69,7 +69,7 @@ UTF8
 UTF8
 
 ! SET client_encoding = UTF9
-contains:parameter "client_encoding" can only be set to "UTF8"
+contains:invalid value for parameter "client_encoding": "utf9"
 
 # if its utf8 we let it through
 > SET NAMES 'UTF8';
@@ -135,7 +135,7 @@ contains:invalid value for parameter "TimeZone": "nope"
 contains:invalid value for parameter "transaction_isolation": "read draft"
 
 ! SET integer_datetimes = false
-contains:parameter "integer_datetimes" cannot be changed
+contains:parameter "integer_datetimes" can only be set to "on"
 
 > SET client_min_messages TO ERROR
 > SHOW client_min_messages
@@ -173,7 +173,7 @@ contains:invalid value for parameter "client_min_messages": "invalid"
 postgres
 
 ! SET intervalstyle = 'postgres-legacy'
-contains:parameter "IntervalStyle" can only be set to "postgres"
+contains:invalid value for parameter "IntervalStyle": "postgres-legacy"
 
 > SET intervalstyle = 'postgres';
 
@@ -183,4 +183,4 @@ contains:parameter "IntervalStyle" can only be set to "postgres"
 > SET cluster_replica = 'r1'
 
 ! SET cluster_replica = 1, 2
-contains:parameter "cluster_replica" requires a "optional string" value
+contains:parameter "cluster_replica" cannot have value "1","2": expects a single value
