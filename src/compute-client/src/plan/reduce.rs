@@ -153,9 +153,6 @@ pub enum ReducePlan {
     /// Plan for not computing any aggregations, just determining the set of
     /// distinct keys.
     Distinct,
-    /// Plan for not computing any aggregations, just determining the set of distinct keys. A
-    /// specialization of [ReducePlan::Distinct] maintaining rows not in the output.
-    DistinctNegated,
     /// Plan for computing only accumulable aggregations.
     Accumulable(AccumulablePlan),
     /// Plan for computing only hierarchical aggregations.
@@ -219,7 +216,6 @@ impl RustType<ProtoReducePlan> for ReducePlan {
         ProtoReducePlan {
             kind: Some(match self {
                 ReducePlan::Distinct => Distinct(()),
-                ReducePlan::DistinctNegated => DistinctNegated(()),
                 ReducePlan::Accumulable(plan) => Accumulable(plan.into_proto()),
                 ReducePlan::Hierarchical(plan) => Hierarchical(plan.into_proto()),
                 ReducePlan::Basic(plan) => Basic(plan.into_proto()),
@@ -235,7 +231,6 @@ impl RustType<ProtoReducePlan> for ReducePlan {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoReducePlan::kind"))?;
         Ok(match kind {
             Distinct(()) => ReducePlan::Distinct,
-            DistinctNegated(()) => ReducePlan::DistinctNegated,
             Accumulable(plan) => ReducePlan::Accumulable(plan.into_rust()?),
             Hierarchical(plan) => ReducePlan::Hierarchical(plan.into_rust()?),
             Basic(plan) => ReducePlan::Basic(plan.into_rust()?),
@@ -651,7 +646,7 @@ impl ReducePlan {
                     assert!(collation.basic.is_none());
                     collation.basic = Some(e);
                 }
-                ReducePlan::Distinct | ReducePlan::DistinctNegated | ReducePlan::Collation(_) => {
+                ReducePlan::Distinct | ReducePlan::Collation(_) => {
                     panic!("Inner reduce plan was unsupported type!")
                 }
             }
@@ -755,16 +750,11 @@ impl ReducePlan {
     /// or a singleton vector containing the list of expressions
     /// that key a single arrangement.
     pub fn keys(&self, key_arity: usize, arity: usize) -> AvailableCollections {
-        match self {
-            ReducePlan::DistinctNegated => AvailableCollections::new_raw(),
-            _ => {
-                let key = (0..key_arity)
-                    .map(mz_expr::MirScalarExpr::Column)
-                    .collect::<Vec<_>>();
-                let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-                AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
-            }
-        }
+        let key = (0..key_arity)
+            .map(mz_expr::MirScalarExpr::Column)
+            .collect::<Vec<_>>();
+        let (permutation, thinning) = permutation_for_arrangement(&key, arity);
+        AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
     }
 }
 
