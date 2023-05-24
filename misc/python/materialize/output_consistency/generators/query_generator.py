@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
+from typing import List, Optional, Set
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -136,22 +136,16 @@ class QueryGenerator:
                 offset_index : offset_index + self.config.max_cols_per_query
             ]
 
-            restrict_to_row_indices = None
-
-            if storage_layout == ValueStorageLayout.VERTICAL:
-                max_number_of_rows_to_select = self.randomized_picker.random_number(
-                    2, 3
-                )
-                restrict_to_row_indices = self.randomized_picker.random_row_indices(
-                    self.vertical_storage_row_count, max_number_of_rows_to_select
-                )
+            restriction_to_row_indices = self._select_row_indices_selection(
+                storage_layout
+            )
 
             query = QueryTemplate(
                 expect_error,
                 expression_chunk,
                 storage_layout,
                 contains_aggregations,
-                restrict_to_row_indices,
+                restriction_to_row_indices,
             )
 
             queries.append(query)
@@ -165,17 +159,34 @@ class QueryGenerator:
 
         queries = []
         for expression in expressions:
+            restriction_to_row_indices = self._select_row_indices_selection(
+                expression.storage_layout
+            )
+
             queries.append(
                 QueryTemplate(
                     expression.is_expect_error,
                     [expression],
                     expression.storage_layout,
                     False,
-                    None,
+                    restriction_to_row_indices,
                 )
             )
 
         return queries
+
+    def _select_row_indices_selection(
+        self, storage_layout: ValueStorageLayout
+    ) -> Optional[Set[int]]:
+        if storage_layout == ValueStorageLayout.HORIZONTAL:
+            return None
+        elif storage_layout == ValueStorageLayout.VERTICAL:
+            max_number_of_rows_to_select = self.randomized_picker.random_number(2, 3)
+            return self.randomized_picker.random_row_indices(
+                self.vertical_storage_row_count, max_number_of_rows_to_select
+            )
+        else:
+            raise RuntimeError(f"Unknown storage layout: {storage_layout}")
 
     def reset_state(self) -> None:
         self.count_pending_expressions = 0
