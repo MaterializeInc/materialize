@@ -91,6 +91,7 @@ operations)
 * `known_inconsistencies` contains a filter to allow skipping certain expressions that produce known inconsistencies
 * `operation` defines the structure of operations, functions, and their parameters (actual operations are specified in
 `input-data/operations`)
+* `output` contains the output printer
 * `query` defines the query and result structure
 * `runner` contains the test runner orchestrating the logic
 * `selection` contains the random picker
