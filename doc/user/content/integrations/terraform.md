@@ -21,16 +21,16 @@ Materialize provider allows users who are not well-versed in SQL to maintain
 objects in an organization. A few specific use cases are captured in the
 sections below.
 
-### MSK or self-managed Kafka and Privacylink
+### MSK or self-managed Kafka and PrivateLink
 
 To get data into Materialize, you need a connection to allow your data source to
 communicate with Materialize. One option to connect securely to Materialize is
-AWS Privatelink. 
+AWS PrivateLink. 
 
-The [AWS MSK Privatelink](https://github.com/MaterializeInc/terraform-aws-msk-privatelink) and [AWS Kafka Privatelink](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink) modules allow you to manage
+The [AWS MSK PrivateLink](https://github.com/MaterializeInc/terraform-aws-msk-privatelink) and [AWS Kafka PrivateLink](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink) modules allow you to manage
 your connection to Materialize in a single configuration. With these modules,
 you can create a secure connection and add Materialize [resource blocks](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/connection_aws_privatelink) to allow
-Materialize to communicate with the Privatelink endpoint.
+Materialize to communicate with the PrivateLink endpoint.
 
 ### EC2 SSH bastion host
 
