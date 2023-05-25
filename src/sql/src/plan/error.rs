@@ -165,6 +165,10 @@ pub enum PlanError {
         name: UnresolvedItemName,
         upstream_references: Vec<UnresolvedItemName>,
     },
+    SubsourceDuplicateReference {
+        name: UnresolvedItemName,
+        target_names: Vec<UnresolvedItemName>,
+    },
     PostgresDatabaseMissingFilteredSchemas {
         schemas: Vec<String>,
     },
@@ -436,6 +440,9 @@ impl fmt::Display for PlanError {
             Self::EmptyPublication(publication) => write!(f, "PostgreSQL PUBLICATION {publication} is empty"),
             Self::SubsourceNameConflict { name, upstream_references } => {
                 write!(f, "multiple tables with name {}: {}", name.to_ast_string_stable(), itertools::join(upstream_references.iter().map(|n| n.to_ast_string_stable()), ", "))
+            },
+            Self::SubsourceDuplicateReference { name, target_names } => {
+                write!(f, "table {} referred to by multiple subsources: {}", name.to_ast_string_stable(), itertools::join(target_names.iter().map(|n| n.to_ast_string_stable()), ", "))
             },
             Self::PostgresDatabaseMissingFilteredSchemas { schemas} => {
                 write!(f, "FOR SCHEMAS (..) included {}, but PostgreSQL database has no schema with that name", itertools::join(schemas.iter(), ", "))
