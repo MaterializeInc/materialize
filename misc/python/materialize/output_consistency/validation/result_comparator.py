@@ -9,7 +9,7 @@
 
 import re
 from decimal import Decimal
-from typing import Any, List, cast
+from typing import Any, cast
 
 from materialize.output_consistency.query.query_result import (
     QueryExecution,
@@ -40,10 +40,10 @@ class ResultComparator:
         if len(query_execution.outcomes) == 1:
             raise RuntimeError("Contains only one outcome, nothing to compare against!")
 
-        if query_execution.error_was_expected:
+        if query_execution.query.expect_error:
             validation_outcome.add_remark(ValidationRemark("DB error was expected"))
 
-        self.validate_outcomes_metadata(query_execution.outcomes, validation_outcome)
+        self.validate_outcomes_metadata(query_execution, validation_outcome)
 
         if not validation_outcome.success():
             # do not continue with value comparison if metadata differs
@@ -52,7 +52,7 @@ class ResultComparator:
         queries_succeeded = query_execution.outcomes[0].successful
 
         if queries_succeeded:
-            self.validate_outcomes_data(query_execution.outcomes, validation_outcome)
+            self.validate_outcomes_data(query_execution, validation_outcome)
             validation_outcome.success_reason = "result data matches"
         else:
             # error messages were already validated at metadata validation
@@ -61,17 +61,19 @@ class ResultComparator:
         return validation_outcome
 
     def validate_outcomes_metadata(
-        self, outcomes: List[QueryOutcome], validation_outcome: ValidationOutcome
+        self, query_execution: QueryExecution, validation_outcome: ValidationOutcome
     ) -> None:
+        outcomes = query_execution.outcomes
         outcome1 = outcomes[0]
 
         for index in range(1, len(outcomes)):
             self.validate_metadata_of_two_outcomes(
-                outcome1, outcomes[index], validation_outcome
+                query_execution, outcome1, outcomes[index], validation_outcome
             )
 
     def validate_metadata_of_two_outcomes(
         self,
+        query_execution: QueryExecution,
         outcome1: QueryOutcome,
         outcome2: QueryOutcome,
         validation_outcome: ValidationOutcome,
@@ -79,6 +81,7 @@ class ResultComparator:
         if outcome1.successful != outcome2.successful:
             validation_outcome.add_error(
                 ValidationError(
+                    query_execution.query,
                     ValidationErrorType.SUCCESS_MISMATCH,
                     "Outcome differs",
                     value1=outcome1.__class__.__name__,
@@ -96,6 +99,7 @@ class ResultComparator:
 
         if both_successful:
             self.validate_row_count(
+                query_execution,
                 cast(QueryResult, outcome1),
                 cast(QueryResult, outcome2),
                 validation_outcome,
@@ -107,6 +111,7 @@ class ResultComparator:
         if both_failed:
             failure1 = cast(QueryFailure, outcome1)
             self.validate_error_messages(
+                query_execution,
                 failure1,
                 cast(QueryFailure, outcome2),
                 validation_outcome,
@@ -125,6 +130,7 @@ class ResultComparator:
 
     def validate_row_count(
         self,
+        query_execution: QueryExecution,
         result1: QueryResult,
         result2: QueryResult,
         validation_outcome: ValidationOutcome,
@@ -137,6 +143,7 @@ class ResultComparator:
         if num_rows1 != num_rows2:
             validation_outcome.add_error(
                 ValidationError(
+                    query_execution.query,
                     ValidationErrorType.ROW_COUNT_MISMATCH,
                     "Row count differs",
                     value1=str(num_rows1),
@@ -150,6 +157,7 @@ class ResultComparator:
 
     def validate_error_messages(
         self,
+        query_execution: QueryExecution,
         failure1: QueryFailure,
         failure2: QueryFailure,
         validation_outcome: ValidationOutcome,
@@ -160,6 +168,7 @@ class ResultComparator:
         if norm_error_message_1 != norm_error_message_2:
             validation_outcome.add_error(
                 ValidationError(
+                    query_execution.query,
                     ValidationErrorType.ERROR_MISMATCH,
                     "Error message differs",
                     value1=norm_error_message_1,
@@ -209,21 +218,25 @@ class ResultComparator:
             )
 
     def validate_outcomes_data(
-        self, outcomes: List[QueryOutcome], validation_outcome: ValidationOutcome
+        self,
+        query_execution: QueryExecution,
+        validation_outcome: ValidationOutcome,
     ) -> None:
         # each outcome is known to contain at least one row
         # each row is supposed to have the same number of columns
 
+        outcomes = query_execution.outcomes
         result1 = cast(QueryResult, outcomes[0])
 
         for index in range(1, len(outcomes)):
             other_result = cast(QueryResult, outcomes[index])
             self.validate_data_of_two_outcomes(
-                result1, other_result, validation_outcome
+                query_execution, result1, other_result, validation_outcome
             )
 
     def validate_data_of_two_outcomes(
         self,
+        query_execution: QueryExecution,
         outcome1: QueryResult,
         outcome2: QueryResult,
         validation_outcome: ValidationOutcome,
@@ -238,10 +251,13 @@ class ResultComparator:
             raise RuntimeError("Results count different number of columns!")
 
         for col_index in range(0, num_columns1):
-            self.validate_column(outcome1, outcome2, col_index, validation_outcome)
+            self.validate_column(
+                query_execution, outcome1, outcome2, col_index, validation_outcome
+            )
 
     def validate_column(
         self,
+        query_execution: QueryExecution,
         result1: QueryResult,
         result2: QueryResult,
         col_index: int,
@@ -257,6 +273,7 @@ class ResultComparator:
             if not self.is_value_equal(result_value1, result_value2):
                 validation_outcome.add_error(
                     ValidationError(
+                        query_execution.query,
                         ValidationErrorType.CONTENT_MISMATCH,
                         "Value differs",
                         value1=result_value1,
@@ -265,6 +282,7 @@ class ResultComparator:
                         strategy2=result2.strategy,
                         sql1=result1.sql,
                         sql2=result2.sql,
+                        col_index=col_index,
                         location=f"row index {row_index}, column index {col_index}",
                     ),
                 )

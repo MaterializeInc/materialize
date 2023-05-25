@@ -12,6 +12,7 @@ from typing import Optional
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
+from materialize.output_consistency.query.query_template import QueryTemplate
 
 
 class ValidationErrorType(Enum):
@@ -72,18 +73,21 @@ class ValidationWarning(ValidationMessage):
 class ValidationError(ValidationMessage):
     def __init__(
         self,
+        query_template: QueryTemplate,
         error_type: ValidationErrorType,
         message: str,
+        strategy1: EvaluationStrategy,
+        strategy2: EvaluationStrategy,
         description: Optional[str] = None,
         value1: Optional[str] = None,
         value2: Optional[str] = None,
-        strategy1: Optional[EvaluationStrategy] = None,
-        strategy2: Optional[EvaluationStrategy] = None,
         sql1: Optional[str] = None,
         sql2: Optional[str] = None,
+        col_index: Optional[int] = None,
         location: Optional[str] = None,
     ):
         super().__init__(message, description)
+        self.query_template = query_template
         self.error_type = error_type
         self.value1 = value1
         self.value2 = value2
@@ -91,13 +95,11 @@ class ValidationError(ValidationMessage):
         self.strategy2 = strategy2
         self.sql1 = sql1
         self.sql2 = sql2
+        self.col_index = col_index
         self.location = location
 
         if value1 is None and value2 is not None:
             raise RuntimeError("value1 must be set if value2 is set")
-
-        if strategy1 is None and strategy2 is not None:
-            raise RuntimeError("strategy1 must be set if strategy2 is set")
 
         if sql1 is None and sql2 is not None:
             raise RuntimeError("sql1 must be set if sql2 is set")
@@ -118,13 +120,10 @@ class ValidationError(ValidationMessage):
         elif self.value1 is not None:
             strategy1_desc = f" ({self.strategy1})"
             value_and_strategy_desc = f"\n  Value{strategy1_desc}: '{self.value1}'  (type: {type(self.value1)})"
-        elif self.strategy2 is not None:
-            # self.strategy1 will never be null in this case
+        else:
             value_and_strategy_desc = (
                 f"\n  Strategy 1: {self.strategy1}\nStrategy 2:   {self.strategy2}"
             )
-        elif self.strategy1 is not None:
-            value_and_strategy_desc = f"\n  Strategy: {self.strategy1}"
 
         sql_desc = ""
         if self.sql1 is not None:
