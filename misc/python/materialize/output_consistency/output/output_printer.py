@@ -57,7 +57,7 @@ class OutputPrinter:
         print(sql)
 
     def __print_text(self, text: str) -> None:
-        adjusted_text = re.sub("\n", f"\n{COMMENT_PREFIX} ", text)
-        adjusted_text = f"{COMMENT_PREFIX} {adjusted_text}"
+        adjusted_text = re.sub("\n", f"\n{COMMENT_PREFIX}", text)
+        adjusted_text = f"{COMMENT_PREFIX}{adjusted_text}"
 
         print(adjusted_text)
