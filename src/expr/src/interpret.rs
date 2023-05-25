@@ -524,14 +524,14 @@ pub trait Interpreter {
 
 /// Wrap another interpreter, but tack a few extra columns on at the end. An internal implementation
 /// detail of `eval_mfp` and `eval_mfp_plan`.
-struct MfpEval<'a, E: Interpreter + ?Sized> {
+pub(crate) struct MfpEval<'a, E: Interpreter + ?Sized> {
     evaluator: &'a E,
     input_arity: usize,
     expressions: Vec<E::Summary>,
 }
 
 impl<'a, E: Interpreter + ?Sized> MfpEval<'a, E> {
-    fn new(evaluator: &'a E, input_arity: usize, expressions: &[MirScalarExpr]) -> Self {
+    pub(crate) fn new(evaluator: &'a E, input_arity: usize, expressions: &[MirScalarExpr]) -> Self {
         let mut mfp_eval = MfpEval {
             evaluator,
             input_arity,
@@ -604,84 +604,39 @@ pub enum Pushdownable {
     Yes,
 }
 
-/// Maps column identifiers to pushdown information. We can't tell how many columns are in the
-/// relation just from inspecting the expression, so the `Vec` may not include every column; an entry
-/// of `No` is treated the same as the entry not being present.
-#[derive(Eq, PartialEq, Clone, Debug)]
-pub struct RelationTrace(pub Vec<Pushdownable>);
+impl From<Monotonic> for Pushdownable {
+    fn from(value: Monotonic) -> Self {
+        match value {
+            Monotonic::Yes => Pushdownable::Yes,
+            Monotonic::Maybe => Pushdownable::Maybe,
+            Monotonic::No => Pushdownable::No,
+        }
+    }
+}
 
 /// An interpreter that traces how information about the source columns flows through the expression.
 #[derive(Debug)]
 pub struct Trace;
 
-impl RelationTrace {
-    pub fn new() -> RelationTrace {
-        RelationTrace(vec![])
-    }
-
-    pub fn get(&mut self, id: usize) -> Pushdownable {
-        self.0.get(id).copied().unwrap_or(Pushdownable::No)
-    }
-
-    pub fn set(&mut self, id: usize, value: Pushdownable) {
-        if self.0.len() <= id {
-            self.0.resize(id + 1, Pushdownable::No);
-        }
-        self.0[id] = value;
-    }
-
-    fn apply_fn(mut self, is_monotonic: Monotonic) -> Self {
-        match is_monotonic {
-            Monotonic::Yes => {
-                // Still correlated, nothing to do.
-            }
-            Monotonic::No => {
-                // A function that we know we can't see through. No reason to expect the range
-                // of the columns to affect the range of the expression.
-                for col in &mut self.0 {
-                    *col = Pushdownable::No;
-                }
-            }
-            Monotonic::Maybe => {
-                // A function that we may or may not be able to see through.
-                for col in &mut self.0 {
-                    *col = Pushdownable::Maybe.min(*col);
-                }
-            }
-        }
-        self
-    }
-
-    fn union(mut self, other: RelationTrace) -> RelationTrace {
-        for (id, pushdownable) in other.0.into_iter().enumerate() {
-            let pushdownable = self.get(id).max(pushdownable);
-            self.set(id, pushdownable);
-        }
-        self
-    }
-}
-
 impl Interpreter for Trace {
     /// For every column in the data, we track whether or not that column is "pusdownable".
     /// (If the column is not present in the summary, we default to `false`.
-    type Summary = RelationTrace;
+    type Summary = Pushdownable;
 
-    fn column(&self, id: usize) -> Self::Summary {
-        let mut trace = RelationTrace::new();
-        trace.set(id, Pushdownable::Yes);
-        trace
+    fn column(&self, _id: usize) -> Self::Summary {
+        Pushdownable::Yes
     }
 
     fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
-        RelationTrace::new()
+        Pushdownable::No
     }
 
     fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
-        RelationTrace::new()
+        Pushdownable::No
     }
 
     fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-        expr.apply_fn(unary_monotonic(func))
+        expr.min(unary_monotonic(func).into())
     }
 
     fn binary(
@@ -696,21 +651,19 @@ impl Interpreter for Trace {
             BinaryFunc::JsonbGetString { stringify: false } => (Monotonic::Yes, Monotonic::No),
             _ => binary_monotonic(func),
         };
-        left.apply_fn(left_monotonic)
-            .union(right.apply_fn(right_monotonic))
+        left.min(left_monotonic.into())
+            .max(right.min(right_monotonic.into()))
     }
 
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
         let is_monotonic = variadic_monotonic(func);
-        exprs
-            .into_iter()
-            .fold(RelationTrace::new(), |acc, columns| {
-                acc.union(columns.apply_fn(is_monotonic))
-            })
+        exprs.into_iter().fold(Pushdownable::No, |acc, arg| {
+            acc.max(arg.min(is_monotonic.into()))
+        })
     }
 
     fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
-        cond.union(then.union(els))
+        cond.max(then.max(els))
     }
 }
 
@@ -1484,14 +1437,6 @@ mod tests {
             }),
         };
         let trace = Trace.expr(&expr);
-        assert_eq!(
-            trace,
-            RelationTrace(vec![
-                Pushdownable::Yes, // one side of a conditional
-                Pushdownable::Yes, // other side of the conditional, nested in +
-                Pushdownable::No,  // not referenced!
-                Pushdownable::No   // referenced, but we can't see through abs()
-            ])
-        )
+        assert_eq!(trace, Pushdownable::Yes);
     }
 }

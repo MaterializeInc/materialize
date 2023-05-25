@@ -13,9 +13,8 @@ use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::time::Duration;
 
-use itertools::Itertools;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::Indent;
+use mz_ore::str::{separated, Indent};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
 use mz_repr::explain::{
@@ -23,7 +22,7 @@ use mz_repr::explain::{
     UnsupportedFormat, UsedIndexes,
 };
 
-use crate::interpret::{Interpreter, Pushdownable, RelationTrace, Trace};
+use crate::interpret::{Interpreter, MfpEval, Pushdownable, Trace};
 use crate::visit::Visit;
 use crate::{Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 
@@ -54,30 +53,31 @@ pub struct ExplainSinglePlan<'a, T> {
 /// Carries metadata about the possibility of MFP pushdown for a source.
 /// (Likely to change, and only emitted when a context flag is enabled.)
 #[allow(missing_debug_implementations)]
-pub struct PushdownInfo {
-    /// Pushdown-able columns in the source.
-    pub trace: RelationTrace,
+pub struct PushdownInfo<'a> {
+    /// Pushdown-able filters in the source, by index.
+    pub pushdown: Vec<&'a MirScalarExpr>,
+    /// Filters that might be pushdownable. This is expected to go away once
+    /// we've gone through / annotated every function.
+    pub potential_pushdown: Vec<&'a MirScalarExpr>,
 }
 
-impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo {
+impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo<'_> {
     fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        if !self.trace.0.is_empty() {
-            writeln!(
-                f,
-                "{}pushdown=({})",
-                ctx.as_mut(),
-                self.trace
-                    .0
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(id, p)| match p {
-                        Pushdownable::No => None,
-                        Pushdownable::Maybe => Some(format!("#{id}?")),
-                        Pushdownable::Yes => Some(format!("#{id}")),
-                    })
-                    .join(", ")
-            )?;
+        let Self {
+            pushdown,
+            potential_pushdown,
+        } = self;
+
+        if !pushdown.is_empty() {
+            let separated = separated(" AND ", pushdown);
+            writeln!(f, "{}pushdown=({})", ctx.as_mut(), separated)?;
         }
+
+        if !potential_pushdown.is_empty() {
+            let separated = separated(" AND ", potential_pushdown);
+            writeln!(f, "{}potential_pushdown=({})", ctx.as_mut(), separated)?;
+        }
+
         Ok(())
     }
 }
@@ -86,7 +86,7 @@ impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo {
 pub struct ExplainSource<'a> {
     pub id: String,
     pub op: &'a MapFilterProject,
-    pub pushdown_info: Option<PushdownInfo>,
+    pub pushdown_info: Option<PushdownInfo<'a>>,
 }
 
 impl<'a> ExplainSource<'a> {
@@ -96,8 +96,23 @@ impl<'a> ExplainSource<'a> {
         context: &ExplainContext<'a>,
     ) -> ExplainSource<'a> {
         let pushdown_info = if context.config.mfp_pushdown {
+            let mfp_mapped = MfpEval::new(&Trace, op.input_arity, &op.expressions);
+            let mut pushdown = vec![];
+            let mut potential_pushdown = vec![];
+            for (_, expr) in op.predicates.iter() {
+                match mfp_mapped.expr(expr) {
+                    Pushdownable::No => {}
+                    Pushdownable::Maybe => {
+                        potential_pushdown.push(expr);
+                    }
+                    Pushdownable::Yes => {
+                        pushdown.push(expr);
+                    }
+                }
+            }
             Some(PushdownInfo {
-                trace: Trace.mfp_filter(op),
+                pushdown,
+                potential_pushdown,
             })
         } else {
             None
