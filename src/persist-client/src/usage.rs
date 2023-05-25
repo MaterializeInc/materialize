@@ -26,6 +26,32 @@ use crate::internal::state_versions::StateVersions;
 use crate::write::WriterId;
 use crate::{retry_external, Metrics, PersistClient, ShardId};
 
+/// A breakdown of the size of various contributions to a shard's blob
+/// usage that is actively referenced by any live state in Consensus.
+#[derive(Clone, Debug)]
+pub struct ShardUsageReferenced {
+    pub(crate) batches_bytes: u64,
+    pub(crate) rollup_bytes: u64,
+}
+
+impl ShardUsageReferenced {
+    /// Byte size of all data referenced in state for the shard.
+    pub fn size_bytes(&self) -> u64 {
+        let Self {
+            batches_bytes,
+            rollup_bytes,
+        } = self;
+        *batches_bytes + *rollup_bytes
+    }
+}
+
+/// The referenced blob usage for a set of shards.
+#[derive(Debug)]
+pub struct ShardsUsageReferenced {
+    /// The data for each shard.
+    pub by_shard: BTreeMap<ShardId, ShardUsageReferenced>,
+}
+
 /// A breakdown of the size of various contributions to a shard's blob (S3)
 /// usage.
 ///
@@ -33,7 +59,7 @@ use crate::{retry_external, Metrics, PersistClient, ShardId};
 /// Specifically `1=2a+2b`, `2a=3a+3b`, `3a=4a+4b`, `4a=5a+5b` (so the "a"s are
 /// the funnel and the "b"s are places where data splits out of the funnel).
 #[derive(Clone, Debug)]
-pub struct ShardUsage {
+pub struct ShardUsageAudit {
     /// 5a: Data in batches/parts referenced by the most recent version of
     /// state.
     pub current_state_batches_bytes: u64,
@@ -64,7 +90,7 @@ pub struct ShardUsage {
     pub leaked_bytes: u64,
 }
 
-impl ShardUsage {
+impl ShardUsageAudit {
     /// 4a: Data referenced by the most recent version of state.
     pub fn current_state_bytes(&self) -> u64 {
         self.current_state_batches_bytes + self.current_state_rollups_bytes
@@ -92,9 +118,9 @@ impl ShardUsage {
 
 /// The blob (S3) usage of all shards in an environment.
 #[derive(Clone, Debug)]
-pub struct ShardsUsage {
+pub struct ShardsUsageAudit {
     /// The data for each shard.
-    pub by_shard: BTreeMap<ShardId, ShardUsage>,
+    pub by_shard: BTreeMap<ShardId, ShardUsageAudit>,
     /// Data not attributable to any particular shard. This _should_ always be
     /// 0; a nonzero value indicates either persist wrote an invalid blob key,
     /// or another process is storing data under the same path (!)
@@ -151,16 +177,123 @@ impl StorageUsageClient {
         }
     }
 
-    /// Computes [ShardUsage] for a single shard.
-    pub async fn shard_usage(&self, shard_id: ShardId) -> ShardUsage {
+    /// Computes [ShardUsageReferenced] for a single shard. Suitable for customer billing.
+    pub async fn shard_usage_referenced(&self, shard_id: ShardId) -> ShardUsageReferenced {
+        let mut start = Instant::now();
+        let states_iter = self
+            .state_versions
+            .fetch_all_live_states::<u64>(shard_id)
+            .await;
+        let states_iter = match states_iter {
+            Some(x) => x,
+            None => {
+                return ShardUsageReferenced {
+                    batches_bytes: 0,
+                    rollup_bytes: 0,
+                }
+            }
+        };
+        let mut states_iter = states_iter
+            .check_ts_codec()
+            .expect("ts should be a u64 in all prod shards");
+
+        let shard_metrics = &self.metrics.shards.shard(&shard_id);
+        shard_metrics
+            .gc_live_diffs
+            .set(u64::cast_from(states_iter.len()));
+
+        let now = Instant::now();
+        self.metrics
+            .audit
+            .step_state
+            .inc_by(now.duration_since(start).as_secs_f64());
+        start = now;
+
+        let mut batches_bytes = 0;
+        let mut rollup_bytes = 0;
+        while let Some(_) = states_iter.next(|diff| {
+            diff.referenced_blob_fn(|blob| match blob {
+                HollowBlobRef::Batch(batch) => {
+                    for part in &batch.parts {
+                        batches_bytes += part.encoded_size_bytes;
+                    }
+                }
+                HollowBlobRef::Rollup(rollup) => {
+                    rollup_bytes += rollup.encoded_size_bytes.unwrap_or(0);
+                }
+            })
+        }) {}
+
+        let referenced = ShardUsageReferenced {
+            batches_bytes: u64::cast_from(batches_bytes),
+            rollup_bytes: u64::cast_from(rollup_bytes),
+        };
+
+        let current_state_sizes = states_iter.state().size_metrics();
+        shard_metrics
+            .usage_current_state_batches_bytes
+            .set(u64::cast_from(current_state_sizes.state_batches_bytes));
+        shard_metrics
+            .usage_current_state_rollups_bytes
+            .set(u64::cast_from(current_state_sizes.state_rollups_bytes));
+        shard_metrics.usage_referenced_not_current_state_bytes.set(
+            referenced.size_bytes()
+                - u64::cast_from(
+                    current_state_sizes.state_batches_bytes
+                        + current_state_sizes.state_rollups_bytes,
+                ),
+        );
+
+        self.metrics
+            .audit
+            .step_math
+            .inc_by(now.duration_since(start).as_secs_f64());
+
+        referenced
+    }
+
+    /// Computes [ShardUsageReferenced] for a given set of shards. Suitable for customer billing.
+    pub async fn shards_usage_referenced<I>(&self, shard_ids: I) -> ShardsUsageReferenced
+    where
+        I: IntoIterator<Item = ShardId>,
+    {
+        let semaphore = Arc::new(Semaphore::new(
+            self.cfg.dynamic.usage_state_fetch_concurrency_limit(),
+        ));
+        let by_shard_futures = FuturesUnordered::new();
+        for shard_id in shard_ids {
+            let semaphore = Arc::clone(&semaphore);
+            let shard_usage_fut = async move {
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .expect("acquiring permit from open semaphore");
+                let shard_usage = self.shard_usage_referenced(shard_id).await;
+                (shard_id, shard_usage)
+            };
+            by_shard_futures.push(shard_usage_fut);
+        }
+        let by_shard = by_shard_futures.collect().await;
+        ShardsUsageReferenced { by_shard }
+    }
+
+    /// Computes [ShardUsageAudit] for a single shard.
+    ///
+    /// Performs a full scan of [Blob] and [Consensus] to compute a full audit of blob
+    /// usage for the shard. While [ShardUsageAudit::referenced_bytes] is suitable for
+    /// billing, prefer [Self::shard_usage_referenced] instead to avoid the costly scan
+    /// of [Blob].
+    pub async fn shard_usage_audit(&self, shard_id: ShardId) -> ShardUsageAudit {
         let mut blob_usage = self.blob_raw_usage(BlobKeyPrefix::Shard(&shard_id)).await;
         let blob_usage = blob_usage.by_shard.remove(&shard_id).unwrap_or_default();
         self.shard_usage_given_blob_usage(shard_id, &blob_usage)
             .await
     }
 
-    /// Computes [ShardUsage] for every shard in an env.
-    pub async fn shards_usage(&self) -> ShardsUsage {
+    /// Computes [ShardUsageAudit] for every shard in an env.
+    ///
+    /// See [Self::shard_usage_audit] for more details on when to use this function.
+    pub async fn shards_usage_audit(&self) -> ShardsUsageAudit {
         let blob_usage = self.blob_raw_usage(BlobKeyPrefix::All).await;
         self.metrics
             .audit
@@ -198,7 +331,7 @@ impl StorageUsageClient {
         }
 
         let by_shard = by_shard_futures.collect().await;
-        ShardsUsage {
+        ShardsUsageAudit {
             by_shard,
             unattributable_bytes: blob_usage.unattributable_bytes,
         }
@@ -266,7 +399,7 @@ impl StorageUsageClient {
         &self,
         shard_id: ShardId,
         blob_usage: &ShardBlobUsage,
-    ) -> ShardUsage {
+    ) -> ShardUsageAudit {
         let mut start = Instant::now();
         let states_iter = self
             .state_versions
@@ -288,7 +421,7 @@ impl StorageUsageClient {
                     "interrupted"),
                     shard_id
                 );
-                return ShardUsage {
+                return ShardUsageAudit {
                     current_state_batches_bytes: 0,
                     current_state_rollups_bytes: 0,
                     referenced_not_current_state_bytes: 0,
@@ -353,7 +486,7 @@ impl StorageUsageClient {
         let current_state_bytes = current_state_batches_bytes + current_state_rollups_bytes;
 
         let live_writers = &states_iter.state().collections.writers;
-        let ret = ShardUsage::from(ShardUsageCumulativeMaybeRacy {
+        let ret = ShardUsageAudit::from(ShardUsageCumulativeMaybeRacy {
             current_state_batches_bytes,
             current_state_bytes,
             referenced_other_bytes,
@@ -415,7 +548,7 @@ struct ShardUsageCumulativeMaybeRacy<'a, T> {
     blob_usage: &'a ShardBlobUsage,
 }
 
-impl<T: std::fmt::Debug> From<ShardUsageCumulativeMaybeRacy<'_, T>> for ShardUsage {
+impl<T: std::fmt::Debug> From<ShardUsageCumulativeMaybeRacy<'_, T>> for ShardUsageAudit {
     fn from(x: ShardUsageCumulativeMaybeRacy<'_, T>) -> Self {
         let mut not_leaked_bytes = 0;
         let mut total_bytes = 0;
@@ -511,7 +644,7 @@ impl<T: std::fmt::Debug> From<ShardUsageCumulativeMaybeRacy<'_, T>> for ShardUsa
         adjust(&mut possible_over_count, &mut current_state_batches_bytes);
         assert_eq!(possible_over_count, 0);
 
-        let ret = ShardUsage {
+        let ret = ShardUsageAudit {
             current_state_batches_bytes,
             current_state_rollups_bytes,
             referenced_not_current_state_bytes,
@@ -530,7 +663,7 @@ impl<T: std::fmt::Debug> From<ShardUsageCumulativeMaybeRacy<'_, T>> for ShardUsa
     }
 }
 
-impl std::fmt::Display for ShardUsage {
+impl std::fmt::Display for ShardUsageAudit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -667,15 +800,15 @@ mod tests {
         assert_eq!(all_size, shard_one_size + shard_two_size);
 
         assert_eq!(
-            usage.shard_usage(shard_id_one).await.total_bytes(),
+            usage.shard_usage_audit(shard_id_one).await.total_bytes(),
             shard_one_size
         );
         assert_eq!(
-            usage.shard_usage(shard_id_two).await.total_bytes(),
+            usage.shard_usage_audit(shard_id_two).await.total_bytes(),
             shard_two_size
         );
 
-        let shards_usage = usage.shards_usage().await;
+        let shards_usage = usage.shards_usage_audit().await;
         assert_eq!(shards_usage.by_shard.len(), 2);
         assert_eq!(
             shards_usage
@@ -736,7 +869,7 @@ mod tests {
         write1.expire().await;
 
         let usage = StorageUsageClient::open(client);
-        let shard_usage = usage.shard_usage(shard_id).await;
+        let shard_usage = usage.shard_usage_audit(shard_id).await;
         // We've written data.
         assert!(shard_usage.current_state_batches_bytes > 0);
         // There's always at least one rollup.
@@ -797,7 +930,7 @@ mod tests {
                 live_writers: &live_writers,
                 blob_usage: &blob_usage,
             };
-            let usage = ShardUsage::from(input);
+            let usage = ShardUsageAudit::from(input);
             let actual = format!(
                 "{} {}/{} {}/{} {}/{} {}/{}",
                 usage.total_bytes(),
@@ -1030,7 +1163,7 @@ mod tests {
             .await
             .unwrap();
         let usage = StorageUsageClient::open(client);
-        let shards_usage = usage.shards_usage().await;
+        let shards_usage = usage.shards_usage_audit().await;
         assert_eq!(shards_usage.by_shard.len(), 1);
         assert_eq!(
             shards_usage.by_shard.get(&shard_id).unwrap().leaked_bytes,
