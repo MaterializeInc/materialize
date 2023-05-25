@@ -95,7 +95,9 @@ def _run_output_consistency_tests_internal(
     max_iterations: int,
     avoid_expressions_expecting_db_error: bool,
 ) -> ConsistencyTestSummary:
-    output_printer = OutputPrinter()
+    input_data = ConsistencyTestInputData()
+
+    output_printer = OutputPrinter(input_data)
 
     config = ConsistencyTestConfiguration(
         random_seed=random_seed,
@@ -110,6 +112,7 @@ def _run_output_consistency_tests_internal(
         max_pending_expressions=100,
         use_autocommit=True,
         split_and_retry_on_db_error=True,
+        print_reproduction_code=True,
         skip_postgres_incompatible_types=False,
     )
 
@@ -124,8 +127,6 @@ def _run_output_consistency_tests_internal(
     randomized_picker = RandomizedPicker(config)
 
     known_inconsistencies_filter = KnownOutputInconsistenciesFilter()
-
-    input_data = ConsistencyTestInputData()
 
     expression_generator = ExpressionGenerator(config, randomized_picker, input_data)
     query_generator = QueryGenerator(
@@ -157,7 +158,7 @@ def _run_output_consistency_tests_internal(
 
     test_summary = test_runner.start()
 
-    output_printer.print_separator()
+    output_printer.print_major_separator()
     output_printer.print_test_summary(test_summary)
 
     return test_summary

@@ -239,7 +239,7 @@ class QueryExecutionManager:
         ):
             return
 
-        self.output_printer.print_separator()
+        self.output_printer.print_major_separator()
         self.output_printer.print_info(f"Test query #{query_id}:")
         self.output_printer.print_non_executable_sql(query_execution.generic_sql)
 
@@ -259,6 +259,9 @@ class QueryExecutionManager:
             self.output_printer.print_info(
                 f"Errors:\n{validation_outcome.error_output()}"
             )
+
+            if self.config.print_reproduction_code:
+                self.output_printer.print_reproduction_code(validation_outcome.errors)
 
         if validation_outcome.has_warnings():
             self.output_printer.print_info(
