@@ -17,8 +17,8 @@ use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::{ColumnCfg, ColumnFormat, ColumnGet, ColumnPush, Data, DataType};
-use crate::dyn_struct::DynStruct;
-use crate::stats::DynStats;
+use crate::dyn_struct::{DynStruct, ValidityRef};
+use crate::stats::{DynStats, StatsFrom};
 
 /// A type-erased [crate::columnar::Data::Col].
 #[derive(Debug)]
@@ -59,30 +59,18 @@ impl DynColumnRef {
 
     /// Computes statistics on this column using the default implementation of
     /// `T::Stats::From`.
-    ///
-    /// See [Self::stats].
-    pub fn stats_default(&self) -> Box<dyn DynStats> {
-        struct StatsDataFn<'a>(&'a DynColumnRef);
+    pub fn stats_default(&self, validity: ValidityRef<'_>) -> Box<dyn DynStats> {
+        struct StatsDataFn<'a>(&'a DynColumnRef, ValidityRef<'a>);
         impl DataFn<Result<Box<dyn DynStats>, String>> for StatsDataFn<'_> {
             fn call<T: Data>(self, _cfg: &T::Cfg) -> Result<Box<dyn DynStats>, String> {
-                let stats = self.0.stats::<T, _>(|x| T::Stats::from(x))?;
-                Ok(Box::new(stats))
+                let StatsDataFn(col, validity) = self;
+                let col = col.downcast::<T>()?;
+                Ok(Box::new(T::Stats::stats_from(col, validity)))
             }
         }
         self.0
-            .data_fn(StatsDataFn(self))
+            .data_fn(StatsDataFn(self, validity))
             .expect("DynColumnRef DataType should be internally consistent")
-    }
-
-    /// Computes statistics on this column using the specified function.
-    ///
-    /// See [Self::stats_default].
-    pub fn stats<T: Data, F: FnOnce(&T::Col) -> T::Stats>(
-        &self,
-        stats_fn: F,
-    ) -> Result<T::Stats, String> {
-        let col = self.downcast::<T>()?;
-        Ok(stats_fn(col))
     }
 
     #[allow(clippy::borrowed_box)]

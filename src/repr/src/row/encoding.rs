@@ -20,7 +20,7 @@ use mz_persist_types::columnar::{
     ColumnCfg, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
 use mz_persist_types::dyn_col::DynColumnRef;
-use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
+use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg, ValidityRef};
 use mz_persist_types::stats::{AtomicBytesStats, BytesStats, DynStats, OptionStats, StatsFn};
 use mz_persist_types::Codec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
@@ -259,15 +259,17 @@ impl DatumToPersist for ProtoDatumToPersist {
     type Data = Vec<u8>;
     type Cfg = ();
     const CFG: Self::Cfg = ();
-    const STATS_FN: StatsFn =
-        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
-            let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
+    const STATS_FN: StatsFn = StatsFn::Custom(
+        |col: &DynColumnRef, validity: ValidityRef<'_>| -> Result<Box<dyn DynStats>, String> {
+            let (lower, upper, null_count) =
+                proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?, validity);
             assert_eq!(null_count, 0);
             Ok(Box::new(BytesStats::Atomic(AtomicBytesStats {
                 lower,
                 upper,
             })))
-        });
+        },
+    );
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         let proto = ProtoDatum::from(datum);
         let buf = proto.encode_to_vec();
@@ -292,14 +294,17 @@ impl DatumToPersist for NullableProtoDatumToPersist {
     type Data = Option<Vec<u8>>;
     type Cfg = ();
     const CFG: Self::Cfg = ();
-    const STATS_FN: StatsFn =
-        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
-            let (lower, upper, null_count) = proto_datum_min_max_nulls(col.downcast::<Vec<u8>>()?);
+    const STATS_FN: StatsFn = StatsFn::Custom(
+        |col: &DynColumnRef, validity: ValidityRef<'_>| -> Result<Box<dyn DynStats>, String> {
+            let col = col.downcast::<Option<Vec<u8>>>()?;
+            debug_assert!(validity.is_superset(col.validity()));
+            let (lower, upper, null_count) = proto_datum_min_max_nulls(col, ValidityRef::none());
             Ok(Box::new(OptionStats {
                 none: null_count,
                 some: BytesStats::Atomic(AtomicBytesStats { lower, upper }),
             }))
-        });
+        },
+    );
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         if datum == Datum::Null {
             ColumnPush::<Self::Data>::push(col, None);
@@ -327,12 +332,13 @@ impl DatumToPersist for Jsonb {
     type Data = <ProtoDatumToPersist as DatumToPersist>::Data;
     type Cfg = ();
     const CFG: Self::Cfg = ();
-    const STATS_FN: StatsFn =
-        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
-            let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Vec<u8>>()?)?;
+    const STATS_FN: StatsFn = StatsFn::Custom(
+        |col: &DynColumnRef, validity: ValidityRef<'_>| -> Result<Box<dyn DynStats>, String> {
+            let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Vec<u8>>()?, validity)?;
             assert_eq!(null_count, 0);
             Ok(Box::new(BytesStats::Json(stats)))
-        });
+        },
+    );
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         ProtoDatumToPersist::encode(col, datum)
     }
@@ -348,14 +354,17 @@ impl DatumToPersist for Option<Jsonb> {
     type Data = <NullableProtoDatumToPersist as DatumToPersist>::Data;
     type Cfg = ();
     const CFG: Self::Cfg = ();
-    const STATS_FN: StatsFn =
-        StatsFn::Custom(|col: &DynColumnRef| -> Result<Box<dyn DynStats>, String> {
-            let (stats, null_count) = jsonb_stats_nulls(col.downcast::<Option<Vec<u8>>>()?)?;
+    const STATS_FN: StatsFn = StatsFn::Custom(
+        |col: &DynColumnRef, validity: ValidityRef<'_>| -> Result<Box<dyn DynStats>, String> {
+            let col = col.downcast::<Option<Vec<u8>>>()?;
+            debug_assert!(validity.is_superset(col.validity()));
+            let (stats, null_count) = jsonb_stats_nulls(col, ValidityRef::none())?;
             Ok(Box::new(OptionStats {
                 some: BytesStats::Json(stats),
                 none: null_count,
             }))
-        });
+        },
+    );
     fn encode(col: &mut <Self::Data as Data>::Mut, datum: Datum) {
         NullableProtoDatumToPersist::encode(col, datum)
     }

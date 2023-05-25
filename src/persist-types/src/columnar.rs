@@ -54,7 +54,7 @@ use crate::codec_impls::UnitSchema;
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use crate::part::PartBuilder;
-use crate::stats::ColumnStats;
+use crate::stats::{ColumnStats, StatsFrom};
 use crate::Codec;
 
 /// A type understood by persist.
@@ -98,7 +98,7 @@ pub trait Data: Debug + Send + Sync + Sized + 'static {
     type Mut: ColumnPush<Self>;
 
     /// The statistics type of columns of this type of data.
-    type Stats: ColumnStats<Self> + for<'a> From<&'a Self::Col>;
+    type Stats: ColumnStats<Self> + StatsFrom<Self::Col>;
 }
 
 /// If necessary, whatever information beyond the type of `Self` needed to

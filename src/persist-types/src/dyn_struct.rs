@@ -178,12 +178,24 @@ impl DynStructCol {
         }
     }
 
-    pub(crate) fn stats(&self) -> Result<OptionStats<StructStats>, String> {
+    pub(crate) fn stats(
+        &self,
+        validity: ValidityRef<'_>,
+    ) -> Result<OptionStats<StructStats>, String> {
+        let validity = match (validity.0, self.validity.as_ref()) {
+            (Some(_), Some(y)) => {
+                debug_assert!(validity.is_superset(Some(y)));
+                Some(y)
+            }
+            (Some(x), None) => Some(x),
+            (None, Some(y)) => Some(y),
+            (None, None) => None,
+        };
         let mut cols = BTreeMap::new();
         for (n, s, c) in self.cols() {
             let stats = match s {
-                StatsFn::Default => c.stats_default(),
-                StatsFn::Custom(x) => x(c)?,
+                StatsFn::Default => c.stats_default(ValidityRef(validity)),
+                StatsFn::Custom(x) => x(c, ValidityRef(validity))?,
             };
             cols.insert(n.to_owned(), stats);
         }
@@ -406,15 +418,46 @@ impl From<DynStructMut> for DynStructCol {
 /// The `arrow2` crate has an optimization where the validity column can be
 /// elided if every value is true. This is the common case for the `Ok` struct
 /// of our `SourceData`, so seems worth opting in to ourselves.
-#[derive(Debug)]
-pub struct ValidityRef<'a>(Option<&'a <bool as Data>::Col>);
+#[derive(Debug, Clone, Copy)]
+pub struct ValidityRef<'a>(pub(crate) Option<&'a <bool as Data>::Col>);
 
 impl ValidityRef<'_> {
+    /// Returns a validity that indicates true for all values.
+    pub fn none() -> Self {
+        ValidityRef(None)
+    }
+
     /// Returns whether a column of optional structs is Some at the given index.
     /// If this is false, the contents of the struct's component fields at `idx`
     /// will be undefined.
     pub fn get(&self, idx: usize) -> bool {
         self.0.map_or(true, |x| x.get_bit(idx))
+    }
+
+    /// Returns whether the set of all indexes that return `true` in `self` is a
+    /// superset of the set of all indexes that return `true` in `other`.
+    #[allow(clippy::bool_comparison)]
+    pub fn is_superset(&self, other: Option<&<bool as Data>::Col>) -> bool {
+        match (self.0, other) {
+            (None, _) => {
+                // None means all-true, which is trivially a superset.
+                true
+            }
+            (Some(s), None) => {
+                // None means all-true, so s is only a superset if it's entirely
+                // true.
+                s.unset_bits() == 0
+            }
+            (Some(s), Some(o)) => {
+                assert_eq!(s.len(), o.len());
+                for idx in 0..s.len() {
+                    if s.get_bit(idx) == false && o.get_bit(idx) == true {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
     }
 }
 

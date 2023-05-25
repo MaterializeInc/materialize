@@ -17,7 +17,9 @@ use arrow2::io::parquet::write::Encoding;
 
 use crate::columnar::sealed::{ColumnMut, ColumnRef};
 use crate::columnar::Schema;
-use crate::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg, DynStructCol, DynStructMut};
+use crate::dyn_struct::{
+    ColumnsMut, ColumnsRef, DynStructCfg, DynStructCol, DynStructMut, ValidityRef,
+};
 use crate::stats::StructStats;
 use crate::Codec64;
 
@@ -50,7 +52,7 @@ impl Part {
 
     /// Computes a [StructStats] for the key columns.
     pub fn key_stats(&self) -> Result<StructStats, String> {
-        let stats = self.key.stats()?;
+        let stats = self.key.stats(ValidityRef(None))?;
         Ok(stats.some)
     }
 
