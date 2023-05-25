@@ -12,9 +12,6 @@ from typing import List
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.data_value.data_row_selection import (
-    DataRowSelection,
-)
 from materialize.output_consistency.execution.test_summary import ConsistencyTestLogger
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
@@ -28,6 +25,10 @@ from materialize.output_consistency.known_inconsistencies.known_deviation_filter
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
+from materialize.output_consistency.selection.selection import (
+    ALL_ROWS_SELECTION,
+    DataRowSelection,
+)
 
 
 class QueryGenerator:
@@ -201,7 +202,7 @@ class QueryGenerator:
 
     def _select_rows(self, storage_layout: ValueStorageLayout) -> DataRowSelection:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
-            return DataRowSelection()
+            return ALL_ROWS_SELECTION
         elif storage_layout == ValueStorageLayout.VERTICAL:
             if self.randomized_picker.random_boolean(0.8):
                 # In 80% of the cases, try to pick two or three rows

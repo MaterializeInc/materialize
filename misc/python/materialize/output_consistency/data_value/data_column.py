@@ -11,9 +11,6 @@ from typing import List, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.data_value.data_row_selection import (
-    DataRowSelection,
-)
 from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
@@ -22,6 +19,7 @@ from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.selection.selection import DataRowSelection
 
 
 class DataColumn(Expression):
@@ -45,7 +43,7 @@ class DataColumn(Expression):
         involved_characteristics: Set[ExpressionCharacteristics] = set()
 
         for index, value in enumerate(self.all_row_values):
-            if row_selection.is_included_row(index):
+            if row_selection.is_included(index):
                 involved_characteristics.union(
                     value.collect_involved_characteristics(row_selection)
                 )
@@ -59,7 +57,7 @@ class DataColumn(Expression):
         selected_rows = []
 
         for row_index, row_value in enumerate(self.all_row_values):
-            if row_selection.is_included_row(row_index):
+            if row_selection.is_included(row_index):
                 selected_rows.append(row_value)
 
         return selected_rows

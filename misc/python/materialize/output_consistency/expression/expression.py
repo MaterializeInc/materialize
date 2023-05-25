@@ -9,15 +9,13 @@
 from typing import Set
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.data_value.data_row_selection import (
-    DataRowSelection,
-)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.selection.selection import DataRowSelection
 
 
 class Expression:

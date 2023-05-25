@@ -7,13 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.data_value.data_row_selection import (
-    DataRowSelection,
-)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.selection.selection import DataRowSelection
 
 
 class KnownOutputInconsistenciesFilter:

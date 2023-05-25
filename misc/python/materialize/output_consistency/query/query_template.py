@@ -8,9 +8,6 @@
 # by the Apache License, Version 2.0.
 from typing import List
 
-from materialize.output_consistency.data_value.data_row_selection import (
-    DataRowSelection,
-)
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -20,6 +17,7 @@ from materialize.output_consistency.execution.value_storage_layout import (
 )
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.query.query_format import QueryOutputFormat
+from materialize.output_consistency.selection.selection import DataRowSelection
 
 
 class QueryTemplate:
@@ -70,12 +68,10 @@ FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
         return f",{space_separator}".join(expressions_as_sql)
 
     def _create_where_clause(self) -> str:
-        if self.row_selection.row_indices is None:
+        if self.row_selection.keys is None:
             return ""
 
-        row_index_string = ", ".join(
-            str(index) for index in self.row_selection.row_indices
-        )
+        row_index_string = ", ".join(str(index) for index in self.row_selection.keys)
         return f"WHERE {VERTICAL_LAYOUT_ROW_INDEX_COL_NAME} IN ({row_index_string})"
 
     def _create_order_by_clause(self) -> str:
