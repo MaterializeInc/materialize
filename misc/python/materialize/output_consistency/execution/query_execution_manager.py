@@ -30,6 +30,9 @@ from materialize.output_consistency.query.query_result import (
     QueryResult,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.selection import (
+    ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.output_consistency.validation.validation_outcome import (
     ValidationOutcome,
@@ -63,7 +66,7 @@ class QueryExecutionManager:
             self.output_printer.print_info(
                 f"Setup for evaluation strategy '{strategy.name}'"
             )
-            ddl_statements = strategy.generate_source(data_type_with_values)
+            ddl_statements = strategy.generate_sources(data_type_with_values)
 
             for sql_statement in ddl_statements:
                 self.output_printer.print_sql(sql_statement)
@@ -139,7 +142,9 @@ class QueryExecutionManager:
 
         for strategy in evaluation_strategies:
             sql_query_string = query_template.to_sql(
-                strategy, QueryOutputFormat.SINGLE_LINE
+                strategy,
+                QueryOutputFormat.SINGLE_LINE,
+                ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
             )
 
             try:

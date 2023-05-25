@@ -16,6 +16,12 @@ from materialize.output_consistency.execution.value_storage_layout import (
     VERTICAL_LAYOUT_ROW_INDEX_COL_NAME,
     ValueStorageLayout,
 )
+from materialize.output_consistency.selection.selection import (
+    ALL_ROWS_SELECTION,
+    ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
+    DataRowSelection,
+    TableColumnByNameSelection,
+)
 
 
 class EvaluationStrategy:
@@ -25,22 +31,34 @@ class EvaluationStrategy:
         self.key = key
         self.name = name
 
-    def generate_source(
+    def generate_sources(
         self, data_type_with_values: List[DataTypeWithValues]
     ) -> List[str]:
         statements = []
         statements.extend(
-            self._generate_source(data_type_with_values, ValueStorageLayout.HORIZONTAL)
+            self.generate_source_for_storage_layout(
+                data_type_with_values,
+                ValueStorageLayout.HORIZONTAL,
+                ALL_ROWS_SELECTION,
+                ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
+            )
         )
         statements.extend(
-            self._generate_source(data_type_with_values, ValueStorageLayout.VERTICAL)
+            self.generate_source_for_storage_layout(
+                data_type_with_values,
+                ValueStorageLayout.VERTICAL,
+                ALL_ROWS_SELECTION,
+                ALL_TABLE_COLUMNS_BY_NAME_SELECTION,
+            )
         )
         return statements
 
-    def _generate_source(
+    def generate_source_for_storage_layout(
         self,
         data_type_with_values: List[DataTypeWithValues],
         storage_layout: ValueStorageLayout,
+        row_selection: DataRowSelection,
+        table_column_selection: TableColumnByNameSelection,
     ) -> List[str]:
         raise RuntimeError("Not implemented")
 
@@ -58,8 +76,9 @@ class DummyEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__("<source>", "Dummy")
 
-    def generate_source(
-        self, data_type_with_values: List[DataTypeWithValues]
+    def generate_sources(
+        self,
+        data_type_with_values: List[DataTypeWithValues],
     ) -> List[str]:
         return []
 
@@ -68,19 +87,25 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__("t_dfr", "Dataflow rendering")
 
-    def _generate_source(
+    def generate_source_for_storage_layout(
         self,
         data_type_with_values: List[DataTypeWithValues],
         storage_layout: ValueStorageLayout,
+        row_selection: DataRowSelection,
+        table_column_selection: TableColumnByNameSelection,
     ) -> List[str]:
         db_object_name = self.get_db_object_name(storage_layout)
         statements = []
 
-        column_specs = _create_column_specs(data_type_with_values, storage_layout, True)
+        column_specs = _create_column_specs(
+            data_type_with_values, storage_layout, True, table_column_selection
+        )
         statements.append(f"DROP TABLE IF EXISTS {db_object_name};")
         statements.append(f"CREATE TABLE {db_object_name} ({', '.join(column_specs)});")
 
-        value_rows = _create_value_rows(data_type_with_values, storage_layout)
+        value_rows = _create_value_rows(
+            data_type_with_values, storage_layout, row_selection, table_column_selection
+        )
 
         for value_row in value_rows:
             statements.append(f"INSERT INTO {db_object_name} VALUES ({value_row});")
@@ -92,20 +117,24 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__("v_ctf", "Constant folding")
 
-    def _generate_source(
+    def generate_source_for_storage_layout(
         self,
         data_type_with_values: List[DataTypeWithValues],
         storage_layout: ValueStorageLayout,
+        row_selection: DataRowSelection,
+        table_column_selection: TableColumnByNameSelection,
     ) -> List[str]:
         column_specs = _create_column_specs(
-            data_type_with_values, storage_layout, False
+            data_type_with_values, storage_layout, False, table_column_selection
         )
 
-        value_rows = _create_value_rows(data_type_with_values, storage_layout)
-        value_specification = " UNION SELECT ".join(value_rows)
+        value_rows = _create_value_rows(
+            data_type_with_values, storage_layout, row_selection, table_column_selection
+        )
+        value_specification = "\n    UNION SELECT ".join(value_rows)
 
         create_view_statement = (
-            f"CREATE OR REPLACE VIEW {self.get_db_object_name(storage_layout)} ({', '.join(column_specs)})"
+            f"CREATE OR REPLACE VIEW {self.get_db_object_name(storage_layout)} ({', '.join(column_specs)})\n"
             f" AS SELECT {value_specification};"
         )
 
@@ -116,6 +145,7 @@ def _create_column_specs(
     data_type_with_values: List[DataTypeWithValues],
     storage_layout: ValueStorageLayout,
     include_type: bool,
+    table_column_selection: TableColumnByNameSelection,
 ) -> List[str]:
     column_specs = []
 
@@ -128,11 +158,14 @@ def _create_column_specs(
 
         if storage_layout == ValueStorageLayout.HORIZONTAL:
             for data_value in type_with_values.raw_values:
-                column_specs.append(f"{data_value.column_name}{type_info}")
+                if table_column_selection.is_included(data_value.column_name):
+                    column_specs.append(f"{data_value.column_name}{type_info}")
         elif storage_layout == ValueStorageLayout.VERTICAL:
-            column_specs.append(
-                f"{type_with_values.create_vertical_storage_column_expression().column_name}{type_info}"
+            column_name = (
+                type_with_values.create_vertical_storage_column_expression().column_name
             )
+            if table_column_selection.is_included(column_name):
+                column_specs.append(f"{column_name}{type_info}")
         else:
             raise RuntimeError(f"Unexpected storage layout: {storage_layout}")
 
@@ -140,30 +173,41 @@ def _create_column_specs(
 
 
 def _create_value_rows(
-    data_type_with_values: List[DataTypeWithValues], storage_layout: ValueStorageLayout
+    data_type_with_values: List[DataTypeWithValues],
+    storage_layout: ValueStorageLayout,
+    row_selection: DataRowSelection,
+    table_column_selection: TableColumnByNameSelection,
 ) -> List[str]:
     if storage_layout == ValueStorageLayout.HORIZONTAL:
-        return [__create_horizontal_value_row(data_type_with_values)]
+        return [
+            __create_horizontal_value_row(data_type_with_values, table_column_selection)
+        ]
     elif storage_layout == ValueStorageLayout.VERTICAL:
-        return __create_vertical_value_rows(data_type_with_values)
+        return __create_vertical_value_rows(
+            data_type_with_values, row_selection, table_column_selection
+        )
     else:
         raise RuntimeError(f"Unexpected storage layout: {storage_layout}")
 
 
 def __create_horizontal_value_row(
     data_type_with_values: List[DataTypeWithValues],
+    table_column_selection: TableColumnByNameSelection,
 ) -> str:
     row_values = []
 
     for type_with_values in data_type_with_values:
         for data_value in type_with_values.raw_values:
-            row_values.append(data_value.to_sql_as_value())
+            if table_column_selection.is_included(data_value.column_name):
+                row_values.append(data_value.to_sql_as_value())
 
     return f"{', '.join(row_values)}"
 
 
 def __create_vertical_value_rows(
     data_type_with_values: List[DataTypeWithValues],
+    row_selection: DataRowSelection,
+    table_column_selection: TableColumnByNameSelection,
 ) -> List[str]:
     """Creates table rows with the values of each type in a column. For types with fewer values, values are repeated."""
     rows = []
@@ -175,6 +219,10 @@ def __create_vertical_value_rows(
         new_value_encountered = False
 
         for type_with_values in data_type_with_values:
+            column_name = (
+                type_with_values.create_vertical_storage_column_expression().column_name
+            )
+
             value_in_type_index = value_index
             if value_index < len(type_with_values.raw_values):
                 new_value_encountered = True
@@ -188,12 +236,15 @@ def __create_vertical_value_rows(
                     (value_index - null_value_offset) % value_count_without_null_value
                 )
 
-            row_values.append(
-                type_with_values.raw_values[value_in_type_index].to_sql_as_value()
-            )
+            if table_column_selection.is_included(column_name):
+                # only filter at this place to make sure that value repetitions occur for types with fewer values
+                row_values.append(
+                    type_with_values.raw_values[value_in_type_index].to_sql_as_value()
+                )
 
         if new_value_encountered:
-            rows.append(f"{', '.join(row_values)}")
+            if row_selection.is_included(value_index):
+                rows.append(f"{', '.join(row_values)}")
         else:
             break
 

@@ -17,7 +17,10 @@ from materialize.output_consistency.execution.value_storage_layout import (
 )
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.query.query_format import QueryOutputFormat
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.selection import (
+    DataRowSelection,
+    QueryColumnByIndexSelection,
+)
 
 
 class QueryTemplate:
@@ -44,11 +47,14 @@ class QueryTemplate:
         self.select_expressions.extend(expressions)
 
     def to_sql(
-        self, strategy: EvaluationStrategy, output_format: QueryOutputFormat
+        self,
+        strategy: EvaluationStrategy,
+        output_format: QueryOutputFormat,
+        query_column_selection: QueryColumnByIndexSelection,
     ) -> str:
         space_separator = self._get_space_separator(output_format)
 
-        column_sql = self._create_column_sql(space_separator)
+        column_sql = self._create_column_sql(query_column_selection, space_separator)
         where_clause = self._create_where_clause()
         order_by_clause = self._create_order_by_clause()
 
@@ -63,8 +69,14 @@ FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
     def _get_space_separator(self, output_format: QueryOutputFormat) -> str:
         return "\n  " if output_format == QueryOutputFormat.MULTI_LINE else " "
 
-    def _create_column_sql(self, space_separator: str) -> str:
-        expressions_as_sql = [expr.to_sql() for expr in self.select_expressions]
+    def _create_column_sql(
+        self, query_column_selection: QueryColumnByIndexSelection, space_separator: str
+    ) -> str:
+        expressions_as_sql = []
+        for index, expression in enumerate(self.select_expressions):
+            if query_column_selection.is_included(index):
+                expressions_as_sql.append(expression.to_sql())
+
         return f",{space_separator}".join(expressions_as_sql)
 
     def _create_where_clause(self) -> str:
