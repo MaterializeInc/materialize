@@ -240,7 +240,7 @@ Explained Query:
           Get l1
     With Mutually Recursive
       cte l1 =
-        TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1 monotonic=false
+        TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1
           Union
             Map (0)
               Get l0
@@ -453,7 +453,7 @@ Explained Query:
           Get l1
     With Mutually Recursive [iteration_limit=23]
       cte l1 =
-        TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1 monotonic=false
+        TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1
           Union
             Map (0)
               Get l0

@@ -2915,7 +2915,7 @@ Explained Query:
       FlatMap unnest_list(#0) // { arity: 2 }
         Project (#1) // { arity: 1 }
           Map (list[row(1, row(#0))]) // { arity: 2 }
-            TopK limit=1 monotonic=false // { arity: 1 }
+            TopK limit=1 // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Get materialize.public.m3 // { arity: 11 }
 

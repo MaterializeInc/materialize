@@ -194,25 +194,25 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema}
 # Optimization not possible - explicit distinct is present in plan
 
 > EXPLAIN SELECT DISTINCT key1 FROM t1_pkne;
-"Explained Query:  Distinct group_by=[#0]    Project (#0)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
+"Explained Query:  Distinct group_by=[#0] monotonic    Project (#0)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
 
 > EXPLAIN SELECT DISTINCT key2 FROM t1_pkne;
-"Explained Query:  Distinct group_by=[#0]    Project (#1)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
+"Explained Query:  Distinct group_by=[#0] monotonic    Project (#1)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
 
 > EXPLAIN SELECT DISTINCT key1, upper(key2) FROM t1_pkne;
-"Explained Query:  Distinct group_by=[#0, upper(#1)]    Project (#0, #1)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
+"Explained Query:  Distinct group_by=[#0, upper(#1)] monotonic    Project (#0, #1)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
 
 > EXPLAIN SELECT DISTINCT key1, key2 || 'a' FROM t1_pkne;
-"Explained Query:  Distinct group_by=[#0, (#1 || \"a\")]    Project (#0, #1)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
+"Explained Query:  Distinct group_by=[#0, (#1 || \"a\")] monotonic    Project (#0, #1)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
 
 > EXPLAIN SELECT key1 FROM t1_pkne GROUP BY key1;
-"Explained Query:  Distinct group_by=[#0]    Project (#0)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
+"Explained Query:  Distinct group_by=[#0] monotonic    Project (#0)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
 
 > EXPLAIN SELECT key2 FROM t1_pkne GROUP BY key2;
-"Explained Query:  Distinct group_by=[#0]    Project (#1)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
+"Explained Query:  Distinct group_by=[#0] monotonic    Project (#1)      Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
 
 > EXPLAIN SELECT COUNT(DISTINCT key1) FROM t1_pkne;
-"Explained Query:  Return    Union      Get l0      Map (0)        Union          Negate            Project ()              Get l0          Constant            - ()  With    cte l0 =      Reduce aggregates=[count(distinct #0)]        Project (#0)          Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
+"Explained Query:  Return    Union      Get l0      Map (0)        Union          Negate            Project ()              Get l0          Constant            - ()  With    cte l0 =      Reduce aggregates=[count(distinct #0)] monotonic        Project (#0)          Get t1_pkneUsed Indexes:  - t1_pkne_primary_idx"
 
 # Make sure that primary key information is inherited from the source
 

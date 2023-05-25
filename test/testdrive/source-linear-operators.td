@@ -209,7 +209,7 @@ materialize.public.v:
   Union
     Project (#1, #0)
       Map (1)
-        Reduce aggregates=[sum(#0)]
+        Reduce aggregates=[sum(#0)] monotonic
           Project (#1)
             Filter (#0 = 1)
               Get materialize.public.data

@@ -120,7 +120,7 @@ Explained Query:
   Threshold // { types: "(boolean?, bigint)" }
     Union // { types: "(boolean?, bigint)" }
       Negate // { types: "(boolean?, bigint)" }
-        TopK limit=1 monotonic=false // { types: "(boolean?, bigint)" }
+        TopK limit=1 // { types: "(boolean?, bigint)" }
           Project (#1, #2) // { types: "(boolean?, bigint)" }
             Reduce group_by=[#0] aggregates=[min(#1), count(*)] // { types: "(double precision, boolean?, bigint)" }
               Project (#0, #1) // { types: "(double precision, boolean?)" }

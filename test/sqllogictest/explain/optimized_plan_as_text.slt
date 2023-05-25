@@ -164,7 +164,7 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 VIEW ov
 ----
 materialize.public.ov:
-  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false
+  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
     Get materialize.public.t
 
 Used Indexes:
@@ -309,7 +309,7 @@ Explained Query:
                 Get l1
   With
     cte l4 =
-      TopK group_by=[#0] limit=1 monotonic=false
+      TopK group_by=[#0] limit=1
         Project (#0, #1)
           Filter (#0) IS NOT NULL
             Join on=(#0 = #2) type=differential
@@ -318,7 +318,7 @@ Explained Query:
                 Filter (#1) IS NOT NULL
                   Get materialize.public.mv
     cte l3 =
-      TopK group_by=[#0] limit=1 monotonic=false
+      TopK group_by=[#0] limit=1
         Project (#0, #1)
           Filter (#0) IS NOT NULL
             Join on=(#0 = #2) type=differential

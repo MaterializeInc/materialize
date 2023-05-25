@@ -42,7 +42,7 @@ Explained Query:
             - ()
   With
     cte l0 =
-      Reduce aggregates=[count(*)] // { arity: 1 }
+      Reduce aggregates=[count(*)] monotonic // { arity: 1 }
         Constant // { arity: 0 }
           - (() x 1000000000)
 
