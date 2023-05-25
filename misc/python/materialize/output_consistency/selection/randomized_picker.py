@@ -28,6 +28,13 @@ class RandomizedPicker:
         self.config = config
         random.seed(self.config.random_seed)
 
+    def random_boolean(self, probability_for_true: float) -> bool:
+        if probability_for_true < 0 or probability_for_true > 1:
+            raise RuntimeError(f"Invalid probability: {probability_for_true}")
+
+        weights = [probability_for_true, 1 - probability_for_true]
+        return random.choices([True, False], k=1, weights=weights)[0]
+
     def random_number(self, min_value_incl: int, max_value_incl: int) -> int:
         return random.randint(min_value_incl, max_value_incl)
 

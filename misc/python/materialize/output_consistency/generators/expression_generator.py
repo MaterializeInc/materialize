@@ -110,7 +110,7 @@ class ExpressionGenerator:
 
         # strongly prefer vertical storage for aggregations but allow some variance
 
-        if self.randomized_picker.random_number(0, 9) == 0:
+        if self.randomized_picker.random_boolean(0.1):
             # Use horizontal layout in 10 % different of the cases
             return ValueStorageLayout.HORIZONTAL
 
