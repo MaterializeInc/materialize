@@ -124,9 +124,6 @@ pub async fn init(
         false => init_with_browser().await?,
     };
 
-    // TODO:
-    // * Append vault
-    // * Append region
     let new_profile = TomlProfile {
         app_password: Some(app_password.to_string()),
         vault: None,
@@ -134,11 +131,10 @@ pub async fn init(
         admin_endpoint: None,
         cloud_endpoint: None,
     };
-    // TODO:
-    // * Replace default with env/config value
+
     scx.config_file()
         .add_profile(
-            profile_name.map_or("default".to_string(), |n| n),
+            profile_name.map_or(scx.config_file().profile().to_string(), |n| n),
             new_profile,
         )
         .await?;
@@ -218,7 +214,7 @@ pub async fn config_get(
 }
 
 pub async fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
-    let profile_params = cx.config_file().list_profile_params();
+    let profile_params = cx.config_file().list_profile_params()?;
     let output = cx.output_formatter();
 
     // Structure to format the output. The name of the field equals the column name.
@@ -230,7 +226,6 @@ pub async fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
         value: OptionalStr<'a>,
     }
 
-    // TODO: Improve map?
     output.output_table(profile_params.iter().map(|(name, value)| ProfileParam {
         name,
         value: OptionalStr(value.as_deref()),

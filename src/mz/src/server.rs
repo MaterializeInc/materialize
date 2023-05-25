@@ -29,9 +29,8 @@ async fn request(
         client_id: client_id.parse().unwrap(),
         secret_key: secret.parse().unwrap(),
     })
-    // TODO: Should we just implement Debug in AppPassword?
-    // Custom panic. `AppPassword` doesn't implements Debug
-    .unwrap_or_else(|_| panic!("Error communicating login details in the transaction."));
+    // TODO: Implement custom error
+    .unwrap_or_else(|_| panic!("Error handling login details."));
     (StatusCode::OK, "You can now close the tab.")
 }
 

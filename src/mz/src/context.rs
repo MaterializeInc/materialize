@@ -201,24 +201,19 @@ impl RegionContext {
     pub async fn get_cloud_provider(&self) -> Result<CloudProvider, Error> {
         let client = &self.context.cloud_client;
         let cloud_providers = client.list_cloud_providers().await?;
-        // TODO: Replace unwrap wih custom error
+
         let provider = cloud_providers
             .into_iter()
             .find(|x| x.id == self.region_name)
-            .unwrap();
+            .ok_or(Error::CloudProviderMissing)?;
 
         Ok(provider)
     }
 
     pub async fn get_region(&self) -> Result<Region, Error> {
-        let client = &self.context.cloud_client;
-        let cloud_providers = client.list_cloud_providers().await?;
-        // TODO: Replace unwrap wih custom error
-        let provider = cloud_providers
-            .into_iter()
-            .find(|x| x.id == self.region_name)
-            .unwrap();
-        let region = client.get_region(provider).await?;
+        let client = self.cloud_client();
+        let cloud_provider = self.get_cloud_provider().await?;
+        let region = client.get_region(cloud_provider).await?;
 
         Ok(region)
     }

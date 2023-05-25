@@ -17,10 +17,7 @@
 //!
 //! Consult the user-facing documentation for details.
 
-use std::{
-    io::{self, Write},
-    os::unix::process::CommandExt,
-};
+use std::io::{self, Write};
 
 use crate::{context::RegionContext, error::Error};
 
@@ -97,8 +94,16 @@ pub async fn create(
     commands.iter().for_each(|c| {
         client.args(vec!["-c", c]);
     });
-    let _error = client.arg("-q").exec();
-    // TODO: Check error.
+
+    let output = client
+        .arg("-q")
+        .output()
+        .map_err(|err| Error::CommandExecutionError(err.to_string()))?;
+
+    if !output.status.success() {
+        let error_message = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(Error::CommandFailed(error_message));
+    }
 
     loading_spinner.finish_and_clear();
     Ok(())

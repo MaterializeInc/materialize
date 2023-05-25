@@ -17,7 +17,7 @@
 //!
 //! Consult the user-facing documentation for details.
 
-use std::{os::unix::process::CommandExt};
+use std::os::unix::process::CommandExt;
 
 use crate::{context::RegionContext, error::Error};
 

@@ -112,8 +112,7 @@ impl ConfigFile {
 
         let profiles = editable.entry("profiles").or_insert(toml_edit::table());
         let mut new_profile = toml_edit::Table::new();
-        // TODO: Replace unwrap for error.
-        new_profile["app-password"] = value(profile.app_password.unwrap());
+        new_profile["app-password"] = value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
         new_profile["region"] = value(profile.region.unwrap_or("aws/us-east-1".to_string()));
 
         if let Some(admin_endpoint) = profile.admin_endpoint {
@@ -128,8 +127,11 @@ impl ConfigFile {
             new_profile["vault"] = value(vault);
         }
 
-        profiles[name] = toml_edit::Item::Table(new_profile);
+        profiles[name.clone()] = toml_edit::Item::Table(new_profile);
         editable["profiles"] = profiles.clone();
+
+        // If there is no profile assigned in the global config assign one.
+        editable["profile"] = editable.entry("profile").or_insert(value(name)).clone();
 
         // TODO: I don't know why it creates an empty [profiles] table
         fs::write(&self.path, editable.to_string()).await?;
@@ -140,7 +142,9 @@ impl ConfigFile {
     /// Removes a profile from the configuration file.
     pub async fn remove_profile<'a>(&self, name: &str) -> Result<(), Error> {
         let mut editable = self.editable.clone();
-        let profiles = editable["profiles"].as_table_mut().unwrap();
+        let profiles = editable["profiles"]
+            .as_table_mut()
+            .ok_or(Error::ProfilesMissing)?;
         profiles.remove(name);
 
         fs::write(&self.path, editable.to_string()).await?;
@@ -163,17 +167,16 @@ impl ConfigFile {
         self.parsed.profiles.clone()
     }
 
-    pub fn list_profile_params(&self) -> Vec<(&str, Option<String>)> {
+    pub fn list_profile_params(&self) -> Result<Vec<(&str, Option<String>)>, Error> {
         // Use the parsed profile rather than reading from the editable.
         // If there is a missing field it is more difficult to detect.
-        // TODO: Turn unwrap into errors. And use PROFILE_PARAMS
         let profile = self
             .parsed
             .profiles
             .clone()
-            .unwrap()
+            .ok_or(Error::ProfilesMissing)?
             .get(self.profile())
-            .unwrap()
+            .ok_or(Error::ProfileMissing)?
             .clone();
 
         let out = vec![
@@ -184,7 +187,7 @@ impl ConfigFile {
             ("vault", profile.vault),
         ];
 
-        out
+        Ok(out)
     }
 
     /// Gets the value of a profile's configuration parameter.
@@ -202,7 +205,9 @@ impl ConfigFile {
         // Update the value
         match value {
             None => {
-                let profile = editable["profiles"][self.profile()].as_table_mut().unwrap();
+                let profile = editable["profiles"][self.profile()]
+                    .as_table_mut()
+                    .ok_or(Error::ProfileMissing)?;
                 if profile.contains_key(&name.to_string()) {
                     profile.remove(&name.to_string());
                 }

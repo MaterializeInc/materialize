@@ -39,7 +39,10 @@ pub async fn enable(cx: RegionContext) -> Result<(), Error> {
     let environment = cx.get_environment(region.clone()).await?;
 
     loop {
-        if cx.sql_client().is_ready(&environment, cx.admin_client().claims().await?.email)? {
+        if cx
+            .sql_client()
+            .is_ready(&environment, cx.admin_client().claims().await?.email)?
+        {
             break;
         }
     }
@@ -60,7 +63,6 @@ pub async fn list(cx: RegionContext) -> Result<(), Error> {
         status: &'a str,
     }
 
-    // TODO: Should this be in the cloud-api rather than here?
     let cloud_providers: Vec<CloudProvider> = cx.cloud_client().list_cloud_providers().await?;
     let mut regions: Vec<Region> = vec![];
 
@@ -97,8 +99,7 @@ pub async fn show(cx: RegionContext) -> Result<(), Error> {
     let environment = cx.get_environment(region.clone()).await?;
     let claims = cx.admin_client().claims().await?;
     let sql_client = cx.sql_client();
-    let environment_health = match sql_client.is_ready(&environment, claims.email)
-    {
+    let environment_health = match sql_client.is_ready(&environment, claims.email) {
         Ok(healthy) => match healthy {
             true => "yes",
             _ => "no",
