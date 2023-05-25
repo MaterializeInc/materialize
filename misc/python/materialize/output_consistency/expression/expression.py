@@ -6,7 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import Set
+from __future__ import annotations
+
+from typing import List, Set
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.execution.value_storage_layout import (
@@ -19,7 +21,7 @@ from materialize.output_consistency.selection.selection import DataRowSelection
 
 
 class Expression:
-    """An expression is either a `DataValue` or a `ExpressionWithArgs`"""
+    """An expression is either a `LeafExpression` or a `ExpressionWithArgs`"""
 
     def __init__(
         self,
@@ -44,6 +46,10 @@ class Expression:
         self, row_selection: DataRowSelection
     ) -> Set[ExpressionCharacteristics]:
         """Get all involved characteristics through recursion"""
+        raise RuntimeError("Not implemented")
+
+    def collect_leaves(self) -> List[Expression]:
+        # the return type should actually be LeafExpression but can't be to avoid cycles
         raise RuntimeError("Not implemented")
 
     def __str__(self) -> str:

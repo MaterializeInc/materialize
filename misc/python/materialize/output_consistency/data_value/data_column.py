@@ -15,27 +15,24 @@ from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
-from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.expression.leaf_expression import LeafExpression
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
-class DataColumn(Expression):
+class DataColumn(LeafExpression):
     """A column with a value per row (in contrast to an `ExpressionWithArgs`) for VERTICAL storage"""
 
     def __init__(self, data_type: DataType, row_values: List[DataValue]):
-        super().__init__(set(), ValueStorageLayout.VERTICAL, False, False)
+        column_name = f"{data_type.identifier.lower()}_val"
+        super().__init__(column_name, set(), ValueStorageLayout.VERTICAL, False, False)
         self.data_type = data_type
         self.all_row_values = row_values
-        self.column_name = f"{data_type.identifier.lower()}_val"
 
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category
-
-    def to_sql(self) -> str:
-        return self.column_name
 
     def collect_involved_characteristics(
         self, row_selection: DataRowSelection
