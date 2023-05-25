@@ -279,9 +279,9 @@ impl StorageUsageClient {
 
     /// Computes [ShardUsageAudit] for a single shard.
     ///
-    /// Performs a full scan of [Blob] and [Consensus] to compute a full audit of blob usage,
-    /// categorizing both referenced and unreferenced blobs (see [ShardUsageAudit] for full
-    /// details). While [ShardUsageAudit::referenced_bytes] is suitable for billing, prefer
+    /// Performs a full scan of [Blob] and [mz_persist::location::Consensus] to compute a full audit
+    /// of blob usage, categorizing both referenced and unreferenced blobs (see [ShardUsageAudit]
+    /// for full details). While [ShardUsageAudit::referenced_bytes] is suitable for billing, prefer
     /// [Self::shard_usage_referenced] to avoid the (costly!) scan of [Blob] if the additional
     /// categorizations are not needed.
     pub async fn shard_usage_audit(&self, shard_id: ShardId) -> ShardUsageAudit {
