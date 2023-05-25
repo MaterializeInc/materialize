@@ -34,8 +34,8 @@ use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 use tracing::warn;
 
-use crate::extensions::operator::{MzArrange, MzReduce};
-use crate::extensions::reduce::ReduceExt;
+use crate::extensions::arrange::MzArrange;
+use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{Arrangement, CollectionBundle, Context, KeyArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::ReductionMonoid;

@@ -29,7 +29,7 @@ use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
 
-use crate::extensions::operator::MzArrange;
+use crate::extensions::arrange::MzArrange;
 use crate::logging::{DifferentialLog, EventQueue, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 

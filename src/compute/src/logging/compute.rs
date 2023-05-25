@@ -33,7 +33,7 @@ use timely::Container;
 use tracing::error;
 use uuid::Uuid;
 
-use crate::extensions::operator::MzArrange;
+use crate::extensions::arrange::MzArrange;
 use crate::logging::{ComputeLog, EventQueue, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 

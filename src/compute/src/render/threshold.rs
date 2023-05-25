@@ -20,7 +20,8 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 
-use crate::extensions::operator::{MzArrange, MzReduce};
+use crate::extensions::arrange::MzArrange;
+use crate::extensions::reduce::MzReduce;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::typedefs::RowSpine;
 

@@ -24,7 +24,7 @@ use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
 
-use crate::extensions::operator::MzArrange;
+use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
     Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
 };

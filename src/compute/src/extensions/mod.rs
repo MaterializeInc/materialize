@@ -11,5 +11,5 @@
 //!
 //! Consult [mz_compute_client::plan::join::JoinPlan] documentation for details.
 
-pub(crate) mod operator;
+pub(crate) mod arrange;
 pub(crate) mod reduce;

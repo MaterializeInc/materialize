@@ -36,7 +36,7 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::extensions::operator::MzArrange;
+use crate::extensions::arrange::MzArrange;
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinImpl;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};

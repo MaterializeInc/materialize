@@ -30,7 +30,8 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 
-use crate::extensions::operator::{MzArrange, MzReduce};
+use crate::extensions::arrange::MzArrange;
+use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::typedefs::{RowKeySpine, RowSpine};

@@ -34,7 +34,7 @@ use timely::logging::{
 };
 use tracing::error;
 
-use crate::extensions::operator::MzArrange;
+use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 

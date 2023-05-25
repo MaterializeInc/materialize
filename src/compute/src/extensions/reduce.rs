@@ -16,15 +16,50 @@
 use differential_dataflow::difference::{Abelian, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::Data;
 use timely::dataflow::Scope;
 
-use crate::extensions::operator::MzReduce;
+/// Extension trait for the `reduce_core` differential dataflow method.
+pub trait MzReduce<G: Scope, K: Data, V: Data, R: Semigroup>: ReduceCore<G, K, V, R>
+where
+    G::Timestamp: Lattice + Ord,
+{
+    /// Applies `reduce` to arranged data, and returns an arrangement of output data.
+    fn mz_reduce_abelian<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
+    where
+        T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
+        T2::Val: Data,
+        T2::R: Abelian,
+        T2::Batch: Batch,
+        L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
+    {
+        // Allow access to `reduce_core` since we're within Mz's wrapper.
+        #[allow(clippy::disallowed_methods)]
+        self.reduce_core::<_, T2>(name, move |key, input, output, change| {
+            if !input.is_empty() {
+                logic(key, input, change);
+            }
+            change.extend(output.drain(..).map(|(x, d)| (x, d.negate())));
+        })
+    }
+}
+
+impl<G, K, V, T1, R> MzReduce<G, K, V, R> for Arranged<G, T1>
+where
+    G::Timestamp: Lattice + Ord,
+    G: Scope,
+    K: Data,
+    V: Data,
+    R: Semigroup,
+    T1: TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + Clone + 'static,
+{
+}
 
 /// Extension trait for `ReduceCore`, currently providing a reduction based
 /// on an operator-pair approach.
-pub(crate) trait ReduceExt<G: Scope, K: Data, V: Data, R: Semigroup>
+pub trait ReduceExt<G: Scope, K: Data, V: Data, R: Semigroup>
 where
     G::Timestamp: Lattice + Ord,
 {

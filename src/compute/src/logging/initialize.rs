@@ -19,7 +19,7 @@ use timely::logging::{Logger, TimelyEvent};
 use timely::progress::reachability::logging::TrackerEvent;
 
 use crate::arrangement::manager::TraceBundle;
-use crate::extensions::operator::MzArrange;
+use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::reachability::ReachabilityEvent;
 use crate::logging::{BatchLogger, EventQueue};
