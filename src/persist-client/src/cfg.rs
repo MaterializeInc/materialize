@@ -535,6 +535,11 @@ impl DynamicConfig {
 
     /// Determines how often to write rollups, assigning a maintenance task
     /// after `rollup_threshold` seqnos have passed since the last rollup.
+    ///
+    /// Tuning note: in the absence of a long reader seqno hold, and with
+    /// incremental GC, this threshold will determine about how many live
+    /// diffs are held in Consensus. Lowering this value decreases the live
+    /// diff count at the cost of more maintenance work + blob writes.
     pub fn rollup_threshold(&self) -> usize {
         self.rollup_threshold.load(Self::LOAD_ORDERING)
     }

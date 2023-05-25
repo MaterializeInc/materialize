@@ -1469,6 +1469,7 @@ pub(crate) mod tests {
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
+    use crate::internal::paths::RollupId;
     use crate::internal::trace::tests::any_trace;
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
 
