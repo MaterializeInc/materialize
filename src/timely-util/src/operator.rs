@@ -13,9 +13,9 @@ use std::future::Future;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::rc::Weak;
 
+use crate::arrange::MzArrange;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
@@ -593,10 +593,8 @@ where
             data.hash(&mut h);
             h.finish()
         });
-        // We allow access to `Arrange::arrange_core` here until `MzArrange` will be accessible.
-        #[allow(clippy::disallowed_methods)]
         self.map(|k| (k, ()))
-            .arrange_core::<_, Tr>(exchange, name)
+            .mz_arrange_core::<_, Tr>(exchange, name)
             .as_collection(|d: &D1, _| d.clone())
     }
 }
