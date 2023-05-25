@@ -279,10 +279,11 @@ impl StorageUsageClient {
 
     /// Computes [ShardUsageAudit] for a single shard.
     ///
-    /// Performs a full scan of [Blob] and [Consensus] to compute a full audit of blob
-    /// usage for the shard. While [ShardUsageAudit::referenced_bytes] is suitable for
-    /// billing, prefer [Self::shard_usage_referenced] instead to avoid the costly scan
-    /// of [Blob].
+    /// Performs a full scan of [Blob] and [Consensus] to compute a full audit of blob usage,
+    /// categorizing both referenced and unreferenced blobs (see [ShardUsageAudit] for full
+    /// details). While [ShardUsageAudit::referenced_bytes] is suitable for billing, prefer
+    /// [Self::shard_usage_referenced] to avoid the (costly!) scan of [Blob] if the additional
+    /// categorizations are not needed.
     pub async fn shard_usage_audit(&self, shard_id: ShardId) -> ShardUsageAudit {
         let mut blob_usage = self.blob_raw_usage(BlobKeyPrefix::Shard(&shard_id)).await;
         let blob_usage = blob_usage.by_shard.remove(&shard_id).unwrap_or_default();
@@ -292,7 +293,7 @@ impl StorageUsageClient {
 
     /// Computes [ShardUsageAudit] for every shard in an env.
     ///
-    /// See [Self::shard_usage_audit] for more details on when to use this function.
+    /// See [Self::shard_usage_audit] for more details on when to use a full audit.
     pub async fn shards_usage_audit(&self) -> ShardsUsageAudit {
         let blob_usage = self.blob_raw_usage(BlobKeyPrefix::All).await;
         self.metrics
