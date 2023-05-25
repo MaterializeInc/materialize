@@ -10,6 +10,7 @@
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use async_trait::async_trait;
 use bytes::BufMut;
 use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
+use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
@@ -50,7 +52,8 @@ use timely::progress::{PathSummary, Timestamp};
 use uuid::Uuid;
 
 use crate::controller::{
-    CollectionMetadata, CreateResumptionFrontierCalc, ResumptionFrontierCalculator, UpperState,
+    CollectionMetadata, CreateResumptionFrontierCalc, ResumptionFrontierCalculator, StorageError,
+    UpperState,
 };
 use crate::types::connections::{KafkaConnection, PostgresConnection};
 use crate::types::errors::{DataflowError, ProtoDataflowError};
@@ -101,6 +104,56 @@ impl<S> IngestionDescription<S> {
             .keys()
             .copied()
             .chain(std::iter::once(*remap_collection_id))
+    }
+}
+
+impl<S: Debug + Eq + PartialEq> IngestionDescription<S> {
+    /// Determines if `self` is compatible with another `IngestionDescription`, such that we can
+    /// support an `ALTER SOURCE`.
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &IngestionDescription<S>,
+    ) -> Result<(), StorageError> {
+        let IngestionDescription {
+            desc,
+            source_imports,
+            ingestion_metadata,
+            source_exports,
+            instance_id,
+            remap_collection_id,
+        } = self;
+
+        self.desc.alter_compatible(id, desc)?;
+
+        let compatibility_checks = [
+            source_imports == &other.source_imports,
+            ingestion_metadata == &other.ingestion_metadata,
+            source_exports
+                .iter()
+                .merge_join_by(&other.source_exports, |(l_key, _), (r_key, _)| {
+                    l_key.cmp(r_key)
+                })
+                .all(|r| match r {
+                    Both((_, l_val), (_, r_val)) => l_val == r_val,
+                    _ => true,
+                }),
+            instance_id == &other.instance_id,
+            remap_collection_id == &other.remap_collection_id,
+        ];
+        for compatible in compatibility_checks {
+            if !compatible {
+                tracing::info!(
+                    "IngestionDescription incompatible:\nself:\n{:?}\n\nother\n{:?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1349,6 +1402,11 @@ pub trait SourceConnection: Clone {
     /// The available metadata columns in the order specified by the user. This only identifies the
     /// kinds of columns that this source offers without any further information.
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource>;
+
+    /// Are the changes between `self` and `other` known to be a valid transition due to an `ALTER`?
+    fn alter_compatible(&self, id: GlobalId, _: &Self) -> Result<(), StorageError> {
+        Err(StorageError::InvalidAlterSource { id })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1708,6 +1766,39 @@ impl SourceDesc<GenericSourceConnection> {
     pub fn envelope(&self) -> &SourceEnvelope {
         &self.envelope
     }
+
+    pub fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        let Self {
+            connection,
+            encoding,
+            envelope,
+            metadata_columns,
+            timestamp_interval,
+        } = &self;
+        connection.alter_compatible(id, &other.connection)?;
+
+        let compatibility_checks = [
+            connection == &other.connection,
+            encoding == &other.encoding,
+            envelope == &other.envelope,
+            metadata_columns == &other.metadata_columns,
+            timestamp_interval == &other.timestamp_interval,
+        ];
+
+        for compatible in compatibility_checks {
+            if !compatible {
+                tracing::info!(
+                    "SourceDesc<GenericSourceConnection> incompatible:\nself:\n{:?}\n\nother\n{:?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1794,6 +1885,18 @@ impl SourceConnection for GenericSourceConnection {
             Self::Postgres(conn) => conn.metadata_column_types(),
             Self::LoadGenerator(conn) => conn.metadata_column_types(),
             Self::TestScript(conn) => conn.metadata_column_types(),
+        }
+    }
+
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        match (self, other) {
+            (Self::Kafka(conn), Self::Kafka(other)) => conn.alter_compatible(id, other),
+            (Self::Postgres(conn), Self::Postgres(other)) => conn.alter_compatible(id, other),
+            (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
+                conn.alter_compatible(id, other)
+            }
+            (Self::TestScript(conn), Self::TestScript(other)) => conn.alter_compatible(id, other),
+            _ => Err(StorageError::InvalidAlterSource { id }),
         }
     }
 }
@@ -1899,6 +2002,46 @@ impl SourceConnection for PostgresSourceConnection {
 
     fn metadata_column_types(&self) -> Vec<IncludedColumnSource> {
         vec![]
+    }
+
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        let PostgresSourceConnection {
+            connection_id,
+            connection,
+            table_casts,
+            publication,
+            publication_details,
+        } = self;
+
+        let compatibility_checks = [
+            connection_id == &other.connection_id,
+            connection == &other.connection,
+            table_casts
+                .iter()
+                .merge_join_by(&other.table_casts, |(l_key, _), (r_key, _)| {
+                    l_key.cmp(r_key)
+                })
+                .all(|r| match r {
+                    Both((_, l_val), (_, r_val)) => l_val == r_val,
+                    _ => true,
+                }),
+            publication == &other.publication,
+            publication_details == &other.publication_details,
+        ];
+
+        for compatible in compatibility_checks {
+            if !compatible {
+                tracing::info!(
+                    "PostgresSourceConnection incompatible:\nself:\n{:?}\n\nother\n{:?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlterSource { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
