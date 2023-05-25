@@ -27,7 +27,7 @@ use mz_sql::plan::{ExecuteTimeout, PlanKind};
 use mz_sql::session::vars::Var;
 use tokio::sync::{oneshot, watch};
 
-use crate::client::ConnectionId;
+use crate::client::ConnectionIdType;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -77,7 +77,9 @@ pub enum Command {
     },
 
     CancelRequest {
-        conn_id: ConnectionId,
+        /// Note: This is a [`ConnectionIdType`] and not a `ConnetionId` to support external
+        /// clients.
+        conn_id: ConnectionIdType,
         secret_key: u32,
     },
 

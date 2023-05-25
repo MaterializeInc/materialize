@@ -42,7 +42,7 @@ use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
-const DUMMY_CONNECTION_ID: ConnectionId = 0;
+const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::new_static(0);
 const DUMMY_CONNECT_TIME: EpochMillis = 0;
 
 /// A session holds per-connection state.
@@ -138,8 +138,8 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Returns the connection ID associated with the session.
-    pub fn conn_id(&self) -> ConnectionId {
-        self.conn_id
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
     }
 
     /// Returns the time at which the session connected to Materialize.
@@ -148,7 +148,7 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Returns the secret key associated with the session.
-    pub fn secret_key(&self) -> ConnectionId {
+    pub fn secret_key(&self) -> u32 {
         self.secret_key
     }
 

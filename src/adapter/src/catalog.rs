@@ -119,7 +119,7 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 
-pub const SYSTEM_CONN_ID: ConnectionId = 0;
+pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::new_static(0);
 
 const CREATE_SQL_TODO: &str = "TODO";
 
@@ -291,7 +291,7 @@ impl CatalogState {
     fn object_dependents(
         &self,
         object_ids: &Vec<ObjectId>,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
@@ -387,7 +387,7 @@ impl CatalogState {
     fn database_dependents(
         &self,
         database_id: DatabaseId,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
@@ -418,7 +418,7 @@ impl CatalogState {
         &self,
         database_spec: ResolvedDatabaseSpecifier,
         schema_spec: SchemaSpecifier,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
@@ -516,9 +516,9 @@ impl CatalogState {
     pub fn resolve_full_name(
         &self,
         name: &QualifiedItemName,
-        conn_id: Option<ConnectionId>,
+        conn_id: Option<&ConnectionId>,
     ) -> FullItemName {
-        let conn_id = conn_id.unwrap_or(SYSTEM_CONN_ID);
+        let conn_id = conn_id.unwrap_or(&SYSTEM_CONN_ID);
 
         let database = match &name.qualifiers.database_spec {
             ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
@@ -566,7 +566,7 @@ impl CatalogState {
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedItemName,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Option<&CatalogEntry> {
         self.get_schema(
             &name.qualifiers.database_spec,
@@ -604,14 +604,14 @@ impl CatalogState {
         res.unwrap_or_else(|| panic!("cannot find {} in system schema", item))
     }
 
-    pub fn item_exists(&self, name: &QualifiedItemName, conn_id: ConnectionId) -> bool {
+    pub fn item_exists(&self, name: &QualifiedItemName, conn_id: &ConnectionId) -> bool {
         self.try_get_entry_in_schema(name, conn_id).is_some()
     }
 
     fn find_available_name(
         &self,
         mut name: QualifiedItemName,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> QualifiedItemName {
         let mut i = 0;
         let orig_item_name = name.item.clone();
@@ -698,7 +698,7 @@ impl CatalogState {
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
         let mut session_catalog = ConnCatalog {
             state: Cow::Borrowed(self),
-            conn_id: SYSTEM_CONN_ID,
+            conn_id: SYSTEM_CONN_ID.clone(),
             cluster: "default".into(),
             database: self
                 .resolve_database(DEFAULT_DATABASE_NAME)
@@ -809,7 +809,7 @@ impl CatalogState {
                 ),
             }
         }
-        let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+        let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = self.get_schema_mut(
             &entry.name().qualifiers.database_spec,
             &entry.name().qualifiers.schema_spec,
@@ -848,7 +848,7 @@ impl CatalogState {
             }
         }
 
-        let conn_id = metadata.item.conn_id().unwrap_or(SYSTEM_CONN_ID);
+        let conn_id = metadata.item.conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = self.get_schema_mut(
             &metadata.name().qualifiers.database_spec,
             &metadata.name().qualifiers.schema_spec,
@@ -907,7 +907,7 @@ impl CatalogState {
                 },
                 item: index_name.clone(),
             };
-            index_name = self.find_available_name(index_name, SYSTEM_CONN_ID);
+            index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
             let index_item_name = index_name.item.clone();
             // TODO(clusters): Avoid panicking here on ID exhaustion
             // before stabilization.
@@ -1119,11 +1119,11 @@ impl CatalogState {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         let schema = match database_spec {
             ResolvedDatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
-                self.temporary_schemas.get(&conn_id)
+                self.temporary_schemas.get(conn_id)
             }
             ResolvedDatabaseSpecifier::Ambient => self
                 .ambient_schemas_by_name
@@ -1142,12 +1142,12 @@ impl CatalogState {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> &Schema {
         // Keep in sync with `get_schemas_mut`
         match (database_spec, schema_spec) {
             (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => {
-                &self.temporary_schemas[&conn_id]
+                &self.temporary_schemas[conn_id]
             }
             (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => {
                 &self.ambient_schemas_by_id[id]
@@ -1166,13 +1166,13 @@ impl CatalogState {
         &mut self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> &mut Schema {
         // Keep in sync with `get_schemas`
         match (database_spec, schema_spec) {
             (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => self
                 .temporary_schemas
-                .get_mut(&conn_id)
+                .get_mut(conn_id)
                 .expect("catalog out of sync"),
             (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => self
                 .ambient_schemas_by_id
@@ -1274,7 +1274,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         database_name: Option<&str>,
         schema_name: &str,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         let database_spec = match database_name {
             // If a database is explicitly specified, validate it. Note that we
@@ -1372,7 +1372,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
         err_gen: fn(String) -> SqlCatalogError,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
@@ -1421,7 +1421,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.resolve(
             |schema| &schema.items,
@@ -1439,7 +1439,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.resolve(
             |schema| &schema.functions,
@@ -1581,8 +1581,8 @@ pub struct ConnCatalog<'a> {
 }
 
 impl ConnCatalog<'_> {
-    pub fn conn_id(&self) -> ConnectionId {
-        self.conn_id
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
     }
 
     pub fn state(&self) -> &CatalogState {
@@ -2226,11 +2226,11 @@ impl CatalogItem {
 
     /// Returns the connection ID that this item belongs to, if this item is
     /// temporary.
-    pub fn conn_id(&self) -> Option<ConnectionId> {
+    pub fn conn_id(&self) -> Option<&ConnectionId> {
         match self {
-            CatalogItem::View(view) => view.conn_id,
-            CatalogItem::Index(index) => index.conn_id,
-            CatalogItem::Table(table) => table.conn_id,
+            CatalogItem::View(view) => view.conn_id.as_ref(),
+            CatalogItem::Index(index) => index.conn_id.as_ref(),
+            CatalogItem::Table(table) => table.conn_id.as_ref(),
             CatalogItem::Log(_)
             | CatalogItem::Source(_)
             | CatalogItem::Sink(_)
@@ -2614,7 +2614,7 @@ impl CatalogEntry {
 
     /// Returns the connection ID that this item belongs to, if this item is
     /// temporary.
-    pub fn conn_id(&self) -> Option<ConnectionId> {
+    pub fn conn_id(&self) -> Option<&ConnectionId> {
         self.item.conn_id()
     }
 
@@ -2811,7 +2811,7 @@ impl Catalog {
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
         };
 
-        catalog.create_temporary_schema(SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
+        catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
         let databases = catalog.storage().await.load_databases().await?;
         for storage::Database {
@@ -3791,7 +3791,7 @@ impl Catalog {
                     .get_schema(
                         &entry.name.qualifiers.database_spec,
                         &entry.name.qualifiers.schema_spec,
-                        entry.conn_id().unwrap_or(SYSTEM_CONN_ID),
+                        entry.conn_id().unwrap_or(&SYSTEM_CONN_ID),
                     )
                     .name
                     .schema
@@ -4218,7 +4218,7 @@ impl Catalog {
             .map(|id| id.clone());
         ConnCatalog {
             state: Cow::Borrowed(state),
-            conn_id: session.conn_id(),
+            conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
             database,
             search_path,
@@ -4230,7 +4230,7 @@ impl Catalog {
     pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
         ConnCatalog {
             state: Cow::Borrowed(&self.state),
-            conn_id: SYSTEM_CONN_ID,
+            conn_id: SYSTEM_CONN_ID.clone(),
             cluster: "default".into(),
             database: self
                 .resolve_database(DEFAULT_DATABASE_NAME)
@@ -4369,7 +4369,7 @@ impl Catalog {
         current_database: Option<&DatabaseId>,
         database_name: Option<&str>,
         schema_name: &str,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema(current_database, database_name, schema_name, conn_id)
@@ -4379,7 +4379,7 @@ impl Catalog {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
@@ -4398,7 +4398,7 @@ impl Catalog {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.state
             .resolve_entry(current_database, search_path, name, conn_id)
@@ -4425,7 +4425,7 @@ impl Catalog {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.state
             .resolve_function(current_database, search_path, name, conn_id)
@@ -4494,7 +4494,7 @@ impl Catalog {
     pub fn resolve_full_name(
         &self,
         name: &QualifiedItemName,
-        conn_id: Option<ConnectionId>,
+        conn_id: Option<&ConnectionId>,
     ) -> FullItemName {
         self.state.resolve_full_name(name, conn_id)
     }
@@ -4503,12 +4503,12 @@ impl Catalog {
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedItemName,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Option<&CatalogEntry> {
         self.state.try_get_entry_in_schema(name, conn_id)
     }
 
-    pub fn item_exists(&self, name: &QualifiedItemName, conn_id: ConnectionId) -> bool {
+    pub fn item_exists(&self, name: &QualifiedItemName, conn_id: &ConnectionId) -> bool {
         self.state.item_exists(name, conn_id)
     }
 
@@ -4524,7 +4524,7 @@ impl Catalog {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> &Schema {
         self.state.get_schema(database_spec, schema_spec, conn_id)
     }
@@ -4561,12 +4561,12 @@ impl Catalog {
     /// indicated by the TEMPORARY or TEMP keywords.
     pub fn create_temporary_schema(
         &mut self,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
         owner_id: RoleId,
     ) -> Result<(), Error> {
         let oid = self.allocate_oid()?;
         self.state.temporary_schemas.insert(
-            conn_id,
+            conn_id.clone(),
             Schema {
                 name: QualifiedSchemaName {
                     database: ResolvedDatabaseSpecifier::Ambient,
@@ -4586,8 +4586,8 @@ impl Catalog {
         Ok(())
     }
 
-    fn item_exists_in_temp_schemas(&self, conn_id: ConnectionId, item_name: &str) -> bool {
-        self.state.temporary_schemas[&conn_id]
+    fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
+        self.state.temporary_schemas[conn_id]
             .items
             .contains_key(item_name)
     }
@@ -4599,7 +4599,7 @@ impl Catalog {
             .cloned()
             .map(ObjectId::Item)
             .collect();
-        self.object_dependents(&temp_ids, *conn_id)
+        self.object_dependents(&temp_ids, conn_id)
             .into_iter()
             .map(Op::DropObject)
             .collect()
@@ -4615,7 +4615,7 @@ impl Catalog {
     pub(crate) fn object_dependents(
         &self,
         object_ids: &Vec<ObjectId>,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.object_dependents(object_ids, conn_id, &mut seen)
@@ -4641,7 +4641,7 @@ impl Catalog {
     fn temporary_ids(
         &self,
         ops: &[Op],
-        temporary_drops: BTreeSet<(ConnectionId, String)>,
+        temporary_drops: BTreeSet<(&ConnectionId, String)>,
     ) -> Result<Vec<GlobalId>, Error> {
         let mut creating = BTreeSet::new();
         let mut temporary_ids = Vec::with_capacity(ops.len());
@@ -4783,7 +4783,7 @@ impl Catalog {
     }
 
     /// Returns the privileges of an object by its ID.
-    pub fn get_privileges(&self, id: &ObjectId, conn_id: ConnectionId) -> Option<&PrivilegeMap> {
+    pub fn get_privileges(&self, id: &ObjectId, conn_id: &ConnectionId) -> Option<&PrivilegeMap> {
         match id {
             ObjectId::Cluster(id) => Some(self.get_cluster(*id).privileges()),
             ObjectId::Database(id) => Some(self.get_database(id).privileges()),
@@ -5611,7 +5611,7 @@ impl Catalog {
                             &schema_spec,
                             session
                                 .map(|session| session.conn_id())
-                                .unwrap_or(SYSTEM_CONN_ID),
+                                .unwrap_or(&SYSTEM_CONN_ID),
                         );
                         let database_id = match database_spec {
                             ResolvedDatabaseSpecifier::Ambient => None,
@@ -5964,7 +5964,7 @@ impl Catalog {
                                 &schema_spec,
                                 session
                                     .map(|session| session.conn_id())
-                                    .unwrap_or(SYSTEM_CONN_ID),
+                                    .unwrap_or(&SYSTEM_CONN_ID),
                             );
                             update_privilege_fn(&mut schema.privileges, privilege);
                             let database_id = match &database_spec {
@@ -6185,7 +6185,7 @@ impl Catalog {
                             &schema_spec,
                             session
                                 .map(|session| session.conn_id())
-                                .unwrap_or(SYSTEM_CONN_ID),
+                                .unwrap_or(&SYSTEM_CONN_ID),
                         );
                         Self::update_privilege_owners(
                             &mut schema.privileges,
@@ -6343,7 +6343,7 @@ impl Catalog {
                 id
             );
             assert_eq!(old_entry.uses(), to_item.uses());
-            let conn_id = old_entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+            let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
             let schema = &mut state.get_schema_mut(
                 &old_entry.name().qualifiers.database_spec,
                 &old_entry.name().qualifiers.schema_spec,
@@ -6926,7 +6926,7 @@ impl Catalog {
     pub fn ensure_not_reserved_object(
         &self,
         object_id: &ObjectId,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<(), Error> {
         match object_id {
             ObjectId::Cluster(cluster_id) | ObjectId::ClusterReplica((cluster_id, _)) => {
@@ -7396,7 +7396,7 @@ impl SessionCatalog for ConnCatalog<'_> {
             self.database.as_ref(),
             database_name,
             schema_name,
-            self.conn_id,
+            &self.conn_id,
         )?)
     }
 
@@ -7407,7 +7407,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     ) -> Result<&dyn mz_sql::catalog::CatalogSchema, SqlCatalogError> {
         Ok(self
             .state
-            .resolve_schema_in_database(database_spec, schema_name, self.conn_id)?)
+            .resolve_schema_in_database(database_spec, schema_name, &self.conn_id)?)
     }
 
     fn get_schema(
@@ -7416,7 +7416,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         schema_spec: &SchemaSpecifier,
     ) -> &dyn CatalogSchema {
         self.state
-            .get_schema(database_spec, schema_spec, self.conn_id)
+            .get_schema(database_spec, schema_spec, &self.conn_id)
     }
 
     // `as` is ok to use to cast to a trait object.
@@ -7502,7 +7502,7 @@ impl SessionCatalog for ConnCatalog<'_> {
             self.database.as_ref(),
             &self.effective_search_path(true),
             name,
-            self.conn_id,
+            &self.conn_id,
         )?)
     }
 
@@ -7514,7 +7514,7 @@ impl SessionCatalog for ConnCatalog<'_> {
             self.database.as_ref(),
             &self.effective_search_path(false),
             name,
-            self.conn_id,
+            &self.conn_id,
         )?)
     }
 
@@ -7535,7 +7535,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn item_exists(&self, name: &QualifiedItemName) -> bool {
-        self.state.item_exists(name, self.conn_id)
+        self.state.item_exists(name, &self.conn_id)
     }
 
     fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster {
@@ -7569,11 +7569,11 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn find_available_name(&self, name: QualifiedItemName) -> QualifiedItemName {
-        self.state.find_available_name(name, self.conn_id)
+        self.state.find_available_name(name, &self.conn_id)
     }
 
     fn resolve_full_name(&self, name: &QualifiedItemName) -> FullItemName {
-        self.state.resolve_full_name(name, Some(self.conn_id))
+        self.state.resolve_full_name(name, Some(&self.conn_id))
     }
 
     fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
@@ -7630,7 +7630,7 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
-        self.state.object_dependents(ids, self.conn_id, &mut seen)
+        self.state.object_dependents(ids, &self.conn_id, &mut seen)
     }
 
     fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId> {
@@ -8379,7 +8379,7 @@ mod tests {
                 .id();
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
             let schema_spec = catalog
-                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, SYSTEM_CONN_ID)
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
                 .expect("failed to resolve default schemazs")
                 .id
                 .clone();

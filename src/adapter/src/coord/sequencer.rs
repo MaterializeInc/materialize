@@ -343,7 +343,7 @@ impl Coordinator {
                     self.drop_temp_items(&session).await;
                     let conn_meta = self
                         .active_conns
-                        .get_mut(&session.conn_id())
+                        .get_mut(session.conn_id())
                         .expect("must exist for active session");
                     let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
                     self.drop_compute_sinks(drop_sinks);

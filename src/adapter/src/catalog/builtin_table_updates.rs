@@ -284,7 +284,7 @@ impl CatalogState {
         let entry = self.get_entry(&id);
         let id = entry.id();
         let oid = entry.oid();
-        let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+        let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema_id = &self
             .get_schema(
                 &entry.name().qualifiers.database_spec,
@@ -1223,7 +1223,7 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SESSIONS),
             row: Row::pack_slice(&[
-                Datum::UInt32(session.conn_id()),
+                Datum::UInt32(session.conn_id().val()),
                 Datum::String(&session.role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),

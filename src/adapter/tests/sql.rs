@@ -131,7 +131,7 @@ async fn datadriven() {
                                 .resolve_schema_in_database(
                                     &database_spec,
                                     DEFAULT_SCHEMA,
-                                    SYSTEM_CONN_ID,
+                                    &SYSTEM_CONN_ID,
                                 )
                                 .unwrap()
                                 .id
