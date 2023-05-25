@@ -719,6 +719,7 @@ impl std::fmt::Display for HumanBytes {
 
 #[cfg(test)]
 mod tests {
+    use crate::cfg::PersistParameters;
     use bytes::Bytes;
     use mz_persist::location::{Atomicity, SeqNo};
     use timely::progress::Antichain;
@@ -869,21 +870,81 @@ mod tests {
         std::mem::forget(batch);
         write1.expire().await;
 
+        // Write a rollup that has an encoded size (the initial rollup has size 0);
+        let maintenance = write0.machine.add_rollup_for_current_seqno().await;
+        maintenance.perform(&write0.machine, &write0.gc).await;
+
         let usage = StorageUsageClient::open(client);
-        let shard_usage = usage.shard_usage_audit(shard_id).await;
+        let shard_usage_audit = usage.shard_usage_audit(shard_id).await;
+        let shard_usage_referenced = usage.shard_usage_referenced(shard_id).await;
         // We've written data.
-        assert!(shard_usage.current_state_batches_bytes > 0);
+        assert!(shard_usage_audit.current_state_batches_bytes > 0);
+        assert!(shard_usage_referenced.batches_bytes > 0);
         // There's always at least one rollup.
-        assert!(shard_usage.current_state_rollups_bytes > 0);
+        assert!(shard_usage_audit.current_state_rollups_bytes > 0);
+        assert!(shard_usage_referenced.rollup_bytes > 0);
         // Sadly, it's tricky (and brittle) to ensure that there is data
         // referenced by some live state, but no longer referenced by the
         // current one, so no asserts on referenced_not_current_state_bytes for
         // now.
         //
         // write0 wrote a batch, but never linked it in, but is still active.
-        assert!(shard_usage.not_leaked_not_referenced_bytes > 0);
+        assert!(shard_usage_audit.not_leaked_not_referenced_bytes > 0);
         // write0 wrote a batch, but never linked it in, and is now expired.
-        assert!(shard_usage.leaked_bytes > 0);
+        assert!(shard_usage_audit.leaked_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn usage_referenced() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "four".to_owned()), 4, 1),
+        ];
+
+        let shard_id = ShardId::new();
+        let mut client = new_test_client().await;
+        // make our bookkeeping simple by skipping compaction blobs writes
+        client.cfg.compaction_enabled = false;
+        // make things interesting and create multiple parts per batch
+        let mut params = PersistParameters::default();
+        params.blob_target_size = Some(0);
+        params.apply(&client.cfg);
+
+        let (mut write, _read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        let mut b1 = write.expect_batch(&data[..2], 0, 3).await;
+        let mut b2 = write.expect_batch(&data[2..], 2, 5).await;
+
+        let batches_size = b1
+            .batch
+            .parts
+            .iter()
+            .map(|x| u64::cast_from(x.encoded_size_bytes))
+            .sum::<u64>()
+            + b2.batch
+                .parts
+                .iter()
+                .map(|x| u64::cast_from(x.encoded_size_bytes))
+                .sum::<u64>();
+
+        write
+            .expect_compare_and_append_batch(&mut [&mut b1], 0, 3)
+            .await;
+        write
+            .expect_compare_and_append_batch(&mut [&mut b2], 3, 5)
+            .await;
+
+        let usage = StorageUsageClient::open(client);
+        let shard_usage_referenced = usage.shard_usage_referenced(shard_id).await;
+
+        // with compaction disabled, we can do an exact match on batch part byte size
+        assert_eq!(shard_usage_referenced.batches_bytes, batches_size);
     }
 
     fn writer_id(x: char) -> WriterId {
