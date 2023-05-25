@@ -15,7 +15,6 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_cluster_client::errors::DataflowError;
@@ -28,6 +27,7 @@ use mz_storage_client::source::persist_source;
 use mz_storage_client::types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
 };
+use mz_timely_util::arrange::MzArrange;
 use timely::dataflow::Scope;
 use tracing::warn;
 
@@ -174,11 +174,8 @@ where
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
     let collection = match sink.envelope {
         Some(SinkEnvelope::Debezium) => {
-            // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
-            // TODO(#17413): Revisit with cluster unification.
-            #[allow(clippy::disallowed_methods)]
             let combined = combine_at_timestamp(
-                keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Debezium"),
+                keyed.mz_arrange::<ColValSpine<_, _, _, _>>("Arrange Debezium"),
             );
 
             // if there is no user-specified key, remove the synthetic
@@ -207,12 +204,8 @@ where
             collection
         }
         Some(SinkEnvelope::Upsert) => {
-            // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
-            // TODO(#17413): Revisit with cluster unification.
-            #[allow(clippy::disallowed_methods)]
-            let combined = combine_at_timestamp(
-                keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Upsert"),
-            );
+            let combined =
+                combine_at_timestamp(keyed.mz_arrange::<ColValSpine<_, _, _, _>>("Arrange Upsert"));
 
             let from_id = sink.from;
             let collection = combined.flat_map(move |(mut k, v)| {
