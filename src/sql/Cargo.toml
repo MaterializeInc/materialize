@@ -30,7 +30,7 @@ mz-ore = { path = "../ore", features = ["chrono", "async"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
-mz-postgres-util = { path = "../postgres-util" }
+mz-postgres-util = { path = "../postgres-util", features = ["privileges"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-rocksdb = { path = "../rocksdb" }
