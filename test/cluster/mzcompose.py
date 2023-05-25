@@ -1518,8 +1518,10 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         """
         output = c.sql_query(
             """
-            SELECT s.user, c.name, t.name
+            SELECT r.name, c.name, t.name
             FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_sessions e ON (e.id = s.session_id)
+              JOIN mz_roles r ON (r.id = e.role_id)
               JOIN mz_clusters c ON (c.id = s.cluster_id)
               JOIN mz_tables t ON (t.id = s.referenced_object_ids[1])
             ORDER BY s.created_at
