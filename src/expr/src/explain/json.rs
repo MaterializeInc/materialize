@@ -12,7 +12,6 @@
 use mz_repr::explain::json::DisplayJson;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource, PushdownInfo};
-use crate::interpret::Pushdownable;
 
 impl<'a, T: 'a> DisplayJson for ExplainSinglePlan<'a, T>
 where
@@ -54,18 +53,17 @@ where
                         "op": op,
                     });
 
-                    if let Some(PushdownInfo { trace }) = pushdown_info {
-                        let pushdownable: Vec<_> = trace
-                            .0
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, p)| **p == Pushdownable::Yes)
-                            .map(|(i, _)| i)
-                            .collect();
-
-                        json.as_object_mut()
-                            .unwrap()
-                            .insert("pushdown".to_owned(), serde_json::json!(pushdownable));
+                    if let Some(PushdownInfo {
+                        pushdown,
+                        potential_pushdown,
+                    }) = pushdown_info
+                    {
+                        let object = json.as_object_mut().unwrap();
+                        object.insert("pushdown".to_owned(), serde_json::json!(pushdown));
+                        object.insert(
+                            "potential_pushdown".to_owned(),
+                            serde_json::json!(potential_pushdown),
+                        );
                     }
 
                     json
