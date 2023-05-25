@@ -514,7 +514,7 @@ impl MirRelationExpr {
     {
         use MirRelationExpr::*;
 
-        match self {
+        let mut keys = match self {
             Constant {
                 rows: Ok(rows),
                 typ,
@@ -852,7 +852,10 @@ impl MirRelationExpr {
                 // Important: do not inherit keys of either input, as not unique.
                 result
             }
-        }
+        };
+        keys.sort();
+        keys.dedup();
+        keys
     }
 
     /// The number of columns in the relation.
