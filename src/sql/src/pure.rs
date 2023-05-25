@@ -404,6 +404,25 @@ pub async fn purify_create_source(
                 });
             }
 
+            // We technically could allow multiple subsources to ingest the same upstream table, but
+            // it is almost certainly an error on the user's end.
+            if let Some(name) = validated_requested_subsources
+                .iter()
+                .map(|(referenced_name, _, _)| referenced_name)
+                .duplicates()
+                .next()
+                .cloned()
+            {
+                let mut target_names: Vec<_> = validated_requested_subsources
+                    .into_iter()
+                    .filter_map(|(u, t, _)| if u == name { Some(t) } else { None })
+                    .collect();
+
+                target_names.sort();
+
+                return Err(PlanError::SubsourceDuplicateReference { name, target_names });
+            }
+
             // Ensure that we have select permissions on all tables; we have to do this before we
             // start snapshotting because if we discover we cannot `COPY` from a table while
             // snapshotting, we break the entire source.
