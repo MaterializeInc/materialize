@@ -1,6 +1,6 @@
 ---
-title: "Create a new user and role"
-description: ""
+title: "How to manage users and roles"
+description: "Add users, create roles, and assign privileges in Materialize"
 menu:
   main:
     parent: user-management
