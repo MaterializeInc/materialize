@@ -29,6 +29,7 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import getmembers, isfunction
+from pathlib import Path
 from ssl import SSLContext
 from tempfile import TemporaryFile
 from typing import (
@@ -734,6 +735,14 @@ class Composition:
             self.exec(service, *args, stdin=input)
         else:
             self.run(service, *args, stdin=input)
+
+    def cp(
+        self,
+        source: Union[str, Path],
+        destination: Union[str, Path],
+    ) -> None:
+        """Copy a file to or from a container."""
+        self.invoke("cp", str(source), str(destination))
 
 
 class ServiceHealthcheck(TypedDict, total=False):
