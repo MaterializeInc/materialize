@@ -164,7 +164,7 @@ operations in the system.
 | Field                    | Type                           | Meaning                                                                                                                    |
 | ------------------------ | ------------------------------ | --------                                                                                                                   |
 | `id`                     | [`text`]                       | The ID of the subscription.                                                                                                |
-| `user`                   | [`text`]                       | The user who started the subscription.                                                                                     |
+| `session_id`             | [`uint4`]                      | The ID of the session that runs the subscription. Corresponds to [`mz_sessions.id`](#mz_sessions).                         |
 | `cluster_id`             | [`text`]                       | The ID of the cluster on which the subscription is running. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
 | `created_at`             | [`timestamp with time zone`]   | The time at which the subscription was created.                                                                            |
 | `referenced_object_ids`  | [`text list`]                  | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
