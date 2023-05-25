@@ -476,7 +476,7 @@ impl From<EnvelopeError> for DataflowError {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::errors::DecodeErrorKind;
+    use crate::errors::DecodeErrorKind;
 
     use super::DecodeError;
 

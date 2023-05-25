@@ -2705,7 +2705,7 @@ pub struct SourceToken {
 mod tests {
     use proptest::prelude::*;
 
-    use crate::types::errors::EnvelopeError;
+    use mz_cluster_client::errors::EnvelopeError;
 
     use super::*;
 
