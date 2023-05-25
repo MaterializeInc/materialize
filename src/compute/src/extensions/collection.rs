@@ -16,6 +16,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData};
+use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::Scope;
 
@@ -49,8 +50,8 @@ impl<G, D1, R> ConsolidateExt<G, D1, R> for Collection<G, D1, R>
 where
     G: Scope,
     G::Timestamp: Lattice + Data,
-    D1: ExchangeData + Hash,
-    R: Semigroup + ExchangeData,
+    D1: ExchangeData + Hash + Columnation,
+    R: Semigroup + ExchangeData + Columnation,
 {
     fn mz_consolidate_if<Tr>(&self, must_consolidate: bool, name: &str) -> Self
     where

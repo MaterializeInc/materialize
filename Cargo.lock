@@ -3909,6 +3909,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
+ "columnation",
  "criterion",
  "csv",
  "datadriven",

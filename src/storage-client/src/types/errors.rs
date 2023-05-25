@@ -411,6 +411,15 @@ pub enum DataflowError {
 
 impl Error for DataflowError {}
 
+mod columnation {
+    use crate::types::errors::DataflowError;
+    use timely::container::columnation::{CloneRegion, Columnation};
+
+    impl Columnation for DataflowError {
+        type InnerRegion = CloneRegion<DataflowError>;
+    }
+}
+
 impl RustType<ProtoDataflowError> for DataflowError {
     fn into_proto(&self) -> ProtoDataflowError {
         use proto_dataflow_error::Kind::*;

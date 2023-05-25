@@ -24,7 +24,7 @@ use crate::extensions::operator::{ArrangementSize, MzReduce};
 
 /// Extension trait for `ReduceCore`, currently providing a reduction based
 /// on an operator-pair approach.
-pub(crate) trait ReduceExt<G: Scope, K: Data, V: Data, R: Semigroup>
+pub trait ReduceExt<G: Scope, K: Data, V: Data, R: Semigroup>
 where
     G::Timestamp: Lattice + Ord,
 {

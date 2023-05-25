@@ -195,7 +195,7 @@ pub(super) fn construct<A: Allocate>(
                         .collect::<Vec<_>>(),
                     variant.desc().arity(),
                 );
-                let arranged = collection
+                let trace = collection
                     .map({
                         let mut row_buf = Row::default();
                         let mut datums = DatumVec::new();
@@ -208,8 +208,9 @@ pub(super) fn construct<A: Allocate>(
                             (row_key, row_val)
                         }
                     })
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant));
-                traces.insert(variant.clone(), (arranged.trace, Rc::clone(&token)));
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
+                    .trace;
+                traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
         }
 

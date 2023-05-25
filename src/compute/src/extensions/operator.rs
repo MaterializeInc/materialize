@@ -18,54 +18,80 @@ use mz_storage_client::types::errors::DataflowError;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
-use timely::dataflow::Scope;
+use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::logging::compute::ComputeEvent;
 use crate::typedefs::{ErrSpine, ErrValSpine, RowKeySpine, RowSpine};
 
-pub(crate) trait MzArrange<G: Scope, K, V, R: Semigroup>
+pub trait MzArrange
 where
+    <Self::Scope as ScopeParent>::Timestamp: Lattice,
+{
+    type Scope: Scope;
+    type Key: Data;
+    type Val: Data;
+    type R: Data + Semigroup;
+
+    /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
+    ///
+    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
+    /// This trace is current for all times marked completed in the output stream, and probing this stream
+    /// is the correct way to determine that times in the shared trace are committed.
+    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    where
+        Self::Key: ExchangeData + Hashable,
+        Self::Val: ExchangeData,
+        Self::R: ExchangeData,
+        Tr: Trace
+            + TraceReader<
+                Key = Self::Key,
+                Val = Self::Val,
+                Time = <Self::Scope as ScopeParent>::Timestamp,
+                R = Self::R,
+            > + 'static,
+        Tr::Batch: Batch,
+        Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
+
+    /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
+    ///
+    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
+    /// This trace is current for all times marked completed in the output stream, and probing this stream
+    /// is the correct way to determine that times in the shared trace are committed.
+    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<Self::Scope, TraceAgent<Tr>>
+    where
+        P: ParallelizationContract<
+            <Self::Scope as ScopeParent>::Timestamp,
+            (
+                (Self::Key, Self::Val),
+                <Self::Scope as ScopeParent>::Timestamp,
+                Self::R,
+            ),
+        >,
+        Tr: Trace
+            + TraceReader<
+                Key = Self::Key,
+                Val = Self::Val,
+                Time = <Self::Scope as ScopeParent>::Timestamp,
+                R = Self::R,
+            > + 'static,
+        Tr::Batch: Batch,
+        Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
+}
+
+impl<G, K, V, R> MzArrange for Collection<G, (K, V), R>
+where
+    G: Scope,
     G::Timestamp: Lattice,
-    K: Data,
-    V: Data,
+    K: Data + Columnation,
+    V: Data + Columnation,
+    R: Semigroup + Columnation,
 {
-    /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
-    ///
-    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
-    /// This trace is current for all times marked completed in the output stream, and probing this stream
-    /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        K: ExchangeData + Hashable,
-        V: ExchangeData,
-        R: ExchangeData,
-        Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + 'static,
-        Tr::Batch: Batch,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize;
+    type Scope = G;
+    type Key = K;
+    type Val = V;
+    type R = R;
 
-    /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
-    ///
-    /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
-    /// This trace is current for all times marked completed in the output stream, and probing this stream
-    /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
-    where
-        R: ExchangeData,
-        P: ParallelizationContract<G::Timestamp, ((K, V), G::Timestamp, R)>,
-        Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + 'static,
-        Tr::Batch: Batch,
-        Arranged<G, TraceAgent<Tr>>: ArrangementSize;
-}
-
-impl<G, K, V, R> MzArrange<G, K, V, R> for Collection<G, (K, V), R>
-where
-    G: Scope,
-    G::Timestamp: Lattice + Ord,
-    K: Data,
-    V: Data,
-    R: Semigroup,
-{
     fn mz_arrange<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
         K: ExchangeData + Hashable,
@@ -82,7 +108,6 @@ where
 
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        R: ExchangeData,
         P: ParallelizationContract<G::Timestamp, ((K, V), G::Timestamp, R)>,
         Tr: Trace + TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch,
@@ -94,44 +119,57 @@ where
     }
 }
 
-impl<G, R> MzArrange<G, DataflowError, (), R> for Collection<G, DataflowError, R>
+pub struct KeyCollection<G: Scope, D, R: Semigroup = usize>(Collection<G, D, R>);
+
+pub trait IntoKeyCollection {
+    type Output;
+    fn into_key_collection(self) -> Self::Output;
+}
+
+impl<G: Scope, D, R: Semigroup> IntoKeyCollection for Collection<G, D, R> {
+    type Output = KeyCollection<G, D, R>;
+
+    fn into_key_collection(self) -> Self::Output {
+        KeyCollection(self)
+    }
+}
+
+impl<G, K, R> MzArrange for KeyCollection<G, K, R>
 where
     G: Scope,
-    G::Timestamp: Lattice + Ord,
-    R: Semigroup,
+    K: Data + Columnation,
+    G::Timestamp: Lattice,
+    R: Semigroup + Columnation,
 {
+    type Scope = G;
+    type Key = K;
+    type Val = ();
+    type R = R;
+
     fn mz_arrange<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
+        K: ExchangeData + Hashable,
         R: ExchangeData,
-        Tr: Trace
-            + TraceReader<Key = DataflowError, Val = (), Time = G::Timestamp, R = R>
-            + 'static,
+        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        // Allow access to `arrange_named` because we're within Mz's wrapper.
-        #[allow(clippy::disallowed_methods)]
-        self.arrange_named(name).log_arrangement_size()
+        self.0.map(|d| (d, ())).mz_arrange(name)
     }
 
     fn mz_arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        R: ExchangeData,
-        P: ParallelizationContract<G::Timestamp, ((DataflowError, ()), G::Timestamp, R)>,
-        Tr: Trace
-            + TraceReader<Key = DataflowError, Val = (), Time = G::Timestamp, R = R>
-            + 'static,
+        P: ParallelizationContract<G::Timestamp, ((K, ()), G::Timestamp, R)>,
+        Tr: Trace + TraceReader<Key = K, Val = (), Time = G::Timestamp, R = R> + 'static,
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        // Allow access to `arrange_named` because we're within Mz's wrapper.
-        #[allow(clippy::disallowed_methods)]
-        self.arrange_core(pact, name).log_arrangement_size()
+        self.0.map(|d| (d, ())).mz_arrange_core(pact, name)
     }
 }
 
-// A type that can log its heap size.
-pub(crate) trait ArrangementSize {
+/// A type that can log its heap size.
+pub trait ArrangementSize {
     /// Install a logger to track the heap size of the target.
     fn log_arrangement_size(self) -> Self;
 }

@@ -21,7 +21,7 @@ use timely::logging::{Logger, TimelyEvent};
 use timely::progress::reachability::logging::TrackerEvent;
 
 use crate::arrangement::manager::TraceBundle;
-use crate::extensions::operator::MzArrange;
+use crate::extensions::operator::{IntoKeyCollection, MzArrange};
 use crate::logging::compute::ComputeEvent;
 use crate::logging::reachability::ReachabilityEvent;
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
@@ -117,6 +117,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             .worker
             .dataflow_named("Dataflow: logging errors", |scope| {
                 Collection::<_, DataflowError, Diff>::empty(scope)
+                    .into_key_collection()
                     .mz_arrange("Arrange logging err")
                     .trace
             });
