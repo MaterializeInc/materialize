@@ -7,17 +7,18 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+ahash = "0.8.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures-util = "0.3.25"
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-serde = { version = "1.0.152", features = ["derive"] }
+mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
-polonius-the-crab = "0.3.1"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread", "time"] }
 num-traits = "0.2"
-ahash = "0.8.0"
+polonius-the-crab = "0.3.1"
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
+serde = { version = "1.0.152", features = ["derive"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread", "time"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

@@ -22,6 +22,7 @@ use bytes::BufMut;
 use dec::OrderedDecimal;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_cluster_client::errors::{DataflowError, ProtoDataflowError};
 use mz_expr::{MirScalarExpr, PartitionId};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
@@ -51,7 +52,6 @@ use uuid::Uuid;
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use crate::types::connections::{KafkaConnection, PostgresConnection};
-use crate::types::errors::{DataflowError, ProtoDataflowError};
 use crate::types::instances::StorageInstanceId;
 use crate::types::sources::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use crate::types::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};

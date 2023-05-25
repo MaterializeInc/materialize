@@ -42,6 +42,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
 use itertools::Itertools;
+use mz_cluster_client::errors::SourceError;
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -55,7 +56,6 @@ use mz_storage_client::client::SourceStatisticsUpdate;
 use mz_storage_client::controller::{CollectionMetadata, ResumptionFrontierCalculator};
 use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{
     MzOffset, SourceConnection, SourceExport, SourceTimestamp, SourceToken,

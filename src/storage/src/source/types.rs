@@ -20,11 +20,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::Collection;
+use mz_cluster_client::errors::{DecodeError, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
 use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};

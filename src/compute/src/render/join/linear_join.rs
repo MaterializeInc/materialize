@@ -15,16 +15,16 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
+use mz_cluster_client::errors::DataflowError;
 use mz_compute_client::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_client::plan::join::JoinClosure;
 use mz_repr::{DatumVec, Diff, Row, RowArena};
-use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::arrange::MzArrange;
 use mz_timely_util::operator::CollectionExt;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
 
-use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
     Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
 };

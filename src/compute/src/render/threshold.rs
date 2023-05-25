@@ -16,12 +16,12 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use mz_compute_client::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::{Diff, Row};
+use mz_timely_util::arrange::MzArrange;
+use mz_timely_util::reduce::MzReduce;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 
-use crate::extensions::arrange::MzArrange;
-use crate::extensions::reduce::MzReduce;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::typedefs::RowSpine;
 

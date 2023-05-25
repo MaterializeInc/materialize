@@ -20,6 +20,7 @@ use differential_dataflow::trace::TraceReader;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
+use mz_timely_util::arrange::MzArrange;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
@@ -33,7 +34,6 @@ use timely::Container;
 use tracing::error;
 use uuid::Uuid;
 
-use crate::extensions::arrange::MzArrange;
 use crate::logging::{ComputeLog, EventQueue, LogVariant};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 

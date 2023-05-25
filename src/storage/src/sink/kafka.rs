@@ -22,6 +22,7 @@ use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
 use maplit::btreemap;
+use mz_cluster_client::errors::DataflowError;
 use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
@@ -37,7 +38,6 @@ use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sinks::{
     KafkaSinkConnection, MetadataFilled, PublishedSchemaInfo, SinkAsOf, SinkEnvelope,
     StorageSinkDesc,

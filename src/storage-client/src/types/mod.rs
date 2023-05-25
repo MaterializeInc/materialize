@@ -10,7 +10,6 @@
 #![allow(missing_docs)]
 
 pub mod connections;
-pub mod errors;
 pub mod instances;
 pub mod parameters;
 pub mod sinks;

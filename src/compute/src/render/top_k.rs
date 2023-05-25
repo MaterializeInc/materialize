@@ -18,20 +18,20 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
+use mz_cluster_client::errors::DataflowError;
 use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
 use mz_expr::EvalError;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{DatumVec, Diff, Row};
-use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::arrange::MzArrange;
 use mz_timely_util::operator::{CollectionExt, ConsolidateExt};
+use mz_timely_util::reduce::MzReduce;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 
-use crate::extensions::arrange::MzArrange;
-use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::typedefs::{RowKeySpine, RowSpine};

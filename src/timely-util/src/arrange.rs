@@ -12,7 +12,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
-use mz_storage_client::types::errors::DataflowError;
+use mz_cluster_client::errors::DataflowError;
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::Scope;
 

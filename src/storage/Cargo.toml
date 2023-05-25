@@ -38,6 +38,7 @@ mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-expr = { path = "../expr" }
 mz-cluster = { path = "../cluster" }
+mz-cluster-client = { path = "../cluster-client" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing_", "chrono"] }

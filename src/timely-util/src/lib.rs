@@ -83,6 +83,7 @@
 
 pub mod activator;
 pub mod antichain;
+pub mod arrange;
 pub mod buffer;
 pub mod builder_async;
 pub mod capture;
@@ -93,4 +94,5 @@ pub mod pact;
 pub mod panic;
 pub mod probe;
 pub mod progress;
+pub mod reduce;
 pub mod replay;

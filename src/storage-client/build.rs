@@ -112,7 +112,6 @@ fn main() {
             &[
                 "storage-client/src/controller.proto",
                 "storage-client/src/client.proto",
-                "storage-client/src/types/errors.proto",
                 "storage-client/src/types/connections/aws.proto",
                 "storage-client/src/types/instances.proto",
                 "storage-client/src/types/parameters.proto",

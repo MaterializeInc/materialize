@@ -14,7 +14,7 @@ import "expr/src/id.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
 
-package mz_storage_client.types.errors;
+package mz_cluster_client.errors;
 
 message ProtoDecodeError {
     ProtoDecodeErrorKind kind = 1;
