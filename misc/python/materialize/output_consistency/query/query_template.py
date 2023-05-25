@@ -6,8 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List, Optional, Set
+from typing import List
 
+from materialize.output_consistency.data_value.data_row_selection import (
+    DataRowSelection,
+)
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -28,13 +31,13 @@ class QueryTemplate:
         select_expressions: List[Expression],
         storage_layout: ValueStorageLayout,
         contains_aggregations: bool,
-        restrict_to_row_indices: Optional[Set[int]],
+        row_selection: DataRowSelection,
     ) -> None:
         self.expect_error = expect_error
         self.select_expressions: List[Expression] = select_expressions
         self.storage_layout = storage_layout
         self.contains_aggregations = contains_aggregations
-        self.restrict_to_row_indices = restrict_to_row_indices
+        self.row_selection = row_selection
 
     def add_select_expression(self, expression: Expression) -> None:
         self.select_expressions.append(expression)
@@ -67,11 +70,11 @@ FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
         return f",{space_separator}".join(expressions_as_sql)
 
     def _create_where_clause(self) -> str:
-        if self.restrict_to_row_indices is None:
+        if self.row_selection.row_indices is None:
             return ""
 
         row_index_string = ", ".join(
-            str(index) for index in self.restrict_to_row_indices
+            str(index) for index in self.row_selection.row_indices
         )
         return f"WHERE {VERTICAL_LAYOUT_ROW_INDEX_COL_NAME} IN ({row_index_string})"
 

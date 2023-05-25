@@ -170,7 +170,7 @@ class ExpressionGenerator:
         )
 
         if storage_layout == ValueStorageLayout.VERTICAL:
-            return type_with_values.vertical_storage_data_column
+            return type_with_values.create_vertical_storage_column_expression()
         else:
             if len(type_with_values.raw_values) == 0:
                 raise NoSuitableExpressionFound()

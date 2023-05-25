@@ -10,6 +10,9 @@ from typing import Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.data_value.data_row_selection import (
+    DataRowSelection,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -45,6 +48,11 @@ class DataValue(Expression):
 
     def to_sql_as_value(self) -> str:
         return f"{self.value}::{self.data_type.type_name}"
+
+    def collect_involved_characteristics(
+        self, row_selection: DataRowSelection
+    ) -> Set[ExpressionCharacteristics]:
+        return self.own_characteristics
 
     def __str__(self) -> str:
         return f"{self.column_name} ({self.value})"

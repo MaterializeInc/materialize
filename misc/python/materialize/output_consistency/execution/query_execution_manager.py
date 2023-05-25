@@ -196,14 +196,14 @@ class QueryExecutionManager:
             query1_args,
             original_query_template.storage_layout,
             original_query_template.contains_aggregations,
-            original_query_template.restrict_to_row_indices,
+            original_query_template.row_selection,
         )
         new_query_template2 = QueryTemplate(
             False,
             query2_args,
             original_query_template.storage_layout,
             original_query_template.contains_aggregations,
-            original_query_template.restrict_to_row_indices,
+            original_query_template.row_selection,
         )
         query_id_prefix = f"{query_id}."
 

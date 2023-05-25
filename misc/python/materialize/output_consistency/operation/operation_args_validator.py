@@ -34,7 +34,7 @@ class OperationArgsValidator:
             if index in skip_argument_indices:
                 continue
 
-            if match_argument_fn(arg.characteristics, index):
+            if match_argument_fn(arg.own_characteristics, index):
                 return index
 
         return -1

@@ -27,8 +27,6 @@ class DataTypeWithValues:
         )
         # values (and implicitly a column for each value for horizontal storage)
         self.raw_values: List[DataValue] = [self.null_value]
-        # column for vertical storage (with all values)
-        self.vertical_storage_data_column = DataColumn(data_type)
 
     def _create_raw_value(
         self,
@@ -52,4 +50,7 @@ class DataTypeWithValues:
         self, characteristic: ExpressionCharacteristics
     ) -> None:
         for raw_value in self.raw_values:
-            raw_value.characteristics.add(characteristic)
+            raw_value.own_characteristics.add(characteristic)
+
+    def create_vertical_storage_column_expression(self) -> DataColumn:
+        return DataColumn(self.data_type, self.raw_values)

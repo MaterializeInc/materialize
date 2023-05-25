@@ -7,10 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional, Set
+from typing import List
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
+)
+from materialize.output_consistency.data_value.data_row_selection import (
+    DataRowSelection,
 )
 from materialize.output_consistency.execution.test_summary import ConsistencyTestLogger
 from materialize.output_consistency.execution.value_storage_layout import (
@@ -150,12 +153,10 @@ class QueryGenerator:
                 offset_index : offset_index + self.config.max_cols_per_query
             ]
 
-            restriction_to_row_indices = self._select_row_indices_selection(
-                storage_layout
-            )
+            row_selection = self._select_rows(storage_layout)
 
             expression_chunk = self._remove_known_inconsistencies(
-                logger, expression_chunk, restriction_to_row_indices
+                logger, expression_chunk, row_selection
             )
 
             if len(expression_chunk) == 0:
@@ -166,7 +167,7 @@ class QueryGenerator:
                 expression_chunk,
                 storage_layout,
                 contains_aggregations,
-                restriction_to_row_indices,
+                row_selection,
             )
 
             queries.append(query)
@@ -180,13 +181,9 @@ class QueryGenerator:
 
         queries = []
         for expression in expressions:
-            restriction_to_row_indices = self._select_row_indices_selection(
-                expression.storage_layout
-            )
+            row_selection = self._select_rows(expression.storage_layout)
 
-            if self.known_inconsistencies_filter.matches(
-                expression, restriction_to_row_indices
-            ):
+            if self.known_inconsistencies_filter.matches(expression, row_selection):
                 self._log_skipped_expression(logger, expression)
                 continue
 
@@ -196,22 +193,21 @@ class QueryGenerator:
                     [expression],
                     expression.storage_layout,
                     False,
-                    restriction_to_row_indices,
+                    row_selection,
                 )
             )
 
         return queries
 
-    def _select_row_indices_selection(
-        self, storage_layout: ValueStorageLayout
-    ) -> Optional[Set[int]]:
+    def _select_rows(self, storage_layout: ValueStorageLayout) -> DataRowSelection:
         if storage_layout == ValueStorageLayout.HORIZONTAL:
-            return None
+            return DataRowSelection()
         elif storage_layout == ValueStorageLayout.VERTICAL:
             max_number_of_rows_to_select = self.randomized_picker.random_number(2, 3)
-            return self.randomized_picker.random_row_indices(
+            row_indices = self.randomized_picker.random_row_indices(
                 self.vertical_storage_row_count, max_number_of_rows_to_select
             )
+            return DataRowSelection(row_indices)
         else:
             raise RuntimeError(f"Unknown storage layout: {storage_layout}")
 
@@ -219,14 +215,12 @@ class QueryGenerator:
         self,
         logger: ConsistencyTestLogger,
         expressions: List[Expression],
-        restriction_to_row_indices: Optional[Set[int]],
+        row_selection: DataRowSelection,
     ) -> List[Expression]:
         indices_to_remove = []
 
         for index, expression in enumerate(expressions):
-            if self.known_inconsistencies_filter.matches(
-                expression, restriction_to_row_indices
-            ):
+            if self.known_inconsistencies_filter.matches(expression, row_selection):
                 self._log_skipped_expression(logger, expression)
                 indices_to_remove.append(index)
 

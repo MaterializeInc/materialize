@@ -131,7 +131,7 @@ def _create_column_specs(
                 column_specs.append(f"{data_value.column_name}{type_info}")
         elif storage_layout == ValueStorageLayout.VERTICAL:
             column_specs.append(
-                f"{type_with_values.vertical_storage_data_column.column_name}{type_info}"
+                f"{type_with_values.create_vertical_storage_column_expression().column_name}{type_info}"
             )
         else:
             raise RuntimeError(f"Unexpected storage layout: {storage_layout}")

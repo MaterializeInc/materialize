@@ -6,13 +6,19 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.data_value.data_row_selection import (
+    DataRowSelection,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.operation.operation import (
     EXPRESSION_PLACEHOLDER,
     DbOperationOrFunction,
@@ -31,10 +37,11 @@ class ExpressionWithArgs(Expression):
     ):
         super().__init__(
             operation.derive_characteristics(args),
-            _get_storage_layout(args),
+            _determine_storage_layout(args),
             is_aggregate,
             is_expect_error,
         )
+        self.operation = operation
         self.pattern = operation.to_pattern(len(args))
         self.return_type_category = operation.return_type_category
         self.args = args
@@ -74,8 +81,21 @@ class ExpressionWithArgs(Expression):
         args_desc = ", ".join(arg.__str__() for arg in self.args)
         return f"ExpressionWithArgs with pattern {self.pattern} and args {args_desc}"
 
+    def collect_involved_characteristics(
+        self, row_selection: DataRowSelection
+    ) -> Set[ExpressionCharacteristics]:
+        involved_characteristics: Set[ExpressionCharacteristics] = set()
+        involved_characteristics.union(self.own_characteristics)
 
-def _get_storage_layout(args: List[Expression]) -> ValueStorageLayout:
+        for arg in self.args:
+            involved_characteristics.union(
+                arg.collect_involved_characteristics(row_selection)
+            )
+
+        return involved_characteristics
+
+
+def _determine_storage_layout(args: List[Expression]) -> ValueStorageLayout:
     storage_layout: Optional[ValueStorageLayout] = None
 
     for arg in args:
