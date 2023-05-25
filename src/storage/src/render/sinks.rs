@@ -15,19 +15,19 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use mz_cluster_client::errors::DataflowError;
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format};
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::source::persist_source;
+use mz_storage_client::types::errors::DataflowError;
 use mz_storage_client::types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
 };
-use mz_timely_util::arrange::MzArrange;
 use timely::dataflow::Scope;
 use tracing::warn;
 
@@ -175,7 +175,7 @@ where
     let collection = match sink.envelope {
         Some(SinkEnvelope::Debezium) => {
             let combined = combine_at_timestamp(
-                keyed.mz_arrange::<ColValSpine<_, _, _, _>>("Arrange Debezium"),
+                keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Debezium"),
             );
 
             // if there is no user-specified key, remove the synthetic
@@ -204,8 +204,9 @@ where
             collection
         }
         Some(SinkEnvelope::Upsert) => {
-            let combined =
-                combine_at_timestamp(keyed.mz_arrange::<ColValSpine<_, _, _, _>>("Arrange Upsert"));
+            let combined = combine_at_timestamp(
+                keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Upsert"),
+            );
 
             let from_id = sink.from;
             let collection = combined.flat_map(move |(mut k, v)| {

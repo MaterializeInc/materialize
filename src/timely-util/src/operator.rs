@@ -18,6 +18,7 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
+use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -554,8 +555,8 @@ where
 
 impl<G, D1, R> ConsolidateExt<G, D1, R> for Collection<G, D1, R>
 where
-    D1: differential_dataflow::ExchangeData + Hash,
-    R: Semigroup + differential_dataflow::ExchangeData,
+    D1: differential_dataflow::ExchangeData + Hash + Columnation,
+    R: Semigroup + differential_dataflow::ExchangeData + Columnation,
     G::Timestamp: Lattice,
     G: Scope,
 {

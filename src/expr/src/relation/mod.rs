@@ -2133,6 +2133,17 @@ pub struct ColumnOrder {
     pub nulls_last: bool,
 }
 
+mod columnation {
+    use columnation::{CloneRegion, Columnation};
+
+    use crate::ColumnOrder;
+
+    impl Columnation for ColumnOrder {
+        // ColumnOrder does not contain any pointers.
+        type InnerRegion = CloneRegion<ColumnOrder>;
+    }
+}
+
 impl RustType<ProtoColumnOrder> for ColumnOrder {
     fn into_proto(&self) -> ProtoColumnOrder {
         ProtoColumnOrder {

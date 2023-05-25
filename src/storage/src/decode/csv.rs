@@ -7,8 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_cluster_client::errors::DecodeErrorKind;
 use mz_repr::{Datum, Row};
+use mz_storage_client::types::errors::DecodeErrorKind;
 use mz_storage_client::types::sources::encoding::CsvEncoding;
 
 #[derive(Debug)]

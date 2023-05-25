@@ -108,7 +108,6 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::izip;
-use mz_cluster_client::errors::DataflowError;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_expr::Id;
@@ -116,7 +115,8 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
 use mz_storage_client::source::persist_source::FlowControl;
-use mz_timely_util::arrange::MzArrange;
+use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::arrange::{IntoKeyCollection, MzArrange};
 use mz_timely_util::operator::{CollectionExt, ConsolidateExt};
 use mz_timely_util::probe::{self, ProbeNotify};
 use mz_timely_util::reduce::MzReduce;
@@ -682,6 +682,7 @@ where
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
                 let mut errs = err
+                    .into_key_collection()
                     .mz_arrange::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
                     .mz_reduce_abelian::<_, ErrSpine<_, _, _>>(
                         "Distinct recursive err",

@@ -19,13 +19,13 @@ use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{Collection, Data};
-use mz_cluster_client::errors::DataflowError;
 use mz_compute_client::plan::AvailableCollections;
 use mz_compute_client::types::dataflows::DataflowDescription;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use mz_storage_client::controller::CollectionMetadata;
-use mz_timely_util::arrange::MzArrange;
+use mz_storage_client::types::errors::DataflowError;
+use mz_timely_util::arrange::{IntoKeyCollection, MzArrange};
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::message::RefOrMut;
 use timely::container::columnation;
@@ -785,6 +785,7 @@ where
                 let oks = oks_keyed.mz_arrange::<RowSpine<Row, Row, _, _>>(&name);
                 let errs = errs
                     .concat(&errs_keyed)
+                    .into_key_collection()
                     .mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));

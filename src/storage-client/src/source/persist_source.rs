@@ -14,7 +14,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use mz_cluster_client::errors::DataflowError;
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
@@ -41,6 +40,7 @@ use timely::scheduling::Activator;
 use tracing::error;
 
 use crate::controller::CollectionMetadata;
+use crate::types::errors::DataflowError;
 use crate::types::sources::{RelationDescHack, SourceData};
 
 /// Creates a new source that reads from a persist shard, distributing the work

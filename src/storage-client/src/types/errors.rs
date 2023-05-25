@@ -7,22 +7,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Error type definitions for most of what runs within a cluster.
-
-#![allow(missing_docs)]
-
 use std::error::Error;
 use std::fmt::Display;
 
+use bytes::BufMut;
 use mz_expr::{EvalError, PartitionId};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
-use prost::bytes::BufMut;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-include!(concat!(env!("OUT_DIR"), "/mz_cluster_client.errors.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_storage_client.types.errors.rs"
+));
 
 /// The underlying data was not decodable in the format we expected: eg.
 /// invalid JSON or Avro data that doesn't match a schema.
@@ -412,6 +411,15 @@ pub enum DataflowError {
 
 impl Error for DataflowError {}
 
+mod columnation {
+    use crate::types::errors::DataflowError;
+    use timely::container::columnation::{CloneRegion, Columnation};
+
+    impl Columnation for DataflowError {
+        type InnerRegion = CloneRegion<DataflowError>;
+    }
+}
+
 impl RustType<ProtoDataflowError> for DataflowError {
     fn into_proto(&self) -> ProtoDataflowError {
         use proto_dataflow_error::Kind::*;
@@ -476,7 +484,7 @@ impl From<EnvelopeError> for DataflowError {
 
 #[cfg(test)]
 mod tests {
-    use crate::errors::DecodeErrorKind;
+    use crate::types::errors::DecodeErrorKind;
 
     use super::DecodeError;
 

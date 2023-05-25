@@ -104,13 +104,6 @@ fn main() {
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
         .extern_path(".mz_repr.url", "::mz_repr::url")
-        .compile_with_config(
-            config,
-            &[
-                "cluster-client/src/client.proto",
-                "cluster-client/src/errors.proto",
-            ],
-            &[".."],
-        )
+        .compile_with_config(config, &["cluster-client/src/client.proto"], &[".."])
         .unwrap();
 }

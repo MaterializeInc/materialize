@@ -12,10 +12,10 @@ use std::collections::{BTreeMap, VecDeque};
 use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use mz_cluster_client::errors::{DataflowError, EnvelopeError};
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_storage_client::types::errors::{DataflowError, EnvelopeError};
 use mz_storage_client::types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, MzOffset,

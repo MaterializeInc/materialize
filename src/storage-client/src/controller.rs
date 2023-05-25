@@ -33,7 +33,6 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_cluster_client::errors::DataflowError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -63,6 +62,7 @@ use crate::client::{
 use crate::controller::rehydration::RehydratingStorageClient;
 use crate::healthcheck;
 use crate::metrics::StorageControllerMetrics;
+use crate::types::errors::DataflowError;
 use crate::types::instances::StorageInstanceId;
 use crate::types::parameters::StorageParameters;
 use crate::types::sinks::{

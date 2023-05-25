@@ -86,7 +86,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::Collection;
-use mz_cluster_client::errors::SourceErrorDetails;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -94,6 +93,7 @@ use mz_postgres_util::PostgresError;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_client::types::errors::SourceErrorDetails;
 use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Concat, Map};

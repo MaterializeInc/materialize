@@ -11,10 +11,10 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "cluster-client/src/errors.proto";
-import "proto/src/tokio_postgres.proto";
 import "repr/src/global_id.proto";
 import "repr/src/url.proto";
+import "proto/src/tokio_postgres.proto";
+import "storage-client/src/types/errors.proto";
 
 package mz_storage_client.types.connections;
 

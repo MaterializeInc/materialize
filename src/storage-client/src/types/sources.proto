@@ -11,7 +11,6 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "cluster-client/src/errors.proto";
 import "postgres-util/src/desc.proto";
 import "proto/src/proto.proto";
 import "repr/src/chrono.proto";
@@ -21,6 +20,7 @@ import "repr/src/row.proto";
 import "storage-client/src/controller.proto";
 import "storage-client/src/types/connections.proto";
 import "storage-client/src/types/connections/aws.proto";
+import "storage-client/src/types/errors.proto";
 import "storage-client/src/types/instances.proto";
 import "storage-client/src/types/sources/encoding.proto";
 import "expr/src/scalar.proto";
@@ -181,7 +181,7 @@ message ProtoSourceConnection {
 message ProtoSourceData {
     oneof kind {
         mz_repr.row.ProtoRow ok = 1;
-        mz_cluster_client.errors.ProtoDataflowError err = 2;
+        errors.ProtoDataflowError err = 2;
     }
 }
 

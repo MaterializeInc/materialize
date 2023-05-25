@@ -16,7 +16,7 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use mz_compute_client::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::{Diff, Row};
-use mz_timely_util::arrange::MzArrange;
+use mz_timely_util::arrange::{IntoKeyCollection, MzArrange};
 use mz_timely_util::reduce::MzReduce;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
@@ -72,6 +72,7 @@ where
             let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
             let errs = errs
                 .as_collection(|k, _| k.clone())
+                .into_key_collection()
                 .mz_arrange("Arrange threshold basic err");
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }

@@ -18,13 +18,13 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
-use mz_cluster_client::errors::DataflowError;
 use mz_compute_client::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
 use mz_expr::EvalError;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{DatumVec, Diff, Row};
+use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::arrange::MzArrange;
 use mz_timely_util::operator::{CollectionExt, ConsolidateExt};
 use mz_timely_util::reduce::MzReduce;
@@ -649,6 +649,66 @@ pub mod monoids {
     pub struct Top1Monoid {
         pub row: Row,
         pub order_key: Vec<ColumnOrder>,
+    }
+
+    mod columnation {
+        use crate::render::top_k::monoids::Top1Monoid;
+        use mz_expr::ColumnOrder;
+        use mz_repr::Row;
+        use timely::container::columnation::{Columnation, Region};
+
+        #[derive(Default)]
+        pub struct Top1MonoidRegion {
+            row_region: <Row as Columnation>::InnerRegion,
+            order_key_region: <Vec<ColumnOrder> as Columnation>::InnerRegion,
+        }
+
+        impl Columnation for Top1Monoid {
+            type InnerRegion = Top1MonoidRegion;
+        }
+
+        impl Region for Top1MonoidRegion {
+            type Item = Top1Monoid;
+
+            unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
+                Top1Monoid {
+                    row: self.row_region.copy(&item.row),
+                    order_key: self.order_key_region.copy(&item.order_key),
+                }
+            }
+
+            fn clear(&mut self) {
+                self.row_region.clear();
+                self.order_key_region.clear();
+            }
+
+            fn reserve_items<'a, I>(&mut self, items: I)
+            where
+                Self: 'a,
+                I: Iterator<Item = &'a Self::Item> + Clone,
+            {
+                let items2 = items.clone();
+                self.row_region.reserve_items(items2.map(|x| &x.row));
+                self.order_key_region
+                    .reserve_items(items.map(|x| &x.order_key));
+            }
+
+            fn reserve_regions<'a, I>(&mut self, regions: I)
+            where
+                Self: 'a,
+                I: Iterator<Item = &'a Self> + Clone,
+            {
+                self.row_region
+                    .reserve_regions(regions.clone().map(|r| &r.row_region));
+                self.order_key_region
+                    .reserve_regions(regions.map(|r| &r.order_key_region));
+            }
+
+            fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
+                self.row_region.heap_size(&mut callback);
+                self.order_key_region.heap_size(callback);
+            }
+        }
     }
 
     impl Multiply<Diff> for Top1Monoid {

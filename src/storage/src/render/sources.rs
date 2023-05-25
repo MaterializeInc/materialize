@@ -16,12 +16,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
-use mz_cluster_client::errors::{
-    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
-};
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
+use mz_storage_client::types::errors::{
+    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
+};
 use mz_storage_client::types::sources::encoding::*;
 use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;

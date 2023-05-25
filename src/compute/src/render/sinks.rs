@@ -14,11 +14,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
-use mz_cluster_client::errors::DataflowError;
 use mz_compute_client::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::probe;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;

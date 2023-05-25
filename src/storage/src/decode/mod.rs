@@ -23,13 +23,13 @@ use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use mz_cluster_client::errors::{DecodeError, DecodeErrorKind};
 use mz_expr::PartitionId;
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_ore::error::ErrorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_storage_client::types::connections::{ConnectionContext, CsrConnection};
+use mz_storage_client::types::errors::{DecodeError, DecodeErrorKind};
 use mz_storage_client::types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
