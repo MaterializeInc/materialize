@@ -21,22 +21,6 @@ class OperationArgsValidator:
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
         raise RuntimeError("Not implemented")
 
-    def has_all_characteristics(
-        self,
-        arg: Expression,
-        characteristics: Set[ExpressionCharacteristics],
-    ) -> bool:
-        overlap = arg.characteristics & characteristics
-        return len(overlap) == len(characteristics)
-
-    def has_any_characteristic(
-        self,
-        arg: Expression,
-        characteristics: Set[ExpressionCharacteristics],
-    ) -> bool:
-        overlap = arg.characteristics & characteristics
-        return len(overlap) > 0
-
     def index_of(
         self,
         args: List[Expression],

@@ -40,3 +40,16 @@ class Expression:
 
     def __str__(self) -> str:
         raise RuntimeError("Not implemented")
+
+    def has_all_characteristics(
+        self, characteristics: Set[ExpressionCharacteristics]
+    ) -> bool:
+        overlap = self.characteristics & characteristics
+        return len(overlap) == len(characteristics)
+
+    def has_any_characteristic(
+        self,
+        characteristics: Set[ExpressionCharacteristics],
+    ) -> bool:
+        overlap = self.characteristics & characteristics
+        return len(overlap) > 0
