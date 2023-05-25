@@ -398,7 +398,7 @@ pub async fn purify_create_source(
 
                 upstream_references.sort();
 
-                return Err(PlanError::DuplicateSubsourceReference {
+                return Err(PlanError::SubsourceNameConflict {
                     name,
                     upstream_references,
                 });

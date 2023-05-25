@@ -161,7 +161,7 @@ pub enum PlanError {
         linked_object_name: String,
     },
     EmptyPublication(String),
-    DuplicateSubsourceReference {
+    SubsourceNameConflict {
         name: UnresolvedItemName,
         upstream_references: Vec<UnresolvedItemName>,
     },
@@ -252,7 +252,7 @@ impl PlanError {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
                 Some(format!("Did you supply an availability zone name instead of an ID? Known availability zone IDs:\n  {}", supported_azs_str))
             }
-            Self::DuplicateSubsourceReference { .. } => {
+            Self::SubsourceNameConflict { .. } => {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             }
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
@@ -434,7 +434,7 @@ impl fmt::Display for PlanError {
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
             Self::EmptyPublication(publication) => write!(f, "PostgreSQL PUBLICATION {publication} is empty"),
-            Self::DuplicateSubsourceReference { name, upstream_references } => {
+            Self::SubsourceNameConflict { name, upstream_references } => {
                 write!(f, "multiple tables with name {}: {}", name.to_ast_string_stable(), itertools::join(upstream_references.iter().map(|n| n.to_ast_string_stable()), ", "))
             },
             Self::PostgresDatabaseMissingFilteredSchemas { schemas} => {
