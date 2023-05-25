@@ -4267,6 +4267,7 @@ dependencies = [
  "sentry",
  "sentry-tracing",
  "serde",
+ "serde_json",
  "smallvec",
  "stacker",
  "tokio",

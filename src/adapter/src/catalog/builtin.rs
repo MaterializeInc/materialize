@@ -4102,7 +4102,7 @@ mod tests {
                             .resolve_schema_in_database(
                                 &ResolvedDatabaseSpecifier::Ambient,
                                 ty.schema,
-                                SYSTEM_CONN_ID,
+                                &SYSTEM_CONN_ID,
                             )
                             .expect("unable to resolve schema");
                         let allocated_type = catalog
@@ -4114,7 +4114,7 @@ mod tests {
                                     schema: Some(schema.name().schema.clone()),
                                     item: ty.name.to_string(),
                                 },
-                                SYSTEM_CONN_ID,
+                                &SYSTEM_CONN_ID,
                             )
                             .expect("unable to resolve type");
                         let ty = if let CatalogItem::Type(ty) = &allocated_type.item {

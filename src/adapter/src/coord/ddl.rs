@@ -221,14 +221,14 @@ impl Coordinator {
                     .map(|dependent_id| (dependent_id, sink_id, sub))
             })
             .map(|(dependent_id, sink_id, active_subscribe)| {
-                let conn_id = active_subscribe.conn_id;
+                let conn_id = &active_subscribe.conn_id;
                 let entry = self.catalog().get_entry(dependent_id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(conn_id));
 
                 (
-                    (conn_id, name.to_string()),
+                    (conn_id.clone(), name.to_string()),
                     ComputeSinkId {
                         cluster_id: active_subscribe.cluster_id,
                         global_id: *sink_id,
@@ -247,7 +247,7 @@ impl Coordinator {
                 let entry = self.catalog().get_entry(id);
                 let name = self
                     .catalog()
-                    .resolve_full_name(entry.name(), Some(pending_peek.conn_id));
+                    .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
                 peeks_to_drop.push((name.to_string(), uuid.clone()));
             }
         }
@@ -305,7 +305,7 @@ impl Coordinator {
             &ops,
             session
                 .map(|session| session.conn_id())
-                .unwrap_or(SYSTEM_CONN_ID),
+                .unwrap_or(&SYSTEM_CONN_ID),
         )?;
 
         // This will produce timestamps that are guaranteed to increase on each
@@ -646,7 +646,7 @@ impl Coordinator {
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
     pub(crate) async fn drop_temp_items(&mut self, session: &Session) {
-        let ops = self.catalog_mut().drop_temp_item_ops(&session.conn_id());
+        let ops = self.catalog_mut().drop_temp_item_ops(session.conn_id());
         if ops.is_empty() {
             return;
         }
@@ -823,7 +823,7 @@ impl Coordinator {
     fn validate_resource_limits(
         &self,
         ops: &Vec<catalog::Op>,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<(), AdapterError> {
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;

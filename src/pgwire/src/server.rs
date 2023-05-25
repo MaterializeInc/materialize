@@ -128,7 +128,7 @@ impl Server {
                             None => return Ok(()),
 
                             Some(FrontendStartupMessage::Startup { version, params }) => {
-                                let mut conn = FramedConn::new(conn_id, conn);
+                                let mut conn = FramedConn::new(conn_id.clone(), conn);
                                 protocol::run(protocol::RunParams {
                                     tls_mode: tls.as_ref().map(|tls| tls.mode),
                                     adapter_client,

@@ -35,7 +35,7 @@ use timely::progress::Timestamp;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::client::ConnectionId;
+use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::util::{send_immediate_rows, ResultExt};
@@ -432,7 +432,7 @@ impl crate::coord::Coordinator {
             uuid,
             PendingPeek {
                 sender: rows_tx,
-                conn_id,
+                conn_id: conn_id.clone(),
                 cluster_id: compute_instance,
                 depends_on: source_ids,
             },
@@ -484,11 +484,14 @@ impl crate::coord::Coordinator {
     }
 
     /// Cancel and remove all pending peeks that were initiated by the client with `conn_id`.
+    ///
+    /// Note: Here we take a [`ConnectionIdType`] as opposed to an owned `ConnectionId` because
+    /// this method gets called by external clients when they request to cancel a request.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) fn cancel_pending_peeks(&mut self, conn_id: &ConnectionId) -> Vec<PendingPeek> {
+    pub(crate) fn cancel_pending_peeks(&mut self, conn_id: ConnectionIdType) -> Vec<PendingPeek> {
         // The peek is present on some specific compute instance.
         // Allow dataflow to cancel any pending peeks.
-        if let Some(uuids) = self.client_pending_peeks.remove(conn_id) {
+        if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
             let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
             for (uuid, compute_instance) in &uuids {
                 inverse.entry(*compute_instance).or_default().insert(*uuid);
