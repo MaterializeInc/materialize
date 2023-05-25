@@ -14,6 +14,11 @@ ALTER SYSTEM SET enable_mfp_pushdown_explain = true
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_stats_filter_enabled = true
+----
+COMPLETE 0
+
 # Verify filter pushdown information for various temporal filters.
 # For straightforward temporal filters like these, every column mentioned in the filter
 # should be present in the pushdown list.
@@ -52,7 +57,7 @@ Explained Query:
 
 Source materialize.public.events
   filter=((mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp(#2)))
-  pushdown=(#1, #2)
+  pushdown=((mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp(#2)))
 
 EOF
 
@@ -75,7 +80,7 @@ Explained Query:
 Source materialize.public.events
   filter=((mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
   map=((#1 / 10000))
-  pushdown=(#1)
+  pushdown=((mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
 
 EOF
 
@@ -98,7 +103,7 @@ Explained Query:
 Source materialize.public.events
   filter=((mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
   map=((#1 / 10000))
-  pushdown=(#1)
+  pushdown=((mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
 
 EOF
 
@@ -120,7 +125,7 @@ Explained Query:
 
 Source materialize.public.events
   filter=((mz_now() < numeric_to_mz_timestamp((#1 + 30000))) AND (mz_now() >= numeric_to_mz_timestamp(#1)))
-  pushdown=(#1)
+  pushdown=((mz_now() < numeric_to_mz_timestamp((#1 + 30000))) AND (mz_now() >= numeric_to_mz_timestamp(#1)))
 
 EOF
 
@@ -137,6 +142,6 @@ Explained Query:
 
 Source materialize.public.events
   filter=((mz_now() >= numeric_to_mz_timestamp((#1 + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 60000))))
-  pushdown=(#1, #2)
+  pushdown=((mz_now() >= numeric_to_mz_timestamp((#1 + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 60000))))
 
 EOF
