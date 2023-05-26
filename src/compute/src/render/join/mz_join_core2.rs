@@ -697,7 +697,7 @@ where
 
             while !replay1.is_done() {
                 replay2.advance_buffer_by(replay1.meet().unwrap());
-                for &((ref val2, ref time2), ref diff2) in replay2.buffer().iter() {
+                for &((val2, ref time2), ref diff2) in replay2.buffer().iter() {
                     let (val1, time1, ref diff1) = replay1.edit().unwrap();
                     let effort = results(val1, val2, time1.join(time2), diff1, diff2);
                     burn_fuel(&self.fuel, effort).await;
@@ -706,7 +706,7 @@ where
             }
             while !replay2.is_done() {
                 replay1.advance_buffer_by(replay2.meet().unwrap());
-                for &((ref val1, ref time1), ref diff1) in replay1.buffer().iter() {
+                for &((val1, ref time1), ref diff1) in replay1.buffer().iter() {
                     let (val2, time2, ref diff2) = replay2.edit().unwrap();
                     let effort = results(val1, val2, time1.join(time2), diff1, diff2);
                     burn_fuel(&self.fuel, effort).await;
@@ -787,7 +787,7 @@ where
             let upper = self.values[index].1;
             for edit in lower..upper {
                 logic(
-                    &self.values[index].0,
+                    self.values[index].0,
                     &self.edits[edit].0,
                     self.edits[edit].1.clone(),
                 );
@@ -817,37 +817,6 @@ impl<'storage, V: Ord + Clone + 'storage, T: Lattice + Ord + Clone, R: Semigroup
         self.edits.clear();
         self.history.clear();
         self.buffer.clear();
-    }
-    fn load<C, L>(&mut self, cursor: &mut C, storage: &'storage C::Storage, logic: L)
-    where
-        C: Cursor<Val = V, Time = T, R = R>,
-        C::Key: Eq,
-        L: Fn(&T) -> T,
-    {
-        self.edits.load(cursor, storage, logic);
-    }
-
-    /// Loads and replays a specified key.
-    ///
-    /// If the key is absent, the replayed history will be empty.
-    fn replay_key<'history, C, L>(
-        &'history mut self,
-        cursor: &mut C,
-        storage: &'storage C::Storage,
-        key: &C::Key,
-        logic: L,
-    ) -> HistoryReplay<'storage, 'history, V, T, R>
-    where
-        C: Cursor<Val = V, Time = T, R = R>,
-        C::Key: Eq,
-        L: Fn(&T) -> T,
-    {
-        self.clear();
-        cursor.seek_key(storage, key);
-        if cursor.get_key(storage) == Some(key) {
-            self.load(cursor, storage, logic);
-        }
-        self.replay()
     }
 
     /// Organizes history based on current contents of edits.
@@ -920,14 +889,6 @@ where
             (self.replay.edits.values[value_index].0, time),
             self.replay.edits.edits[edit_offset].1.clone(),
         ));
-    }
-    fn step_while_time_is(&mut self, time: &T) -> bool {
-        let mut found = false;
-        while self.time() == Some(time) {
-            found = true;
-            self.step();
-        }
-        found
     }
     fn advance_buffer_by(&mut self, meet: &T) {
         for element in self.replay.buffer.iter_mut() {

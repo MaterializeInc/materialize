@@ -27,7 +27,6 @@ use timely::progress::timestamp::{Refines, Timestamp};
 use crate::render::context::{
     Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
 };
-use crate::render::join::mz_join_core::mz_join_core;
 use crate::render::join::mz_join_core2;
 use crate::typedefs::RowSpine;
 

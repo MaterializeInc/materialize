@@ -36,6 +36,8 @@
 //! join and as responsive as `mz_join_core`. Whether that means adding merge-join matching to
 //! `mz_join_core` or adding better fueling to DD's join implementation is still TBD.
 
+#![allow(dead_code)]
+
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 
