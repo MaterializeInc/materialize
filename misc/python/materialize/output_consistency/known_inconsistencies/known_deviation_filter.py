@@ -78,6 +78,7 @@ class KnownOutputInconsistenciesFilter:
         # Note that function names are always provided in lower case.
         if db_function.function_name in {"sum", "avg", "stddev_samp", "stddev_pop"}:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
+                # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return True
 
         return False
