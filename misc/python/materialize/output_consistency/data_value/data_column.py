@@ -25,11 +25,11 @@ from materialize.output_consistency.selection.selection import DataRowSelection
 class DataColumn(LeafExpression):
     """A column with a value per row (in contrast to an `ExpressionWithArgs`) for VERTICAL storage"""
 
-    def __init__(self, data_type: DataType, row_values: List[DataValue]):
+    def __init__(self, data_type: DataType, row_values_of_column: List[DataValue]):
         column_name = f"{data_type.identifier.lower()}_val"
         super().__init__(column_name, set(), ValueStorageLayout.VERTICAL, False, False)
         self.data_type = data_type
-        self.all_row_values = row_values
+        self.row_values_of_column = row_values_of_column
 
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category
@@ -39,7 +39,7 @@ class DataColumn(LeafExpression):
     ) -> Set[ExpressionCharacteristics]:
         involved_characteristics: Set[ExpressionCharacteristics] = set()
 
-        for index, value in enumerate(self.all_row_values):
+        for index, value in enumerate(self.row_values_of_column):
             if row_selection.is_included(index):
                 involved_characteristics = involved_characteristics.union(
                     value.collect_involved_characteristics(row_selection)
@@ -49,11 +49,11 @@ class DataColumn(LeafExpression):
 
     def get_filtered_values(self, row_selection: DataRowSelection) -> List[DataValue]:
         if row_selection.includes_all():
-            return self.all_row_values
+            return self.row_values_of_column
 
         selected_rows = []
 
-        for row_index, row_value in enumerate(self.all_row_values):
+        for row_index, row_value in enumerate(self.row_values_of_column):
             if row_selection.is_included(row_index):
                 selected_rows.append(row_value)
 
