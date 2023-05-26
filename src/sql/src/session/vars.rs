@@ -66,12 +66,10 @@
 use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use const_format::concatcp;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
@@ -101,17 +99,17 @@ pub enum EndTransactionAction {
 }
 
 /// Errors that can occur when working with [`Var`]s
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum VarError {
     /// The specified session parameter is constrained to a finite set of
     /// values.
     #[error(
         "invalid value for parameter {}: {}",
-        parameter.name().quoted(),
+        parameter.name.quoted(),
         values.iter().map(|v| v.quoted()).join(",")
     )]
     ConstrainedParameter {
-        parameter: &'static (dyn Var + Send + Sync),
+        parameter: VarErrParam,
         values: Vec<String>,
         valid_values: Option<Vec<&'static str>>,
     },
@@ -121,21 +119,21 @@ pub enum VarError {
     /// with PostgreSQL-based tools.
     #[error(
         "parameter {} can only be set to {}",
-        .0.name().quoted(),
-        .0.value().quoted(),
+        .0.name.quoted(),
+        .0.value.quoted(),
     )]
-    FixedValueParameter(&'static (dyn Var + Send + Sync)),
+    FixedValueParameter(VarErrParam),
     /// The value for the specified parameter does not have the right type.
     #[error(
         "parameter {} requires a {} value",
-        .0.name().quoted(),
-        .0.type_name().quoted()
+        .0.name.quoted(),
+        .0.type_name.quoted()
     )]
-    InvalidParameterType(&'static (dyn Var + Send + Sync)),
+    InvalidParameterType(VarErrParam),
     /// The value of the specified parameter is incorrect.
     #[error(
         "parameter {} cannot have value {}: {}",
-        parameter.name().quoted(),
+        parameter.name.quoted(),
         values
             .iter()
             .map(|v| v.quoted().to_string())
@@ -144,7 +142,7 @@ pub enum VarError {
         reason,
     )]
     InvalidParameterValue {
-        parameter: &'static (dyn Var + Send + Sync),
+        parameter: VarErrParam,
         values: Vec<String>,
         reason: String,
     },
@@ -194,6 +192,25 @@ impl VarError {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+/// We don't want to hold a static reference to a variable while erroring, so take an owned version
+/// of the fields we want.
+pub struct VarErrParam {
+    name: &'static str,
+    value: String,
+    type_name: String,
+}
+
+impl<'a, V: Var + Send + Sync + ?Sized> From<&'a V> for VarErrParam {
+    fn from(var: &'a V) -> VarErrParam {
+        VarErrParam {
+            name: var.name(),
+            value: var.value(),
+            type_name: var.type_name(),
+        }
+    }
+}
+
 // We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
 // be. Too new and some clients will emit a "server too new" warning. Too old
 // and some clients will fall back to legacy code paths. v9.5.0 empirically
@@ -211,16 +228,17 @@ pub const SERVER_PATCH_VERSION: u8 = 0;
 /// The name of the default database that Materialize uses.
 pub const DEFAULT_DATABASE_NAME: &str = "materialize";
 
-const APPLICATION_NAME: ServerVar<str> = ServerVar {
+pub static DEFAULT_APPLICATION_NAME: Lazy<String> = Lazy::new(|| "".to_string());
+pub static APPLICATION_NAME: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("application_name"),
-    value: "",
+    value: &DEFAULT_APPLICATION_NAME,
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
     internal: false,
-};
+});
 
-const CLIENT_ENCODING: ServerVar<str> = ServerVar {
+pub static CLIENT_ENCODING: ServerVar<ClientEncoding> = ServerVar {
     name: UncasedStr::new("client_encoding"),
-    value: "UTF8",
+    value: &ClientEncoding::Utf8,
     description: "Sets the client's character set encoding (PostgreSQL).",
     internal: false,
 };
@@ -231,14 +249,15 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
     internal: false,
 };
-pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 
-const CLUSTER: ServerVar<str> = ServerVar {
+pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
+pub static DEFAULT_CLUSTER: Lazy<String> = Lazy::new(|| "default".to_string());
+pub static CLUSTER: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: CLUSTER_VAR_NAME,
-    value: "default",
+    value: &DEFAULT_CLUSTER,
     description: "Sets the current cluster (Materialize).",
     internal: false,
-};
+});
 
 const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
     name: UncasedStr::new("cluster_replica"),
@@ -248,22 +267,21 @@ const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
 };
 
 pub const DATABASE_VAR_NAME: &UncasedStr = UncasedStr::new("database");
-
-const DATABASE: ServerVar<str> = ServerVar {
+pub static DEFAULT_DATABASE: Lazy<String> = Lazy::new(|| DEFAULT_DATABASE_NAME.to_string());
+pub static DATABASE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: DATABASE_VAR_NAME,
-    value: DEFAULT_DATABASE_NAME,
+    value: &DEFAULT_DATABASE,
     description: "Sets the current database (CockroachDB).",
     internal: false,
-};
+});
 
-static DEFAULT_DATE_STYLE: Lazy<Vec<String>> = Lazy::new(|| vec!["ISO".into(), "MDY".into()]);
-static DATE_STYLE: Lazy<ServerVar<Vec<String>>> = Lazy::new(|| ServerVar {
+static DATE_STYLE: ServerVar<DateStyle> = ServerVar {
     // DateStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("DateStyle"),
-    value: &*DEFAULT_DATE_STYLE,
+    value: &DEFAULT_DATE_STYLE,
     description: "Sets the display format for date and time values (PostgreSQL).",
     internal: false,
-});
+};
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("extra_float_digits"),
@@ -272,9 +290,9 @@ const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     internal: false,
 };
 
-const FAILPOINTS: ServerVar<str> = ServerVar {
+const FAILPOINTS: ServerVar<Failpoints> = ServerVar {
     name: UncasedStr::new("failpoints"),
-    value: "",
+    value: &Failpoints,
     description: "Allows failpoints to be dynamically activated.",
     internal: false,
 };
@@ -286,10 +304,10 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
-const INTERVAL_STYLE: ServerVar<str> = ServerVar {
+pub static INTERVAL_STYLE: ServerVar<IntervalStyle> = ServerVar {
     // IntervalStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("IntervalStyle"),
-    value: "postgres",
+    value: &IntervalStyle::Postgres,
     description: "Sets the display format for interval values (PostgreSQL).",
     internal: false,
 };
@@ -327,18 +345,19 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: false,
 };
 
-const SERVER_VERSION: ServerVar<str> = ServerVar {
+pub static SERVER_VERSION_VALUE: Lazy<String> = Lazy::new(|| {
+    format!(
+        "{}.{}.{}",
+        SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION, SERVER_PATCH_VERSION
+    )
+});
+
+pub static SERVER_VERSION: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("server_version"),
-    value: concatcp!(
-        SERVER_MAJOR_VERSION,
-        ".",
-        SERVER_MINOR_VERSION,
-        ".",
-        SERVER_PATCH_VERSION
-    ),
+    value: &SERVER_VERSION_VALUE,
     description: "Shows the PostgreSQL compatible server version (PostgreSQL).",
     internal: false,
-};
+});
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("server_version_num"),
@@ -569,9 +588,12 @@ mod upsert_rocksdb {
             "rocksdb_compaction_style".to_string()
         }
 
-        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-            let s = extract_single_value(input)?;
-            CompactionStyle::from_str(s).map_err(|_| ())
+        fn parse<'a>(
+            param: &'a (dyn Var + Send + Sync),
+            input: VarInput,
+        ) -> Result<Self::Owned, VarError> {
+            let s = extract_single_value(param, input)?;
+            CompactionStyle::from_str(s).map_err(|_| VarError::InvalidParameterType(param.into()))
         }
 
         fn format(&self) -> String {
@@ -584,9 +606,12 @@ mod upsert_rocksdb {
             "rocksdb_compression_type".to_string()
         }
 
-        fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-            let s = extract_single_value(input)?;
-            CompressionType::from_str(s).map_err(|_| ())
+        fn parse<'a>(
+            param: &'a (dyn Var + Send + Sync),
+            input: VarInput,
+        ) -> Result<Self::Owned, VarError> {
+            let s = extract_single_value(param, input)?;
+            CompressionType::from_str(s).map_err(|_| VarError::InvalidParameterType(param.into()))
         }
 
         fn format(&self) -> String {
@@ -874,6 +899,17 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+/// Whether compute rendering should use Materialize's custom linear join implementation rather
+/// than the one from Differential Dataflow.
+const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_mz_join_core"),
+    value: &false,
+    description:
+        "Feature flag indicating whether compute rendering should use Materialize's custom linear \
+         join implementation rather than the one from Differential Dataflow. (Materialize).",
+    internal: true,
+};
+
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
     value: &true,
@@ -1086,72 +1122,102 @@ impl OwnedVarInput {
 /// Materialize configuration model.
 #[derive(Debug)]
 pub struct SessionVars {
-    // Normal variables.
-    application_name: SessionVar<str>,
-    client_encoding: ServerVar<str>,
-    client_min_messages: SessionVar<ClientSeverity>,
-    cluster: SessionVar<str>,
-    cluster_replica: SessionVar<Option<String>>,
-    database: SessionVar<str>,
-    date_style: &'static ServerVar<Vec<String>>,
-    extra_float_digits: SessionVar<i32>,
-    failpoints: ServerVar<str>,
-    integer_datetimes: ServerVar<bool>,
-    interval_style: ServerVar<str>,
-    search_path: SessionVar<Vec<Ident>>,
-    server_version: ServerVar<str>,
-    server_version_num: ServerVar<i32>,
-    sql_safe_updates: SessionVar<bool>,
-    standard_conforming_strings: ServerVar<bool>,
-    statement_timeout: SessionVar<Duration>,
-    idle_in_transaction_session_timeout: SessionVar<Duration>,
-    timezone: SessionVar<TimeZone>,
-    transaction_isolation: SessionVar<IsolationLevel>,
-    real_time_recency: SessionVar<bool>,
-    emit_timestamp_notice: SessionVar<bool>,
-    emit_trace_id_notice: SessionVar<bool>,
-    auto_route_introspection_queries: SessionVar<bool>,
-    enable_session_rbac_checks: SessionVar<bool>,
+    vars: BTreeMap<&'static UncasedStr, Box<dyn SessionVarMut>>,
     // Inputs to computed variables.
     build_info: &'static BuildInfo,
     user: User,
 }
 
 impl SessionVars {
-    /// Creates a new [`SessionVars`].
     pub fn new(build_info: &'static BuildInfo, user: User) -> SessionVars {
-        SessionVars {
-            application_name: SessionVar::new(&APPLICATION_NAME),
-            client_encoding: CLIENT_ENCODING,
-            client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
-            cluster: SessionVar::new(&CLUSTER),
-            cluster_replica: SessionVar::new(&CLUSTER_REPLICA),
-            database: SessionVar::new(&DATABASE),
-            date_style: &DATE_STYLE,
-            extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
-            failpoints: FAILPOINTS,
-            integer_datetimes: INTEGER_DATETIMES,
-            interval_style: INTERVAL_STYLE,
-            search_path: SessionVar::new(&SEARCH_PATH),
-            server_version: SERVER_VERSION,
-            server_version_num: SERVER_VERSION_NUM,
-            sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
-            standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
-            statement_timeout: SessionVar::new(&STATEMENT_TIMEOUT),
-            idle_in_transaction_session_timeout: SessionVar::new(
-                &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
-            ),
-            timezone: SessionVar::new(&TIMEZONE),
-            transaction_isolation: SessionVar::new(&TRANSACTION_ISOLATION),
-            real_time_recency: SessionVar::new(&REAL_TIME_RECENCY)
-                .add_feature_flag(&ALLOW_REAL_TIME_RECENCY),
-            emit_timestamp_notice: SessionVar::new(&EMIT_TIMESTAMP_NOTICE),
-            emit_trace_id_notice: SessionVar::new(&EMIT_TRACE_ID_NOTICE),
-            auto_route_introspection_queries: SessionVar::new(&AUTO_ROUTE_INTROSPECTION_QUERIES),
-            enable_session_rbac_checks: SessionVar::new(&ENABLE_SESSION_RBAC_CHECKS),
+        let s = SessionVars {
+            vars: BTreeMap::new(),
             build_info,
             user,
-        }
+        };
+
+        s.with_var(&APPLICATION_NAME)
+            .with_var(&CLIENT_ENCODING)
+            .with_var(&CLIENT_MIN_MESSAGES)
+            .with_var(&CLUSTER)
+            .with_var(&CLUSTER_REPLICA)
+            .with_var(&DATABASE)
+            .with_var(&DATE_STYLE)
+            .with_var(&EXTRA_FLOAT_DIGITS)
+            .with_var(&FAILPOINTS)
+            .with_value_constrained_var(&INTEGER_DATETIMES, ValueConstraint::Fixed)
+            .with_var(&INTERVAL_STYLE)
+            .with_var(&SEARCH_PATH)
+            .with_value_constrained_var(&SERVER_VERSION, ValueConstraint::ReadOnly)
+            .with_value_constrained_var(&SERVER_VERSION_NUM, ValueConstraint::ReadOnly)
+            .with_var(&SEARCH_PATH)
+            .with_var(&SQL_SAFE_UPDATES)
+            .with_value_constrained_var(&STANDARD_CONFORMING_STRINGS, ValueConstraint::Fixed)
+            .with_var(&STATEMENT_TIMEOUT)
+            .with_var(&IDLE_IN_TRANSACTION_SESSION_TIMEOUT)
+            .with_var(&TIMEZONE)
+            .with_var(&TRANSACTION_ISOLATION)
+            .with_feature_gated_var(&REAL_TIME_RECENCY, &ALLOW_REAL_TIME_RECENCY)
+            .with_var(&EMIT_TIMESTAMP_NOTICE)
+            .with_var(&EMIT_TRACE_ID_NOTICE)
+            .with_var(&AUTO_ROUTE_INTROSPECTION_QUERIES)
+            .with_var(&ENABLE_SESSION_RBAC_CHECKS)
+    }
+
+    fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
+    where
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+    {
+        self.vars.insert(var.name, Box::new(SessionVar::new(var)));
+        self
+    }
+
+    fn with_value_constrained_var<V>(
+        mut self,
+        var: &'static ServerVar<V>,
+        c: ValueConstraint<V>,
+    ) -> Self
+    where
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+    {
+        self.vars.insert(
+            var.name,
+            Box::new(SessionVar::new(var).with_value_constraint(c)),
+        );
+        self
+    }
+
+    fn with_feature_gated_var<V>(
+        mut self,
+        var: &'static ServerVar<V>,
+        flag: &'static FeatureFlag,
+    ) -> Self
+    where
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+    {
+        self.vars.insert(
+            var.name,
+            Box::new(SessionVar::new(var).add_feature_flag(flag)),
+        );
+        self
+    }
+
+    fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
+    where
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+    {
+        let var = self
+            .vars
+            .get(var.name)
+            .expect("provided var should be in state");
+
+        var.value_any()
+            .downcast_ref()
+            .expect("provided var type should matched stored var")
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1161,62 +1227,37 @@ impl SessionVars {
     /// be visible because of other settings or users. Before or after accessing
     /// this method, you should call `Var::visible`.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        // `as` is ok to use to cast to a trait object.
         #[allow(clippy::as_conversions)]
-        let vars = [
-            &self.application_name as &dyn Var,
-            &self.client_encoding,
-            &self.client_min_messages,
-            &self.cluster,
-            &self.cluster_replica,
-            &self.database,
-            self.date_style,
-            &self.extra_float_digits,
-            &self.failpoints,
-            &self.integer_datetimes,
-            &self.interval_style,
-            &self.search_path,
-            &self.server_version,
-            &self.server_version_num,
-            &self.sql_safe_updates,
-            &self.standard_conforming_strings,
-            &self.statement_timeout,
-            &self.idle_in_transaction_session_timeout,
-            &self.timezone,
-            &self.transaction_isolation,
-            &self.real_time_recency,
-            &self.emit_timestamp_notice,
-            &self.emit_trace_id_notice,
-            &self.auto_route_introspection_queries,
-            &self.enable_session_rbac_checks,
-            self.build_info,
-            &self.user,
-        ];
-        vars.into_iter()
+        self.vars
+            .values()
+            .map(|v| v.as_var())
+            .chain([self.build_info as &dyn Var, &self.user].into_iter())
     }
 
     /// Returns an iterator over configuration parameters (and their current
     /// values for this session) that are expected to be sent to the client when
     /// a new connection is established or when their value changes.
     pub fn notify_set(&self) -> impl Iterator<Item = &dyn Var> {
-        let vars: [&dyn Var; 9] = [
-            &self.application_name,
-            &self.client_encoding,
-            self.date_style,
-            &self.integer_datetimes,
-            &self.server_version,
-            &self.standard_conforming_strings,
-            &self.timezone,
-            &self.interval_style,
-            // Including `mz_version` in the notify set is a Materialize
-            // extension. Doing so allows applications to detect whether they
-            // are talking to Materialize or PostgreSQL without an additional
-            // network roundtrip. This is known to be safe because CockroachDB
-            // has an analogous extension [0].
-            // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
-            self.build_info,
-        ];
-        vars.into_iter()
+        #[allow(clippy::as_conversions)]
+        [
+            &*APPLICATION_NAME as &dyn Var,
+            &CLIENT_ENCODING,
+            &DATE_STYLE,
+            &INTEGER_DATETIMES,
+            &*SERVER_VERSION,
+            &STANDARD_CONFORMING_STRINGS,
+            &TIMEZONE,
+            &INTERVAL_STYLE,
+        ]
+        .into_iter()
+        .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
+        // Including `mz_version` in the notify set is a Materialize
+        // extension. Doing so allows applications to detect whether they
+        // are talking to Materialize or PostgreSQL without an additional
+        // network roundtrip. This is known to be safe because CockroachDB
+        // has an analogous extension [0].
+        // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
+        .chain(std::iter::once(self.build_info as &dyn Var))
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -1229,71 +1270,22 @@ impl SessionVars {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
-    ///
-    /// If the variable does not exist or the user does not have the visibility requires, this
-    /// function returns an error.
     pub fn get(&self, system_vars: Option<&SystemVars>, name: &str) -> Result<&dyn Var, VarError> {
-        let var: &dyn Var = if name == APPLICATION_NAME.name {
-            &self.application_name
-        } else if name == CLIENT_ENCODING.name {
-            &self.client_encoding
-        } else if name == CLIENT_MIN_MESSAGES.name {
-            &self.client_min_messages
-        } else if name == CLUSTER.name {
-            &self.cluster
-        } else if name == CLUSTER_REPLICA.name {
-            &self.cluster_replica
-        } else if name == DATABASE.name {
-            &self.database
-        } else if name == DATE_STYLE.name {
-            self.date_style
-        } else if name == EXTRA_FLOAT_DIGITS.name {
-            &self.extra_float_digits
-        } else if name == FAILPOINTS.name {
-            &self.failpoints
-        } else if name == INTEGER_DATETIMES.name {
-            &self.integer_datetimes
-        } else if name == INTERVAL_STYLE.name {
-            &self.interval_style
-        } else if name == MZ_VERSION_NAME {
-            self.build_info
-        } else if name == SEARCH_PATH.name {
-            &self.search_path
-        } else if name == SERVER_VERSION.name {
-            &self.server_version
-        } else if name == SERVER_VERSION_NUM.name {
-            &self.server_version_num
-        } else if name == SQL_SAFE_UPDATES.name {
-            &self.sql_safe_updates
-        } else if name == STANDARD_CONFORMING_STRINGS.name {
-            &self.standard_conforming_strings
-        } else if name == STATEMENT_TIMEOUT.name {
-            &self.statement_timeout
-        } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
-            &self.idle_in_transaction_session_timeout
-        } else if name == TIMEZONE.name {
-            &self.timezone
-        } else if name == TRANSACTION_ISOLATION.name {
-            &self.transaction_isolation
-        } else if name == REAL_TIME_RECENCY.name {
-            &self.real_time_recency
-        } else if name == EMIT_TIMESTAMP_NOTICE.name {
-            &self.emit_timestamp_notice
-        } else if name == EMIT_TRACE_ID_NOTICE.name {
-            &self.emit_trace_id_notice
-        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
-            &self.auto_route_introspection_queries
+        let name = UncasedStr::new(name);
+        if name == MZ_VERSION_NAME {
+            Ok(self.build_info)
         } else if name == IS_SUPERUSER_NAME {
-            &self.user
-        } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
-            &self.enable_session_rbac_checks
+            Ok(&self.user)
         } else {
-            return Err(VarError::UnknownParameter(name.into()));
-        };
-
-        var.visible(&self.user, system_vars)?;
-
-        Ok(var)
+            self.vars
+                .get(name)
+                .map(|v| {
+                    v.visible(&self.user, system_vars)?;
+                    Ok(v.as_var())
+                })
+                .transpose()?
+                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+        }
     }
 
     /// Sets the configuration parameter named `name` to the value represented
@@ -1308,9 +1300,6 @@ impl SessionVars {
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
-    ///
-    /// If the variable does not exist or the user does not have the visibility requires, this
-    /// function returns an error.
     pub fn set(
         &mut self,
         system_vars: Option<&SystemVars>,
@@ -1318,137 +1307,20 @@ impl SessionVars {
         input: VarInput,
         local: bool,
     ) -> Result<(), VarError> {
-        self.get(system_vars, name)?;
-
-        if name == APPLICATION_NAME.name {
-            self.application_name.set(input, local)
-        } else if name == CLIENT_ENCODING.name {
-            match extract_single_value(input) {
-                Ok(value) if UncasedStr::new(value) == CLIENT_ENCODING.value => Ok(()),
-                _ => Err(VarError::FixedValueParameter(&CLIENT_ENCODING)),
-            }
-        } else if name == CLIENT_MIN_MESSAGES.name {
-            if let Ok(_) = ClientSeverity::parse(input) {
-                self.client_min_messages.set(input, local)
-            } else {
-                return Err(VarError::ConstrainedParameter {
-                    parameter: &CLIENT_MIN_MESSAGES,
-                    values: input.to_vec(),
-                    valid_values: Some(ClientSeverity::valid_values()),
-                });
-            }
-        } else if name == CLUSTER.name {
-            self.cluster.set(input, local)
-        } else if name == CLUSTER_REPLICA.name {
-            self.cluster_replica.set(input, local)
-        } else if name == DATABASE.name {
-            self.database.set(input, local)
-        } else if name == DATE_STYLE.name {
-            let Ok(values) = Vec::<String>::parse(input) else {
-                return Err(VarError::FixedValueParameter(&*DATE_STYLE));
-            };
-            for value in values {
-                let value = UncasedStr::new(value.trim());
-                if value != "ISO" && value != "MDY" {
-                    return Err(VarError::FixedValueParameter(&*DATE_STYLE));
-                }
-            }
-            Ok(())
-        } else if name == EXTRA_FLOAT_DIGITS.name {
-            self.extra_float_digits.set(input, local)
-        } else if name == FAILPOINTS.name {
-            let values = input.to_vec();
-            for mut cfg in values.iter().map(|v| v.trim().split(';')).flatten() {
-                cfg = cfg.trim();
-                if cfg.is_empty() {
-                    continue;
-                }
-                let mut splits = cfg.splitn(2, '=');
-                let failpoint = splits
-                    .next()
-                    .ok_or_else(|| VarError::InvalidParameterValue {
-                        parameter: &FAILPOINTS,
-                        values: input.to_vec(),
-                        reason: "missing failpoint name".into(),
-                    })?;
-                let action = splits
-                    .next()
-                    .ok_or_else(|| VarError::InvalidParameterValue {
-                        parameter: &FAILPOINTS,
-                        values: input.to_vec(),
-                        reason: "missing failpoint action".into(),
-                    })?;
-                fail::cfg(failpoint, action).map_err(|e| VarError::InvalidParameterValue {
-                    parameter: &FAILPOINTS,
-                    values: input.to_vec(),
-                    reason: e,
-                })?;
-            }
-            Ok(())
-        } else if name == INTEGER_DATETIMES.name {
-            Err(VarError::ReadOnlyParameter(INTEGER_DATETIMES.name()))
-        } else if name == INTERVAL_STYLE.name {
-            match extract_single_value(input) {
-                Ok(value) if UncasedStr::new(value) == INTERVAL_STYLE.value => Ok(()),
-                _ => Err(VarError::FixedValueParameter(&INTERVAL_STYLE)),
-            }
-        } else if name == SEARCH_PATH.name {
-            self.search_path.set(input, local)
-        } else if name == SERVER_VERSION.name {
-            Err(VarError::ReadOnlyParameter(SERVER_VERSION.name()))
-        } else if name == SERVER_VERSION_NUM.name {
-            Err(VarError::ReadOnlyParameter(SERVER_VERSION_NUM.name()))
-        } else if name == SQL_SAFE_UPDATES.name {
-            self.sql_safe_updates.set(input, local)
-        } else if name == STANDARD_CONFORMING_STRINGS.name {
-            match bool::parse(input) {
-                Ok(value) if value == *STANDARD_CONFORMING_STRINGS.value => Ok(()),
-                Ok(_) => Err(VarError::FixedValueParameter(&STANDARD_CONFORMING_STRINGS)),
-                Err(()) => Err(VarError::InvalidParameterType(&STANDARD_CONFORMING_STRINGS)),
-            }
-        } else if name == STATEMENT_TIMEOUT.name {
-            self.statement_timeout.set(input, local)
-        } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
-            self.idle_in_transaction_session_timeout.set(input, local)
-        } else if name == TIMEZONE.name {
-            if let Ok(_) = TimeZone::parse(input) {
-                self.timezone.set(input, local)
-            } else {
-                Err(VarError::ConstrainedParameter {
-                    parameter: &TIMEZONE,
-                    values: input.to_vec(),
-                    valid_values: None,
-                })
-            }
-        } else if name == TRANSACTION_ISOLATION.name {
-            if let Ok(_) = IsolationLevel::parse(input) {
-                self.transaction_isolation.set(input, local)
-            } else {
-                return Err(VarError::ConstrainedParameter {
-                    parameter: &TRANSACTION_ISOLATION,
-                    values: input.to_vec(),
-                    valid_values: Some(IsolationLevel::valid_values()),
-                });
-            }
-        } else if name == REAL_TIME_RECENCY.name {
-            self.real_time_recency.set(input, local)
-        } else if name == EMIT_TIMESTAMP_NOTICE.name {
-            self.emit_timestamp_notice.set(input, local)
-        } else if name == EMIT_TRACE_ID_NOTICE.name {
-            self.emit_trace_id_notice.set(input, local)
-        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
-            self.auto_route_introspection_queries.set(input, local)
+        let name = UncasedStr::new(name);
+        if name == MZ_VERSION_NAME {
+            Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
         } else if name == IS_SUPERUSER_NAME {
-            Err(VarError::ReadOnlyParameter(self.user.name()))
-        } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
-            self.enable_session_rbac_checks.set(input, local)
+            Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
         } else {
-            mz_ore::soft_assert!(
-                false,
-                "SessionVars get/set states have diverged; get has {name}, but set does not",
-            );
-
-            Err(VarError::UnknownParameter(name.into()))
+            self.vars
+                .get_mut(name)
+                .map(|v| {
+                    v.visible(&self.user, system_vars)?;
+                    v.set(input, local)
+                })
+                .transpose()?
+                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
         }
     }
 
@@ -1471,120 +1343,35 @@ impl SessionVars {
         name: &str,
         local: bool,
     ) -> Result<(), VarError> {
-        self.get(system_vars, name)?;
-
-        if name == APPLICATION_NAME.name {
-            self.application_name.reset(local);
-        } else if name == CLIENT_MIN_MESSAGES.name {
-            self.client_min_messages.reset(local);
-        } else if name == CLUSTER.name {
-            self.cluster.reset(local);
-        } else if name == CLUSTER_REPLICA.name {
-            self.cluster_replica.reset(local);
-        } else if name == DATABASE.name {
-            self.database.reset(local);
-        } else if name == EXTRA_FLOAT_DIGITS.name {
-            self.extra_float_digits.reset(local);
-        } else if name == SEARCH_PATH.name {
-            self.search_path.reset(local);
-        } else if name == SQL_SAFE_UPDATES.name {
-            self.sql_safe_updates.reset(local);
-        } else if name == STATEMENT_TIMEOUT.name {
-            self.statement_timeout.reset(local);
-        } else if name == IDLE_IN_TRANSACTION_SESSION_TIMEOUT.name {
-            self.idle_in_transaction_session_timeout.reset(local);
-        } else if name == TIMEZONE.name {
-            self.timezone.reset(local);
-        } else if name == TRANSACTION_ISOLATION.name {
-            self.transaction_isolation.reset(local);
-        } else if name == REAL_TIME_RECENCY.name {
-            self.real_time_recency.reset(local);
-        } else if name == EMIT_TIMESTAMP_NOTICE.name {
-            self.emit_timestamp_notice.reset(local);
-        } else if name == EMIT_TRACE_ID_NOTICE.name {
-            self.emit_trace_id_notice.reset(local);
-        } else if name == AUTO_ROUTE_INTROSPECTION_QUERIES.name {
-            self.auto_route_introspection_queries.reset(local);
-        } else if name == ENABLE_SESSION_RBAC_CHECKS.name {
-            self.enable_session_rbac_checks.reset(local);
-        } else if name == CLIENT_ENCODING.name
-            || name == DATE_STYLE.name
-            || name == FAILPOINTS.name
-            || name == INTEGER_DATETIMES.name
-            || name == INTERVAL_STYLE.name
-            || name == SERVER_VERSION.name
-            || name == SERVER_VERSION_NUM.name
-            || name == STANDARD_CONFORMING_STRINGS.name
-            || name == IS_SUPERUSER_NAME
-        {
-            // fixed value
+        let name = UncasedStr::new(name);
+        if name == MZ_VERSION_NAME {
+            Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
+        } else if name == IS_SUPERUSER_NAME {
+            Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
         } else {
-            mz_ore::soft_assert!(
-                false,
-                "SessionVars get/reset states have diverged; get has {name}, but set does not",
-            );
-
-            return Err(VarError::UnknownParameter(name.into()));
+            self.vars
+                .get_mut(name)
+                .map(|v| {
+                    v.visible(&self.user, system_vars)?;
+                    v.reset(local);
+                    Ok(())
+                })
+                .transpose()?
+                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
         }
-        Ok(())
     }
 
     /// Commits or rolls back configuration parameter updates made via
     /// [`SessionVars::set`] since the last call to `end_transaction`.
     pub fn end_transaction(&mut self, action: EndTransactionAction) {
-        // IMPORTANT: if you've added a new `SessionVar`, add a corresponding
-        // call to `end_transaction` below.
-        let SessionVars {
-            application_name,
-            client_encoding: _,
-            client_min_messages,
-            cluster,
-            cluster_replica,
-            database,
-            date_style: _,
-            extra_float_digits,
-            failpoints: _,
-            integer_datetimes: _,
-            interval_style: _,
-            search_path,
-            server_version: _,
-            server_version_num: _,
-            sql_safe_updates,
-            standard_conforming_strings: _,
-            statement_timeout,
-            idle_in_transaction_session_timeout,
-            timezone,
-            transaction_isolation,
-            real_time_recency,
-            emit_timestamp_notice,
-            emit_trace_id_notice,
-            auto_route_introspection_queries,
-            enable_session_rbac_checks,
-            build_info: _,
-            user: _,
-        } = self;
-        application_name.end_transaction(action);
-        client_min_messages.end_transaction(action);
-        cluster.end_transaction(action);
-        cluster_replica.end_transaction(action);
-        database.end_transaction(action);
-        extra_float_digits.end_transaction(action);
-        search_path.end_transaction(action);
-        sql_safe_updates.end_transaction(action);
-        statement_timeout.end_transaction(action);
-        idle_in_transaction_session_timeout.end_transaction(action);
-        timezone.end_transaction(action);
-        transaction_isolation.end_transaction(action);
-        real_time_recency.end_transaction(action);
-        emit_timestamp_notice.end_transaction(action);
-        emit_trace_id_notice.end_transaction(action);
-        auto_route_introspection_queries.end_transaction(action);
-        enable_session_rbac_checks.end_transaction(action);
+        for var in self.vars.values_mut() {
+            var.end_transaction(action);
+        }
     }
 
     /// Returns the value of the `application_name` configuration parameter.
     pub fn application_name(&self) -> &str {
-        self.application_name.value()
+        self.expect_value(&*APPLICATION_NAME).as_str()
     }
 
     /// Returns the build info.
@@ -1593,48 +1380,48 @@ impl SessionVars {
     }
 
     /// Returns the value of the `client_encoding` configuration parameter.
-    pub fn client_encoding(&self) -> &'static str {
-        self.client_encoding.value
+    pub fn client_encoding(&self) -> &ClientEncoding {
+        self.expect_value(&CLIENT_ENCODING)
     }
 
     /// Returns the value of the `client_min_messages` configuration parameter.
     pub fn client_min_messages(&self) -> &ClientSeverity {
-        self.client_min_messages.value()
+        self.expect_value(&CLIENT_MIN_MESSAGES)
     }
 
     /// Returns the value of the `cluster` configuration parameter.
     pub fn cluster(&self) -> &str {
-        self.cluster.value()
+        self.expect_value(&*CLUSTER).as_str()
     }
 
     /// Returns the value of the `cluster_replica` configuration parameter.
     pub fn cluster_replica(&self) -> Option<&str> {
-        self.cluster_replica.value().as_deref()
+        self.expect_value(&CLUSTER_REPLICA).as_deref()
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.
-    pub fn date_style(&self) -> &[String] {
-        self.date_style.value
+    pub fn date_style(&self) -> &[&str] {
+        &self.expect_value(&DATE_STYLE).0
     }
 
     /// Returns the value of the `database` configuration parameter.
     pub fn database(&self) -> &str {
-        self.database.value()
+        self.expect_value(&*DATABASE).as_str()
     }
 
     /// Returns the value of the `extra_float_digits` configuration parameter.
     pub fn extra_float_digits(&self) -> i32 {
-        *self.extra_float_digits.value()
+        *self.expect_value(&EXTRA_FLOAT_DIGITS)
     }
 
     /// Returns the value of the `integer_datetimes` configuration parameter.
     pub fn integer_datetimes(&self) -> bool {
-        *self.integer_datetimes.value
+        *self.expect_value(&INTEGER_DATETIMES)
     }
 
     /// Returns the value of the `intervalstyle` configuration parameter.
-    pub fn intervalstyle(&self) -> &'static str {
-        self.interval_style.value
+    pub fn intervalstyle(&self) -> &IntervalStyle {
+        self.expect_value(&INTERVAL_STYLE)
     }
 
     /// Returns the value of the `mz_version` configuration parameter.
@@ -1644,74 +1431,74 @@ impl SessionVars {
 
     /// Returns the value of the `search_path` configuration parameter.
     pub fn search_path(&self) -> &[Ident] {
-        self.search_path.value()
+        self.expect_value(&*SEARCH_PATH).as_slice()
     }
 
     /// Returns the value of the `server_version` configuration parameter.
-    pub fn server_version(&self) -> &'static str {
-        self.server_version.value
+    pub fn server_version(&self) -> &str {
+        self.expect_value(&*SERVER_VERSION).as_str()
     }
 
     /// Returns the value of the `server_version_num` configuration parameter.
     pub fn server_version_num(&self) -> i32 {
-        *self.server_version_num.value
+        *self.expect_value(&SERVER_VERSION_NUM)
     }
 
     /// Returns the value of the `sql_safe_updates` configuration parameter.
     pub fn sql_safe_updates(&self) -> bool {
-        *self.sql_safe_updates.value()
+        *self.expect_value(&SQL_SAFE_UPDATES)
     }
 
     /// Returns the value of the `standard_conforming_strings` configuration
     /// parameter.
     pub fn standard_conforming_strings(&self) -> bool {
-        *self.standard_conforming_strings.value
+        *self.expect_value(&STANDARD_CONFORMING_STRINGS)
     }
 
     /// Returns the value of the `statement_timeout` configuration parameter.
     pub fn statement_timeout(&self) -> &Duration {
-        self.statement_timeout.value()
+        self.expect_value(&STATEMENT_TIMEOUT)
     }
 
     /// Returns the value of the `idle_in_transaction_session_timeout` configuration parameter.
     pub fn idle_in_transaction_session_timeout(&self) -> &Duration {
-        self.idle_in_transaction_session_timeout.value()
+        self.expect_value(&IDLE_IN_TRANSACTION_SESSION_TIMEOUT)
     }
 
     /// Returns the value of the `timezone` configuration parameter.
     pub fn timezone(&self) -> &TimeZone {
-        self.timezone.value()
+        self.expect_value(&TIMEZONE)
     }
 
     /// Returns the value of the `transaction_isolation` configuration
     /// parameter.
     pub fn transaction_isolation(&self) -> &IsolationLevel {
-        self.transaction_isolation.value()
+        self.expect_value(&TRANSACTION_ISOLATION)
     }
 
     /// Returns the value of `real_time_recency` configuration parameter.
     pub fn real_time_recency(&self) -> bool {
-        *self.real_time_recency.value()
+        *self.expect_value(&REAL_TIME_RECENCY)
     }
 
     /// Returns the value of `emit_timestamp_notice` configuration parameter.
     pub fn emit_timestamp_notice(&self) -> bool {
-        *self.emit_timestamp_notice.value()
+        *self.expect_value(&EMIT_TIMESTAMP_NOTICE)
     }
 
     /// Returns the value of `emit_trace_id_notice` configuration parameter.
     pub fn emit_trace_id_notice(&self) -> bool {
-        *self.emit_trace_id_notice.value()
+        *self.expect_value(&EMIT_TRACE_ID_NOTICE)
     }
 
     /// Returns the value of `auto_route_introspection_queries` configuration parameter.
     pub fn auto_route_introspection_queries(&self) -> bool {
-        *self.auto_route_introspection_queries.value()
+        *self.expect_value(&AUTO_ROUTE_INTROSPECTION_QUERIES)
     }
 
     /// Returns the value of `enable_session_rbac_checks` configuration parameter.
     pub fn enable_session_rbac_checks(&self) -> bool {
-        *self.enable_session_rbac_checks.value()
+        *self.expect_value(&ENABLE_SESSION_RBAC_CHECKS)
     }
 
     /// Returns the value of `is_superuser` configuration parameter.
@@ -1730,7 +1517,8 @@ impl SessionVars {
     }
 
     pub fn set_cluster(&mut self, cluster: String) {
-        self.cluster.session_value = Some(cluster);
+        self.set(None, CLUSTER.name(), VarInput::Flat(&cluster), false)
+            .expect("setting cluster from string succeeds");
     }
 }
 
@@ -1798,7 +1586,7 @@ impl DropConnection {
 pub struct SystemVars {
     /// Allows "unsafe" parameters to be set.
     allow_unsafe: bool,
-    vars: BTreeMap<&'static UncasedStr, Box<dyn VarMut>>,
+    vars: BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>,
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
 }
 
@@ -1836,7 +1624,10 @@ impl SystemVars {
             .with_var(&MAX_MATERIALIZED_VIEWS)
             .with_var(&MAX_CLUSTERS)
             .with_var(&MAX_REPLICAS_PER_CLUSTER)
-            .with_var(&MAX_CREDIT_CONSUMPTION_RATE)
+            .with_value_constrained_var(
+                &MAX_CREDIT_CONSUMPTION_RATE,
+                ValueConstraint::Domain(&NumericNonNegNonNan),
+            )
             .with_var(&MAX_DATABASES)
             .with_var(&MAX_SCHEMAS_PER_DATABASE)
             .with_var(&MAX_OBJECTS_PER_SCHEMA)
@@ -1878,7 +1669,8 @@ impl SystemVars {
             .with_var(&PG_REPLICATION_TCP_USER_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
-            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES);
+            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
+            .with_var(&ENABLE_MZ_JOIN_CORE);
         vars.refresh_internal_state();
         vars
     }
@@ -1886,7 +1678,7 @@ impl SystemVars {
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
     where
         V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+        V::Owned: Debug + Send + Clone + Sync,
     {
         self.vars.insert(var.name, Box::new(SystemVar::new(var)));
         self
@@ -1901,10 +1693,26 @@ impl SystemVars {
         self.allow_unsafe
     }
 
+    fn with_value_constrained_var<V>(
+        mut self,
+        var: &'static ServerVar<V>,
+        c: ValueConstraint<V>,
+    ) -> Self
+    where
+        V: Value + Debug + PartialEq + Clone + 'static,
+        V::Owned: Debug + Send + Clone + Sync,
+    {
+        self.vars.insert(
+            var.name,
+            Box::new(SystemVar::new(var).with_value_constraint(c)),
+        );
+        self
+    }
+
     fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
     where
         V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+        V::Owned: Debug + Send + Clone + Sync,
     {
         let var = self
             .vars
@@ -2325,10 +2133,15 @@ impl SystemVars {
     pub fn keep_n_source_status_history_entries(&self) -> usize {
         *self.expect_value(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
     }
+
+    /// Returns the `enable_mz_join_core` configuration parameter.
+    pub fn enable_mz_join_core(&self) -> bool {
+        *self.expect_value(&ENABLE_MZ_JOIN_CORE)
+    }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
-pub trait Var: fmt::Debug {
+pub trait Var: Debug {
     /// Returns the name of the configuration parameter.
     fn name(&self) -> &'static str;
 
@@ -2355,7 +2168,7 @@ pub trait Var: fmt::Debug {
 
 /// A `Var` with additional methods for mutating the value, as well as
 /// helpers that enable various operations in a `dyn` context.
-pub trait VarMut: Var + Send + Sync {
+pub trait SystemVarMut: Var + Send + Sync {
     /// Upcast to Var, for use with `dyn`.
     fn as_var(&self) -> &dyn Var;
 
@@ -2363,7 +2176,7 @@ pub trait VarMut: Var + Send + Sync {
     fn value_any(&self) -> &(dyn Any + 'static);
 
     /// Clone, but object safe and specialized to `VarMut`.
-    fn clone_var(&self) -> Box<dyn VarMut>;
+    fn clone_var(&self) -> Box<dyn SystemVarMut>;
 
     /// Return whether or not `input` is equal to this var's default value,
     /// if there is one.
@@ -2384,7 +2197,7 @@ pub trait VarMut: Var + Send + Sync {
 #[derive(Debug)]
 pub struct ServerVar<V>
 where
-    V: fmt::Debug + ?Sized + 'static,
+    V: Debug + 'static,
 {
     name: &'static UncasedStr,
     value: &'static V,
@@ -2394,7 +2207,7 @@ where
 
 impl<V> Var for ServerVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
+    V: Value + Debug + PartialEq + 'static,
 {
     fn name(&self) -> &'static str {
         self.name.as_str()
@@ -2433,40 +2246,64 @@ where
 #[derive(Debug)]
 struct SystemVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + Debug + PartialEq + 'static,
+    V::Owned: Debug + Clone + Send + Sync,
 {
     persisted_value: Option<V::Owned>,
     dynamic_default: Option<V::Owned>,
     parent: &'static ServerVar<V>,
+    constraints: Vec<ValueConstraint<V>>,
 }
 
 // The derived `Clone` implementation requires `V: Clone`, which is not needed.
 impl<V> Clone for SystemVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug + Clone,
+    V: Value + Debug + PartialEq + 'static,
+    V::Owned: Debug + Clone + Send + Sync,
 {
     fn clone(&self) -> Self {
         SystemVar {
             persisted_value: self.persisted_value.clone(),
             dynamic_default: self.dynamic_default.clone(),
             parent: self.parent,
+            constraints: self.constraints.clone(),
         }
     }
 }
 
 impl<V> SystemVar<V>
 where
-    V: Value + fmt::Debug + PartialEq + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + Debug + PartialEq + 'static,
+    V::Owned: Debug + Clone + Send + Sync,
 {
     fn new(parent: &'static ServerVar<V>) -> SystemVar<V> {
         SystemVar {
             persisted_value: None,
             dynamic_default: None,
             parent,
+            constraints: vec![],
         }
+    }
+
+    fn with_value_constraint(mut self, c: ValueConstraint<V>) -> SystemVar<V> {
+        assert!(
+            !self
+                .constraints
+                .iter()
+                .any(|c| matches!(c, ValueConstraint::ReadOnly | ValueConstraint::Fixed)),
+            "fixed value and read only params do not support any other constraints"
+        );
+        self.constraints.push(c);
+        self
+    }
+
+    fn check_constraints(&self, v: &V::Owned) -> Result<(), VarError> {
+        let cur_v = self.value();
+        for constraint in &self.constraints {
+            constraint.check_constraint(self, cur_v, v)?;
+        }
+
+        Ok(())
     }
 
     fn persisted_value(&self) -> Option<&V> {
@@ -2488,8 +2325,8 @@ where
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + fmt::Debug + PartialEq + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + Debug + PartialEq + 'static,
+    V::Owned: Debug + Clone + Send + Sync,
 {
     fn name(&self) -> &'static str {
         self.parent.name()
@@ -2512,10 +2349,10 @@ where
     }
 }
 
-impl<V> VarMut for SystemVar<V>
+impl<V> SystemVarMut for SystemVar<V>
 where
-    V: Value + fmt::Debug + PartialEq + 'static,
-    V::Owned: fmt::Debug + Clone + Send + Sync,
+    V: Value + Debug + PartialEq + 'static,
+    V::Owned: Debug + Clone + Send + Sync,
 {
     fn as_var(&self) -> &dyn Var {
         self
@@ -2526,28 +2363,25 @@ where
         value
     }
 
-    fn clone_var(&self) -> Box<dyn VarMut> {
+    fn clone_var(&self) -> Box<dyn SystemVarMut> {
         Box::new(self.clone())
     }
 
     fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
-        match V::parse(input) {
-            Ok(v) => Ok(self.parent.value == v.borrow()),
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
-        }
+        let v = V::parse(self, input)?;
+        Ok(self.parent.value == v.borrow())
     }
 
     fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
-        match V::parse(input) {
-            Ok(v) => {
-                if self.persisted_value() != Some(v.borrow()) {
-                    self.persisted_value = Some(v);
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
+        let v = V::parse(self, input)?;
+
+        self.check_constraints(&v)?;
+
+        if self.persisted_value() != Some(v.borrow()) {
+            self.persisted_value = Some(v);
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -2561,13 +2395,9 @@ where
     }
 
     fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
-        match V::parse(input) {
-            Ok(v) => {
-                self.dynamic_default = Some(v);
-                Ok(())
-            }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
-        }
+        let v = V::parse(self, input)?;
+        self.dynamic_default = Some(v);
+        Ok(())
     }
 }
 
@@ -2632,7 +2462,7 @@ impl FeatureFlag {
 #[derive(Debug)]
 struct SessionVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
+    V: Value + ToOwned + Debug + PartialEq + 'static,
 {
     default_value: &'static V,
     local_value: Option<V::Owned>,
@@ -2640,11 +2470,69 @@ where
     session_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
     feature_flag: Option<&'static FeatureFlag>,
+    constraints: Vec<ValueConstraint<V>>,
+}
+
+#[derive(Debug)]
+enum ValueConstraint<V>
+where
+    V: Value + ToOwned + Debug + PartialEq + 'static,
+{
+    Fixed,
+    ReadOnly,
+    // Arbitrary constraints over values.
+    Domain(&'static dyn DomainConstraint<V>),
+}
+
+impl<V> ValueConstraint<V>
+where
+    V: Value + ToOwned + Debug + PartialEq + 'static,
+{
+    fn check_constraint(
+        &self,
+        var: &(dyn Var + Send + Sync),
+        cur_value: &V,
+        new_value: &V::Owned,
+    ) -> Result<(), VarError> {
+        match self {
+            ValueConstraint::ReadOnly => return Err(VarError::ReadOnlyParameter(var.name())),
+            ValueConstraint::Fixed => {
+                if cur_value != new_value.borrow() {
+                    return Err(VarError::FixedValueParameter(var.into()));
+                }
+            }
+            ValueConstraint::Domain(check) => check.check(var, new_value)?,
+        }
+
+        Ok(())
+    }
+}
+
+impl<V> Clone for ValueConstraint<V>
+where
+    V: Value + ToOwned + Debug + PartialEq + 'static,
+{
+    fn clone(&self) -> Self {
+        match self {
+            ValueConstraint::Fixed => ValueConstraint::Fixed,
+            ValueConstraint::ReadOnly => ValueConstraint::ReadOnly,
+            ValueConstraint::Domain(c) => ValueConstraint::Domain(*c),
+        }
+    }
+}
+
+trait DomainConstraint<V>: Debug + Send + Sync
+where
+    V: Value + Debug + PartialEq + 'static,
+{
+    // `self` is make a trait object
+    fn check(&self, var: &(dyn Var + Send + Sync), v: &V::Owned) -> Result<(), VarError>;
 }
 
 impl<V> SessionVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
+    V: Value + ToOwned + Debug + PartialEq + 'static,
+    V::Owned: Debug + Send + Sync,
 {
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
@@ -2654,6 +2542,7 @@ where
             session_value: None,
             parent,
             feature_flag: None,
+            constraints: vec![],
         }
     }
 
@@ -2662,39 +2551,25 @@ where
         self
     }
 
-    fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
-        match V::parse(input) {
-            Ok(v) => {
-                if local {
-                    self.local_value = Some(v);
-                } else {
-                    self.local_value = None;
-                    self.staged_value = Some(v);
-                }
-                Ok(())
-            }
-            Err(()) => Err(VarError::InvalidParameterType(self.parent)),
-        }
+    fn with_value_constraint(mut self, c: ValueConstraint<V>) -> SessionVar<V> {
+        assert!(
+            !self
+                .constraints
+                .iter()
+                .any(|c| matches!(c, ValueConstraint::ReadOnly | ValueConstraint::Fixed)),
+            "fixed value and read only params do not support any other constraints"
+        );
+        self.constraints.push(c);
+        self
     }
 
-    fn reset(&mut self, local: bool) {
-        let value = self.default_value.to_owned();
-        if local {
-            self.local_value = Some(value);
-        } else {
-            self.local_value = None;
-            self.staged_value = Some(value);
+    fn check_constraints(&self, v: &V::Owned) -> Result<(), VarError> {
+        let cur_v = self.value();
+        for constraint in &self.constraints {
+            constraint.check_constraint(self, cur_v, v)?;
         }
-    }
 
-    fn end_transaction(&mut self, action: EndTransactionAction) {
-        self.local_value = None;
-        match action {
-            EndTransactionAction::Commit if self.staged_value.is_some() => {
-                self.session_value = self.staged_value.take()
-            }
-            _ => self.staged_value = None,
-        }
+        Ok(())
     }
 
     fn value(&self) -> &V {
@@ -2709,8 +2584,8 @@ where
 
 impl<V> Var for SessionVar<V>
 where
-    V: Value + fmt::Debug + ?Sized + 'static,
-    V::Owned: fmt::Debug,
+    V: Value + ToOwned + Debug + PartialEq + 'static,
+    V::Owned: Debug + Send + Sync,
 {
     fn name(&self) -> &'static str {
         self.parent.name()
@@ -2737,6 +2612,75 @@ where
     }
 }
 
+/// A `Var` with additional methods for mutating the value, as well as
+/// helpers that enable various operations in a `dyn` context.
+pub trait SessionVarMut: Var + Send + Sync {
+    /// Upcast to Var, for use with `dyn`.
+    fn as_var(&self) -> &dyn Var;
+
+    fn value_any(&self) -> &(dyn Any + 'static);
+
+    /// Parse the input and update the stored value to match.
+    fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError>;
+
+    /// Reset the stored value to the default.
+    fn reset(&mut self, local: bool);
+
+    fn end_transaction(&mut self, action: EndTransactionAction);
+}
+
+impl<V> SessionVarMut for SessionVar<V>
+where
+    V: Value + Debug + PartialEq + 'static,
+    V::Owned: Debug + Send + Sync + PartialEq,
+{
+    /// Upcast to Var, for use with `dyn`.
+    fn as_var(&self) -> &dyn Var {
+        self
+    }
+
+    fn value_any(&self) -> &(dyn Any + 'static) {
+        let value = SessionVar::value(self);
+        value
+    }
+
+    /// Parse the input and update the stored value to match.
+    fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
+        let v = V::parse(self, input)?;
+
+        self.check_constraints(&v)?;
+
+        if local {
+            self.local_value = Some(v);
+        } else {
+            self.local_value = None;
+            self.staged_value = Some(v);
+        }
+        Ok(())
+    }
+
+    /// Reset the stored value to the default.
+    fn reset(&mut self, local: bool) {
+        let value = self.default_value.to_owned();
+        if local {
+            self.local_value = Some(value);
+        } else {
+            self.local_value = None;
+            self.staged_value = Some(value);
+        }
+    }
+
+    fn end_transaction(&mut self, action: EndTransactionAction) {
+        self.local_value = None;
+        match action {
+            EndTransactionAction::Commit if self.staged_value.is_some() => {
+                self.session_value = self.staged_value.take()
+            }
+            _ => self.staged_value = None,
+        }
+    }
+}
+
 impl Var for BuildInfo {
     fn name(&self) -> &'static str {
         MZ_VERSION_NAME.as_str()
@@ -2751,7 +2695,7 @@ impl Var for BuildInfo {
     }
 
     fn type_name(&self) -> String {
-        str::type_name()
+        String::type_name()
     }
 
     fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
@@ -2785,8 +2729,12 @@ impl Var for User {
 pub trait Value: ToOwned + Send + Sync {
     /// The name of the value type.
     fn type_name() -> String;
+
     /// Parses a value of this type from a [`VarInput`].
-    fn parse(input: VarInput) -> Result<Self::Owned, ()>;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError>;
     /// Formats this value as a flattened string.
     ///
     /// The resulting string is guaranteed to be parsable if provided to
@@ -2794,11 +2742,18 @@ pub trait Value: ToOwned + Send + Sync {
     fn format(&self) -> String;
 }
 
-fn extract_single_value(input: VarInput) -> Result<&str, ()> {
+fn extract_single_value<'var, 'input: 'var>(
+    param: &'var (dyn Var + Send + Sync),
+    input: VarInput<'input>,
+) -> Result<&'input str, VarError> {
     match input {
         VarInput::Flat(value) => Ok(value),
         VarInput::SqlSet([value]) => Ok(value),
-        _ => Err(()),
+        VarInput::SqlSet(values) => Err(VarError::InvalidParameterValue {
+            parameter: param.into(),
+            values: values.to_vec(),
+            reason: "expects a single value".to_string(),
+        }),
     }
 }
 
@@ -2807,12 +2762,12 @@ impl Value for bool {
         "boolean".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<Self, VarError> {
+        let s = extract_single_value(param, input)?;
         match s {
             "t" | "true" | "on" => Ok(true),
             "f" | "false" | "off" => Ok(false),
-            _ => Err(()),
+            _ => Err(VarError::InvalidParameterType(param.into())),
         }
     }
 
@@ -2829,9 +2784,10 @@ impl Value for i32 {
         "integer".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<i32, ()> {
-        let s = extract_single_value(input)?;
-        s.parse().map_err(|_| ())
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<i32, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
     }
 
     fn format(&self) -> String {
@@ -2844,9 +2800,10 @@ impl Value for u32 {
         "unsigned integer".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<u32, ()> {
-        let s = extract_single_value(input)?;
-        s.parse().map_err(|_| ())
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<u32, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
     }
 
     fn format(&self) -> String {
@@ -2859,9 +2816,13 @@ impl Value for mz_repr::Timestamp {
         "mz-timestamp".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<mz_repr::Timestamp, ()> {
-        let s = extract_single_value(input)?;
-        s.parse().map_err(|_| ())
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<mz_repr::Timestamp, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
     }
 
     fn format(&self) -> String {
@@ -2874,13 +2835,31 @@ impl Value for usize {
         "unsigned integer".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<usize, ()> {
-        let s = extract_single_value(input)?;
-        s.parse().map_err(|_| ())
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<usize, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
     }
 
     fn format(&self) -> String {
         self.to_string()
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct NumericNonNegNonNan;
+
+impl DomainConstraint<Numeric> for NumericNonNegNonNan {
+    fn check(&self, var: &(dyn Var + Send + Sync), n: &Numeric) -> Result<(), VarError> {
+        if n.is_nan() || n.is_negative() {
+            Err(VarError::InvalidParameterValue {
+                parameter: var.into(),
+                values: vec![n.to_string()],
+                reason: "only supports non-negative, non-NaN numeric values".to_string(),
+            })
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -2889,21 +2868,15 @@ impl Value for Numeric {
         "numeric".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-        let s = extract_single_value(input)?;
-        let n: Numeric = s.parse().map_err(|_| ())?;
-        // TODO(jkosh44) This is a hacky way of of imposing validations on Numerics. Ideally this type
-        //  of validation should be specific to the variable that requires it, not all Numerics.
-        //  Additionally, it should return an InvalidParameterValue error, but this eventually gets
-        //  turned into an InvalidParameterType error. Unfortunately, SystemVars has no way of doing
-        //  this kind of validation.
-        // NaN and negatives are not valid values. Positive infinity is allowed because it's useful
-        // to signify that there is no limit.
-        if n.is_nan() || n.is_negative() {
-            Err(())
-        } else {
-            Ok(n)
-        }
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let n = s
+            .parse()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))?;
+        Ok(n)
     }
 
     fn format(&self) -> String {
@@ -2921,8 +2894,11 @@ impl Value for Duration {
         "duration".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Duration, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Duration, VarError> {
+        let s = extract_single_value(param, input)?;
         let s = s.trim();
         // Take all numeric values from [0..]
         let split_pos = s
@@ -2931,7 +2907,9 @@ impl Value for Duration {
             .unwrap_or_else(|| s.chars().count());
 
         // Error if the numeric values don't parse, i.e. there aren't any.
-        let d = s[..split_pos].parse::<u64>().map_err(|_| ())?;
+        let d = s[..split_pos]
+            .parse::<u64>()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))?;
 
         // We've already trimmed end
         let (f, m): (fn(u64) -> Duration, u64) = match s[split_pos..].trim_start() {
@@ -2942,13 +2920,23 @@ impl Value for Duration {
             "min" => (Duration::from_secs, SEC_TO_MIN),
             "h" => (Duration::from_secs, SEC_TO_HOUR),
             "d" => (Duration::from_secs, SEC_TO_DAY),
-            _ => return Err(()),
+            o => {
+                return Err(VarError::InvalidParameterValue {
+                    parameter: param.into(),
+                    values: vec![s.to_string()],
+                    reason: format!("expected us, ms, s, min, h, or d but got {:?}", o),
+                })
+            }
         };
 
         let d = if d == 0 {
             Duration::from_secs(u64::MAX)
         } else {
-            f(d.checked_mul(m).ok_or(())?)
+            f(d.checked_mul(m).ok_or(VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: vec![s.to_string()],
+                reason: "expected value to fit in u64".to_string(),
+            })?)
         };
         Ok(d)
     }
@@ -2984,7 +2972,7 @@ impl Value for Duration {
 #[test]
 fn test_value_duration() {
     fn inner(t: &'static str, e: Duration, expected_format: Option<&'static str>) {
-        let d = Duration::parse(VarInput::Flat(t)).expect("invalid duration");
+        let d = Duration::parse(&STATEMENT_TIMEOUT, VarInput::Flat(t)).expect("invalid duration");
         assert_eq!(d, e);
         let mut d_format = d.format();
         d_format.retain(|c| !c.is_whitespace());
@@ -3031,7 +3019,7 @@ fn test_value_duration() {
     );
 
     fn errs(t: &'static str) {
-        assert!(Duration::parse(VarInput::Flat(t)).is_err());
+        assert!(Duration::parse(&STATEMENT_TIMEOUT, VarInput::Flat(t)).is_err());
     }
     errs("1 m");
     errs("1 sec");
@@ -3047,28 +3035,13 @@ fn test_value_duration() {
     errs("18446744073709551615 min");
 }
 
-impl Value for str {
-    fn type_name() -> String {
-        "string".to_string()
-    }
-
-    fn parse(input: VarInput) -> Result<String, ()> {
-        let s = extract_single_value(input)?;
-        Ok(s.to_owned())
-    }
-
-    fn format(&self) -> String {
-        self.to_owned()
-    }
-}
-
 impl Value for String {
     fn type_name() -> String {
         "string".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<String, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<String, VarError> {
+        let s = extract_single_value(param, input)?;
         Ok(s.to_owned())
     }
 
@@ -3077,30 +3050,54 @@ impl Value for String {
     }
 }
 
-impl Value for Vec<String> {
+/// This style should actually be some more complex struct, but we only support this configuration
+/// of it, so this is fine for the time being.
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct DateStyle([&'static str; 2]);
+
+const DEFAULT_DATE_STYLE: DateStyle = DateStyle(["ISO", "MDY"]);
+
+impl Value for DateStyle {
     fn type_name() -> String {
         "string list".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Vec<String>, ()> {
-        match input {
-            VarInput::Flat(v) => mz_sql_parser::parser::split_identifier_string(v).map_err(|_| ()),
+    /// This impl is unlike most others because we have under-implemented its backing struct.
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<DateStyle, VarError> {
+        let input = match input {
+            VarInput::Flat(v) => mz_sql_parser::parser::split_identifier_string(v)
+                .map_err(|_| VarError::InvalidParameterType(param.into()))?,
             // Unlike parsing `Vec<Ident>`, we further split each element.
             // This matches PostgreSQL.
             VarInput::SqlSet(values) => {
                 let mut out = vec![];
                 for v in values {
-                    let idents =
-                        mz_sql_parser::parser::split_identifier_string(v).map_err(|_| ())?;
+                    let idents = mz_sql_parser::parser::split_identifier_string(v)
+                        .map_err(|_| VarError::InvalidParameterType(param.into()))?;
                     out.extend(idents)
                 }
-                Ok(out)
+                out
+            }
+        };
+
+        for input in input {
+            if !DEFAULT_DATE_STYLE
+                .0
+                .iter()
+                .any(|valid| UncasedStr::new(valid) == &input)
+            {
+                return Err(VarError::FixedValueParameter((&DATE_STYLE).into()));
             }
         }
+
+        Ok(DEFAULT_DATE_STYLE.clone())
     }
 
     fn format(&self) -> String {
-        self.join(", ")
+        self.0.join(", ")
     }
 }
 
@@ -3109,11 +3106,15 @@ impl Value for Vec<Ident> {
         "identifier list".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Vec<Ident>, ()> {
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Vec<Ident>, VarError> {
         let holder;
         let values = match input {
             VarInput::Flat(value) => {
-                holder = mz_sql_parser::parser::split_identifier_string(value).map_err(|_| ())?;
+                holder = mz_sql_parser::parser::split_identifier_string(value)
+                    .map_err(|_| VarError::InvalidParameterType(param.into()))?;
                 &holder
             }
             // Unlike parsing `Vec<String>`, we do *not* further split each
@@ -3137,11 +3138,14 @@ where
         format!("optional {}", V::type_name())
     }
 
-    fn parse(input: VarInput) -> Result<Option<V>, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Option<V>, VarError> {
+        let s = extract_single_value(param, input)?;
         match s {
             "" => Ok(None),
-            _ => <V as Value>::parse(VarInput::Flat(s)).map(Some),
+            _ => <V as Value>::parse(param, VarInput::Flat(s)).map(Some),
         }
     }
 
@@ -3150,6 +3154,55 @@ where
             Some(s) => s.format(),
             None => "".into(),
         }
+    }
+}
+
+// This unorthodox design lets us escape complex errors from value parsing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Failpoints;
+
+impl Value for Failpoints {
+    fn type_name() -> String {
+        "failpoints config".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Failpoints, VarError> {
+        let values = input.to_vec();
+        for mut cfg in values.iter().map(|v| v.trim().split(';')).flatten() {
+            cfg = cfg.trim();
+            if cfg.is_empty() {
+                continue;
+            }
+            let mut splits = cfg.splitn(2, '=');
+            let failpoint = splits
+                .next()
+                .ok_or_else(|| VarError::InvalidParameterValue {
+                    parameter: param.into(),
+                    values: input.to_vec(),
+                    reason: "missing failpoint name".into(),
+                })?;
+            let action = splits
+                .next()
+                .ok_or_else(|| VarError::InvalidParameterValue {
+                    parameter: param.into(),
+                    values: input.to_vec(),
+                    reason: "missing failpoint action".into(),
+                })?;
+            fail::cfg(failpoint, action).map_err(|e| VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: input.to_vec(),
+                reason: e,
+            })?;
+        }
+
+        Ok(Failpoints)
+    }
+
+    fn format(&self) -> String {
+        "<omitted>".to_string()
     }
 }
 
@@ -3231,8 +3284,11 @@ impl Value for ClientSeverity {
         "string".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
         let s = UncasedStr::new(s);
 
         if s == ClientSeverity::Error.as_str() {
@@ -3257,7 +3313,11 @@ impl Value for ClientSeverity {
         } else if s == ClientSeverity::Debug5.as_str() {
             Ok(ClientSeverity::Debug5)
         } else {
-            Err(())
+            Err(VarError::ConstrainedParameter {
+                parameter: param.into(),
+                values: input.to_vec(),
+                valid_values: Some(ClientSeverity::valid_values()),
+            })
         }
     }
 
@@ -3293,8 +3353,11 @@ impl Value for TimeZone {
         "string".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
         let s = UncasedStr::new(s);
 
         if s == TimeZone::UTC.as_str() {
@@ -3302,7 +3365,11 @@ impl Value for TimeZone {
         } else if s == "+00:00" {
             Ok(TimeZone::FixedOffset("+00:00"))
         } else {
-            Err(())
+            Err(VarError::ConstrainedParameter {
+                parameter: (&TIMEZONE).into(),
+                values: input.to_vec(),
+                valid_values: None,
+            })
         }
     }
 
@@ -3348,8 +3415,11 @@ impl Value for IsolationLevel {
         "string".to_string()
     }
 
-    fn parse(input: VarInput) -> Result<Self::Owned, ()> {
-        let s = extract_single_value(input)?;
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
         let s = UncasedStr::new(s);
 
         // We don't have any optimizations for levels below Serializable,
@@ -3363,7 +3433,11 @@ impl Value for IsolationLevel {
         } else if s == Self::StrictSerializable.as_str() {
             Ok(Self::StrictSerializable)
         } else {
-            Err(())
+            Err(VarError::ConstrainedParameter {
+                parameter: (&TRANSACTION_ISOLATION).into(),
+                values: input.to_vec(),
+                valid_values: Some(IsolationLevel::valid_values()),
+            })
         }
     }
 
@@ -3388,6 +3462,7 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == ENABLE_MZ_JOIN_CORE.name()
         || is_persist_config_var(name)
 }
 
@@ -3428,4 +3503,92 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_FILTER_ENABLED.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ClientEncoding {
+    Utf8,
+}
+
+impl ClientEncoding {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ClientEncoding::Utf8 => "UTF8",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![ClientEncoding::Utf8.as_str()]
+    }
+}
+
+impl Value for ClientEncoding {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let s = UncasedStr::new(s);
+        if s == Self::Utf8.as_str() {
+            Ok(Self::Utf8)
+        } else {
+            Err(VarError::ConstrainedParameter {
+                parameter: (&CLIENT_ENCODING).into(),
+                values: vec![s.to_string()],
+                valid_values: Some(ClientEncoding::valid_values()),
+            })
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().to_string()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IntervalStyle {
+    Postgres,
+}
+
+impl IntervalStyle {
+    fn as_str(&self) -> &'static str {
+        match self {
+            IntervalStyle::Postgres => "postgres",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![IntervalStyle::Postgres.as_str()]
+    }
+}
+
+impl Value for IntervalStyle {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        let s = UncasedStr::new(s);
+        if s == Self::Postgres.as_str() {
+            Ok(Self::Postgres)
+        } else {
+            Err(VarError::ConstrainedParameter {
+                parameter: (&INTERVAL_STYLE).into(),
+                values: vec![s.to_string()],
+                valid_values: Some(IntervalStyle::valid_values()),
+            })
+        }
+    }
+
+    fn format(&self) -> String {
+        self.as_str().to_string()
+    }
 }

@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Cloudtest is still running with RBAC off, while the mzcompose-based tests
+# have it enabled, so enable it explicitly for this test so that we have
+# consistent output in "SHOW ALL".
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_rbac_checks = true;
+
 $ set-regex match="cluster1|default|v\d+\.\d+\.\d+(-[a-z0-9]+)? \([a-f0-9]{9}\)" replacement=<VARIES>
 
 > SHOW ALL
@@ -18,7 +24,7 @@ cluster_replica                     ""                      "Sets a target clust
 database                            materialize             "Sets the current database (CockroachDB)."
 DateStyle                           "ISO, MDY"              "Sets the display format for date and time values (PostgreSQL)."
 extra_float_digits                  3                       "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
-failpoints                          ""                      "Allows failpoints to be dynamically activated."
+failpoints                          <omitted>               "Allows failpoints to be dynamically activated."
 integer_datetimes                   on                      "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL)."
 IntervalStyle                       postgres                "Sets the display format for interval values (PostgreSQL)."
 search_path                         public                  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
@@ -37,7 +43,7 @@ enable_session_rbac_checks          off                     "User facing session
 mz_version                          <VARIES>                "Shows the Materialize server version (Materialize)."
 is_superuser                        off                     "Reports whether the current session is a superuser (PostgreSQL)."
 allowed_cluster_replica_sizes       ""                      "The allowed sizes when creating a new cluster replica (Materialize)."
-enable_rbac_checks                  off                     "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
+enable_rbac_checks                  on                      "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 max_aws_privatelink_connections     0                       "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
 max_clusters                        10                      "The maximum number of clusters in the region (Materialize)."
 max_connections                     1000                    "The maximum number of concurrent connections (Materialize)."
@@ -63,7 +69,7 @@ UTF8
 UTF8
 
 ! SET client_encoding = UTF9
-contains:parameter "client_encoding" can only be set to "UTF8"
+contains:invalid value for parameter "client_encoding": "utf9"
 
 # if its utf8 we let it through
 > SET NAMES 'UTF8';
@@ -129,7 +135,7 @@ contains:invalid value for parameter "TimeZone": "nope"
 contains:invalid value for parameter "transaction_isolation": "read draft"
 
 ! SET integer_datetimes = false
-contains:parameter "integer_datetimes" cannot be changed
+contains:parameter "integer_datetimes" can only be set to "on"
 
 > SET client_min_messages TO ERROR
 > SHOW client_min_messages
@@ -167,7 +173,7 @@ contains:invalid value for parameter "client_min_messages": "invalid"
 postgres
 
 ! SET intervalstyle = 'postgres-legacy'
-contains:parameter "IntervalStyle" can only be set to "postgres"
+contains:invalid value for parameter "IntervalStyle": "postgres-legacy"
 
 > SET intervalstyle = 'postgres';
 
@@ -177,4 +183,4 @@ contains:parameter "IntervalStyle" can only be set to "postgres"
 > SET cluster_replica = 'r1'
 
 ! SET cluster_replica = 1, 2
-contains:parameter "cluster_replica" requires a "optional string" value
+contains:parameter "cluster_replica" cannot have value "1","2": expects a single value

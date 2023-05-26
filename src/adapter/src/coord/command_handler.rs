@@ -11,6 +11,7 @@
 //! client via some external Materialize API (ex: HTTP and psql).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
@@ -30,7 +31,7 @@ use tokio::sync::{oneshot, watch};
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::client::ConnectionId;
+use crate::client::ConnectionIdType;
 use crate::command::{
     Canceled, Command, ExecuteResponse, GetVariablesResponse, Response, StartupMessage,
     StartupResponse,
@@ -89,7 +90,7 @@ impl Coordinator {
                 self.declare(tx, session, name, stmt, param_types);
             }
 
-            Command::Describe {
+            Command::Prepare {
                 name,
                 stmt,
                 param_types,
@@ -97,7 +98,7 @@ impl Coordinator {
                 tx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                self.handle_describe(tx, session, name, stmt, param_types);
+                self.handle_prepare(tx, session, name, stmt, param_types);
             }
 
             Command::CancelRequest {
@@ -269,7 +270,7 @@ impl Coordinator {
             .with_label_values(&[session_type])
             .inc();
         self.active_conns.insert(
-            session.conn_id(),
+            session.conn_id().clone(),
             ConnMeta {
                 cancel_tx,
                 secret_key: session.secret_key(),
@@ -508,7 +509,7 @@ impl Coordinator {
             // coordinator thread of control.
             Statement::CreateSource(stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id();
+                let conn_id = session.conn_id().clone();
                 let purify_fut = mz_sql::pure::purify_create_source(
                     Box::new(catalog.into_owned()),
                     self.now(),
@@ -551,7 +552,7 @@ impl Coordinator {
         }
     }
 
-    fn handle_describe(
+    fn handle_prepare(
         &self,
         tx: ClientTransmitter<()>,
         mut session: Session,
@@ -560,7 +561,19 @@ impl Coordinator {
         param_types: Vec<Option<ScalarType>>,
     ) {
         let catalog = self.owned_catalog();
-        mz_ore::task::spawn(|| "coord::handle_describe", async move {
+        mz_ore::task::spawn(|| "coord::handle_prepare", async move {
+            // Note: This failpoint is used to simulate a request outliving the external connection
+            // that made it.
+            let mut async_pause = false;
+            (|| {
+                fail::fail_point!("async_prepare", |val| {
+                    async_pause = val.map_or(false, |val| val.parse().unwrap_or(false))
+                });
+            })();
+            if async_pause {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            };
+
             let res = match Self::describe(&catalog, &session, stmt.clone(), param_types) {
                 Ok(desc) => {
                     session.set_prepared_statement(
@@ -577,7 +590,10 @@ impl Coordinator {
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
-    fn handle_cancel(&mut self, conn_id: ConnectionId, secret_key: u32) {
+    ///
+    /// Note: Here we take a [`ConnectionIdType`] as opposed to an owned `ConnectionId` because
+    /// this method gets called by external clients when they request to cancel a request.
+    fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -591,7 +607,7 @@ impl Coordinator {
                 matches!(pending_write_txn, PendingWriteTxn::User {
                     pending_txn: PendingTxn { session, .. },
                     ..
-                } if session.conn_id() == conn_id)
+                } if session.conn_id().val() == conn_id)
             }) {
                 if let PendingWriteTxn::User {
                     pending_txn:
@@ -611,7 +627,7 @@ impl Coordinator {
             if let Some(idx) = self
                 .write_lock_wait_group
                 .iter()
-                .position(|ready| matches!(ready, Deferred::Plan(ready) if ready.session.conn_id() == conn_id))
+                .position(|ready| matches!(ready, Deferred::Plan(ready) if ready.session.conn_id().val() == conn_id))
             {
                 let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
                 if let Deferred::Plan(ready) = ready {
@@ -635,7 +651,7 @@ impl Coordinator {
                 conn_id: _,
                 cluster_id: _,
                 depends_on: _,
-            } in self.cancel_pending_peeks(&conn_id)
+            } in self.cancel_pending_peeks(conn_id)
             {
                 // Cancel messages can be sent after the connection has hung
                 // up, but before the connection's state has been cleaned up.
@@ -649,7 +665,7 @@ impl Coordinator {
     ///
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
-        if self.active_conns.get(&session.conn_id()).is_none() {
+        if self.active_conns.get(session.conn_id()).is_none() {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
             // Instead we explicitly panic here while dumping the entire Coord to the logs to help
             // debug. This panic is very infrequent so we want as much information as possible.
@@ -661,15 +677,15 @@ impl Coordinator {
 
         self.drop_temp_items(session).await;
         self.catalog_mut()
-            .drop_temporary_schema(&session.conn_id())
+            .drop_temporary_schema(session.conn_id())
             .unwrap_or_terminate("unable to drop temporary schema");
         let session_type = metrics::session_type_label_value(session.user());
         self.metrics
             .active_sessions
             .with_label_values(&[session_type])
             .dec();
-        self.active_conns.remove(&session.conn_id());
-        self.cancel_pending_peeks(&session.conn_id());
+        self.active_conns.remove(session.conn_id());
+        self.cancel_pending_peeks(session.conn_id().val());
         let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update]).await;
     }

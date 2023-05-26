@@ -619,6 +619,35 @@ impl PersistClient {
         Ok(writer)
     }
 
+    /// Returns the internal state of the shard for debugging and QA.
+    ///
+    /// We'll be thoughtful about making unnecessary changes, but the **output
+    /// of this method needs to be gated from users**, so that it's not subject
+    /// to our backward compatibility guarantees.
+    pub async fn inspect_shard<T: Timestamp + Lattice + Codec64>(
+        &self,
+        shard_id: &ShardId,
+    ) -> Result<impl serde::Serialize, anyhow::Error> {
+        let state_versions = StateVersions::new(
+            self.cfg.clone(),
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.blob),
+            Arc::clone(&self.metrics),
+        );
+        // TODO: Don't fetch all live diffs. Feels like we should pull out a new
+        // method in StateVersions for fetching the latest version of State of a
+        // shard that might or might not exist.
+        let versions = state_versions.fetch_all_live_diffs(shard_id).await;
+        if versions.0.is_empty() {
+            return Err(anyhow::anyhow!("{} does not exist", shard_id));
+        }
+        let state = state_versions
+            .fetch_current_state::<T>(shard_id, versions.0)
+            .await;
+        let state = state.check_ts_codec(shard_id)?;
+        Ok(state)
+    }
+
     /// Test helper for a [Self::open] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]

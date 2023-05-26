@@ -37,6 +37,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::render::errors::ErrorLogger;
+use crate::render::join::LinearJoinImpl;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
@@ -90,8 +91,10 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, V, T>>,
-    /// An token that operators can probe to know whether the dataflow is shutting down.
+    /// A token that operators can probe to know whether the dataflow is shutting down.
     pub(super) shutdown_token: ShutdownToken,
+    /// The implementation to use for rendering linear joins.
+    pub(super) linear_join_impl: LinearJoinImpl,
 }
 
 impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
@@ -118,6 +121,7 @@ where
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
+            linear_join_impl: Default::default(),
         }
     }
 }

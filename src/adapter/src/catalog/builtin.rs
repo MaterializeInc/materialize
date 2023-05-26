@@ -1889,7 +1889,7 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("user", ScalarType::String.nullable(false))
+        .with_column("session_id", ScalarType::UInt32.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("created_at", ScalarType::TimestampTz.nullable(false))
         .with_column(
@@ -4102,7 +4102,7 @@ mod tests {
                             .resolve_schema_in_database(
                                 &ResolvedDatabaseSpecifier::Ambient,
                                 ty.schema,
-                                SYSTEM_CONN_ID,
+                                &SYSTEM_CONN_ID,
                             )
                             .expect("unable to resolve schema");
                         let allocated_type = catalog
@@ -4114,7 +4114,7 @@ mod tests {
                                     schema: Some(schema.name().schema.clone()),
                                     item: ty.name.to_string(),
                                 },
-                                SYSTEM_CONN_ID,
+                                &SYSTEM_CONN_ID,
                             )
                             .expect("unable to resolve type");
                         let ty = if let CatalogItem::Type(ty) = &allocated_type.item {

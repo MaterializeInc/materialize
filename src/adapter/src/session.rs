@@ -42,7 +42,7 @@ use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
-const DUMMY_CONNECTION_ID: ConnectionId = 0;
+const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::new_static(0);
 const DUMMY_CONNECT_TIME: EpochMillis = 0;
 
 /// A session holds per-connection state.
@@ -138,8 +138,8 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Returns the connection ID associated with the session.
-    pub fn conn_id(&self) -> ConnectionId {
-        self.conn_id
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
     }
 
     /// Returns the time at which the session connected to Materialize.
@@ -148,7 +148,7 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Returns the secret key associated with the session.
-    pub fn secret_key(&self) -> ConnectionId {
+    pub fn secret_key(&self) -> u32 {
         self.secret_key
     }
 
@@ -684,7 +684,7 @@ impl<T: TimestampManipulation> Session<T> {
 /// A prepared statement.
 #[derive(Debug, Clone)]
 pub struct PreparedStatement {
-    sql: Option<Statement<Raw>>,
+    stmt: Option<Statement<Raw>>,
     desc: StatementDesc,
     /// The most recent catalog revision that has verified this statement.
     pub catalog_revision: u64,
@@ -693,21 +693,21 @@ pub struct PreparedStatement {
 impl PreparedStatement {
     /// Constructs a new prepared statement.
     pub fn new(
-        sql: Option<Statement<Raw>>,
+        stmt: Option<Statement<Raw>>,
         desc: StatementDesc,
         catalog_revision: u64,
     ) -> PreparedStatement {
         PreparedStatement {
-            sql,
+            stmt,
             desc,
             catalog_revision,
         }
     }
 
-    /// Returns the raw SQL string associated with this prepared statement,
+    /// Returns the AST associated with this prepared statement,
     /// if the prepared statement was not the empty query.
-    pub fn sql(&self) -> Option<&Statement<Raw>> {
-        self.sql.as_ref()
+    pub fn stmt(&self) -> Option<&Statement<Raw>> {
+        self.stmt.as_ref()
     }
 
     /// Returns the description of the prepared statement.

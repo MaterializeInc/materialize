@@ -16,10 +16,10 @@ import "expr/src/scalar.proto";
 package mz_compute_client.plan.threshold;
 
 message ProtoThresholdPlan {
-   oneof kind {
-       ProtoArrangement basic = 1;
-       ProtoArrangement retractions = 2;
-   }
+    reserved 2; // retractions
+    oneof kind {
+        ProtoArrangement basic = 1;
+    }
 }
 
 message ProtoArrangement {
@@ -31,5 +31,4 @@ message ProtoArrangement {
     repeated mz_expr.scalar.ProtoMirScalarExpr all_columns = 1;
     repeated ProtoArrangementPermutation  permutation = 2;
     repeated uint64 thinning = 3;
-
 };

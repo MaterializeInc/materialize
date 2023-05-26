@@ -14,6 +14,8 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 
+use serde::ser::{SerializeMap, SerializeStruct};
+
 use crate::columnar::Data;
 use crate::part::DynColumnRef;
 use crate::stats::private::StatsCost;
@@ -133,6 +135,31 @@ pub struct StructStats {
     /// This will often be all of the columns, but it's not guaranteed. Persist
     /// reserves the right to prune statistics about some or all of the columns.
     pub cols: BTreeMap<String, Box<dyn DynStats>>,
+}
+
+impl serde::Serialize for StructStats {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let StructStats { len, cols } = self;
+        let mut s = s.serialize_struct("StructStats", 2)?;
+        let () = s.serialize_field("len", len)?;
+        let () = s.serialize_field("cols", &DynStatsCols(cols))?;
+        s.end()
+    }
+}
+
+struct DynStatsCols<'a>(&'a BTreeMap<String, Box<dyn DynStats>>);
+
+impl serde::Serialize for DynStatsCols<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut s = s.serialize_map(Some(self.0.len()))?;
+        for (k, v) in self.0.iter() {
+            // TODO: Consider adding an `as_json(&self) -> serde_json::Value`
+            // method to `DynStats` so we can make it easier to use them.
+            let v = v.into_proto();
+            let () = s.serialize_entry(k, &v)?;
+        }
+        s.end()
+    }
 }
 
 impl StructStats {
@@ -380,6 +407,8 @@ mod impls {
     use arrow2::types::simd::Simd;
     use arrow2::types::NativeType;
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
+    use proptest::prelude::*;
+    use serde::Serialize;
 
     use crate::columnar::Data;
     use crate::stats::private::StatsCost;
@@ -538,6 +567,7 @@ mod impls {
 
     impl<T> DynStats for PrimitiveStats<T>
     where
+        T: Serialize,
         PrimitiveStats<T>:
             StatsCost + RustType<ProtoPrimitiveStats> + std::fmt::Debug + Send + Sync + 'static,
     {
@@ -1066,11 +1096,31 @@ mod impls {
     primitive_stats_rust_type!(f64, LowerF64, UpperF64);
     primitive_stats_rust_type!(Vec<u8>, LowerBytes, UpperBytes);
     primitive_stats_rust_type!(String, LowerString, UpperString);
+
+    #[allow(unused_parens)]
+    impl Arbitrary for StructStats {
+        type Parameters = ();
+        type Strategy =
+            proptest::strategy::Map<(<usize as Arbitrary>::Strategy), fn((usize)) -> Self>;
+
+        fn arbitrary_with(_: ()) -> Self::Strategy {
+            Strategy::prop_map((any::<usize>()), |(len)| {
+                StructStats {
+                    len,
+                    // TODO: Fill in cols with stats.
+                    cols: Default::default(),
+                }
+            })
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow2::array::BinaryArray;
     use proptest::prelude::*;
+
+    use crate::columnar::ColumnPush;
 
     use super::*;
 
@@ -1193,44 +1243,88 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // too slow
     fn primitive_cost_trim_proptest() {
-        fn testcase<T: Ord + Clone + std::fmt::Debug>(x1: T, x2: T)
+        fn primitive_stats<'a, T: Data, F>(xs: &'a [T], f: F) -> (&'a [T], T::Stats)
         where
+            F: for<'b> Fn(&'b T) -> T::Ref<'b>,
+        {
+            let mut col = T::Mut::default();
+            for x in xs {
+                col.push(f(x));
+            }
+            let col = T::Col::from(col);
+            let stats = T::Stats::from(&col);
+            (xs, stats)
+        }
+        fn testcase<T: Data + PartialOrd + Clone + std::fmt::Debug>(
+            xs_stats: (&[T], PrimitiveStats<T>),
+        ) where
             PrimitiveStats<T>: StatsCost,
         {
-            let mut stats = PrimitiveStats {
-                lower: std::cmp::min(&x1, &x2).clone(),
-                upper: std::cmp::max(&x1, &x2).clone(),
-            };
+            let (xs, mut stats) = xs_stats;
+            for x in xs {
+                assert!(&stats.lower <= x);
+                assert!(&stats.upper >= x);
+            }
             let cost_before = stats.cost();
             stats.trim();
             assert!(stats.cost() <= cost_before);
-            assert!(stats.lower <= x1);
-            assert!(stats.lower <= x2);
-            assert!(stats.upper >= x1);
-            assert!(stats.upper >= x2);
+            for x in xs {
+                assert!(&stats.lower <= x);
+                assert!(&stats.upper >= x);
+            }
         }
 
+        proptest!(|(a in any::<bool>(), b in any::<bool>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<u8>(), b in any::<u8>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<u16>(), b in any::<u16>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<u32>(), b in any::<u32>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
         proptest!(|(a in any::<u64>(), b in any::<u64>())| {
-            // The proptest! macro interferes with rustfmt.
-            testcase(a, b)
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<i8>(), b in any::<i8>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<i16>(), b in any::<i16>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<i32>(), b in any::<i32>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<i64>(), b in any::<i64>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<f32>(), b in any::<f32>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
+        });
+        proptest!(|(a in any::<f64>(), b in any::<f64>())| {
+            testcase(primitive_stats(&[a, b], |x| *x))
         });
 
         // Construct strings that are "interesting" in that they have some
         // (possibly empty) shared prefix.
         proptest!(|(prefix in any::<String>(), a in any::<String>(), b in any::<String>())| {
-            // The proptest! macro interferes with rustfmt.
-            testcase(format!("{}{}", prefix, a), format!("{}{}", prefix, b))
+            let vals = &[format!("{}{}", prefix, a), format!("{}{}", prefix, b)];
+            testcase(primitive_stats(vals, |x| x))
         });
 
         // Construct strings that are "interesting" in that they have some
         // (possibly empty) shared prefix.
         proptest!(|(prefix in any::<Vec<u8>>(), a in any::<Vec<u8>>(), b in any::<Vec<u8>>())| {
-            // The proptest! macro interferes with rustfmt.
             let mut sa = prefix.clone();
             sa.extend(&a);
             let mut sb = prefix;
             sb.extend(&b);
-            testcase(sa, sb);
+            let vals = &[sa, sb];
+            let stats = PrimitiveStats::<Vec<u8>>::from(&BinaryArray::<i32>::from_slice(vals));
+            testcase((vals, stats));
         });
     }
 

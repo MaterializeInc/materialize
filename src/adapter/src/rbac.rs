@@ -129,7 +129,7 @@ pub fn check_command(catalog: &Catalog, cmd: &Command) -> Result<(), Unauthorize
         }
         Command::Startup { .. }
         | Command::Declare { .. }
-        | Command::Describe { .. }
+        | Command::Prepare { .. }
         | Command::VerifyPreparedStatement { .. }
         | Command::Execute { .. }
         | Command::Commit { .. }

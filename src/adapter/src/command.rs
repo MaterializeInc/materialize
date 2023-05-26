@@ -27,7 +27,7 @@ use mz_sql::plan::{ExecuteTimeout, PlanKind};
 use mz_sql::session::vars::Var;
 use tokio::sync::{oneshot, watch};
 
-use crate::client::ConnectionId;
+use crate::client::ConnectionIdType;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -49,7 +49,7 @@ pub enum Command {
         tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
-    Describe {
+    Prepare {
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
@@ -77,7 +77,9 @@ pub enum Command {
     },
 
     CancelRequest {
-        conn_id: ConnectionId,
+        /// Note: This is a [`ConnectionIdType`] and not a `ConnetionId` to support external
+        /// clients.
+        conn_id: ConnectionIdType,
         secret_key: u32,
     },
 
@@ -116,7 +118,7 @@ impl Command {
         match self {
             Command::Startup { session, .. }
             | Command::Declare { session, .. }
-            | Command::Describe { session, .. }
+            | Command::Prepare { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
@@ -133,7 +135,7 @@ impl Command {
         match self {
             Command::Startup { session, .. }
             | Command::Declare { session, .. }
-            | Command::Describe { session, .. }
+            | Command::Prepare { session, .. }
             | Command::VerifyPreparedStatement { session, .. }
             | Command::Execute { session, .. }
             | Command::Commit { session, .. }
@@ -156,7 +158,7 @@ impl Command {
         match self {
             Command::Startup { tx, session, .. } => send(tx, session, e),
             Command::Declare { tx, session, .. } => send(tx, session, e),
-            Command::Describe { tx, session, .. } => send(tx, session, e),
+            Command::Prepare { tx, session, .. } => send(tx, session, e),
             Command::VerifyPreparedStatement { tx, session, .. } => send(tx, session, e),
             Command::Execute { tx, session, .. } => send(tx, session, e),
             Command::Commit { tx, session, .. } => send(tx, session, e),

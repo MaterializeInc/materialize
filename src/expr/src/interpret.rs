@@ -494,14 +494,14 @@ pub trait Interpreter {
 
 /// Wrap another interpreter, but tack a few extra columns on at the end. An internal implementation
 /// detail of `eval_mfp` and `eval_mfp_plan`.
-struct MfpEval<'a, E: Interpreter + ?Sized> {
+pub(crate) struct MfpEval<'a, E: Interpreter + ?Sized> {
     evaluator: &'a E,
     input_arity: usize,
     expressions: Vec<E::Summary>,
 }
 
 impl<'a, E: Interpreter + ?Sized> MfpEval<'a, E> {
-    fn new(evaluator: &'a E, input_arity: usize, expressions: &[MirScalarExpr]) -> Self {
+    pub(crate) fn new(evaluator: &'a E, input_arity: usize, expressions: &[MirScalarExpr]) -> Self {
         let mut mfp_eval = MfpEval {
             evaluator,
             input_arity,
@@ -574,84 +574,48 @@ pub enum Pushdownable {
     Yes,
 }
 
-/// Maps column identifiers to pushdown information. We can't tell how many columns are in the
-/// relation just from inspecting the expression, so the `Vec` may not include every column; an entry
-/// of `No` is treated the same as the entry not being present.
-#[derive(Eq, PartialEq, Clone, Debug)]
-pub struct RelationTrace(pub Vec<Pushdownable>);
+impl From<Monotonic> for Pushdownable {
+    fn from(value: Monotonic) -> Self {
+        match value {
+            Monotonic::Yes => Pushdownable::Yes,
+            Monotonic::Maybe => Pushdownable::Maybe,
+            Monotonic::No => Pushdownable::No,
+        }
+    }
+}
+
+impl From<bool> for Pushdownable {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Pushdownable::Yes,
+            false => Pushdownable::No,
+        }
+    }
+}
 
 /// An interpreter that traces how information about the source columns flows through the expression.
 #[derive(Debug)]
 pub struct Trace;
 
-impl RelationTrace {
-    pub fn new() -> RelationTrace {
-        RelationTrace(vec![])
-    }
-
-    pub fn get(&mut self, id: usize) -> Pushdownable {
-        self.0.get(id).copied().unwrap_or(Pushdownable::No)
-    }
-
-    pub fn set(&mut self, id: usize, value: Pushdownable) {
-        if self.0.len() <= id {
-            self.0.resize(id + 1, Pushdownable::No);
-        }
-        self.0[id] = value;
-    }
-
-    fn apply_fn(mut self, is_monotonic: Monotonic) -> Self {
-        match is_monotonic {
-            Monotonic::Yes => {
-                // Still correlated, nothing to do.
-            }
-            Monotonic::No => {
-                // A function that we know we can't see through. No reason to expect the range
-                // of the columns to affect the range of the expression.
-                for col in &mut self.0 {
-                    *col = Pushdownable::No;
-                }
-            }
-            Monotonic::Maybe => {
-                // A function that we may or may not be able to see through.
-                for col in &mut self.0 {
-                    *col = Pushdownable::Maybe.min(*col);
-                }
-            }
-        }
-        self
-    }
-
-    fn union(mut self, other: RelationTrace) -> RelationTrace {
-        for (id, pushdownable) in other.0.into_iter().enumerate() {
-            let pushdownable = self.get(id).max(pushdownable);
-            self.set(id, pushdownable);
-        }
-        self
-    }
-}
-
 impl Interpreter for Trace {
     /// For every column in the data, we track whether or not that column is "pusdownable".
     /// (If the column is not present in the summary, we default to `false`.
-    type Summary = RelationTrace;
+    type Summary = Pushdownable;
 
-    fn column(&self, id: usize) -> Self::Summary {
-        let mut trace = RelationTrace::new();
-        trace.set(id, Pushdownable::Yes);
-        trace
+    fn column(&self, _id: usize) -> Self::Summary {
+        Pushdownable::Yes
     }
 
     fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
-        RelationTrace::new()
+        Pushdownable::No
     }
 
     fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
-        RelationTrace::new()
+        Pushdownable::No
     }
 
     fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-        expr.apply_fn(unary_monotonic(func))
+        expr.min(unary_monotonic(func).into())
     }
 
     fn binary(
@@ -666,20 +630,25 @@ impl Interpreter for Trace {
             BinaryFunc::JsonbGetString { stringify: false } => (true, false),
             _ => func.is_monotone(),
         };
-        left.apply_fn(left_monotonic.into())
-            .union(right.apply_fn(right_monotonic.into()))
+        left.min(left_monotonic.into())
+            .max(right.min(right_monotonic.into()))
     }
 
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
-        exprs
-            .into_iter()
-            .fold(RelationTrace::new(), |acc, columns| {
-                acc.union(columns.apply_fn(func.is_monotone().into()))
-            })
+        if !func.is_associative() && exprs.len() >= ColumnSpecs::MAX_EVAL_ARGS {
+            // We can't efficiently evaluate functions with very large argument lists;
+            // see the comment on ColumnSpecs::MAX_EVAL_ARGS for details.
+            return Pushdownable::No;
+        }
+
+        let is_monotone = func.is_monotone();
+        exprs.into_iter().fold(Pushdownable::No, |acc, arg| {
+            acc.max(arg.min(is_monotone.into()))
+        })
     }
 
     fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
-        cond.union(then.union(els))
+        cond.max(then.max(els))
     }
 }
 
@@ -703,6 +672,14 @@ pub struct ColumnSpecs<'a> {
 }
 
 impl<'a> ColumnSpecs<'a> {
+    // Interpreting a variadic function can lead to exponential blowup: there are up to 4 possibly-
+    // interesting values for each argument (error, null, range bounds...) and in the worst case
+    // we may need to test every combination. We mitigate that here in two ways:
+    // - Adding a linear-time optimization for associative functions like AND, OR, COALESCE.
+    // - Limiting the number of arguments we'll pass on to eval. If this limit is crossed, we'll
+    //   return our default / safe overapproximation instead.
+    const MAX_EVAL_ARGS: usize = 6;
+
     /// Create a new, empty set of column specs. (Initially, the only assumption we make about the
     /// data in the column is that it matches the type.)
     pub fn new(relation: &'a RelationType, arena: &'a RowArena) -> Self {
@@ -909,33 +886,59 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
-        fn eval_loop<'a>(
-            is_monotonic: bool,
-            expr: &mut MirScalarExpr,
-            args: &[ColumnSpec<'a>],
-            index: usize,
-            datum_map: &mut impl FnMut(&MirScalarExpr) -> ResultSpec<'a>,
-        ) -> ResultSpec<'a> {
-            if index >= args.len() {
-                datum_map(expr)
-            } else {
-                args[index].range.flat_map(is_monotonic, |datum| {
-                    ColumnSpecs::set_argument(expr, index, datum);
-                    eval_loop(is_monotonic, expr, args, index + 1, datum_map)
+        let mapped_spec = if func.is_associative() && !args.is_empty() {
+            let col_type = func.output_type(args.iter().map(|cs| cs.col_type.clone()).collect());
+            let mut expr = MirScalarExpr::CallVariadic {
+                func: func.clone(),
+                exprs: vec![
+                    Self::placeholder(col_type.clone()),
+                    Self::placeholder(col_type),
+                ],
+            };
+            let is_monotone = func.is_monotone();
+            args.iter()
+                .map(|cs| cs.range.clone())
+                .reduce(|left, right| {
+                    left.flat_map(is_monotone, |left_result| {
+                        Self::set_argument(&mut expr, 0, left_result);
+                        right.flat_map(is_monotone, |right_result| {
+                            Self::set_argument(&mut expr, 1, right_result);
+                            self.eval_result(expr.eval(&[], self.arena))
+                        })
+                    })
                 })
+                .expect("reduce over non-empty argument list")
+        } else if args.len() >= Self::MAX_EVAL_ARGS {
+            ResultSpec::anything()
+        } else {
+            fn eval_loop<'a>(
+                is_monotonic: bool,
+                expr: &mut MirScalarExpr,
+                args: &[ColumnSpec<'a>],
+                index: usize,
+                datum_map: &mut impl FnMut(&MirScalarExpr) -> ResultSpec<'a>,
+            ) -> ResultSpec<'a> {
+                if index >= args.len() {
+                    datum_map(expr)
+                } else {
+                    args[index].range.flat_map(is_monotonic, |datum| {
+                        ColumnSpecs::set_argument(expr, index, datum);
+                        eval_loop(is_monotonic, expr, args, index + 1, datum_map)
+                    })
+                }
             }
-        }
 
-        let mut fn_expr = MirScalarExpr::CallVariadic {
-            func: func.clone(),
-            exprs: args
-                .iter()
-                .map(|spec| Self::placeholder(spec.col_type.clone()))
-                .collect(),
+            let mut fn_expr = MirScalarExpr::CallVariadic {
+                func: func.clone(),
+                exprs: args
+                    .iter()
+                    .map(|spec| Self::placeholder(spec.col_type.clone()))
+                    .collect(),
+            };
+            eval_loop(func.is_monotone(), &mut fn_expr, &args, 0, &mut |expr| {
+                self.eval_result(expr.eval(&[], self.arena))
+            })
         };
-        let mapped_spec = eval_loop(func.is_monotone(), &mut fn_expr, &args, 0, &mut |expr| {
-            self.eval_result(expr.eval(&[], self.arena))
-        });
 
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
         let col_type = func.output_type(col_types);
@@ -1449,14 +1452,6 @@ mod tests {
             }),
         };
         let trace = Trace.expr(&expr);
-        assert_eq!(
-            trace,
-            RelationTrace(vec![
-                Pushdownable::Yes, // one side of a conditional
-                Pushdownable::Yes, // other side of the conditional, nested in +
-                Pushdownable::No,  // not referenced!
-                Pushdownable::No   // referenced, but we can't see through abs()
-            ])
-        )
+        assert_eq!(trace, Pushdownable::Yes);
     }
 }

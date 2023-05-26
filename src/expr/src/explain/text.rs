@@ -572,7 +572,7 @@ impl MirRelationExpr {
                 group_key,
                 aggregates,
                 expected_group_size,
-                monotonic: _, // TODO: monotonic should be an attribute
+                monotonic,
                 input,
             } => {
                 FmtNode {
@@ -589,6 +589,9 @@ impl MirRelationExpr {
                         if aggregates.len() > 0 {
                             let aggregates = separated(", ", aggregates);
                             write!(f, " aggregates=[{}]", aggregates)?;
+                        }
+                        if *monotonic {
+                            write!(f, " monotonic")?;
                         }
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
@@ -625,7 +628,9 @@ impl MirRelationExpr {
                         if offset > &0 {
                             write!(f, " offset={}", offset)?
                         }
-                        write!(f, " monotonic={}", monotonic)?;
+                        if *monotonic {
+                            write!(f, " monotonic")?;
+                        }
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
                         }

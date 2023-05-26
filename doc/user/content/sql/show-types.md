@@ -1,12 +1,12 @@
 ---
 title: "SHOW TYPES"
-description: "`SHOW TYPES` returns a list of the data types in your Materialize instance."
+description: "`SHOW TYPES` returns a list of the data types in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`SHOW TYPES` returns a list of the data types in your Materialize instance. By default, only custom types are returned.
+`SHOW TYPES` returns a list of the data types in Materialize. By default, only custom types are returned.
 
 ## Syntax
 

@@ -676,7 +676,7 @@ def workflow_test_github_17177(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET enable_repeat_row  = true;
 
             # Set data for test up
@@ -1038,8 +1038,12 @@ def workflow_test_drop_default_cluster(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
 
-    c.sql("DROP CLUSTER default CASCADE")
-    c.sql("CREATE CLUSTER default REPLICAS (default (SIZE '1'))")
+    c.sql("DROP CLUSTER default CASCADE", user="mz_system", port=6877)
+    c.sql(
+        "CREATE CLUSTER default REPLICAS (default (SIZE '1'))",
+        user="mz_system",
+        port=6877,
+    )
 
 
 def workflow_test_resource_limits(c: Composition) -> None:
@@ -1132,7 +1136,10 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-        > CREATE DEFAULT INDEX ON mz_views;
+        $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+        SET CLUSTER TO DEFAULT;
+        CREATE DEFAULT INDEX ON mz_views;
+
         > SELECT id FROM mz_indexes WHERE id like 'u%';
         u1
     """
@@ -1511,8 +1518,10 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         """
         output = c.sql_query(
             """
-            SELECT s.user, c.name, t.name
+            SELECT r.name, c.name, t.name
             FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_sessions e ON (e.id = s.session_id)
+              JOIN mz_roles r ON (r.id = e.role_id)
               JOIN mz_clusters c ON (c.id = s.cluster_id)
               JOIN mz_tables t ON (t.id = s.referenced_object_ids[1])
             ORDER BY s.created_at

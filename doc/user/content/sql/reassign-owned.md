@@ -1,12 +1,12 @@
 ---
 title: "REASSIGN OWNED"
-description: "`REASSIGN OWNED` reassigns the owner of all the objects from your Materialize instance that are owned by one of the specified roles."
+description: "`REASSIGN OWNED` reassigns the owner of all the objects that are owned by one of the specified roles."
 menu:
   main:
     parent: commands
 ---
 
-`REASSIGN OWNED` reassigns the owner of all the objects from your Materialize instance that are owned by one of the specified roles.
+`REASSIGN OWNED` reassigns the owner of all the objects that are owned by one of the specified roles.
 
 {{< note >}}
 Unlike [PostgreSQL](https://www.postgresql.org/docs/current/sql-drop-owned.html), Materialize reassigns

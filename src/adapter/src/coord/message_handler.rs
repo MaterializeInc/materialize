@@ -72,7 +72,7 @@ impl Coordinator {
             // in any situation where you use it, you must also have a code
             // path that responds to the client (e.g. reporting an error).
             Message::RemovePendingPeeks { conn_id } => {
-                self.cancel_pending_peeks(&conn_id);
+                self.cancel_pending_peeks(conn_id.val());
             }
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;

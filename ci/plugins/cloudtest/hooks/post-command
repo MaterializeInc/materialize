@@ -74,8 +74,6 @@ kubectl describe all > kubectl-describe-all.log || true
 sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 
 artifacts=(run.log kubectl-*.log journalctl-merge.log)
-for artifact in "${artifacts[@]}"; do
-  buildkite-agent artifact upload "$artifact"
-done
-
+artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+buildkite-agent artifact upload "$artifacts_str"
 bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"

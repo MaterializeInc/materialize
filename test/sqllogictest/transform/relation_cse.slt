@@ -12,6 +12,11 @@
 # PR https://github.com/MaterializeInc/materialize/pull/7715
 #
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 
@@ -1657,13 +1662,13 @@ Explained Query:
             - (9)
             - (10)
       cte l2 =
-        Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+        Reduce group_by=[#0] aggregates=[count(*)] monotonic // { arity: 2 }
           Project (#0) // { arity: 1 }
             Get l1 // { arity: 2 }
   With Mutually Recursive
     cte l1 =
       Union // { arity: 2 }
-        Distinct group_by=[#0, (#1 + #2)] // { arity: 2 }
+        Distinct group_by=[#0, (#1 + #2)] monotonic // { arity: 2 }
           Project (#0, #1, #3) // { arity: 3 }
             Join on=(#0 = #2) type=differential // { arity: 4 }
               implementation

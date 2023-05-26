@@ -48,7 +48,7 @@ materialize.public.test1:
       Union // { arity: 4 }
         Negate // { arity: 4 }
           Distinct group_by=[#0..=#3] // { arity: 4 }
-            TopK order_by=[#1 asc nulls_last] limit=10 offset=1 monotonic=false // { arity: 4 }
+            TopK order_by=[#1 asc nulls_last] limit=10 offset=1 // { arity: 4 }
               Project (#0..=#2, #4) // { arity: 4 }
                 Map ((#3 + 1)) // { arity: 5 }
                   Union // { arity: 4 }

@@ -54,11 +54,9 @@ impl SystemParameterFrontend {
         let ld_metrics = Metrics::register_into(registry);
         let ld_config = ld::ConfigBuilder::new(ld_sdk_key)
             .event_processor(ld::EventProcessorBuilder::new().on_success({
-                let last_known_time_seconds = ld_metrics.last_known_time_seconds.clone();
                 let last_cse_time_seconds = ld_metrics.last_cse_time_seconds.clone();
                 Arc::new(move |result| {
                     if let Ok(ts) = u64::try_from(result.time_from_server / 1000) {
-                        last_known_time_seconds.set(ts);
                         last_cse_time_seconds.set(ts);
                     } else {
                         tracing::warn!("Cannot convert time_from_server / 1000 from u128 to u64");
@@ -166,8 +164,6 @@ impl SystemParameterFrontend {
 
 #[derive(Debug, Clone)]
 struct Metrics {
-    // TODO: remove this in favor of last_cse_time_seconds.
-    pub last_known_time_seconds: UIntGauge,
     pub last_cse_time_seconds: UIntGauge,
     pub last_sse_time_seconds: UIntGauge,
     pub params_changed: IntCounter,
@@ -176,11 +172,6 @@ struct Metrics {
 impl Metrics {
     fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
-            // TODO: remove this in favor of last_cse_time_seconds.
-            last_known_time_seconds: registry.register(metric!(
-                name: "mz_parameter_frontend_last_known_time_seconds",
-                help: "The last known time of the LaunchDarkly frontend (as unix timestamp).",
-            )),
             last_cse_time_seconds: registry.register(metric!(
                 name: "mz_parameter_frontend_last_cse_time_seconds",
                 help: "The last known time when the LaunchDarkly client sent an event to the LaunchDarkly server (as unix timestamp).",

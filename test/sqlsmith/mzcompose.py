@@ -36,6 +36,8 @@ SERVICES = [
         restart="on-failure",
         memory=f"{TOTAL_MEMORY / len(MZ_SERVERS)}GB",
         use_default_volumes=False,
+        # TODO(def-): Remove this when #19496 is fixed
+        additional_system_parameter_defaults={"persist_stats_filter_enabled": "false"},
     )
     for mz_server in MZ_SERVERS
 ] + [
@@ -227,6 +229,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if frozen_key not in new_errors:
                 new_errors[frozen_key] = []
             new_errors[frozen_key].append({x: error[x] for x in ["timestamp", "query"]})
+
+    assert aggregate["queries"] > 0, "No queries were executed"
 
     print(
         f"SQLsmith: {aggregate['version']} seed: {seed} queries: {aggregate['queries']}"

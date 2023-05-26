@@ -260,7 +260,7 @@ where
         buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
     }
     buf.push(BackendMessage::BackendKeyData {
-        conn_id: session.conn_id(),
+        conn_id: session.conn_id().val(),
         secret_key: session.secret_key(),
     });
     // Immediately respond with connection success without waiting on the
@@ -747,7 +747,7 @@ where
         }
         match self
             .adapter_client
-            .describe(name, maybe_stmt, param_types)
+            .prepare(name, maybe_stmt, param_types)
             .await
         {
             Ok(()) => {
@@ -829,7 +829,7 @@ where
                     .await
             }
         };
-        if aborted_txn && !is_txn_exit_stmt(stmt.sql()) {
+        if aborted_txn && !is_txn_exit_stmt(stmt.stmt()) {
             return self.aborted_txn_error().await;
         }
         let buf = RowArena::new();
@@ -893,7 +893,7 @@ where
 
         let desc = stmt.desc().clone();
         let revision = stmt.catalog_revision;
-        let stmt = stmt.sql().cloned();
+        let stmt = stmt.stmt().cloned();
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,

@@ -1298,6 +1298,7 @@ pub(crate) fn load_generator_ast_to_generator(
             }
             LoadGenerator::Counter { max_cardinality }
         }
+        mz_sql_parser::ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
         mz_sql_parser::ast::LoadGenerator::Datums => LoadGenerator::Datums,
         mz_sql_parser::ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
@@ -1342,6 +1343,7 @@ pub(crate) fn load_generator_ast_to_generator(
             database: RawDatabaseSpecifier::Name("mz_load_generators".to_owned()),
             schema: match load_generator {
                 LoadGenerator::Counter { .. } => "counter".into(),
+                LoadGenerator::Marketing => "marketing".into(),
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),

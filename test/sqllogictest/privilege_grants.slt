@@ -22,11 +22,6 @@ ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-ALTER ROLE materialize CREATEDB CREATECLUSTER CREATEROLE;
-----
-COMPLETE 0
-
 # Test mz_aclitem type and functions
 
 statement ok
@@ -168,21 +163,6 @@ SELECT mz_internal.make_mz_aclitem('u1', 's1', 'asdfa ljefioj')
 
 # Test default privileges
 
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON DATABASE materialize TO materialize;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON SCHEMA materialize.public TO materialize;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO materialize;
-----
-COMPLETE 0
-
 ## Create some helper views
 
 statement ok
@@ -204,7 +184,7 @@ SELECT * FROM database_privileges
 ----
 materialize  =U/mz_system
 materialize  mz_system=UC/mz_system
-materialize  materialize=C/mz_system
+materialize  materialize=UC/mz_system
 
 query TT
 SELECT name, privilege FROM schema_privileges ORDER BY name
@@ -219,14 +199,14 @@ pg_catalog          =U/mz_system
 pg_catalog          mz_system=UC/mz_system
 public              =U/mz_system
 public              mz_system=UC/mz_system
-public              materialize=C/mz_system
+public              materialize=UC/mz_system
 
 query TT
 SELECT * FROM cluster_privileges ORDER BY name
 ----
 default           =U/mz_system
 default           mz_system=UC/mz_system
-default           materialize=C/mz_system
+default           materialize=UC/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_introspection=UC/mz_system
@@ -334,7 +314,7 @@ SELECT name, privilege FROM schema_privileges WHERE name = 'public' ORDER BY nam
 public  =U/mz_system
 public  =U/materialize
 public  mz_system=UC/mz_system
-public  materialize=C/mz_system
+public  materialize=UC/mz_system
 public  materialize=UC/materialize
 
 statement ok
@@ -515,6 +495,26 @@ COMPLETE 0
 
 ## Table
 
+query B
+SELECT has_table_privilege('joe', 't', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 't', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+false
+
 statement ok
 GRANT SELECT on TABLE t TO joe
 
@@ -523,6 +523,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 't'
 ----
 t  joe=r/materialize
 t  materialize=arwd/materialize
+
+query B
+SELECT has_table_privilege('joe', 't', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 't', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+true
 
 ### Duplicate grants have no effect
 statement ok
@@ -561,6 +581,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 't'
 t  =arw/materialize
 t  materialize=arwd/materialize
 
+query B
+SELECT has_table_privilege('joe', 't', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 't', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+false
+
 ### Duplicate revokes have no effect
 statement ok
 REVOKE SELECT on TABLE t FROM joe
@@ -591,6 +631,26 @@ GRANT USAGE, CREATE ON TABLE t TO joe
 
 ## View
 
+query B
+SELECT has_table_privilege('joe', 'v', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'v', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
+----
+false
+
 statement ok
 GRANT SELECT on TABLE v TO joe
 
@@ -599,6 +659,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 'v'
 ----
 v  joe=r/materialize
 v  materialize=r/materialize
+
+query B
+SELECT has_table_privilege('joe', 'v', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'v', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
+----
+true
 
 ### Duplicate grants have no effect
 statement ok
@@ -637,6 +717,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 'v'
 v  =r/materialize
 v  materialize=r/materialize
 
+query B
+SELECT has_table_privilege('joe', 'v', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'v', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_views WHERE name = 'v'), 'SELECT')
+----
+false
+
 ### Duplicate revokes have no effect
 statement ok
 REVOKE SELECT on TABLE v FROM joe
@@ -666,6 +766,26 @@ GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE v TO joe
 
 ## Materialized View
 
+query B
+SELECT has_table_privilege('joe', 'mv', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'mv', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
+----
+false
+
 statement ok
 GRANT SELECT on TABLE mv TO joe
 
@@ -674,6 +794,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 'mv'
 ----
 mv  joe=r/materialize
 mv  materialize=r/materialize
+
+query B
+SELECT has_table_privilege('joe', 'mv', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'mv', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
+----
+true
 
 ### Duplicate grants have no effect
 statement ok
@@ -712,6 +852,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 'mv'
 mv  =r/materialize
 mv  materialize=r/materialize
 
+query B
+SELECT has_table_privilege('joe', 'mv', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 'mv', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'SELECT')
+----
+false
+
 ### Duplicate revokes have no effect
 statement ok
 REVOKE SELECT on TABLE mv FROM joe
@@ -741,6 +901,26 @@ GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE mv TO joe
 
 ## Source
 
+query B
+SELECT has_table_privilege('joe', 's', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 's', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
+----
+false
+
 statement ok
 GRANT SELECT on TABLE s TO joe
 
@@ -749,6 +929,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  joe=r/materialize
 s  materialize=r/materialize
+
+query B
+SELECT has_table_privilege('joe', 's', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 's', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
+----
+true
 
 ### Duplicate grants have no effect
 statement ok
@@ -786,6 +986,26 @@ SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  =r/materialize
 s  materialize=r/materialize
+
+query B
+SELECT has_table_privilege('joe', 's', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('joe', (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), 's', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_roles WHERE name = 'joe'), (SELECT oid FROM mz_sources WHERE name = 's'), 'SELECT')
+----
+false
 
 ### Duplicate revokes have no effect
 statement ok
@@ -1492,7 +1712,114 @@ REVOKE USAGE on CLUSTER mz_introspection FROM PUBLIC
 ----
 db error: ERROR: system cluster 'mz_introspection' cannot be modified
 
+# Test has_X_privilege error and misc scenarios.
+
+## If any input is NULL then the result is NULL.
+
+query B
+SELECT has_table_privilege(NULL, 't', 'SELECT')
+----
+NULL
+
+query B
+SELECT has_table_privilege('joe', NULL, 'SELECT')
+----
+NULL
+
+query B
+SELECT has_table_privilege('joe', 't', NULL)
+----
+NULL
+
+## If any of the text inputs are invalid then the query should error.
+
+query error role "fake-role" does not exist
+SELECT has_table_privilege('fake-role', 't', 'SELECT')
+
+query error object "fake-table" does not exist
+SELECT has_table_privilege('joe', 'fake-table', 'SELECT')
+
+query error unrecognized privilege type: "fake privilege"
+SELECT has_table_privilege('joe', 't', 'fake privilege')
+
+## If any of the oid inputs are invalid then the query should be NULL.
+
+query B
+SELECT has_table_privilege(((SELECT MAX(oid::int8) FROM mz_roles) + 1)::text::oid, 't', 'SELECT')
+----
+NULL
+
+query B
+SELECT has_table_privilege('joe', ((SELECT MAX(oid::int8) FROM mz_objects) + 1)::text::oid, 'SELECT')
+----
+NULL
+
+## The function should return true if ANY of the privileges exist, not all.
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL PRIVILEGES ON t FROM joe, materialize;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON t TO joe
+----
+COMPLETE 0
+
+query B
+SELECT has_table_privilege('joe', 't', 'SELECT, INSERT')
+----
+true
+
+## Test two input variants.
+
+query B
+SELECT has_table_privilege('materialize', 't', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('t', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('materialize', (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON t TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_table_privilege('materialize', 't', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('t', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('materialize', (SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege((SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
+----
+true
+
 # Disable rbac checks.
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----

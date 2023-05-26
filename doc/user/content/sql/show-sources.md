@@ -1,13 +1,12 @@
 ---
 title: "SHOW SOURCES"
-description: "`SHOW SOURCES` returns a list of all sources available to your Materialize instances."
+description: "`SHOW SOURCES` returns a list of all sources available in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`SHOW SOURCES` returns a list of all sources available to your Materialize
-instances.
+`SHOW SOURCES` returns a list of all sources available in Materialize.
 
 ## Syntax
 
@@ -33,26 +32,9 @@ Field | Meaning
 ------|--------
 **name** | The name of the source.
 **type** | The type of the source: `kafka`, `postgres`, `load-generator`, or `subsource`.
-**size** | The [size](/sql/create-source/#sizing-a-source) of the source.
-
-### Internal statistic sources
-
-Materialize comes with a number of sources that contain internal statistics
-about the instance's behavior. These are kept in a "hidden" schema called
-`mz_catalog`.
-
-To view the internal statistic sources use:
-
-```sql
-SHOW SOURCES FROM mz_catalog;
-```
-
-To select from these sources, you must specify that you want to read from the
-source in the `mz_catalog` schema.
+**size** | The [size](/sql/create-source/#sizing-a-source) of the source. Null if the source is created using the `IN CLUSTER` clause.
 
 ## Examples
-
-### Default behavior
 
 ```sql
 SHOW SCHEMAS;
@@ -66,19 +48,19 @@ SHOW SCHEMAS;
 SHOW SOURCES FROM public;
 ```
 ```nofmt
-            name    | type
---------------------+---------
- my_kafka_source    | kafka
- my_postgres_source | postgres
+            name    | type     | size
+--------------------+----------+-------
+ my_kafka_source    | kafka    |
+ my_postgres_source | postgres |
 ```
 ```sql
 SHOW SOURCES;
 ```
 ```nofmt
-            name    | type
---------------------+---------
- my_kafka_source    | kafka
- my_postgres_source | postgres
+            name    | type     | size
+--------------------+----------+-------
+ my_kafka_source    | kafka    |
+ my_postgres_source | postgres |
 ```
 
 ## Related pages

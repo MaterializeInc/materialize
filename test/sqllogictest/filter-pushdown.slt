@@ -14,6 +14,11 @@ ALTER SYSTEM SET enable_mfp_pushdown_explain = true
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_stats_filter_enabled = true
+----
+COMPLETE 0
+
 # Verify filter pushdown information for various temporal filters.
 # For straightforward temporal filters like these, every column mentioned in the filter
 # should be present in the pushdown list.
@@ -52,7 +57,7 @@ Explained Query:
 
 Source materialize.public.events
   filter=((mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp(#2)))
-  pushdown=(#1, #2)
+  pushdown=((mz_now() >= numeric_to_mz_timestamp(#1)) AND (mz_now() < numeric_to_mz_timestamp(#2)))
 
 EOF
 
@@ -75,7 +80,7 @@ Explained Query:
 Source materialize.public.events
   filter=((mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
   map=((#1 / 10000))
-  pushdown=(#1)
+  pushdown=((mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
 
 EOF
 
@@ -98,7 +103,7 @@ Explained Query:
 Source materialize.public.events
   filter=((mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
   map=((#1 / 10000))
-  pushdown=(#1)
+  pushdown=((mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3)))) AND (mz_now() >= numeric_to_mz_timestamp((10000 * #3))))
 
 EOF
 
@@ -120,7 +125,7 @@ Explained Query:
 
 Source materialize.public.events
   filter=((mz_now() < numeric_to_mz_timestamp((#1 + 30000))) AND (mz_now() >= numeric_to_mz_timestamp(#1)))
-  pushdown=(#1)
+  pushdown=((mz_now() < numeric_to_mz_timestamp((#1 + 30000))) AND (mz_now() >= numeric_to_mz_timestamp(#1)))
 
 EOF
 
@@ -137,6 +142,35 @@ Explained Query:
 
 Source materialize.public.events
   filter=((mz_now() >= numeric_to_mz_timestamp((#1 + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 60000))))
-  pushdown=(#1, #2)
+  pushdown=((mz_now() >= numeric_to_mz_timestamp((#1 + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 60000))))
+
+EOF
+
+# Verify explain behaviour for functions with many arguments. In theory, we can't push down
+# non-associative functions with long argument lists... but in practice all the functions we
+# can push down are also associative, so this is moot. Let's at least check that an associative
+# function _does_ report pushdown even when the argument list is long.
+
+query T multiline
+EXPLAIN WITH(mfp_pushdown)
+SELECT content, insert_ms, delete_ms
+FROM events
+WHERE mz_now() < delete_ms + 10000
+  AND mz_now() < delete_ms + 20000
+  AND mz_now() < delete_ms + 30000
+  AND mz_now() < delete_ms + 40000
+  AND mz_now() < delete_ms + 50000
+  AND mz_now() < delete_ms + 60000
+  AND mz_now() < delete_ms + 70000
+  AND mz_now() < delete_ms + 80000
+  AND mz_now() < delete_ms + 90000;
+----
+Explained Query:
+  Filter (mz_now() < numeric_to_mz_timestamp((#2 + 10000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 20000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 30000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 40000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 50000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 70000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 80000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 90000)))
+    Get materialize.public.events
+
+Source materialize.public.events
+  filter=((mz_now() < numeric_to_mz_timestamp((#2 + 10000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 20000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 30000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 40000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 50000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 70000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 80000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 90000))))
+  pushdown=((mz_now() < numeric_to_mz_timestamp((#2 + 10000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 20000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 30000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 40000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 50000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 70000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 80000))) AND (mz_now() < numeric_to_mz_timestamp((#2 + 90000))))
 
 EOF

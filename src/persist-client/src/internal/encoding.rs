@@ -546,6 +546,7 @@ where
 /// A decoded version of [ProtoStateRollup] for which we have not yet checked
 /// that codecs match the ones in durable state.
 #[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct UntypedState<T> {
     pub(crate) key_codec: String,
     pub(crate) val_codec: String,
@@ -1030,8 +1031,10 @@ mod tests {
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_persist::location::SeqNo;
+    use proptest::prelude::*;
 
     use crate::internal::paths::PartialRollupKey;
+    use crate::internal::state::tests::any_state;
     use crate::internal::state::HandleDebugState;
     use crate::internal::state_diff::StateDiff;
     use crate::tests::new_test_client_cache;
@@ -1315,5 +1318,23 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(SeqNo(1), r1_rollup), (SeqNo(2), r2_rollup)]
         );
+    }
+
+    #[test]
+    fn state_proto_roundtrip() {
+        fn testcase<T: Timestamp + Lattice + Codec64>(state: State<T>) {
+            let before = UntypedState {
+                key_codec: <() as Codec>::codec_name(),
+                val_codec: <() as Codec>::codec_name(),
+                ts_codec: <T as Codec64>::codec_name(),
+                diff_codec: <i64 as Codec64>::codec_name(),
+                state,
+            };
+            let proto = before.into_proto();
+            let after = proto.into_rust().unwrap();
+            assert_eq!(before, after);
+        }
+
+        proptest!(|(state in any_state::<u64>(0..3))| testcase(state));
     }
 }

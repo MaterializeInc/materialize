@@ -104,7 +104,7 @@ impl Coordinator {
         if let Some(revision) = Self::verify_statement_revision(
             catalog,
             session,
-            ps.sql(),
+            ps.stmt(),
             ps.desc(),
             ps.catalog_revision,
         )? {
@@ -179,13 +179,13 @@ impl Coordinator {
     ) -> TransactionStatus<mz_repr::Timestamp> {
         let conn_meta = self
             .active_conns
-            .get_mut(&session.conn_id())
+            .get_mut(session.conn_id())
             .expect("must exist for active session");
         let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
         self.drop_compute_sinks(drop_sinks);
 
         // Release this transaction's compaction hold on collections.
-        if let Some(txn_reads) = self.txn_reads.remove(&session.conn_id()) {
+        if let Some(txn_reads) = self.txn_reads.remove(session.conn_id()) {
             self.release_read_hold(&txn_reads);
         }
 

@@ -2278,7 +2278,6 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18897
 fn test_coord_startup_blocking() {
     let initial_time = 0;
     let now = Arc::new(Mutex::new(initial_time));
@@ -2311,7 +2310,7 @@ fn test_coord_startup_blocking() {
         client.query("SELECT 1", &[]).unwrap();
     };
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = std::sync::mpsc::sync_channel(0);
     std::thread::spawn(move || {
         let server =
             util::start_server(config.clone()).expect("unable to start server asynchronously");
@@ -2326,16 +2325,16 @@ fn test_coord_startup_blocking() {
             .expect("receiver waiting for server startup has hung up");
     });
 
+    // The server should be stuck in startup until the system clock advances closer to the
+    // timestamp oracle.
     let server_started = Retry::default()
         .max_duration(Duration::from_secs(3))
         .retry(|_| rx.try_recv());
     assert!(server_started.is_err(), "server should be blocked");
 
-    *now.lock().expect("lock poisoned") = initial_time + 5_000;
-    Retry::default()
-        .max_duration(Duration::from_secs(30))
-        .retry(|_| rx.try_recv())
-        .unwrap();
+    // Updating the system clock will allow the server to start.
+    *now.lock().expect("lock poisoned") = i32::MAX.try_into().expect("known to fit");
+    rx.recv().unwrap();
 }
 
 #[test]
@@ -3175,9 +3174,29 @@ fn test_max_connections() {
             .batch_execute("SELECT 1")
             .expect("super users are still allowed to do queries");
     }
-    // after a client disconnects we can connect
-    let mut client1 = server.connect(postgres::NoTls).unwrap();
-    let _ = client1.batch_execute("SELECT 1").unwrap();
+    // after a client disconnects we can connect once the server notices the close
+    Retry::default()
+        .max_tries(10)
+        .retry(|_state| {
+            let mut client = match server.connect(postgres::NoTls) {
+                Err(e) => {
+                    let e = e
+                        .as_db_error()
+                        .unwrap_or_else(|| panic!("expect db error: {}", e));
+                    assert!(
+                        e.message()
+                            .starts_with("creating connection would violate max_connections limit"),
+                        "e={}",
+                        e
+                    );
+                    return Err(());
+                }
+                Ok(client) => client,
+            };
+            let _ = client.batch_execute("SELECT 1").unwrap();
+            Ok(())
+        })
+        .unwrap();
 
     mz_client
         .batch_execute("ALTER SYSTEM RESET max_connections")

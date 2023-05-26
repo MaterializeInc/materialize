@@ -960,20 +960,10 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     /// are certain to be produced, which can be relied on by the next steps in the plan.
     /// Each of the arrangement keys is associated with an MFP that must be applied if that arrangement is used,
     /// to back out the permutation associated with that arrangement.
-
+    ///
     /// An empty list of arrangement keys indicates that only a `Collection` stream can
     /// be assumed to exist.
-    pub fn from_mir(
-        expr: &MirRelationExpr,
-        arrangements: &mut BTreeMap<Id, AvailableCollections>,
-        debug_info: LirDebugInfo<'_>,
-    ) -> Result<(Self, AvailableCollections), String> {
-        // We don't want to trace recursive calls, which is why the public `from_mir`
-        // is annotated and delegates the work to a private (recursive) from_mir_inner.
-        Plan::from_mir_inner(expr, arrangements, debug_info)
-    }
-
-    fn from_mir_inner(
+    fn from_mir(
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
@@ -1094,12 +1084,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Plan the value using only the initial arrangements, but
                 // introduce any resulting arrangements bound to `id`.
-                let (value, v_keys) = Plan::from_mir_inner(value, arrangements, debug_info)?;
+                let (value, v_keys) = Plan::from_mir(value, arrangements, debug_info)?;
                 let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
                 assert!(pre_existing.is_none());
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys) = Plan::from_mir_inner(body, arrangements, debug_info)?;
+                let (body, b_keys) = Plan::from_mir(body, arrangements, debug_info)?;
                 arrangements.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
                 (
@@ -1126,7 +1116,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 let mut lir_values = Vec::with_capacity(values.len());
                 for (id, value) in ids.iter().zip(values) {
                     let (mut lir_value, mut v_keys) =
-                        Plan::from_mir_inner(value, arrangements, debug_info)?;
+                        Plan::from_mir(value, arrangements, debug_info)?;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
                         // Choose an "arbitrary" arrangement; TODO: prefer a specific one.
@@ -1181,7 +1171,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys) = Plan::from_mir_inner(body, arrangements, debug_info)?;
+                let (body, b_keys) = Plan::from_mir(body, arrangements, debug_info)?;
                 for id in ids.iter() {
                     arrangements.remove(&Id::Local(*id));
                 }
@@ -1197,7 +1187,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 )
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                let (input, keys) = Plan::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Plan::from_mir(input, arrangements, debug_info)?;
                 // This stage can absorb arbitrary MFP instances.
                 let mfp = mfp.take();
                 let mut exprs = exprs.clone();
@@ -1242,7 +1232,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 let mut input_keys = Vec::new();
                 let mut input_arities = Vec::new();
                 for input in inputs.iter() {
-                    let (plan, keys) = Plan::from_mir_inner(input, arrangements, debug_info)?;
+                    let (plan, keys) = Plan::from_mir(input, arrangements, debug_info)?;
                     input_arities.push(input.arity());
                     plans.push(plan);
                     input_keys.push(keys);
@@ -1358,7 +1348,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             } => {
                 let input_arity = input.arity();
                 let output_arity = group_key.len() + aggregates.len();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
                 let (input_key, permutation_and_new_arity) = if let Some((
                     input_key,
                     permutation,
@@ -1402,7 +1392,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 expected_group_size,
             } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
 
                 let top_k_plan = TopKPlan::create_from(
                     group_key.clone(),
@@ -1432,7 +1422,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Negate { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
 
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
@@ -1451,7 +1441,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Threshold { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
@@ -1459,8 +1449,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 } else {
                     input
                 };
-                let (threshold_plan, required_arrangement) =
-                    ThresholdPlan::create_from(arity, false);
+                let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let input = if !keys
                     .arranged
                     .iter()
@@ -1488,10 +1477,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
             MirRelationExpr::Union { base, inputs } => {
                 let arity = base.arity();
                 let mut plans_keys = Vec::with_capacity(1 + inputs.len());
-                let (plan, keys) = Self::from_mir_inner(base, arrangements, debug_info)?;
+                let (plan, keys) = Self::from_mir(base, arrangements, debug_info)?;
                 plans_keys.push((plan, keys));
                 for input in inputs.iter() {
-                    let (plan, keys) = Self::from_mir_inner(input, arrangements, debug_info)?;
+                    let (plan, keys) = Self::from_mir(input, arrangements, debug_info)?;
                     plans_keys.push((plan, keys));
                 }
                 let plans = plans_keys
@@ -1512,8 +1501,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
-                let (input, mut input_keys) =
-                    Self::from_mir_inner(input, arrangements, debug_info)?;
+                let (input, mut input_keys) = Self::from_mir(input, arrangements, debug_info)?;
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
                     .iter()

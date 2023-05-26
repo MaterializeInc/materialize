@@ -85,12 +85,14 @@ use std::{iter, thread};
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
+use futures::FutureExt;
 use http::StatusCode;
 use itertools::Itertools;
 use mz_environmentd::WebSocketResponse;
 use mz_ore::cast::CastLossy;
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
+use mz_ore::task;
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::SYSTEM_USER;
 use reqwest::blocking::Client;
@@ -1362,4 +1364,66 @@ fn test_max_connections_on_all_interfaces() {
     let text = res.text().expect("no body?");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_concurrent_id_reuse() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    server.runtime.block_on(async {
+        {
+            let (client, conn) = server.connect_async(postgres::NoTls).await.unwrap();
+            task::spawn(|| "conn await", async {
+                conn.await.unwrap();
+            });
+            client
+                .batch_execute("CREATE TABLE t (a INT);")
+                .await
+                .unwrap();
+        }
+
+        let http_url = Url::parse(&format!(
+            "http://{}/api/sql",
+            server.inner.http_local_addr()
+        ))
+        .unwrap();
+        let select_json = "{\"queries\":[{\"query\":\"SELECT * FROM t;\",\"params\":[]}]}";
+        let select_json: serde_json::Value = serde_json::from_str(select_json).unwrap();
+
+        let insert_json = "{\"queries\":[{\"query\":\"INSERT INTO t VALUES (1);\",\"params\":[]}]}";
+        let insert_json: serde_json::Value = serde_json::from_str(insert_json).unwrap();
+
+        // The goal here is to start some connection `B`, after another connection `A` has
+        // terminated, but while connection `A` still has some asynchronous work in flight. Then
+        // connection `A` will terminate it's session after connection `B` has started it's own
+        // session. If they use the same connection ID, then `A` will accidentally tear down `B`'s
+        // state and `B` will panic at any point it tries to access it's state. If they don't use
+        // the same connection ID, then everything will be fine.
+        fail::cfg("async_prepare", "return(true)").unwrap();
+        for i in 0..100 {
+            let http_url = http_url.clone();
+            if i % 2 == 0 {
+                let fut = reqwest::Client::new()
+                    .post(http_url)
+                    .json(&select_json)
+                    .send();
+                let time = tokio::time::sleep(Duration::from_millis(500));
+                futures::select! {
+                    _ = fut.fuse() => {},
+                    _ = time.fuse() => {},
+                }
+            } else {
+                reqwest::Client::new()
+                    .post(http_url)
+                    .json(&insert_json)
+                    .send()
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("SELECT 1").unwrap();
 }

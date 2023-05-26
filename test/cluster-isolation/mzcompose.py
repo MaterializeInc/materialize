@@ -49,7 +49,7 @@ disruptions = [
         name="pause-in-materialized-view",
         disruption=lambda c: c.testdrive(
             """
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unstable_dependencies = true;
 
 > SET cluster=cluster1

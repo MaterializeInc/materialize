@@ -18,7 +18,7 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
-use mz_ore::id_gen::IdAllocator;
+use mz_ore::id_gen::{IdAllocator, IdHandle};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
@@ -39,8 +39,13 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::PeekResponseUnary;
 
+/// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
+///
+/// Note: Generally you should not use this type directly, and instead use [`ConnectionId`].
+pub type ConnectionIdType = u32;
+
 /// An abstraction allowing us to name different connections.
-pub type ConnectionId = u32;
+pub type ConnectionId = IdHandle<ConnectionIdType>;
 
 /// A handle to a running coordinator.
 ///
@@ -80,7 +85,7 @@ impl Handle {
 pub struct Client {
     build_info: &'static BuildInfo,
     inner_cmd_tx: mpsc::UnboundedSender<Command>,
-    id_alloc: Arc<IdAllocator<ConnectionId>>,
+    id_alloc: IdAllocator<ConnectionIdType>,
     now: NowFn,
     metrics: Metrics,
 }
@@ -95,7 +100,7 @@ impl Client {
         Client {
             build_info,
             inner_cmd_tx: cmd_tx,
-            id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
+            id_alloc: IdAllocator::new(1, 1 << 16),
             now,
             metrics,
         }
@@ -107,7 +112,7 @@ impl Client {
             build_info: self.build_info,
             conn_id: self
                 .id_alloc
-                .alloc()
+                .alloc_owned()
                 .ok_or(AdapterError::IdExhaustionError)?,
             inner: self.clone(),
         })
@@ -180,12 +185,17 @@ impl ConnClient {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
-        Session::new(self.build_info, self.conn_id, user, (self.inner.now)())
+        Session::new(
+            self.build_info,
+            self.conn_id.clone(),
+            user,
+            (self.inner.now)(),
+        )
     }
 
     /// Returns the ID of the connection associated with this client.
-    pub fn conn_id(&self) -> ConnectionId {
-        self.conn_id
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
     }
 
     /// Upgrades this connection client to a session client.
@@ -236,17 +246,11 @@ impl ConnClient {
     }
 
     /// Cancels the query currently running on another connection.
-    pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
+    pub fn cancel_request(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
         self.inner.send(Command::CancelRequest {
             conn_id,
             secret_key,
         });
-    }
-}
-
-impl Drop for ConnClient {
-    fn drop(&mut self) {
-        self.inner.id_alloc.free(self.conn_id);
     }
 }
 
@@ -306,17 +310,17 @@ impl SessionClient {
             .expect("must exist"))
     }
 
-    /// Saves the specified statement as a prepared statement.
+    /// Saves the parsed statement as a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`crate::session::Session`]
     /// under the specified name.
-    pub async fn describe(
+    pub async fn prepare(
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<ScalarType>>,
     ) -> Result<(), AdapterError> {
-        self.send(|tx, session| Command::Describe {
+        self.send(|tx, session| Command::Prepare {
             name,
             stmt,
             param_types,
@@ -389,7 +393,7 @@ impl SessionClient {
 
     /// Cancels the query currently running on another connection.
     pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner_mut().cancel_request(conn_id, secret_key)
+        self.inner_mut().cancel_request(conn_id.val(), secret_key)
     }
 
     /// Ends a transaction.
@@ -505,7 +509,7 @@ impl SessionClient {
         let application_name = session.application_name();
         let name_hint = ApplicationNameHint::from_str(application_name);
         let (tx, mut rx) = oneshot::channel();
-        let conn_id = session.conn_id();
+        let conn_id = session.conn_id().clone();
         let secret_key = session.secret_key();
         self.inner_mut().inner.send({
             let cmd = f(tx, session);
@@ -516,7 +520,7 @@ impl SessionClient {
                 Command::Declare { .. } => typ = Some("declare"),
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::Startup { .. }
-                | Command::Describe { .. }
+                | Command::Prepare { .. }
                 | Command::VerifyPreparedStatement { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
@@ -553,7 +557,7 @@ impl SessionClient {
                 },
                 _err = &mut cancel_future, if !cancelled => {
                     cancelled = true;
-                    self.inner_mut().cancel_request(conn_id, secret_key);
+                    self.inner_mut().cancel_request(conn_id.val(), secret_key);
                 }
             };
         }

@@ -1,12 +1,12 @@
 ---
 title: "DROP SINK"
-description: "`DROP SINK` removes a sink from your Materialize instances."
+description: "`DROP SINK` removes a sink from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP SINK` removes a sink from your Materialize instances.
+`DROP SINK` removes a sink from Materialize.
 
 {{% kafka-sink-drop  %}}
 

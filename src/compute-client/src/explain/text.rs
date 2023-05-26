@@ -224,9 +224,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     ReducePlan::Distinct => {
                         writeln!(f, "{}Reduce::Distinct", ctx.indent)?;
                     }
-                    ReducePlan::DistinctNegated => {
-                        writeln!(f, "{}Reduce::DistinctNegated", ctx.indent)?;
-                    }
                     ReducePlan::Accumulable(plan) => {
                         writeln!(f, "{}Reduce::Accumulable", ctx.indent)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
@@ -332,11 +329,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     ThresholdPlan::Basic(plan) => {
                         let ensure_arrangement = Arrangement::from(&plan.ensure_arrangement);
                         write!(f, "{}Threshold::Basic", ctx.indent)?;
-                        writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
-                    }
-                    ThresholdPlan::Retractions(plan) => {
-                        let ensure_arrangement = Arrangement::from(&plan.ensure_arrangement);
-                        write!(f, "{}Threshold::Retractions", ctx.indent)?;
                         writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
                     }
                 };
@@ -611,6 +603,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
                 let skips = separated(", ", &plan.skips);
                 writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
+                writeln!(f, "{}monotonic", ctx.indent)?;
                 if plan.must_consolidate {
                     writeln!(f, "{}must_consolidate", ctx.indent)?;
                 }

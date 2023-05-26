@@ -736,7 +736,7 @@ async fn execute_stmt<S: ResultSender>(
 ) -> Result<StatementResult, anyhow::Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
-        .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
         .await
     {
         return Ok(SqlResult::err(client, e).into());
@@ -796,7 +796,7 @@ async fn execute_stmt<S: ResultSender>(
 
     let desc = prep_stmt.desc().clone();
     let revision = prep_stmt.catalog_revision;
-    let stmt = prep_stmt.sql().cloned();
+    let stmt = prep_stmt.stmt().cloned();
     if let Err(err) = client.session().set_portal(
         EMPTY_PORTAL.into(),
         desc,

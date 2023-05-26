@@ -1,14 +1,15 @@
 [bans]
 multiple-versions = "deny"
-# Do not add exemptions for duplicate dependencies! Duplicate dependencies slow
-# down compilation, bloat the binary, and tickle race conditions in `cargo doc`
-# (see rust-lang/cargo#3613). Submit PRs upstream to remove duplicated
-# transitive dependencies. If necessary, use patch directives in the root
-# Cargo.toml to point at a Materialize-maintained fork that avoids the
-# duplicated transitive dependencies.
+# Try to avoid exemptions for duplicate dependencies! Duplicate dependencies
+# slow down compilation, bloat the binary, and tickle race conditions in `cargo
+# doc` (see rust-lang/cargo#3613).
+#
+# If possible, submit PRs upstream to remove duplicated transitive dependencies.
+# You can use patch directives in the root Cargo.toml to point at a
+# Materialize-maintained fork that avoids the duplicated transitive
+# dependencies.
 skip = [
     # One-time exception for base64 due to its prevalence in the crate graph.
-    # Do NOT add other exceptions to this list.
     { name = "base64", version = "0.13.1" },
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
     # transitively depends on. They just released v2.0 which not all crates have
@@ -225,14 +226,19 @@ allow-git = [
     # it into a release.
     "https://github.com/MaterializeInc/rust-server-sdk",
 
-    # Waiting on https://github.com/awslabs/smithy-rs/pull/2525 to make it into a
-    # release.
-    "https://github.com/parker-timmerman/smithy-rs.git",
-
     # Waiting on https://github.com/tokio-rs/prost/pull/833 to make it into a
     # release.
     "https://github.com/MaterializeInc/prost",
 
-    # Waiting on https://github.com/hyperium/tonic/pull/1398
-    "https://github.com/umanwizard/tonic",
+    # Waiting on https://github.com/hyperium/tonic/pull/1398.
+    "https://github.com/MaterializeInc/tonic",
+
+    # Do not add personal GitHub forks here! Forks must be owned by the
+    # MaterializeInc organization so that maintainership is shared amongst
+    # Materialize employees. If you don't have permissions to create a fork in
+    # the MaterializeInc organization, ask in #eng-infra.
+    #
+    # Personal GitHub repositories are okay for projects where the true upstream
+    # is a personal GitHub account (e.g., frankmcsherry/columnation) rather than
+    # a fork.
 ]

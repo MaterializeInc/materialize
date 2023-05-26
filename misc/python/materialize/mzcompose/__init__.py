@@ -29,6 +29,7 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import getmembers, isfunction
+from pathlib import Path
 from ssl import SSLContext
 from tempfile import TemporaryFile
 from typing import (
@@ -52,7 +53,7 @@ from typing import (
 import pg8000
 import sqlparse
 import yaml
-from pg8000 import Cursor
+from pg8000 import Connection, Cursor
 
 from materialize import mzbuild, spawn, ui
 from materialize.mzcompose import loader
@@ -425,6 +426,19 @@ class Composition:
         elapsed = time.time() - start_time
         self.test_results[name] = Composition.TestResult(elapsed, error)
 
+    def sql_connection(
+        self,
+        service: str = "materialized",
+        user: str = "materialize",
+        port: Optional[int] = None,
+        password: Optional[str] = None,
+    ) -> Connection:
+        """Get a connection (with autocommit enabled) to the materialized service."""
+        port = self.port(service, port) if port else self.default_port(service)
+        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
+        conn.autocommit = True
+        return conn
+
     def sql_cursor(
         self,
         service: str = "materialized",
@@ -433,9 +447,7 @@ class Composition:
         password: Optional[str] = None,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
-        port = self.port(service, port) if port else self.default_port(service)
-        conn = pg8000.connect(host="localhost", user=user, password=password, port=port)
-        conn.autocommit = True
+        conn = self.sql_connection(service, user, port, password)
         return conn.cursor()
 
     def sql(
@@ -723,6 +735,14 @@ class Composition:
             self.exec(service, *args, stdin=input)
         else:
             self.run(service, *args, stdin=input)
+
+    def cp(
+        self,
+        source: Union[str, Path],
+        destination: Union[str, Path],
+    ) -> None:
+        """Copy a file to or from a container."""
+        self.invoke("cp", str(source), str(destination))
 
 
 class ServiceHealthcheck(TypedDict, total=False):

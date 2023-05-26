@@ -1246,26 +1246,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "const_format"
-version = "0.2.30"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7309d9b4d3d2c0641e018d449232f2e28f1b22933c137f157d3dbc14228b8c0e"
-dependencies = [
- "const_format_proc_macros",
-]
-
-[[package]]
-name = "const_format_proc_macros"
-version = "0.2.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d897f47bf7270cf70d370f8f98c1abb6d2d4cf60a6845d30e05bfb90c6568650"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-xid",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3397,7 +3377,6 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "const_format",
  "criterion",
  "datadriven",
  "dec",
@@ -4285,6 +4264,7 @@ dependencies = [
  "sentry",
  "sentry-tracing",
  "serde",
+ "serde_json",
  "smallvec",
  "stacker",
  "tokio",
@@ -4326,6 +4306,8 @@ dependencies = [
  "openssl-sys",
  "postgres-openssl",
  "prometheus",
+ "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -4406,6 +4388,7 @@ dependencies = [
  "prost-build",
  "protobuf-src",
  "serde",
+ "serde_json",
  "workspace-hack",
 ]
 
@@ -4750,7 +4733,6 @@ dependencies = [
  "aws-sdk-sts",
  "bitflags",
  "chrono",
- "const_format",
  "datadriven",
  "enum-kinds",
  "fail",
@@ -4946,6 +4928,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum",
+ "bincode",
  "bytesize",
  "chrono",
  "clap",
@@ -4998,6 +4981,7 @@ dependencies = [
  "rdkafka",
  "regex",
  "rocksdb",
+ "seahash",
  "serde",
  "serde_json",
  "sha2",
@@ -5170,6 +5154,7 @@ dependencies = [
 name = "mz-timely-util"
 version = "0.0.0"
 dependencies = [
+ "ahash",
  "differential-dataflow",
  "futures-util",
  "mz-ore",
@@ -6138,7 +6123,7 @@ dependencies = [
 [[package]]
 name = "prost"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
+source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -6147,7 +6132,7 @@ dependencies = [
 [[package]]
 name = "prost-build"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
+source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
 dependencies = [
  "bytes",
  "heck",
@@ -6168,7 +6153,7 @@ dependencies = [
 [[package]]
 name = "prost-derive"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
+source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
 dependencies = [
  "anyhow",
  "itertools",
@@ -6193,7 +6178,7 @@ dependencies = [
 [[package]]
 name = "prost-types"
 version = "0.11.9"
-source = "git+https://github.com/MaterializeInc/prost?branch=btv#c6a3f885f7d4f1ee0ff96dfc31ff24d052960415"
+source = "git+https://github.com/MaterializeInc/prost#17cc373ba4416f69eef12857a02002838d9fa330"
 dependencies = [
  "prost",
 ]
@@ -6647,6 +6632,12 @@ name = "scratch"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96311ef4a16462c757bb6a39152c40f58f31cd2602a40fceb937e2bc34e6cbab"
+
+[[package]]
+name = "seahash"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "sec1"
@@ -7783,7 +7774,7 @@ dependencies = [
 [[package]]
 name = "tonic-build"
 version = "0.8.2"
-source = "git+https://github.com/umanwizard/tonic#76489bf665af99d6e0e83f81648fcac283ea57e1"
+source = "git+https://github.com/MaterializeInc/tonic#76489bf665af99d6e0e83f81648fcac283ea57e1"
 dependencies = [
  "prettyplease",
  "proc-macro2",

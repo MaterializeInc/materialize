@@ -793,7 +793,7 @@ impl Coordinator {
             create_sql: table.create_sql,
             desc: table.desc,
             defaults: table.defaults,
-            conn_id,
+            conn_id: conn_id.cloned(),
             depends_on,
             custom_logical_compaction_window: None,
             is_retained_metrics_object: false,
@@ -1145,7 +1145,7 @@ impl Coordinator {
             optimized_expr,
             desc,
             conn_id: if view.temporary {
-                Some(session.conn_id())
+                Some(session.conn_id().clone())
             } else {
                 None
             },
@@ -2203,9 +2203,9 @@ impl Coordinator {
         match self.recent_timestamp(&session, source_ids.iter().cloned()) {
             Some(fut) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id();
+                let conn_id = session.conn_id().clone();
                 self.pending_real_time_recency_timestamp.insert(
-                    conn_id,
+                    conn_id.clone(),
                     RealTimeRecencyContext::Peek {
                         tx,
                         finishing,
@@ -2228,7 +2228,7 @@ impl Coordinator {
                     let real_time_recency_ts = fut.await;
                     // It is not an error for these results to be ready after `internal_cmd_rx` has been dropped.
                     let result = internal_cmd_tx.send(Message::RealTimeRecencyTimestamp {
-                        conn_id,
+                        conn_id: conn_id.clone(),
                         real_time_recency_ts,
                         validity,
                     });
@@ -2378,7 +2378,7 @@ impl Coordinator {
             )?;
 
             // If we've already acquired read holds for the txn, we can skip doing so again
-            if !self.txn_reads.contains_key(&session.conn_id()) {
+            if !self.txn_reads.contains_key(session.conn_id()) {
                 if let Some(timestamp) = determination.timestamp_context.timestamp() {
                     let timedomain_id_bundle = self.timedomain_for(
                         source_ids,
@@ -2389,7 +2389,7 @@ impl Coordinator {
 
                     let read_holds =
                         self.acquire_read_holds(timestamp.clone(), &timedomain_id_bundle);
-                    self.txn_reads.insert(session.conn_id(), read_holds);
+                    self.txn_reads.insert(session.conn_id().clone(), read_holds);
                 }
             }
         }
@@ -2412,7 +2412,7 @@ impl Coordinator {
         key: Vec<MirScalarExpr>,
         typ: RelationType,
     ) -> Result<PlannedPeek, AdapterError> {
-        let conn_id = session.conn_id();
+        let conn_id = session.conn_id().clone();
         let timestamp_context = self
             .sequence_peek_timestamp(
                 session,
@@ -2471,7 +2471,7 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         // If there are no `txn_reads`, then this must be the first query in the transaction
         // and we can skip timedomain validations.
-        if let Some(txn_reads) = self.txn_reads.get(&session.conn_id()) {
+        if let Some(txn_reads) = self.txn_reads.get(session.conn_id()) {
             // Queries without a timestamp and timeline can belong to any existing timedomain.
             if let TimestampContext::TimelineTimestamp(_, _) = timestamp_context {
                 // Verify that the references and indexes for this query are in the
@@ -2650,7 +2650,7 @@ impl Coordinator {
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
             user: session.user().clone(),
-            conn_id: session.conn_id(),
+            conn_id: session.conn_id().clone(),
             channel: tx,
             emit_progress,
             as_of,
@@ -2679,7 +2679,7 @@ impl Coordinator {
         }
 
         self.active_conns
-            .get_mut(&session.conn_id())
+            .get_mut(session.conn_id())
             .expect("must exist for active sessions")
             .drop_sinks
             .push(ComputeSinkId {
@@ -2985,9 +2985,9 @@ impl Coordinator {
                     replica_id: None,
                 };
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = session.conn_id();
+                let conn_id = session.conn_id().clone();
                 self.pending_real_time_recency_timestamp.insert(
-                    conn_id,
+                    conn_id.clone(),
                     RealTimeRecencyContext::ExplainTimestamp {
                         tx,
                         session,
@@ -3556,7 +3556,7 @@ impl Coordinator {
                             // receive a response.
                             // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
                             let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
-                                conn_id: session.conn_id(),
+                                conn_id: session.conn_id().clone(),
                             });
                             if let Err(e) = result {
                                 warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -3973,10 +3973,10 @@ impl Coordinator {
         let ps = session
             .get_prepared_statement_unverified(&plan.name)
             .expect("known to exist");
-        let sql = ps.sql().cloned();
+        let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
         let revision = ps.catalog_revision;
-        session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
+        session.create_new_portal(stmt, desc, plan.params, Vec::new(), revision)
     }
 
     pub(super) async fn sequence_grant_privilege(

@@ -77,6 +77,8 @@ pub struct Metrics {
     pub watch: WatchMetrics,
     /// Metrics for PubSub client.
     pub pubsub_client: PubSubClientMetrics,
+    /// Metrics for mfp/filter pushdown.
+    pub pushdown: PushdownMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -120,6 +122,7 @@ impl Metrics {
             locks: vecs.locks_metrics(),
             watch: WatchMetrics::new(registry),
             pubsub_client: PubSubClientMetrics::new(registry),
+            pushdown: PushdownMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -1117,10 +1120,6 @@ pub struct ShardsMetrics {
     usage_referenced_not_current_state_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_not_leaked_not_referenced_bytes: mz_ore::metrics::UIntGaugeVec,
     usage_leaked_bytes: mz_ore::metrics::UIntGaugeVec,
-    pushdown_parts_filtered_count: mz_ore::metrics::IntCounterVec,
-    pushdown_parts_filtered_bytes: mz_ore::metrics::IntCounterVec,
-    pushdown_parts_fetched_count: mz_ore::metrics::IntCounterVec,
-    pushdown_parts_fetched_bytes: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_applied: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_not_applied_stale: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
@@ -1253,26 +1252,6 @@ impl ShardsMetrics {
                 help: "data reclaimable by a leaked blob detector",
                 var_labels: ["shard"],
             )),
-            pushdown_parts_filtered_count: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_filtered_count",
-                help: "count of parts filtered by pushdown",
-                var_labels: ["shard"],
-            )),
-            pushdown_parts_filtered_bytes: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_filtered_bytes",
-                help: "total size of parts filtered by pushdown in bytes",
-                var_labels: ["shard"],
-            )),
-            pushdown_parts_fetched_count: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_fetched_count",
-                help: "count of parts not filtered by pushdown",
-                var_labels: ["shard"],
-            )),
-            pushdown_parts_fetched_bytes: registry.register(metric!(
-                name: "mz_persist_pushdown_parts_fetched_bytes",
-                help: "total size of parts not filtered by pushdown in bytes",
-                var_labels: ["shard"],
-            )),
             pubsub_push_diff_applied: registry.register(metric!(
                 name: "mz_persist_shard_pubsub_diff_applied",
                 help: "number of diffs received via pubsub that applied",
@@ -1362,7 +1341,6 @@ pub struct ShardMetrics {
     pub gc_finished: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub compaction_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub cmd_succeeded: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub pushdown: PushdownMetrics,
     pub pubsub_push_diff_applied: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub pubsub_push_diff_not_applied_out_of_order:
@@ -1439,7 +1417,6 @@ impl ShardMetrics {
             usage_leaked_bytes: shards_metrics
                 .usage_leaked_bytes
                 .get_delete_on_drop_gauge(vec![shard.clone()]),
-            pushdown: PushdownMetrics::for_shard(&shard, shards_metrics),
             pubsub_push_diff_applied: shards_metrics
                 .pubsub_push_diff_applied
                 .get_delete_on_drop_counter(vec![shard.clone()]),
@@ -1877,27 +1854,41 @@ impl WatchMetrics {
 
 #[derive(Debug)]
 pub struct PushdownMetrics {
-    pub(crate) parts_filtered_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) parts_filtered_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) parts_fetched_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) parts_fetched_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) parts_filtered_count: IntCounter,
+    pub(crate) parts_filtered_bytes: IntCounter,
+    pub(crate) parts_fetched_count: IntCounter,
+    pub(crate) parts_fetched_bytes: IntCounter,
+    pub(crate) parts_audited_count: IntCounter,
+    pub(crate) parts_audited_bytes: IntCounter,
 }
 
 impl PushdownMetrics {
-    fn for_shard(shard_id: &str, shards_metrics: &ShardsMetrics) -> Self {
+    fn new(registry: &MetricsRegistry) -> Self {
         PushdownMetrics {
-            parts_filtered_count: shards_metrics
-                .pushdown_parts_filtered_count
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
-            parts_filtered_bytes: shards_metrics
-                .pushdown_parts_filtered_bytes
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
-            parts_fetched_count: shards_metrics
-                .pushdown_parts_fetched_count
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
-            parts_fetched_bytes: shards_metrics
-                .pushdown_parts_fetched_bytes
-                .get_delete_on_drop_counter(vec![shard_id.to_owned()]),
+            parts_filtered_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_filtered_count",
+                help: "count of parts filtered by pushdown",
+            )),
+            parts_filtered_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_filtered_bytes",
+                help: "total size of parts filtered by pushdown in bytes",
+            )),
+            parts_fetched_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_fetched_count",
+                help: "count of parts not filtered by pushdown",
+            )),
+            parts_fetched_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_fetched_bytes",
+                help: "total size of parts not filtered by pushdown in bytes",
+            )),
+            parts_audited_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_audited_count",
+                help: "count of parts fetched only for pushdown audit",
+            )),
+            parts_audited_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_audited_bytes",
+                help: "total size of parts fetched only for pushdown audit",
+            )),
         }
     }
 }

@@ -147,6 +147,7 @@ mod threshold;
 mod top_k;
 
 pub use context::CollectionBundle;
+pub use join::LinearJoinImpl;
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
@@ -272,8 +273,8 @@ pub fn build_compute_dataflow<A: Allocate>(
         // in order to support additional timestamp coordinates for iteration.
         if recursive {
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
-                let mut context =
-                    crate::render::context::Context::for_dataflow_in(&dataflow, region.clone());
+                let mut context = Context::for_dataflow_in(&dataflow, region.clone());
+                context.linear_join_impl = compute_state.linear_join_impl;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -326,8 +327,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             });
         } else {
             scope.clone().region_named(&build_name, |region| {
-                let mut context =
-                    crate::render::context::Context::for_dataflow_in(&dataflow, region.clone());
+                let mut context = Context::for_dataflow_in(&dataflow, region.clone());
+                context.linear_join_impl = compute_state.linear_join_impl;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(

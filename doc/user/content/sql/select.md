@@ -92,11 +92,8 @@ For an example, see [Using CTEs](#using-ctes).
 
 CTEs have the following limitations, which we are working to improve:
 
-- CTEs only support `SELECT` queries. {{% gh 4867 %}}
-- Materialize inlines the CTE where it's referenced, which could cause
-  unexpected performance characteristics for especially complex expressions. {{%
-  gh 4867 %}}
-- `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
+- `INSERT`/`UPDATE`/`DELETE` (with `RETURNING`) is not supported inside a CTE. {{% gh 19486 %}}
+- `WITH RECURSIVE` CTEs are not supported. Non-standard support for recursive CTEs is under active development (see {{% gh 17012 %}}).
 
 ### Query hints
 

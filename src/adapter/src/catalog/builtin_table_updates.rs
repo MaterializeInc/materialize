@@ -284,7 +284,7 @@ impl CatalogState {
         let entry = self.get_entry(&id);
         let id = entry.id();
         let oid = entry.oid();
-        let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+        let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema_id = &self
             .get_schema(
                 &entry.name().qualifiers.database_spec,
@@ -1198,7 +1198,7 @@ impl CatalogState {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::String(&subscribe.user.name));
+        packer.push(Datum::UInt32(subscribe.conn_id.val()));
         packer.push(Datum::String(&subscribe.cluster_id.to_string()));
 
         let start_dt = mz_ore::now::to_datetime(subscribe.start_time);
@@ -1223,7 +1223,7 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SESSIONS),
             row: Row::pack_slice(&[
-                Datum::UInt32(session.conn_id()),
+                Datum::UInt32(session.conn_id().val()),
                 Datum::String(&session.role_id().to_string()),
                 Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
             ]),

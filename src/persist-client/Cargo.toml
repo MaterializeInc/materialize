@@ -50,7 +50,7 @@ proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", feat
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 sentry-tracing = "0.29.1"
 semver = "1.0.16"
-serde = { version = "1.0.152", features = ["derive"] }
+serde = { version = "1.0.152", features = ["derive", "rc"] }
 serde_json = "1.0.89"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 thiserror = "1.0.37"

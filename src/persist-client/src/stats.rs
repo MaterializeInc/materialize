@@ -14,14 +14,22 @@ use mz_persist_types::columnar::{PartEncoder, Schema};
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::stats::StructStats;
 use mz_persist_types::Codec;
+use proptest_derive::Arbitrary;
 
 use crate::internal::encoding::Schemas;
 
 /// Aggregate statistics about data contained in a [Part].
-#[derive(Debug)]
+#[derive(Arbitrary, Debug)]
 pub struct PartStats {
     /// Aggregate statistics about key data contained in a [Part].
     pub key: StructStats,
+}
+
+impl serde::Serialize for PartStats {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let PartStats { key } = self;
+        key.serialize(s)
+    }
 }
 
 impl PartStats {

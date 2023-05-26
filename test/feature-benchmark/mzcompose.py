@@ -369,7 +369,7 @@ root_scenario: {args.root_scenario}"""
 
     overrides = [
         KafkaService(
-            extra_environment=[
+            environment_extra=[
                 f"KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://{args.external_addr}:9092"
             ]
         ),
