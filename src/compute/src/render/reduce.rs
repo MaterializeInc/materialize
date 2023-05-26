@@ -29,7 +29,6 @@ use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage_client::types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::{CloneRegion, Columnation};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
@@ -1506,11 +1505,6 @@ enum Accum {
     },
 }
 
-impl Columnation for Accum {
-    // Accum doesn't contain any pointers.
-    type InnerRegion = CloneRegion<Accum>;
-}
-
 impl Semigroup for Accum {
     fn is_zero(&self) -> bool {
         match self {
@@ -1732,64 +1726,6 @@ pub mod monoids {
     pub enum ReductionMonoid {
         Min(Row),
         Max(Row),
-    }
-
-    impl ReductionMonoid {
-        fn inner(&self) -> &Row {
-            match self {
-                ReductionMonoid::Min(row) | ReductionMonoid::Max(row) => row,
-            }
-        }
-    }
-
-    mod columnation {
-        use crate::render::reduce::monoids::ReductionMonoid;
-        use mz_repr::Row;
-        use timely::container::columnation::{Columnation, Region};
-
-        impl Columnation for ReductionMonoid {
-            type InnerRegion = ReductionMonoidRegion;
-        }
-
-        #[derive(Default)]
-        pub struct ReductionMonoidRegion {
-            inner: <Row as Columnation>::InnerRegion,
-        }
-
-        impl Region for ReductionMonoidRegion {
-            type Item = ReductionMonoid;
-
-            unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
-                match item {
-                    ReductionMonoid::Min(r) => ReductionMonoid::Min(self.inner.copy(r)),
-                    ReductionMonoid::Max(r) => ReductionMonoid::Max(self.inner.copy(r)),
-                }
-            }
-
-            fn clear(&mut self) {
-                self.inner.clear();
-            }
-
-            fn reserve_items<'a, I>(&mut self, items: I)
-            where
-                Self: 'a,
-                I: Iterator<Item = &'a Self::Item> + Clone,
-            {
-                self.inner.reserve_items(items.map(ReductionMonoid::inner));
-            }
-
-            fn reserve_regions<'a, I>(&mut self, regions: I)
-            where
-                Self: 'a,
-                I: Iterator<Item = &'a Self> + Clone,
-            {
-                self.inner.reserve_regions(regions.map(|r| &r.inner));
-            }
-
-            fn heap_size(&self, callback: impl FnMut(usize, usize)) {
-                self.inner.heap_size(callback);
-            }
-        }
     }
 
     impl Multiply<Diff> for ReductionMonoid {

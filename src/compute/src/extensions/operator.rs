@@ -13,8 +13,6 @@ use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
-use mz_repr::Row;
-use mz_storage_client::types::errors::DataflowError;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
@@ -22,18 +20,23 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::{Antichain, Timestamp};
 
 use crate::logging::compute::ComputeEvent;
-use crate::typedefs::{ErrSpine, ErrValSpine, RowKeySpine, RowSpine};
+use crate::typedefs::{RowKeySpine, RowSpine};
 
+/// Extension trait to arrange data.
 pub trait MzArrange
 where
     <Self::Scope as ScopeParent>::Timestamp: Lattice,
 {
+    /// The current scope.
     type Scope: Scope;
+    /// The key type.
     type Key: Data;
+    /// The value type.
     type Val: Data;
+    /// The difference type.
     type R: Data + Semigroup;
 
-    /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
+    /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
@@ -53,7 +56,8 @@ where
         Tr::Batch: Batch,
         Arranged<Self::Scope, TraceAgent<Tr>>: ArrangementSize;
 
-    /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
+    /// Arranges a stream of `(Key, Val)` updates by `Key` into a trace of type `Tr`. Partitions
+    /// the data according to `pact`.
     ///
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
@@ -85,7 +89,7 @@ where
     G::Timestamp: Lattice,
     K: Data + Columnation,
     V: Data + Columnation,
-    R: Semigroup + Columnation,
+    R: Semigroup,
 {
     type Scope = G;
     type Key = K;
@@ -119,8 +123,12 @@ where
     }
 }
 
+/// A specialized collection where data only has a key, but no associated value.
+///
+/// Created by calling `collection.into_key_collection()`.
 pub struct KeyCollection<G: Scope, D, R: Semigroup = usize>(Collection<G, D, R>);
 
+/// Convert the target into a key collection.
 pub trait IntoKeyCollection {
     type Output;
     fn into_key_collection(self) -> Self::Output;
@@ -139,7 +147,7 @@ where
     G: Scope,
     K: Data + Columnation,
     G::Timestamp: Lattice,
-    R: Semigroup + Columnation,
+    R: Semigroup,
 {
     type Scope = G;
     type Key = K;
@@ -309,58 +317,6 @@ where
             };
             trace.map_batches(|batch| {
                 batch.layer.keys.heap_size(&mut callback);
-                vec_size(&batch.layer.offs, &mut callback);
-                vec_size(&batch.layer.vals.vals, &mut callback);
-            });
-            (size, capacity, allocations)
-        })
-    }
-}
-
-impl<G, T, R> ArrangementSize for Arranged<G, TraceAgent<ErrValSpine<Row, T, R>>>
-where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord,
-    T: Lattice + Timestamp,
-    R: Semigroup,
-{
-    fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                allocations += 1;
-                size += siz;
-                capacity += cap
-            };
-            trace.map_batches(|batch| {
-                vec_size(&batch.layer.keys, &mut callback);
-                vec_size(&batch.layer.offs, &mut callback);
-                vec_size(&batch.layer.vals.keys, &mut callback);
-                vec_size(&batch.layer.vals.offs, &mut callback);
-                vec_size(&batch.layer.vals.vals.vals, &mut callback);
-            });
-            (size, capacity, allocations)
-        })
-    }
-}
-
-impl<G, T, R> ArrangementSize for Arranged<G, TraceAgent<ErrSpine<DataflowError, T, R>>>
-where
-    G: Scope<Timestamp = T>,
-    G::Timestamp: Lattice + Ord,
-    T: Lattice + Timestamp,
-    R: Semigroup,
-{
-    fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                allocations += 1;
-                size += siz;
-                capacity += cap
-            };
-            trace.map_batches(|batch| {
-                vec_size(&batch.layer.keys, &mut callback);
                 vec_size(&batch.layer.offs, &mut callback);
                 vec_size(&batch.layer.vals.vals, &mut callback);
             });
