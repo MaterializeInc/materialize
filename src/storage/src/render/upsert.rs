@@ -265,8 +265,8 @@ where
     let (mut health_output, health_stream) = builder.new_output();
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
-    builder.build(move |mut caps| async move {
-    let [output_cap, health_cap]: &mut [_; 2] = caps.try_into().unwrap();
+    builder.build(move |caps| async move {
+        let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
         let mut state = UpsertState::new(
             state().await,
