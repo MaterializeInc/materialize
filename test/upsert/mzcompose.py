@@ -192,15 +192,15 @@ def workflow_failpoint(c: Composition) -> None:
     for failpoint in [
         (
             "fail_merge_snapshot_chunk",
-            "failure while rehydrating state: Error merging snapshot values",
+            "Failed to rehydrate state: Error merging snapshot values",
         ),
         (
             "fail_state_multi_put",
-            "failure while updating records in state: Error putting values into state",
+            "Failed to update records in state: Error putting values into state",
         ),
         (
             "fail_state_multi_get",
-            "failure while fetching records from state: Error getting values from state",
+            "Failed to fetch records from state: Error getting values from state",
         ),
     ]:
         run_one_failpoint(c, failpoint[0], failpoint[1])
@@ -216,7 +216,7 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
         dependencies = ["zookeeper", "kafka", "clusterd1", "materialized"]
         c.up(*dependencies)
         c.run("testdrive", "failpoint/02-source.td")
-        c.kill("clusterd1", "materialized")
+        c.kill("clusterd1")
 
         with c.override(
             # Start clusterd with failpoint
@@ -228,15 +228,15 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
                 environment_extra=[f"FAILPOINTS={failpoint}=return"],
             ),
         ):
-            c.up("clusterd1", "materialized")
+            c.up("clusterd1")
             c.run(
                 "testdrive", f"--var=error={error_message}", "failpoint/03-failpoint.td"
             )
-            c.kill("clusterd1", "materialized")
+            c.kill("clusterd1")
 
         # Running without set failpoint
-        c.up("clusterd1", "materialized")
+        c.up("clusterd1")
         c.run("testdrive", "failpoint/04-recover.td")
 
     c.run("testdrive", "failpoint/05-reset.td")
-    c.kill("clusterd1", "materialized")
+    c.kill("clusterd1")

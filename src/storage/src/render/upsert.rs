@@ -323,7 +323,7 @@ where
                 Ok(_) => {}
                 Err(e) => {
                     process_upsert_state_error::<G>(
-                        "failure while rehydrating state",
+                        "Failed to rehydrate state".to_string(),
                         e,
                         source_config.worker_id,
                         &mut health_output,
@@ -388,7 +388,7 @@ where
                         Ok(_) => {}
                         Err(e) => {
                             process_upsert_state_error::<G>(
-                                "failure while fetching records from state",
+                                "Failed to fetch records from state".to_string(),
                                 e,
                                 source_config.worker_id,
                                 &mut health_output,
@@ -462,7 +462,7 @@ where
                         Ok(_) => {}
                         Err(e) => {
                             process_upsert_state_error::<G>(
-                                "failure while updating records in state",
+                                "Failed to update records in state".to_string(),
                                 e,
                                 source_config.worker_id,
                                 &mut health_output,
@@ -494,8 +494,9 @@ where
     )
 }
 
+/// Emit the given error, and stall till the dataflow is restarted.
 async fn process_upsert_state_error<G: Scope>(
-    msg: &str,
+    context: String,
     e: anyhow::Error,
     worker_id: usize,
     health_output: &mut AsyncOutputHandle<
@@ -507,7 +508,7 @@ async fn process_upsert_state_error<G: Scope>(
 ) {
     let update = HealthStatusUpdate {
         update: HealthStatus::StalledWithError {
-            error: format!("{}: {}", msg, e.display_with_causes()),
+            error: e.context(context).to_string_with_causes(),
             hint: None,
         },
         should_halt: true,

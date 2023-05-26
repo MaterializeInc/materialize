@@ -26,7 +26,8 @@ use mz_storage_client::types::sources::encoding::*;
 use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{self, Concat, Exchange, Leave, OkErr};
+use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::operators::{Concat, Exchange, Leave, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
@@ -133,7 +134,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (streams, health, capability) = match connection {
+    let (streams, mut health, capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
@@ -197,7 +198,6 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     needed_tokens.push(source_token);
 
     let mut outputs = vec![];
-    let mut health_output = health;
     for (ok_source, err_source) in streams {
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
@@ -218,9 +218,9 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         needed_tokens.extend(extra_tokens);
         outputs.push((ok, err));
 
-        health_output = health_output.concat(&health_stream.leave());
+        health = health.concat(&health_stream.leave());
     }
-    (outputs, health_output, Rc::new(needed_tokens))
+    (outputs, health, Rc::new(needed_tokens))
 }
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope
@@ -287,7 +287,7 @@ where
                 confluent_wire_format,
             );
             needed_tokens.push(Rc::new(token));
-            (oks, None, operators::generic::operator::empty(scope))
+            (oks, None, empty(scope))
         } else {
             // Depending on the type of _raw_ source produced for the given source
             // connection, render the _decode_ part of the pipeline, that turns a raw data
@@ -355,11 +355,7 @@ where
                         }
                         None => super::debezium::render(dbz_envelope, &results),
                     };
-                    (
-                        debezium_ok,
-                        Some(errors),
-                        operators::generic::operator::empty(scope),
-                    )
+                    (debezium_ok, Some(errors), empty(scope))
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => {
                     let upsert_input = upsert_commands(results, upsert_envelope.clone());
@@ -387,10 +383,7 @@ where
                         );
                         (stream.as_collection(), Some(tok))
                     } else {
-                        (
-                            Collection::new(operators::generic::operator::empty(scope)),
-                            None,
-                        )
+                        (Collection::new(empty(scope)), None)
                     };
                     let (upsert, health_update) = crate::render::upsert::upsert(
                         &upsert_input,
@@ -419,11 +412,7 @@ where
                     let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
 
                     let errors = errors.as_collection();
-                    (
-                        stream.as_collection(),
-                        Some(errors),
-                        operators::generic::operator::empty(scope),
-                    )
+                    (stream.as_collection(), Some(errors), empty(scope))
                 }
                 SourceEnvelope::CdcV2 => unreachable!(),
             }
