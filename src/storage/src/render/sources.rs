@@ -204,7 +204,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         // All subsources include the non-definite errors of the ingestion
         let error_collections = vec![err_source.map(DataflowError::from)];
 
-        let (ok, err, extra_tokens, health_update) = render_source_stream(
+        let (ok, err, extra_tokens, health_stream) = render_source_stream(
             scope,
             dataflow_debug_name,
             id,
@@ -218,9 +218,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         needed_tokens.extend(extra_tokens);
         outputs.push((ok, err));
 
-        health_update.map(|h| {
-            health_output = health_output.concat(&h.leave());
-        });
+        health_output = health_output.concat(&health_stream.leave());
     }
     (outputs, health_output, Rc::new(needed_tokens))
 }
@@ -241,7 +239,7 @@ fn render_source_stream<G>(
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,
     Vec<Rc<dyn Any>>,
-    Option<Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -289,7 +287,7 @@ where
                 confluent_wire_format,
             );
             needed_tokens.push(Rc::new(token));
-            (oks, None, None)
+            (oks, None, operators::generic::operator::empty(scope))
         } else {
             // Depending on the type of _raw_ source produced for the given source
             // connection, render the _decode_ part of the pipeline, that turns a raw data
@@ -357,7 +355,11 @@ where
                         }
                         None => super::debezium::render(dbz_envelope, &results),
                     };
-                    (debezium_ok, Some(errors), None)
+                    (
+                        debezium_ok,
+                        Some(errors),
+                        operators::generic::operator::empty(scope),
+                    )
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => {
                     let upsert_input = upsert_commands(results, upsert_envelope.clone());
@@ -406,7 +408,7 @@ where
                     (
                         upsert_ok.as_collection(),
                         Some(upsert_err.as_collection()),
-                        Some(health_update),
+                        health_update,
                     )
                 }
                 SourceEnvelope::None(none_envelope) => {
@@ -417,7 +419,11 @@ where
                     let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
 
                     let errors = errors.as_collection();
-                    (stream.as_collection(), Some(errors), None)
+                    (
+                        stream.as_collection(),
+                        Some(errors),
+                        operators::generic::operator::empty(scope),
+                    )
                 }
                 SourceEnvelope::CdcV2 => unreachable!(),
             }
