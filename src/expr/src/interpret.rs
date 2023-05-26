@@ -659,7 +659,7 @@ impl Interpreter for Trace {
         if !func.is_associative() && exprs.len() >= ColumnSpecs::MAX_EVAL_ARGS {
             // We can't efficiently evaluate functions with very large argument lists;
             // see the comment on ColumnSpecs::MAX_EVAL_ARGS for details.
-            return RelationTrace::new();
+            return Pushdownable::No;
         }
 
         let is_monotonic = variadic_monotonic(func);
