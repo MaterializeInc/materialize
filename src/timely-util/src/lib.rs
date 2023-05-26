@@ -89,7 +89,6 @@ pub mod capture;
 pub mod event;
 pub mod operator;
 pub mod order;
-pub mod pact;
 pub mod panic;
 pub mod probe;
 pub mod progress;
