@@ -28,6 +28,7 @@ use crate::render::context::{
     Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
 };
 use crate::render::join::mz_join_core::mz_join_core;
+use crate::render::join::mz_join_core2;
 use crate::typedefs::RowSpine;
 
 /// Available linear join implementations.
@@ -55,14 +56,16 @@ impl LinearJoinImpl {
         Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
         L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
         I: IntoIterator,
+        I::IntoIter: 'static,
         I::Item: Data,
     {
-        match self {
-            Self::DifferentialDataflow => {
-                differential_dataflow::operators::JoinCore::join_core(arranged1, arranged2, result)
-            }
-            Self::Materialize => mz_join_core(arranged1, arranged2, result),
-        }
+        // match self {
+        //     Self::DifferentialDataflow => {
+        //         differential_dataflow::operators::JoinCore::join_core(arranged1, arranged2, result)
+        //     }
+        //     Self::Materialize => mz_join_core(arranged1, arranged2, result),
+        // }
+        mz_join_core2::JoinCore::join_core(arranged1, arranged2, result)
     }
 }
 
