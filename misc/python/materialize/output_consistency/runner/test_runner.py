@@ -64,7 +64,7 @@ class ConsistencyTestRunner:
 
     def setup(self) -> None:
         self.execution_manager.setup_database_objects(
-            self.input_data.all_data_types_with_values, self.evaluation_strategies
+            self.input_data, self.evaluation_strategies
         )
 
     def start(self) -> ConsistencyTestSummary:

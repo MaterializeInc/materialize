@@ -11,9 +11,6 @@ from typing import List
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.data_type.data_type_with_values import (
-    DataTypeWithValues,
-)
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -22,6 +19,9 @@ from materialize.output_consistency.execution.sql_executor import (
     SqlExecutor,
 )
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
+)
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_result import (
@@ -59,14 +59,14 @@ class QueryExecutionManager:
 
     def setup_database_objects(
         self,
-        data_type_with_values: List[DataTypeWithValues],
+        input_data: ConsistencyTestInputData,
         evaluation_strategies: List[EvaluationStrategy],
     ) -> None:
         for strategy in evaluation_strategies:
             self.output_printer.print_info(
                 f"Setup for evaluation strategy '{strategy.name}'"
             )
-            ddl_statements = strategy.generate_sources(data_type_with_values)
+            ddl_statements = strategy.generate_sources(input_data)
 
             for sql_statement in ddl_statements:
                 self.output_printer.print_sql(sql_statement)

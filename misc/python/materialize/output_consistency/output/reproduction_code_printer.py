@@ -74,7 +74,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
     ) -> None:
         self._print_text(f"Setup for evaluation strategy '{evaluation_strategy.name}':")
         setup_code_lines = evaluation_strategy.generate_source_for_storage_layout(
-            self.input_data.all_data_types_with_values,
+            self.input_data,
             query_template.storage_layout,
             query_template.row_selection,
             table_column_selection,

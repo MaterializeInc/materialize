@@ -52,5 +52,5 @@ class DataTypeWithValues:
         for raw_value in self.raw_values:
             raw_value.own_characteristics.add(characteristic)
 
-    def create_vertical_storage_column_expression(self) -> DataColumn:
+    def create_vertical_storage_column(self) -> DataColumn:
         return DataColumn(self.data_type, self.raw_values)
