@@ -45,12 +45,7 @@ class ConsistencyTestInputData:
         self.max_value_count = self._get_max_value_count_of_all_types()
 
     def _get_max_value_count_of_all_types(self) -> int:
-        max_value = 0
-
-        for type_with_values in self.all_data_types_with_values:
-            value_count = len(type_with_values.raw_values)
-
-            if value_count > max_value:
-                max_value = value_count
-
-        return max_value
+        return max(
+            len(type_with_values.raw_values)
+            for type_with_values in self.all_data_types_with_values
+        )
