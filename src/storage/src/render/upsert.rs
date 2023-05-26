@@ -129,6 +129,9 @@ impl<H: Digest> Hasher for DigestHasher<H> {
 
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
+/// Returns a tuple of
+/// - A collection of the computed upsert operator and,
+/// - A health update stream to propagate errors
 pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
     upsert_envelope: UpsertEnvelope,
