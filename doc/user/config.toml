@@ -126,12 +126,6 @@ identifier = "manage"
 name = "Manage Materialize"
 weight= 14
 
-[[menu.main]]
-name = "User management"
-parent = "manage"
-identifier = "user-management"
-url = "/manage/user-management/"
-weight = 15
 
 #
 # Reference

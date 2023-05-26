@@ -1,9 +1,12 @@
 ---
-title: "Role-based access control"
+title: "Role based access control"
 description: "Manage roles, permissions, and other access control options in Materialize"
+disable_list: true
 menu:
   main:
-    parent: user-management
+    parent: manage
+    name: User management
+    identifier: 'user-management'
     weight: 10
 ---
 
