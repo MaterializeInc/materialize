@@ -83,7 +83,12 @@ FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
         if self.row_selection.keys is None:
             return ""
 
-        row_index_string = ", ".join(str(index) for index in self.row_selection.keys)
+        if len(self.row_selection.keys) == 0:
+            row_index_string = "-1"
+        else:
+            row_index_string = ", ".join(
+                str(index) for index in self.row_selection.keys
+            )
         return f"WHERE {VERTICAL_LAYOUT_ROW_INDEX_COL_NAME} IN ({row_index_string})"
 
     def _create_order_by_clause(self) -> str:
