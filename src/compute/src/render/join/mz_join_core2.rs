@@ -374,7 +374,7 @@ where
                         fuel1.set(1_000_000);
                         fuel2.set(1_000_000);
 
-                        while remaining_work1.is_some() && !todo1.is_empty() && fuel1.get() > 0 {
+                        while (remaining_work1.is_some() || !todo1.is_empty()) && fuel1.get() > 0 {
                             if remaining_work1.is_none() {
                                 if let Some(deferred) = todo1.pop_front() {
                                     let result = Rc::clone(&result);
@@ -408,7 +408,7 @@ where
                             }
                         }
 
-                        while remaining_work2.is_some() && !todo2.is_empty() && fuel2.get() > 0 {
+                        while (remaining_work2.is_some() || !todo2.is_empty()) && fuel2.get() > 0 {
                             if remaining_work2.is_none() {
                                 if let Some(deferred) = todo2.pop_front() {
                                     let result = Rc::clone(&result);
