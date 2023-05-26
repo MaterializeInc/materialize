@@ -585,6 +585,89 @@ impl From<Monotonic> for Pushdownable {
     }
 }
 
+/// A binary function we've added special-case handling for; including:
+/// - A two-argument function, taking and returning [ResultSpec]s. This overrides the
+///   default function-handling logic entirely.
+/// - Metadata on whether / not this function is pushdownable. See [Trace].
+struct SpecialBinary {
+    map_fn: for<'a> fn(ResultSpec<'a>, ResultSpec<'a>) -> ResultSpec<'a>,
+    pushdownable: (Pushdownable, Pushdownable),
+}
+
+impl SpecialBinary {
+    /// Returns the special-case handling for a particular function, if it exists.
+    fn for_func(func: &BinaryFunc) -> Option<SpecialBinary> {
+        /// Eager in the same sense as `func.rs` uses the term; this assumes that
+        /// nulls and errors propagate up, and we only need to define the behaviour
+        /// on values.
+        fn eagerly<'b>(
+            left: ResultSpec<'b>,
+            right: ResultSpec<'b>,
+            value_fn: impl FnOnce(Values<'b>, Values<'b>) -> ResultSpec<'b>,
+        ) -> ResultSpec<'b> {
+            let result = match (left.values, right.values) {
+                (Values::Empty, _) | (_, Values::Empty) => ResultSpec::nothing(),
+                (l, r) => value_fn(l, r),
+            };
+            ResultSpec {
+                fallible: left.fallible || right.fallible || result.fallible,
+                nullable: left.nullable || right.nullable || result.nullable,
+                values: result.values,
+            }
+        }
+
+        fn jsonb_get_string<'b>(
+            left: ResultSpec<'b>,
+            right: ResultSpec<'b>,
+            stringify: bool,
+        ) -> ResultSpec<'b> {
+            eagerly(left, right, |left, right| {
+                let nested_spec = match (left, right) {
+                    (Values::Nested(mut map_spec), Values::Within(key, key2)) if key == key2 => {
+                        map_spec.remove(&key)
+                    }
+                    _ => None,
+                };
+
+                if let Some(field_spec) = nested_spec {
+                    if stringify {
+                        // We only preserve value-range information when stringification
+                        // is a noop. (Common in real queries.)
+                        let values = match field_spec.values {
+                            Values::Empty => Values::Empty,
+                            Values::Within(min @ Datum::String(_), max @ Datum::String(_)) => {
+                                Values::Within(min, max)
+                            }
+                            Values::Within(_, _) | Values::Nested(_) | Values::All => Values::All,
+                        };
+                        ResultSpec {
+                            values,
+                            ..field_spec
+                        }
+                    } else {
+                        field_spec
+                    }
+                } else {
+                    // TODO: it should be possible to narrow this further...
+                    ResultSpec::anything()
+                }
+            })
+        }
+
+        match func {
+            BinaryFunc::JsonbGetString { stringify } => Some(SpecialBinary {
+                map_fn: if *stringify {
+                    |l, r| jsonb_get_string(l, r, true)
+                } else {
+                    |l, r| jsonb_get_string(l, r, false)
+                },
+                pushdownable: (Pushdownable::Yes, Pushdownable::No),
+            }),
+            _ => None,
+        }
+    }
+}
+
 impl From<bool> for Pushdownable {
     fn from(value: bool) -> Self {
         match value {
@@ -633,14 +716,13 @@ impl Interpreter for Trace {
     ) -> Self::Summary {
         // TODO: this is duplicative! If we have more than one or two special-cased functions
         // we should find some way to share the list between `Trace` and `ColumnSpecs`.
-        let (left_pushdownable, right_pushdownable) = match func {
-            BinaryFunc::JsonbGetString { stringify: false } => (true, false),
-            _ => func.is_monotone(),
+        let (left_pushdown, right_pushdown) = if let Some(special) = SpecialBinary::for_func(func) {
+            special.pushdownable
+        } else {
+            let (left, right) = func.is_monotone();
+            (left.into(), right.into())
         };
-        max(
-            min(left, left_pushdownable.into()),
-            min(right, right_pushdownable.into()),
-        )
+        max(min(left, left_pushdown), min(right, right_pushdown))
     }
 
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
@@ -832,65 +914,26 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     ) -> Self::Summary {
         let (left_monotonic, right_monotonic) = func.is_monotone();
 
-        let special_spec = match func {
-            BinaryFunc::JsonbGetString { stringify } => {
-                let values_spec = match (&left.range.values, &right.range.values) {
-                    (Values::Nested(map_spec), Values::Within(key, key2)) if key == key2 => {
-                        map_spec
-                            .get(key)
-                            .cloned()
-                            .map_or_else(ResultSpec::anything, |field_spec| {
-                                if *stringify {
-                                    // We only preserve value-range information when stringification
-                                    // is a noop. (Common in real queries.)
-                                    let values = match field_spec.values {
-                                        Values::Empty => Values::Empty,
-                                        Values::Within(
-                                            min @ Datum::String(_),
-                                            max @ Datum::String(_),
-                                        ) => Values::Within(min, max),
-                                        Values::Within(_, _) | Values::Nested(_) | Values::All => {
-                                            Values::All
-                                        }
-                                    };
-                                    ResultSpec {
-                                        values,
-                                        ..field_spec
-                                    }
-                                } else {
-                                    field_spec
-                                }
-                            })
-                    }
-                    _ => ResultSpec::anything(),
-                };
-                ResultSpec {
-                    nullable: left.range.nullable || right.range.nullable || values_spec.nullable,
-                    fallible: left.range.fallible || right.range.fallible || values_spec.fallible,
-                    values: values_spec.values,
-                }
-            }
-            _ => ResultSpec::anything(),
-        };
-
-        let mut expr = MirScalarExpr::CallBinary {
-            func: func.clone(),
-            expr1: Box::new(Self::placeholder(left.col_type.clone())),
-            expr2: Box::new(Self::placeholder(right.col_type.clone())),
-        };
-        let mapped_spec = left.range.flat_map(left_monotonic, |left_result| {
-            Self::set_argument(&mut expr, 0, left_result);
-            right.range.flat_map(right_monotonic, |right_result| {
-                Self::set_argument(&mut expr, 1, right_result);
-                self.eval_result(expr.eval(&[], self.arena))
+        let mapped_spec = if let Some(special) = SpecialBinary::for_func(func) {
+            (special.map_fn)(left.range, right.range)
+        } else {
+            let mut expr = MirScalarExpr::CallBinary {
+                func: func.clone(),
+                expr1: Box::new(Self::placeholder(left.col_type.clone())),
+                expr2: Box::new(Self::placeholder(right.col_type.clone())),
+            };
+            left.range.flat_map(left_monotonic, |left_result| {
+                Self::set_argument(&mut expr, 0, left_result);
+                right.range.flat_map(right_monotonic, |right_result| {
+                    Self::set_argument(&mut expr, 1, right_result);
+                    self.eval_result(expr.eval(&[], self.arena))
+                })
             })
-        });
+        };
 
         let col_type = func.output_type(left.col_type, right.col_type);
 
-        let range = mapped_spec
-            .intersect(ResultSpec::has_type(&col_type, true))
-            .intersect(special_spec);
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
         ColumnSpec { col_type, range }
     }
 
