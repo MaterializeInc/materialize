@@ -234,17 +234,9 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
             )
             c.kill("clusterd1", "materialized")
 
-            with c.override(
-                # Turn off the failpoint
-                Clusterd(
-                    name="clusterd1",
-                    options=[
-                        "--scratch-directory=/mzdata/source_data",
-                    ],
-                )
-            ):
-                c.up("clusterd1", "materialized")
-                c.run("testdrive", "failpoint/04-recover.td")
+        # Running without set failpoint
+        c.up("clusterd1", "materialized")
+        c.run("testdrive", "failpoint/04-recover.td")
 
     c.run("testdrive", "failpoint/05-reset.td")
     c.kill("clusterd1", "materialized")
