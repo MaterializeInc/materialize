@@ -27,7 +27,7 @@ helpful when you manage other cloud resources in collaboration with Materialize.
 The Terraform modules below provide the cloud infrastructure foundation
 Materialize needs to communicate with components outside of Materialize itself.
 The Materialize provider allows users to manage Materialize resources in the
-same programmatic way. 
+same programmatic way.
 
 You can use the modules to establish the underlying cloud
 resources and then use the Materialize provider to build Materialize-specific
