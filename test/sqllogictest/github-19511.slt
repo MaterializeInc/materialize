@@ -1,0 +1,111 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# The following is a regression test for cases 3), 4), and 6)
+# of https://github.com/MaterializeInc/materialize/issues/19511,
+# where aggregate functions would type-promote to floating point,
+# but could promote to numeric.
+
+statement ok
+CREATE TABLE t_19511_case_3 (row_index INT, decimal_39_8_val DECIMAL(39,8));
+
+statement ok
+INSERT INTO t_19511_case_3 VALUES (3, 9999999999999999999999999999999.99999999::DECIMAL(39,8));
+
+statement ok
+INSERT INTO t_19511_case_3 VALUES (4, -9999999999999999999999999999999.99999999::DECIMAL(39,8));
+
+statement ok
+CREATE OR REPLACE VIEW v_19511_case_3 (row_index, decimal_39_8_val)
+ AS SELECT 3, 9999999999999999999999999999999.99999999::DECIMAL(39,8)
+    UNION SELECT 4, -9999999999999999999999999999999.99999999::DECIMAL(39,8);
+
+# Note that we get an error in the evaluation of this case, while
+# PostgreSQL successfully computes a result. This is due to the
+# precision of our numeric types vs. the algorithm used to calculate
+# standard deviation (https://github.com/MaterializeInc/materialize/issues/1240).
+query error
+SELECT
+  stddev_samp(decimal_39_8_val)
+FROM
+  t_19511_case_3
+WHERE row_index IN (3, 4);
+
+query error
+SELECT
+  stddev_samp(decimal_39_8_val)
+FROM
+WHERE row_index IN (3, 4);
+  v_19511_case_3
+
+statement ok
+CREATE TABLE t_19511_case_4 (row_index INT, int8_val INT8);
+
+statement ok
+INSERT INTO t_19511_case_4 VALUES (5, 0::INT8);
+
+statement ok
+INSERT INTO t_19511_case_4 VALUES (7, 9223372036854775807::INT8);
+
+statement ok
+CREATE OR REPLACE VIEW v_19511_case_4 (row_index, int8_val)
+ AS SELECT 5, 0::INT8
+    UNION SELECT 7, 9223372036854775807::INT8;
+
+query R
+SELECT
+  stddev_pop(int8_val)
+FROM
+  t_19511_case_4
+WHERE row_index IN (5, 7);
+----
+4611686018427387903.50000000000000000001
+
+query R
+SELECT
+  stddev_pop(int8_val)
+FROM
+  v_19511_case_4
+WHERE row_index IN (5, 7);
+----
+4611686018427387903.50000000000000000001
+
+statement ok
+CREATE TABLE t_19511_case_6 (row_index INT, decimal_39_8_val DECIMAL(39,8));
+
+statement ok
+INSERT INTO t_19511_case_6 VALUES (6, 1.00000001::DECIMAL(39,8));
+
+statement ok
+INSERT INTO t_19511_case_6 VALUES (8, 0.99999999::DECIMAL(39,8));
+
+statement ok
+CREATE OR REPLACE VIEW v_19511_case_6 (row_index, decimal_39_8_val)
+ AS SELECT 6, 1.00000001::DECIMAL(39,8)
+    UNION SELECT 8, 0.99999999::DECIMAL(39,8);
+
+query R
+SELECT
+  stddev_pop(decimal_39_8_val)
+FROM
+  t_19511_case_6
+WHERE row_index IN (8, 6);
+----
+0.00000001
+
+query R
+SELECT
+  stddev_pop(decimal_39_8_val)
+FROM
+  v_19511_case_6
+WHERE row_index IN (8, 6);
+----
+0.00000001
