@@ -12,6 +12,9 @@ from typing import List, Set
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.expression.leaf_expression import LeafExpression
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
@@ -64,6 +67,13 @@ class ReproductionCodePrinter(BaseOutputPrinter):
         self.print_minor_separator()
         self.__print_query_of_error(
             query_template, error.strategy2, query_column_selection
+        )
+        self.print_minor_separator()
+        characteristics = self.__get_involved_characteristics(
+            query_template, query_column_selection
+        )
+        self._print_text(
+            f"All directly or indirectly involved characteristics: {characteristics}"
         )
 
     def __print_setup_code_for_error(
@@ -118,3 +128,23 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                     column_names.add(leaf_expression.column_name)
 
         return column_names
+
+    def __get_involved_characteristics(
+        self,
+        query_template: QueryTemplate,
+        query_column_selection: QueryColumnByIndexSelection,
+    ) -> Set[ExpressionCharacteristics]:
+        all_involved_characteristics: Set[ExpressionCharacteristics] = set()
+
+        for index, expression in enumerate(query_template.select_expressions):
+            if not query_column_selection.is_included(index):
+                continue
+
+            characteristics = expression.recursively_collect_involved_characteristics(
+                query_template.row_selection
+            )
+            all_involved_characteristics = all_involved_characteristics.union(
+                characteristics
+            )
+
+        return all_involved_characteristics
