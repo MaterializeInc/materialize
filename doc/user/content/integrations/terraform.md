@@ -1,6 +1,6 @@
 ---
 title: "Terraform"
-description: "Create and manage Materialize objects with the Terraform Materialize provider"
+description: "Create and manage Materialize objects with the Terraform"
 menu:
   main:
     parent: "integrations"
@@ -88,7 +88,9 @@ point between your data source and Materialize.
 After using the module, you can configure the [`materialize_connection_ssh_tunnel`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/connection_ssh_tunnel)
 resource with the module output, allowing Materialize an end-to-end connection
 to your source. The provider will configure the same Materialize objects as the
-[`CREATE CONNECTION`](https://materialize.com/docs/sql/create-connection/#ssh-tunnel) statement
+[`CREATE
+CONNECTION`](https://materialize.com/docs/sql/create-connection/#ssh-tunnel)
+statement.
 
 
 ### Postgres RDS

@@ -134,7 +134,7 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 
 👋 _Is there another object storage tool you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
 
-## Database management tools
+## Database and infrastructure management tools
 
 ### dbt
 
@@ -156,6 +156,13 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 | TablePlus    | {{< supportLevel alpha >}}       | Connect using the [PostgreSQL database driver](https://tableplus.com/blog/2019/09/jdbc-connection-strings.html).                                                                                                                                                                  | [](#notify) |
 
 👋 _Is there another SQL client you'd like to use with Materialize? Submit a [feature request](https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=A-integration&template=02-feature.yml)._
+
+### Terraform
+
+Materialize maintains a
+[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs) to help you configure Materialize resources like
+connections, sources, and database objects. The Materialize provider is a
+Terraform plugin that allows Terraform to interact with the Materialize API.
 
 ## Client libraries and ORMs
 
