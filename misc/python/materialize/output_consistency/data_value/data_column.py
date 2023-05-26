@@ -39,11 +39,7 @@ class DataColumn(LeafExpression):
     ) -> Set[ExpressionCharacteristics]:
         involved_characteristics: Set[ExpressionCharacteristics] = set()
 
-        if row_selection.keys is None:
-            selected_values = self.values
-        else:
-            selected_values = self.get_values_at_rows(row_selection.keys)
-
+        selected_values = self.get_values_at_rows(row_selection)
         for value in selected_values:
             characteristics_of_value = (
                 value.recursively_collect_involved_characteristics(row_selection)
@@ -66,9 +62,12 @@ class DataColumn(LeafExpression):
 
         return selected_rows
 
-    def get_values_at_rows(self, row_indices: Set[int]) -> List[DataValue]:
+    def get_values_at_rows(self, row_selection: DataRowSelection) -> List[DataValue]:
+        if row_selection.keys is None:
+            return self.values
+
         values = []
-        for row_index in row_indices:
+        for row_index in row_selection.keys:
             values.append(self.get_value_at_row(row_index))
 
         return values
