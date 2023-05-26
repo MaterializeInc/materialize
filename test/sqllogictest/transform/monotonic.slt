@@ -1,0 +1,168 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+#
+# Test Common subexpression elimination for Relations.
+# PR https://github.com/MaterializeInc/materialize/pull/7715
+#
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_mutually_recursive = true
+----
+COMPLETE 0
+
+statement ok
+CREATE SOURCE counter FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+
+# Properly TopK
+query T multiline
+EXPLAIN SELECT * FROM (SELECT counter FROM counter limit 1);
+----
+Explained Query:
+  TopK limit=1 monotonic
+    Get materialize.public.counter
+
+EOF
+
+# Infer monotonic Reduce operator
+query T multiline
+EXPLAIN SELECT counter % 3, MAX(counter) as sum FROM counter GROUP BY counter % 3;
+----
+Explained Query:
+  Reduce group_by=[(#0 % 3)] aggregates=[max(#0)] monotonic
+    Get materialize.public.counter
+
+EOF
+
+# Propagating monotonicity analysis through materialized views
+
+statement ok
+CREATE MATERIALIZED VIEW v1 AS SELECT DISTINCT counter % 3 as f1 FROM counter GROUP BY counter % 3;
+
+statement ok
+CREATE MATERIALIZED VIEW v2 AS SELECT f1 as counter FROM v1 WHERE f1 % 7 = 0;
+
+query T multiline
+EXPLAIN SELECT * FROM v1 CROSS JOIN LATERAL (SELECT * FROM v2 WHERE counter < f1 ORDER BY counter DESC LIMIT 3);
+----
+Explained Query:
+  TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=3 monotonic
+    Filter (#1 < #0)
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          Get materialize.public.v1
+        ArrangeBy keys=[[]]
+          Get materialize.public.v2
+
+EOF
+
+# Propagating monotonicity analysis thorugh recursive queries
+
+# Positive example: both c1 and c2 and consequently the body of the
+# WMR are monotonic.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(x INT, y INT) AS (
+    SELECT * FROM (VALUES (1, 2), (3, 4), (5, 6))
+  ),
+  c1(x INT, y INT) AS (
+    SELECT * FROM c0
+    UNION ALL
+    SELECT DISTINCT y, y-1 FROM c2 WHERE x < 1
+  ),
+  c2(x INT, y INT) AS (
+    SELECT * FROM c0
+    UNION ALL
+    SELECT DISTINCT x, x+1 FROM c1 WHERE x >= 1
+  )
+SELECT x, MAX(y) FROM (SELECT * FROM c1 UNION SELECT * FROM c2) GROUP BY x
+----
+Explained Query:
+  Return
+    Reduce group_by=[#0] aggregates=[max(#1)] monotonic
+      Distinct group_by=[#0, #1] monotonic
+        Union
+          Get l0
+          Get l1
+  With Mutually Recursive
+    cte l1 =
+      Union
+        Distinct group_by=[#0, (#0 + 1)] monotonic
+          Project (#0)
+            Filter (#0 >= 1)
+              Get l0
+        Constant
+          - (1, 2)
+          - (3, 4)
+          - (5, 6)
+    cte l0 =
+      Union
+        Distinct group_by=[#0, (#0 - 1)] monotonic
+          Project (#1)
+            Filter (#0 < 1)
+              Get l1
+        Constant
+          - (1, 2)
+          - (3, 4)
+          - (5, 6)
+
+EOF
+
+# Negative example: c2 (and consequently c2 and the WMR block body) are not
+# monotonic because c2 has a LIMIT clause.
+query T multiline
+EXPLAIN
+WITH MUTUALLY RECURSIVE
+  c0(x INT, y INT) AS (
+    SELECT * FROM (VALUES (1, 2), (3, 4), (5, 6))
+  ),
+  c1(x INT, y INT) AS (
+    SELECT * FROM c0
+    UNION ALL
+    SELECT DISTINCT y, y-1 FROM c2 WHERE x < 1
+  ),
+  c2(x INT, y INT) AS (
+    SELECT * FROM c0
+    UNION ALL
+    SELECT DISTINCT x, x+1 FROM c1 WHERE x >= 1 LIMIT 2
+  )
+SELECT x, MAX(y) FROM (SELECT * FROM c1 UNION SELECT * FROM c2) GROUP BY x
+----
+Explained Query:
+  Return
+    Reduce group_by=[#0] aggregates=[max(#1)]
+      Distinct group_by=[#0, #1]
+        Union
+          Get l0
+          Get l1
+  With Mutually Recursive
+    cte l1 =
+      TopK limit=2
+        Union
+          Distinct group_by=[#0, (#0 + 1)]
+            Project (#0)
+              Filter (#0 >= 1)
+                Get l0
+          Constant
+            - (1, 2)
+            - (3, 4)
+            - (5, 6)
+    cte l0 =
+      Union
+        Distinct group_by=[#0, (#0 - 1)]
+          Project (#1)
+            Filter (#0 < 1)
+              Get l1
+        Constant
+          - (1, 2)
+          - (3, 4)
+          - (5, 6)
+
+EOF

@@ -143,7 +143,7 @@ EXPLAIN DECORRELATED PLAN AS TEXT FOR
 VIEW ov
 ----
 Project (#0, #1)
-  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false
+  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5
     CrossJoin
       Constant
         - ()
@@ -345,7 +345,7 @@ With
               Get l7
   cte l7 =
     Project (#0, #1)
-      TopK group_by=[#0] limit=1 monotonic=false
+      TopK group_by=[#0] limit=1
         Filter (#2 = #0)
           CrossJoin
             Get l6
@@ -366,7 +366,7 @@ With
               Get l3
   cte l3 =
     Project (#0, #1)
-      TopK group_by=[#0] limit=1 monotonic=false
+      TopK group_by=[#0] limit=1
         Filter (#2 = #0)
           CrossJoin
             Get l2

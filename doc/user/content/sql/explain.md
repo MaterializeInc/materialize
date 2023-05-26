@@ -216,9 +216,9 @@ Operator | Meaning | Example
 **Filter** | Removes rows of the input for which some scalar predicates return `false`. | `Filter (#20 < #21)`
 **Join** | Returns combinations of rows from each input whenever some equality predicates are `true`. | `Join on=(#1 = #2)`
 **CrossJoin** | An alias for a `Join` with an empty predicate (emits all combinations). | `CrossJoin`
-**Reduce** | Groups the input rows by some scalar expressions, reduces each groups using some aggregate functions and produce rows containing the group key and aggregate outputs. | `Reduce group_by=[#0] aggregates=[max((#0 * #1))]`
+**Reduce** | Groups the input rows by some scalar expressions, reduces each groups using some aggregate functions, and produce rows containing the group key and aggregate outputs. | `Reduce group_by=[#0] aggregates=[max((#0 * #1))]`
 **Distinct** | Alias for a `Reduce` with an empty aggregate list. | `Distinct`
-**TopK** | Groups the inputs rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group and returns the next `limit` rows.| `TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false`
+**TopK** | Groups the inputs rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group, and returns the next `limit` rows.| `TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`
 **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input. | `Negate`
 **Threshold** | Removes any rows with negative counts. | `Threshold`
 **Union** | Sums the counts of each row of all inputs. | `Union`
@@ -236,9 +236,9 @@ Operator | Meaning | Example
 **CallTable** | Appends the result of some table function to each row in the input. | `CallTable generate_series(1, 7, 1)`
 **Filter** | Removes rows of the input for which some scalar predicates return false. | `Filter (#20 < #21)`
 **~Join** | Performs one of `INNER` / `LEFT` / `RIGHT` / `FULL OUTER` / `CROSS` join on the two inputs, using the given predicate. | `InnerJoin (#3 = #5)`.
-**Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions and produce rows containing the group key and aggregate outputs. In the case where the group key is empty and the input is empty, returns a single row with the aggregate functions applied to the empty input collection. | `Reduce group_by=[#2] aggregates=[min(#0), max(#0)]`
+**Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs. In the case where the group key is empty and the input is empty, returns a single row with the aggregate functions applied to the empty input collection. | `Reduce group_by=[#2] aggregates=[min(#0), max(#0)]`
 **Distinct** | Removes duplicate copies of input rows. | `Distinct`
-**TopK** | Groups the inputs rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group and returns the next `limit` rows. | `TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`
+**TopK** | Groups the inputs rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group, and returns the next `limit` rows. | `TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`
 **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input. | `Negate`
 **Threshold** | Removes any rows with negative counts. | `Threshold`
 **Union** | Sums the counts of each row of all inputs. | `Union`

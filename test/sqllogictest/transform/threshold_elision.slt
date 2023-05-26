@@ -185,7 +185,7 @@ Explained Query:
     Union // { non_negative: false }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        TopK group_by=[#0] limit=1 monotonic=false // { non_negative: true }
+        TopK group_by=[#0] limit=1 // { non_negative: true }
           Get l0 // { non_negative: true }
   With
     cte l0 =
@@ -224,7 +224,7 @@ Explained Query:
     Union // { non_negative: false }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        TopK group_by=[#0] limit=1 monotonic=false // { non_negative: true }
+        TopK group_by=[#0] limit=1 // { non_negative: true }
           Get l0 // { non_negative: true }
   With
     cte l0 =

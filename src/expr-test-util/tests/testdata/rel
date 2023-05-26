@@ -126,7 +126,7 @@ build
 (top_k (get y) [1] [0] 5 1)
 ----
 ----
-TopK group_by=[#1] order_by=[#0 asc nulls_first] limit=5 offset=1 monotonic=false
+TopK group_by=[#1] order_by=[#0 asc nulls_first] limit=5 offset=1
   Get u1
 
 ----
@@ -136,7 +136,7 @@ build
 (top_k (get y) [0 1] [(2 true true)] )
 ----
 ----
-TopK group_by=[#0, #1] order_by=[#2 desc nulls_last] monotonic=false
+TopK group_by=[#0, #1] order_by=[#2 desc nulls_last]
   Get u1
 
 ----

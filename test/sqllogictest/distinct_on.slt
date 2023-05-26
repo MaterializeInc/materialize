@@ -32,7 +32,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT ON (c) a FROM abc
 ----
 Explained Query:
   Project (#0) // { arity: 1 }
-    TopK group_by=[#1] limit=1 monotonic=false // { arity: 2 }
+    TopK group_by=[#1] limit=1 // { arity: 2 }
       Project (#0, #2) // { arity: 2 }
         Get materialize.public.abc // { arity: 3 }
 
@@ -43,7 +43,7 @@ EXPLAIN WITH(arity, join_impls) SELECT DISTINCT ON (c) a FROM abc ORDER BY c, b
 ----
 Explained Query:
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] output=[#0]
-    TopK group_by=[#2] order_by=[#1 asc nulls_last] limit=1 monotonic=false // { arity: 3 }
+    TopK group_by=[#2] order_by=[#1 asc nulls_last] limit=1 // { arity: 3 }
       Get materialize.public.abc // { arity: 3 }
 
 EOF
