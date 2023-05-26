@@ -24,7 +24,7 @@ A *cost model* tries to predict a program’s behavior given information about i
 Our cost model should be in terms of the dimensions that are relevant to us:
 
 - Latency (hydration time; latency per update)
-- Storage (memory footprint/implicit storage)
+- Memory (memory footprint/implicit storage)
 - Scalability (to what degree can this query be spread across workers)
 
 Our cost model should be *executable* and *accurate:*
@@ -77,22 +77,24 @@ Traditional databases track cardinality data and statistics about various column
 
 ### Symbolic costs
 
-A symbolic cost is a polynomial over the features of the input relations. For example, a batch query that loops over relation `R` twice and then computes its cross product with relation `Q` will have cost `2|R| + |R|*|Q|`. A traditional database typically computes cost just in terms of overall batch query time, but our costs are multi-dimensional. In rough feasibility order:
+A symbolic cost is a polynomial over the features of the input relations. For example, a batch query that loops over relation `R` twice and then computes its cross product with relation `Q` will have cost `2|R| + |R|*|Q|`. A traditional database typically computes cost just in terms of overall batch query time, but our costs are multi-dimensional. In priority order:
 
-| Dimension          | Input features                                               | Outputs                         | Output type |
-| ------------------ | ------------------------------------------------------------ | ------------------------------- | ----------- |
-| Hydration time     | Source cardinality                                           | Time estimate                   |             |
-| Latency per update | Source cardinality, expected per-update delta on each source | Time estimate (per source)      |             |
-| Storage            | Source cardinality, existing indices, cardinality of groups  | Arrangements and size estimates |             |
-| Scalability        | Distribution of keys (e.g., cardinality of distinct keys)    | Data parallelism estimate       |             |
+| Dimension          | Input features                                               | Outputs                         | Output type                         |
+| ------------------ | ------------------------------------------------------------ | ------------------------------- | ----------------------------------- |
+| Memory             | Source cardinality, existing indices, cardinality of groups  | Arrangements and size estimates | (Vec<Arrangement>, Formula<Source>) |
+| Hydration time     | Source cardinality                                           | Time estimate                   | Formula<Source>                     |
+| Latency per update | Source cardinality, expected per-update delta on each source | Time estimate (per source)      | Map<Source, Formula<Source>>        |
+| Scalability        | Distribution of keys (e.g., cardinality of distinct keys)    | Data parallelism estimate       | Map<Source, Vec<Column>>            |
+
+In the output type, `Arrangement` refers to summary information about the arrangements necessary; `Formula<V>` refers to an algebraic expression with variables drawn from the type `V`.
+
+The *memory* dimension is meant to identify particularly expensive new arrangements: for example, a count query grouping by US state code (just 50, no big deal) vs. grouping by user ID (as big as your user table).
 
 The *hydration time* dimension is effectively a classical batch database cost model: given cardinalities on the input relations, predict how much work a given plan has to do.
 
 The *latency per update* dimension is unique to our streaming setting. Different query plans will lead to different costs when different sources produce new data. If a calculus metaphor is helpful, you can think of the cost model here producing a partial derivative with respect to each input; alternatively, the cost model’s aggregate *latency per update* cost is the [Jacobian](https://en.wikipedia.org/wiki/Jacobian_matrix_and_determinant) of that query.
 
-The *storage* dimension is meant to identify particularly expensive new arrangements: for example, a count query grouping by US state code (just 50, no big deal) vs. grouping by user ID (as big as your user table).
-
-The *scalability* dimension is meant to characterize how much the work for the given query can be spread across multiple nodes.
+The *scalability* dimension is meant to characterize how much the work for the given query can be spread across multiple nodes; the output should identify which columns (per source) will allow for distribution.
 
 # Reference explanation
 [reference-explanation]: #reference-explanation
@@ -101,6 +103,25 @@ This hasn't been implemented yet.
 
 # Rollout
 [rollout]: #rollout
+
+## Implementation plan
+[testing-and-observability]: #implementation-plan
+
+The current plan is to work towards a minimally viable cost model, with the following priority ordering memory > hydration > latency > scalability.
+
+- Start with a source cardinality analysis that maps (symbolic) input cardinalities to (symbolic) output cardinalities.
+
+  + Cardinality analysis can work on MIR or LIR, since cardinality ought to be constant under optimization.
+
+  + Selectivity factors will need to be just made up for now.
+
+- Use the cardinality analysis to build the memory cost model.
+
+  + The memory cost model will work on LIR using the "lower and check cost" approach when planning joins in MIR.
+
+- Try to validate the memory cost model on a variety of queries.
+
+- Experiment with join ordering to see if the memory cost model will improve on our heuristics.
 
 ## Testing and observability
 [testing-and-observability]: #testing-and-observability
@@ -113,7 +134,6 @@ Testing can be split into two categories:
 High-level validation requires running queries on meaningful amounts of data; low-level correctness checking might be able to run via `datadriven::walk` without using any data at all, just checking that certain queries are always given better costs than other queries.
 
 Low-level correctness can live in CI, but high-level validation may be costly enough to need to live elsewhere. We should ensure that high-level validation is run with some frequency to avoid drift.
-
 
 ## Lifecycle
 [lifecycle]: #lifecycle
@@ -134,14 +154,14 @@ Cost models all look more or less the same, though the precise input features an
 
 An alternative implementation approach would be to build a completely empirical cost model. That is, rather than writing a symbolic cost model *a priori*, we could curate a corpus of candidate queries, observe their performance on a variety of inputs, and then try to fit a cost model based on those results. Such an empirical cost model will almost surely be overfit and not particularly robust; it would also be hard to maintain.
 
+Should the multi-dimensional cost model be separate analyses (each running in a linear pass over the plan) or as a single analysis (running one pass)? The shared dependency on source cardinality information suggests that a multi-pass approach will be logistically easier. We can try to combine passes later, though the overall time spent _calculating_ cost should be quite low.
+
 ## Unresolved questions
 [unresolved-questions]: #unresolved-questions
 
 Which loads should we test on? No cost model is perfect, but more testing with better/more realistic loads will give us some confidence that our model will help us make good decisions.
 
-Should the cost model work on `MirRelationExpression` or `LirRelationExpression`? Join planning happens at the MIR level, and join planning is a natural first client of the cost model.
-
-Should the multi-dimensional cost model be separate analyses (each running in a linear pass over the plan) or as a single analysis (running one pass)?
+Should the cost model work on `MirRelationExpression` or `LirRelationExpression`? Join planning happens at the MIR level, and join planning is a natural first client of the cost model. Even so, join planning is late enough that we could have the cost model work on LIR and plan joins by lowering the joined relations to LIR, considering their cost, and then throwing away that lowering. It's more expensive, but working on LIR means the cost model never has to guess how the query will lower.
 
 How should multi-dimensional costs be rendered in `EXPLAIN WITH(cost)`?
 
@@ -151,3 +171,13 @@ How should we communicate source features to the cost model?
 [future-work]: #future-work
 
 When we have a candidate cost model, we will want to identify opportunities to use the cost model in the optimizer and pick a good first place to use it—most likely join planning. Actually using the cost model in the optimizer will require more validation and testing—at a minimum on LDBC, but ideally on client queries—to ensure that we don’t regress performance.
+
+We've identified the following early candidate clients for the cost model:
+
+1. **Join ordering.** There are some trade offs here between set enumeration and more heuristic approaches---in an ideal world, we'd have an explicit "optimization budget" to determine how much of the join ordering space to explore.
+
+2. **CTE filter pushdown.** Pushing filters all the way down can be advantageous, depending on selectivity.
+
+3. **Reduction pushdown.** Pushing reductions down is not always advantageous.
+
+4. **Late materialization.** Given a join on a number of tables, it may be advantageous to break the join in two: a small join on a projection to set of common keys and a larger join to collect the other fields. Whether or not late materialization is worthwhile depends on which arrangements already exist.
