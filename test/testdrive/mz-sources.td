@@ -145,3 +145,6 @@ debezium
 
 > SELECT envelope_type FROM mz_sources WHERE name = 'upsert_source'
 upsert
+
+> SELECT subsources IS NULL FROM mz_sources WHERE name = 'upsert_source'
+true

@@ -298,7 +298,19 @@ impl CatalogState {
         let privileges = privileges_row.unpack_first();
         let mut updates = match entry.item() {
             CatalogItem::Log(_) => self.pack_source_update(
-                id, oid, schema_id, name, "log", None, None, None, None, owner_id, privileges, diff,
+                id,
+                oid,
+                schema_id,
+                name,
+                "log",
+                None,
+                None,
+                None,
+                None,
+                owner_id,
+                privileges,
+                vec![],
+                diff,
             ),
             CatalogItem::Index(index) => {
                 self.pack_index_update(id, oid, name, owner_id, index, diff)
@@ -312,6 +324,13 @@ impl CatalogState {
                 let envelope = source.envelope();
                 let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
 
+                let subsources = match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => {
+                        ingestion.subsource_exports.keys().collect()
+                    }
+                    _ => vec![],
+                };
+
                 let mut updates = self.pack_source_update(
                     id,
                     oid,
@@ -324,6 +343,7 @@ impl CatalogState {
                     cluster_id.as_deref(),
                     owner_id,
                     privileges,
+                    subsources,
                     diff,
                 );
 
@@ -437,8 +457,31 @@ impl CatalogState {
         cluster_id: Option<&str>,
         owner_id: &RoleId,
         privileges: Datum,
+        subsources: Vec<&GlobalId>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
+        let mut subsources_row = Row::default();
+        let mut subsource_strings: Vec<_> = subsources.iter().map(|id| id.to_string()).collect();
+        subsource_strings.sort();
+
+        let subsources = if subsources.is_empty() {
+            Datum::Null
+        } else {
+            subsources_row
+                .packer()
+                .push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: subsources.len(),
+                    }],
+                    subsource_strings
+                        .iter()
+                        .map(|id| Datum::String(id.as_str())),
+                )
+                .expect("subsources is 1 dimensional, and its length is used for the array length");
+            subsources_row.unpack_first()
+        };
+
         vec![BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SOURCES),
             row: Row::pack_slice(&[
@@ -453,6 +496,7 @@ impl CatalogState {
                 Datum::from(cluster_id),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                subsources,
             ]),
             diff,
         }]

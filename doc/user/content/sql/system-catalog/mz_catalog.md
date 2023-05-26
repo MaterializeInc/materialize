@@ -367,6 +367,7 @@ Field            | Type                 | Meaning
 `cluster_id`     | [`text`]             | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`]             | The role ID of the owner of the source. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`     | [`mz_aclitem array`] | The privileges belonging to the source.
+`subsources`     | [`text array`]       | This source's subsources, if any.
 
 ### `mz_storage_usage`
 
