@@ -23,11 +23,15 @@ use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_client::types::sources::UpsertEnvelope;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::operators::Capability;
+use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
@@ -318,12 +322,14 @@ where
             {
                 Ok(_) => {}
                 Err(e) => {
-                    let update = get_health_update(e, "failure while rehydrating state");
-                    health_output
-                        .give(&health_cap, (source_config.worker_id, 0, update))
-                        .await;
-                    std::future::pending::<()>().await;
-                    unreachable!("pending future never returns");
+                    process_upsert_state_error::<G>(
+                        "failure while rehydrating state",
+                        e,
+                        source_config.worker_id,
+                        &mut health_output,
+                        &health_cap,
+                    )
+                    .await;
                 }
             }
         }
@@ -381,13 +387,14 @@ where
                     {
                         Ok(_) => {}
                         Err(e) => {
-                            let update =
-                                get_health_update(e, "failure while fetching records from state");
-                            health_output
-                                .give(&health_cap, (source_config.worker_id, 0, update))
-                                .await;
-                            std::future::pending::<()>().await;
-                            unreachable!("pending future never returns");
+                            process_upsert_state_error::<G>(
+                                "failure while fetching records from state",
+                                e,
+                                source_config.worker_id,
+                                &mut health_output,
+                                &health_cap,
+                            )
+                            .await;
                         }
                     }
 
@@ -454,13 +461,14 @@ where
                     {
                         Ok(_) => {}
                         Err(e) => {
-                            let update =
-                                get_health_update(e, "failure while updating records in state");
-                            health_output
-                                .give(&health_cap, (source_config.worker_id, 0, update))
-                                .await;
-                            std::future::pending::<()>().await;
-                            unreachable!("pending future never returns");
+                            process_upsert_state_error::<G>(
+                                "failure while updating records in state",
+                                e,
+                                source_config.worker_id,
+                                &mut health_output,
+                                &health_cap,
+                            )
+                            .await;
                         }
                     }
 
@@ -486,12 +494,25 @@ where
     )
 }
 
-fn get_health_update(e: anyhow::Error, msg: &str) -> HealthStatusUpdate {
-    HealthStatusUpdate {
+async fn process_upsert_state_error<G: Scope>(
+    msg: &str,
+    e: anyhow::Error,
+    worker_id: usize,
+    health_output: &mut AsyncOutputHandle<
+        <G as ScopeParent>::Timestamp,
+        Vec<(usize, usize, HealthStatusUpdate)>,
+        TeeCore<<G as ScopeParent>::Timestamp, Vec<(usize, usize, HealthStatusUpdate)>>,
+    >,
+    health_cap: &Capability<<G as ScopeParent>::Timestamp>,
+) {
+    let update = HealthStatusUpdate {
         update: HealthStatus::StalledWithError {
             error: format!("{}: {}", msg, e.display_with_causes()),
             hint: None,
         },
         should_halt: true,
-    }
+    };
+    health_output.give(health_cap, (worker_id, 0, update)).await;
+    std::future::pending::<()>().await;
+    unreachable!("pending future never returns");
 }
