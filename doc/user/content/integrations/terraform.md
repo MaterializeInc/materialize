@@ -71,6 +71,10 @@ resource "materialize_connection_kafka" "example_kafka_connection_multiple_broke
 }
 ```
 
+For a complete example of the Amazon MSK module with the Materialize provider,
+check out this [demo](https://github.com/MaterializeInc/demos/tree/main/integrations/terraform/msk-privatelink). The demo adds the Materialize provider configuration to the modules and bundles the entire deployment into one Terraform configuration file.
+
+
 ### EC2 SSH bastion host
 
 Another method for source connection is to use a bastion host to allow SSH
