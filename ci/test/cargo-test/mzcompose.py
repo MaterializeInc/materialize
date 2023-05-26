@@ -123,11 +123,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "--profile=ci",
         ]
 
-        # Many tests don't use 100% of a CPU core, so run more at once in CI
-        cpu_count = os.cpu_count()
-        if ui.env_is_truthy("CI") and cpu_count:
-            cmd += [
-                f"--test-threads={cpu_count * 2}",
-            ]
-
         spawn.runv(cmd + args.args, env=env)
