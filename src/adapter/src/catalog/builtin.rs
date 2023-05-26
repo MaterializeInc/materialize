@@ -1699,7 +1699,8 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        ),
+        )
+        .with_column("oid", ScalarType::Oid.nullable(false)),
     is_retained_metrics_object: false,
 });
 pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1998,7 +1999,7 @@ UNION ALL
 UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
-    SELECT id, NULL::pg_catalog.oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
+    SELECT id, oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
 };
 
 pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
