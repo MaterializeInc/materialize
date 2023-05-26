@@ -399,6 +399,8 @@ static VALID_CASTS: Lazy<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> =
         // so use mz_error_if_null to coerce that into an error. This is hacky and
         // incomplete in a few ways, but gets us close enough to making drivers happy.
         // TODO: Support the correct error code for does not exist (42883).
+        // TODO: Support qualified names.
+        // TODO: This should take into account the search path when looking for an object.
         (String, RegClass) => Explicit: sql_impl_cast("(
                 SELECT
                     CASE

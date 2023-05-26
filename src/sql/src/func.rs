@@ -324,7 +324,7 @@ impl<R> Operation<R> {
 /// Backing implementation for sql_impl_func and sql_impl_cast. See those
 /// functions for details.
 pub fn sql_impl(
-    expr: &'static str,
+    expr: &str,
 ) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, PlanError> {
     let expr = mz_sql_parser::parser::parse_expr(expr).unwrap_or_else(|_| {
         panic!(
@@ -377,7 +377,7 @@ pub fn sql_impl(
 // The number of parameters in the SQL expression must exactly match the number
 // of parameters in the built-in's declaration. There is no support for variadic
 // functions.
-fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
+fn sql_impl_func(expr: &str) -> Operation<HirScalarExpr> {
     let invoke = sql_impl(expr);
     Operation::variadic(move |ecx, args| {
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
@@ -1653,6 +1653,48 @@ macro_rules! catalog_name_only {
 pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
+    macro_rules! privilege_fn {
+        ( $fn_name:expr, $catalog_tbl:expr ) => {
+            &format!("
+                CASE
+                -- We need to validate the privileges to return a proper error before anything
+                -- else.
+                WHEN NOT mz_internal.mz_validate_privileges($3)
+                OR $1 IS NULL
+                OR $2 IS NULL
+                OR $3 IS NULL
+                OR $1 NOT IN (SELECT oid FROM mz_roles)
+                OR $2 NOT IN (SELECT oid FROM {})
+                THEN NULL
+                ELSE COALESCE(
+                    (
+                        SELECT
+                            bool_or(
+                                mz_internal.mz_acl_item_contains_privilege(privilege, $3)
+                            )
+                                AS {}
+                        FROM
+                            (
+                                SELECT
+                                    unnest(privileges)
+                                FROM
+                                    {}
+                                WHERE
+                                    {}.oid = $2
+                            )
+                                AS user_privs (privilege)
+                            LEFT JOIN mz_roles ON
+                                    mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
+                        WHERE
+                            mz_roles.oid = $1
+                    ),
+                    false
+                )
+                END
+            ", $catalog_tbl, $fn_name, $catalog_tbl, $catalog_tbl)
+        };
+    }
+
     builtins! {
         // Literal OIDs collected from PG 13 using a version of this query
         // ```sql
@@ -1889,20 +1931,21 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "get_byte" => Scalar {
             params!(Bytes, Int32) => BinaryFunc::GetByte => Int32, 721;
         },
-        "has_table_privilege" => Scalar {
-            params!(String, String, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, 1922;
-            params!(String, Oid, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 1923;
-            params!(Oid, String, String) => sql_impl_func("has_table_privilege($1, $2::regclass::oid, $3)") => Bool, 1924;
-            params!(Oid, Oid, String) => sql_impl_func("
+        "has_cluster_privilege" => Scalar {
+            params!(String, String, String) => sql_impl_func("has_cluster_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_TEXT_OID;
+            params!(Oid, String, String) => sql_impl_func("
                 CASE
-                -- We need to validate the privileges to return a proper error before anything
-                -- else.
-                WHEN NOT mz_internal.mz_validate_privileges($3)
+                -- We need to validate the name and privileges to return a proper error before
+                -- anything else.
+                WHEN mz_internal.mz_error_if_null(
+                    (SELECT name FROM mz_clusters WHERE name = $2),
+                    'error cluster \"' || $2 || '\" does not exist'
+                ) IS NULL
+                OR NOT mz_internal.mz_validate_privileges($3)
                 OR $1 IS NULL
                 OR $2 IS NULL
                 OR $3 IS NULL
                 OR $1 NOT IN (SELECT oid FROM mz_roles)
-                OR $2 NOT IN (SELECT oid FROM mz_relations)
                 THEN NULL
                 ELSE COALESCE(
                     (
@@ -1910,15 +1953,15 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                             bool_or(
                                 mz_internal.mz_acl_item_contains_privilege(privilege, $3)
                             )
-                                AS has_table_privilege
+                                AS has_cluster_privilege
                         FROM
                             (
                                 SELECT
                                     unnest(privileges)
                                 FROM
-                                    mz_relations
+                                    mz_clusters
                                 WHERE
-                                    mz_relations.oid = $2
+                                    mz_clusters.name = $2
                             )
                                 AS user_privs (privilege)
                             LEFT JOIN mz_roles ON
@@ -1929,9 +1972,56 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     false
                 )
                 END
-            ") => Bool, 1925;
+            ") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_OID_TEXT_TEXT_OID;
+            params!(String, String) => sql_impl_func("has_cluster_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_OID;
+        },
+        "has_connection_privilege" => Scalar {
+            params!(String, String, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_TEXT_OID;
+            params!(String, Oid, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_OID_TEXT_OID;
+            params!(Oid, String, String) => sql_impl_func("has_connection_privilege($1, $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_TEXT_OID;
+            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_connection_privilege", "mz_connections")) => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_OID_TEXT_OID;
+            params!(String, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_OID;
+            params!(Oid, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_OID;
+        },
+        "has_database_privilege" => Scalar {
+            params!(String, String, String) => sql_impl_func("has_database_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_database_oid($2), $3)") => Bool, 2250;
+            params!(String, Oid, String) => sql_impl_func("has_database_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 2251;
+            params!(Oid, String, String) => sql_impl_func("has_database_privilege($1, mz_internal.mz_database_oid($2), $3)") => Bool, 2252;
+            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_database_privilege", "mz_databases")) => Bool, 2253;
+            params!(String, String) => sql_impl_func("has_database_privilege(current_user, $1, $2)") => Bool, 2254;
+            params!(Oid, String) => sql_impl_func("has_database_privilege(current_user, $1, $2)") => Bool, 2255;
+        },
+        "has_schema_privilege" => Scalar {
+            params!(String, String, String) => sql_impl_func("has_schema_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_schema_oid($2), $3)") => Bool, 2268;
+            params!(String, Oid, String) => sql_impl_func("has_schema_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 2269;
+            params!(Oid, String, String) => sql_impl_func("has_schema_privilege($1, mz_internal.mz_schema_oid($2), $3)") => Bool, 2270;
+            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_schema_privilege", "mz_schemas")) => Bool, 2271;
+            params!(String, String) => sql_impl_func("has_schema_privilege(current_user, $1, $2)") => Bool, 2272;
+            params!(Oid, String) => sql_impl_func("has_schema_privilege(current_user, $1, $2)") => Bool, 2273;
+        },
+        "has_secret_privilege" => Scalar {
+            params!(String, String, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_TEXT_OID;
+            params!(String, Oid, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_OID_TEXT_OID;
+            params!(Oid, String, String) => sql_impl_func("has_secret_privilege($1, $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_TEXT_OID;
+            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_secret_privilege", "mz_secrets")) => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_OID_TEXT_OID;
+            params!(String, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_OID;
+            params!(Oid, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_OID;
+        },
+        "has_table_privilege" => Scalar {
+            params!(String, String, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, 1922;
+            params!(String, Oid, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 1923;
+            params!(Oid, String, String) => sql_impl_func("has_table_privilege($1, $2::regclass::oid, $3)") => Bool, 1924;
+            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_table_privilege", "mz_relations")) => Bool, 1925;
             params!(String, String) => sql_impl_func("has_table_privilege(current_user, $1, $2)") => Bool, 1926;
             params!(Oid, String) => sql_impl_func("has_table_privilege(current_user, $1, $2)") => Bool, 1927;
+        },
+        "has_type_privilege" => Scalar {
+            params!(String, String, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, 3138;
+            params!(String, Oid, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 3139;
+            params!(Oid, String, String) => sql_impl_func("has_type_privilege($1, $2::regclass::oid, $3)") => Bool, 3140;
+            params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_type_privilege", "mz_types")) => Bool, 3141;
+            params!(String, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3142;
+            params!(Oid, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3143;
         },
         "hmac" => Scalar {
             params!(String, String, String) => VariadicFunc::HmacString => Bytes, 44156;
@@ -3150,6 +3240,36 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },
+        // There is no regclass equivalent for databases to look up oids, so we have this helper function instead.
+        "mz_database_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_internal.mz_error_if_null(
+                        (SELECT oid FROM mz_databases WHERE name = $1),
+                        'database \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_ROLE_OID_OID;
+        },
+        // There is no regclass equivalent for schemas to look up oids, so we have this helper function instead.
+        // TODO: Support qualified names.
+        // TODO: This should take into account the search path when looking for an object.
+        "mz_schema_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_internal.mz_error_if_null(
+                        (SELECT oid FROM mz_schemas WHERE name = $1),
+                        'schema \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_SCHEMA_OID_OID;
+        },
         // There is no regclass equivalent for roles to look up oids, so we have this helper function instead.
         "mz_role_oid" => Scalar {
             params!(String) => sql_impl_func("
@@ -3157,10 +3277,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 WHEN $1 IS NULL THEN NULL
                 ELSE (
                     mz_internal.mz_error_if_null(
-                        (SELECT oid FROM mz_roles WHERE name = $1
-                        UNION ALL
-                        SELECT NULL::pg_catalog.oid
-                        LIMIT 1),
+                        (SELECT oid FROM mz_roles WHERE name = $1),
                         'role \"' || $1 || '\" does not exist'
                     )
                 )
