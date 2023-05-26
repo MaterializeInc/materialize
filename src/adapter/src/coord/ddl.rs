@@ -897,11 +897,7 @@ impl Coordinator {
                             new_tables += 1;
                         }
                         CatalogItem::Source(source) => {
-                            if source.is_external() {
-                                // Only sources that ingest data from an external system count
-                                // towards resource limits.
-                                new_sources += 1
-                            }
+                            new_sources += source.user_controllable_persist_shard_count()
                         }
                         CatalogItem::Sink(_) => new_sinks += 1,
                         CatalogItem::MaterializedView(_) => {
@@ -917,45 +913,45 @@ impl Coordinator {
                         | CatalogItem::Func(_) => {}
                     }
                 }
-                Op::DropObject(id) => {
-                    match id {
-                        ObjectId::Cluster(_) => {
-                            new_clusters -= 1;
+                Op::DropObject(id) => match id {
+                    ObjectId::Cluster(_) => {
+                        new_clusters -= 1;
+                    }
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                        let cluster = self.catalog().get_cluster_replica(*cluster_id, *replica_id);
+                        if let ReplicaLocation::Managed(location) = &cluster.config.location {
+                            let replica_allocation = self
+                                .catalog()
+                                .cluster_replica_sizes()
+                                .0
+                                .get(&location.size)
+                                .expect(
+                                    "location size is validated against the cluster replica sizes",
+                                );
+                            new_credit_consumption_rate -= replica_allocation.credits_per_hour
                         }
-                        ObjectId::ClusterReplica((cluster_id, replica_id)) => {
-                            *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                            let cluster =
-                                self.catalog().get_cluster_replica(*cluster_id, *replica_id);
-                            if let ReplicaLocation::Managed(location) = &cluster.config.location {
-                                let replica_allocation = self
-                                    .catalog()
-                                    .cluster_replica_sizes()
-                                    .0
-                                    .get(&location.size)
-                                    .expect("location size is validated against the cluster replica sizes");
-                                new_credit_consumption_rate -= replica_allocation.credits_per_hour
-                            }
+                    }
+                    ObjectId::Database(_) => {
+                        new_databases -= 1;
+                    }
+                    ObjectId::Schema((database_spec, _)) => {
+                        if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
+                            *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
                         }
-                        ObjectId::Database(_) => {
-                            new_databases -= 1;
-                        }
-                        ObjectId::Schema((database_spec, _)) => {
-                            if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
-                                *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
-                            }
-                        }
-                        ObjectId::Role(_) => {
-                            new_roles -= 1;
-                        }
-                        ObjectId::Item(id) => {
-                            let entry = self.catalog().get_entry(id);
-                            *new_objects_per_schema
-                                .entry((
-                                    entry.name().qualifiers.database_spec.clone(),
-                                    entry.name().qualifiers.schema_spec.clone(),
-                                ))
-                                .or_insert(0) -= 1;
-                            match entry.item() {
+                    }
+                    ObjectId::Role(_) => {
+                        new_roles -= 1;
+                    }
+                    ObjectId::Item(id) => {
+                        let entry = self.catalog().get_entry(id);
+                        *new_objects_per_schema
+                            .entry((
+                                entry.name().qualifiers.database_spec.clone(),
+                                entry.name().qualifiers.schema_spec.clone(),
+                            ))
+                            .or_insert(0) -= 1;
+                        match entry.item() {
                                 CatalogItem::Connection(connection) => match connection.connection {
                                     mz_storage_client::types::connections::Connection::AwsPrivatelink(
                                         _,
@@ -968,11 +964,7 @@ impl Coordinator {
                                     new_tables -= 1;
                                 }
                                 CatalogItem::Source(source) => {
-                                    if source.is_external() {
-                                        // Only sources that ingest data from an external system count
-                                        // towards resource limits.
-                                        new_sources -= 1;
-                                    }
+                                    new_sources -= source.user_controllable_persist_shard_count()
                                 }
                                 CatalogItem::Sink(_) => new_sinks -= 1,
                                 CatalogItem::MaterializedView(_) => {
@@ -987,9 +979,8 @@ impl Coordinator {
                                 | CatalogItem::Type(_)
                                 | CatalogItem::Func(_) => {}
                             }
-                        }
                     }
-                }
+                },
                 Op::AlterRole { .. }
                 | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
@@ -1033,14 +1024,16 @@ impl Coordinator {
             "table",
             MAX_TABLES.name(),
         )?;
-        // Only sources that ingest data from an external system count
-        // towards resource limits.
-        let current_sources = self
+
+        let current_sources: usize = self
             .catalog()
             .user_sources()
             .filter_map(|source| source.source())
-            .filter(|source| source.is_external())
-            .count();
+            .map(|source| source.user_controllable_persist_shard_count())
+            .sum::<i64>()
+            .try_into()
+            .expect("non-negative sum of sources");
+
         self.validate_resource_limit(
             current_sources,
             new_sources,
