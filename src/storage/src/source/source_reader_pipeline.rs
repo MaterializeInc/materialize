@@ -139,15 +139,11 @@ pub struct RawSourceCreationConfig {
 }
 
 impl RawSourceCreationConfig {
-    /// Returns the worker id responsible for handling the given partition.
-    pub fn responsible_worker<P: Hash>(&self, partition: P) -> usize {
-        let key = usize::cast_from((self.id, partition).hashed());
-        key % self.worker_count
-    }
-
     /// Returns true if this worker is responsible for handling the given partition.
     pub fn responsible_for<P: Hash>(&self, partition: P) -> bool {
-        self.responsible_worker(partition) == self.worker_id
+        let key = usize::cast_from((self.id, partition).hashed());
+        // Distribute partitions equally amongst workers.
+        (key % self.worker_count) == self.worker_id
     }
 }
 
@@ -316,11 +312,9 @@ where
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
 
-                let status = (*output_index, status);
-                if statuses.last() != Some(&status) {
-                    statuses.push(status.clone());
-                    // The global status contains the most recent update of the subsources
-                    statuses.push((0, status.1));
+                let status_wrapper = Some((*output_index, status));
+                if statuses.last() != status_wrapper.as_ref() {
+                    statuses.push(status_wrapper.expect("definitely Some"));
                 }
 
                 match message {
@@ -401,7 +395,6 @@ impl<'a> HealthState<'a> {
 pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    resume_upper: Antichain<mz_repr::Timestamp>,
     primary_source_id: GlobalId,
     health_stream: &Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
     configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
@@ -473,7 +466,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
             .collect();
 
         // Write the initial starting state to the status shard for all managed sources
-        if is_active_worker && !resume_upper.is_empty() {
+        if is_active_worker {
             for state in health_states.values() {
                 if let Some((status_shard, persist_client)) = state.persist_details {
                     let status = HealthStatus::Starting;

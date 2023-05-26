@@ -603,6 +603,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
                 let skips = separated(", ", &plan.skips);
                 writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
+                writeln!(f, "{}monotonic", ctx.indent)?;
                 if plan.must_consolidate {
                     writeln!(f, "{}must_consolidate", ctx.indent)?;
                 }
