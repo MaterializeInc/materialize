@@ -17,11 +17,11 @@ from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
+    InconsistencyIgnoreFilter,
+)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
-)
-from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
-    KnownOutputInconsistenciesFilter,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
@@ -39,12 +39,12 @@ class QueryGenerator:
         config: ConsistencyTestConfiguration,
         randomized_picker: RandomizedPicker,
         input_data: ConsistencyTestInputData,
-        known_inconsistencies_filter: KnownOutputInconsistenciesFilter,
+        ignore_filter: InconsistencyIgnoreFilter,
     ):
         self.config = config
         self.randomized_picker = randomized_picker
         self.vertical_storage_row_count = input_data.max_value_count
-        self.known_inconsistencies_filter = known_inconsistencies_filter
+        self.ignore_filter = ignore_filter
 
         self.count_pending_expressions = 0
         # ONE query PER expression using the storage layout specified in the expression, expressions presumably fail
@@ -184,7 +184,7 @@ class QueryGenerator:
         for expression in expressions:
             row_selection = self._select_rows(expression.storage_layout)
 
-            if self.known_inconsistencies_filter.matches(expression, row_selection):
+            if self.ignore_filter.shall_ignore(expression, row_selection):
                 self._log_skipped_expression(logger, expression)
                 continue
 
@@ -231,7 +231,7 @@ class QueryGenerator:
         indices_to_remove = []
 
         for index, expression in enumerate(expressions):
-            if self.known_inconsistencies_filter.matches(expression, row_selection):
+            if self.ignore_filter.shall_ignore(expression, row_selection):
                 self._log_skipped_expression(logger, expression)
                 indices_to_remove.append(index)
 
