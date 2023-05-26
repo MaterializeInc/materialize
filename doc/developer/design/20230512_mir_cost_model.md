@@ -161,7 +161,7 @@ Should the multi-dimensional cost model be separate analyses (each running in a 
 
 Which loads should we test on? No cost model is perfect, but more testing with better/more realistic loads will give us some confidence that our model will help us make good decisions.
 
-Should the cost model work on `MirRelationExpression` or `LirRelationExpression`? Join planning happens at the MIR level, and join planning is a natural first client of the cost model. Even so, join planning is late enough that we could have the cost model work on LIR and plan joins by lowering the joined relations to LIR, considering their cost, and then throwing away that lowering. It's more expensive, but working on LIR means the cost model never has to guess how the query will lower.
+Should the cost model work on `MirRelationExpression` or LIR's `Plan`? Join planning happens at the MIR level, and join planning is a natural first client of the cost model. Even so, join planning is late enough that we could have the cost model work on LIR and plan joins by lowering the joined relations to LIR, considering their cost, and then throwing away that lowering. It's more expensive, but working on LIR means the cost model never has to guess how the query will lower.
 
 How should multi-dimensional costs be rendered in `EXPLAIN WITH(cost)`?
 
