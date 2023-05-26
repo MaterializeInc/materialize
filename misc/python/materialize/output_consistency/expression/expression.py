@@ -42,7 +42,7 @@ class Expression:
     def resolve_data_type_category(self) -> DataTypeCategory:
         raise RuntimeError("Not implemented")
 
-    def collect_involved_characteristics(
+    def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
     ) -> Set[ExpressionCharacteristics]:
         """Get all involved characteristics through recursion"""

@@ -79,7 +79,7 @@ class ExpressionWithArgs(Expression):
         args_desc = ", ".join(arg.__str__() for arg in self.args)
         return f"ExpressionWithArgs with pattern {self.pattern} and args {args_desc}"
 
-    def collect_involved_characteristics(
+    def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
     ) -> Set[ExpressionCharacteristics]:
         involved_characteristics: Set[ExpressionCharacteristics] = set()
@@ -89,7 +89,7 @@ class ExpressionWithArgs(Expression):
 
         for arg in self.args:
             involved_characteristics = involved_characteristics.union(
-                arg.collect_involved_characteristics(row_selection)
+                arg.recursively_collect_involved_characteristics(row_selection)
             )
 
         return involved_characteristics

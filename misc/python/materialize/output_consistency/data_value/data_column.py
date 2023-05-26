@@ -34,7 +34,7 @@ class DataColumn(LeafExpression):
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category
 
-    def collect_involved_characteristics(
+    def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
     ) -> Set[ExpressionCharacteristics]:
         involved_characteristics: Set[ExpressionCharacteristics] = set()
@@ -45,8 +45,8 @@ class DataColumn(LeafExpression):
             selected_values = self.get_values_at_rows(row_selection.keys)
 
         for value in selected_values:
-            characteristics_of_value = value.collect_involved_characteristics(
-                row_selection
+            characteristics_of_value = (
+                value.recursively_collect_involved_characteristics(row_selection)
             )
             involved_characteristics = involved_characteristics.union(
                 characteristics_of_value

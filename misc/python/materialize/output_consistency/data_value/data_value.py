@@ -43,7 +43,7 @@ class DataValue(LeafExpression):
     def to_sql_as_value(self) -> str:
         return f"{self.value}::{self.data_type.type_name}"
 
-    def collect_involved_characteristics(
+    def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
     ) -> Set[ExpressionCharacteristics]:
         return self.own_characteristics
