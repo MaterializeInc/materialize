@@ -83,10 +83,12 @@ class ExpressionWithArgs(Expression):
         self, row_selection: DataRowSelection
     ) -> Set[ExpressionCharacteristics]:
         involved_characteristics: Set[ExpressionCharacteristics] = set()
-        involved_characteristics.union(self.own_characteristics)
+        involved_characteristics = involved_characteristics.union(
+            self.own_characteristics
+        )
 
         for arg in self.args:
-            involved_characteristics.union(
+            involved_characteristics = involved_characteristics.union(
                 arg.collect_involved_characteristics(row_selection)
             )
 

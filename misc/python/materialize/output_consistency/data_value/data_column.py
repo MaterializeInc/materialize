@@ -41,7 +41,7 @@ class DataColumn(LeafExpression):
 
         for index, value in enumerate(self.all_row_values):
             if row_selection.is_included(index):
-                involved_characteristics.union(
+                involved_characteristics = involved_characteristics.union(
                     value.collect_involved_characteristics(row_selection)
                 )
 
