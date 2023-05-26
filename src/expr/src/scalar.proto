@@ -418,6 +418,7 @@ message ProtoUnaryFunc {
         google.protobuf.Empty mz_acl_item_grantee = 293;
         google.protobuf.Empty mz_acl_item_privileges = 294;
         ProtoCastToVariableType cast_array_to_array = 295;
+        google.protobuf.Empty mz_validate_privileges = 296;
     }
 }
 
@@ -608,6 +609,7 @@ message ProtoBinaryFunc {
         google.protobuf.Empty range_intersection = 181;
         google.protobuf.Empty range_difference = 182;
         google.protobuf.Empty uuid_generate_v5 = 183;
+        google.protobuf.Empty mz_acl_item_contains_privilege = 184;
     }
 }
 

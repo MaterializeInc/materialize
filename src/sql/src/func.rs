@@ -17,6 +17,7 @@ use std::fmt;
 use itertools::Itertools;
 use mz_expr::func;
 use mz_ore::collections::CollectionExt;
+use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, ScalarType};
 use once_cell::sync::Lazy;
@@ -325,8 +326,12 @@ impl<R> Operation<R> {
 pub fn sql_impl(
     expr: &'static str,
 ) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, PlanError> {
-    let expr = mz_sql_parser::parser::parse_expr(expr)
-        .expect("static function definition failed to parse");
+    let expr = mz_sql_parser::parser::parse_expr(expr).unwrap_or_else(|_| {
+        panic!(
+            "static function definition failed to parse {}",
+            expr.quoted(),
+        )
+    });
     move |qcx, types| {
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
@@ -1884,6 +1889,50 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "get_byte" => Scalar {
             params!(Bytes, Int32) => BinaryFunc::GetByte => Int32, 721;
         },
+        "has_table_privilege" => Scalar {
+            params!(String, String, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, 1922;
+            params!(String, Oid, String) => sql_impl_func("has_table_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 1923;
+            params!(Oid, String, String) => sql_impl_func("has_table_privilege($1, $2::regclass::oid, $3)") => Bool, 1924;
+            params!(Oid, Oid, String) => sql_impl_func("
+                CASE
+                -- We need to validate the privileges to return a proper error before anything
+                -- else.
+                WHEN NOT mz_internal.mz_validate_privileges($3)
+                OR $1 IS NULL
+                OR $2 IS NULL
+                OR $3 IS NULL
+                OR $1 NOT IN (SELECT oid FROM mz_roles)
+                OR $2 NOT IN (SELECT oid FROM mz_relations)
+                THEN NULL
+                ELSE COALESCE(
+                    (
+                        SELECT
+                            bool_or(
+                                mz_internal.mz_acl_item_contains_privilege(privilege, $3)
+                            )
+                                AS has_table_privilege
+                        FROM
+                            (
+                                SELECT
+                                    unnest(privileges)
+                                FROM
+                                    mz_relations
+                                WHERE
+                                    mz_relations.oid = $2
+                            )
+                                AS user_privs (privilege)
+                            LEFT JOIN mz_roles ON
+                                    mz_internal.mz_aclitem_grantee(privilege) = mz_roles.id
+                        WHERE
+                            mz_roles.oid = $1
+                    ),
+                    false
+                )
+                END
+            ") => Bool, 1925;
+            params!(String, String) => sql_impl_func("has_table_privilege(current_user, $1, $2)") => Bool, 1926;
+            params!(Oid, String) => sql_impl_func("has_table_privilege(current_user, $1, $2)") => Bool, 1927;
+        },
         "hmac" => Scalar {
             params!(String, String, String) => VariadicFunc::HmacString => Bytes, 44156;
             params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes => Bytes, 44157;
@@ -3046,6 +3095,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         "make_mz_aclitem" => Scalar {
             params!(String, String, String) => VariadicFunc::MakeMzAclItem => MzAclItem, oid::FUNC_MAKE_MZ_ACL_ITEM_OID;
         },
+        "mz_acl_item_contains_privilege" => Scalar {
+            params!(MzAclItem, String) => BinaryFunc::MzAclItemContainsPrivilege => Bool, oid::FUNC_MZ_ACL_ITEM_CONTAINS_PRIVILEGE_OID;
+        },
         "mz_aclitem_grantor" => Scalar {
             params!(MzAclItem) => UnaryFunc::MzAclItemGrantor(func::MzAclItemGrantor) => String, oid::FUNC_MZ_ACL_ITEM_GRANTOR_OID;
         },
@@ -3098,6 +3150,23 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },
+        // There is no regclass equivalent for roles to look up oids, so we have this helper function instead.
+        "mz_role_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_internal.mz_error_if_null(
+                        (SELECT oid FROM mz_roles WHERE name = $1
+                        UNION ALL
+                        SELECT NULL::pg_catalog.oid
+                        LIMIT 1),
+                        'role \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_ROLE_OID_OID;
+        },
         // This ought to be exposed in `mz_catalog`, but its name is rather
         // confusing. It does not identify the SQL session, but the
         // invocation of this `environmentd` process.
@@ -3112,6 +3181,9 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         },
         "mz_type_name" => Scalar {
             params!(Oid) => UnaryFunc::MzTypeName(func::MzTypeName) => String, oid::FUNC_MZ_TYPE_NAME;
+        },
+        "mz_validate_privileges" => Scalar {
+            params!(String) => UnaryFunc::MzValidatePrivileges(func::MzValidatePrivileges) => Bool, oid::FUNC_MZ_VALIDATE_PRIVILEGES_OID;
         }
     }
 });
