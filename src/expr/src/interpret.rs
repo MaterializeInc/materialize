@@ -746,7 +746,7 @@ impl<'a> ColumnSpecs<'a> {
     // - Adding a linear-time optimization for associative functions like AND, OR, COALESCE.
     // - Limiting the number of arguments we'll pass on to eval. If this limit is crossed, we'll
     //   return our default / safe overapproximation instead.
-    const MAX_EVAL_ARGS: usize = 8;
+    const MAX_EVAL_ARGS: usize = 6;
 
     /// Create a new, empty set of column specs. (Initially, the only assumption we make about the
     /// data in the column is that it matches the type.)
