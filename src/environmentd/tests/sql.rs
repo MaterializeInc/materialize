@@ -2278,7 +2278,6 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18897
 fn test_coord_startup_blocking() {
     let initial_time = 0;
     let now = Arc::new(Mutex::new(initial_time));
