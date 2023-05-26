@@ -19,22 +19,27 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_client::types::sources::UpsertEnvelope;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::Scope;
+use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::operators::Capability;
+use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
+use crate::render::sources::{OutputIndex, WorkerId};
 use crate::render::upsert::types::{
     upsert_bincode_opts, InMemoryHashMap, UpsertState, UpsertStateBackend,
 };
-use crate::source::types::UpsertMetrics;
+use crate::source::types::{HealthStatus, HealthStatusUpdate, UpsertMetrics};
 use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
@@ -128,6 +133,9 @@ impl<H: Digest> Hasher for DigestHasher<H> {
 
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
+/// Returns a tuple of
+/// - A collection of the computed upsert operator and,
+/// - A health update stream to propagate errors
 pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, O), Diff>,
     upsert_envelope: UpsertEnvelope,
@@ -137,7 +145,10 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
     source_config: crate::source::RawSourceCreationConfig,
     instance_context: &StorageInstanceContext,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
-) -> Collection<G, Result<Row, DataflowError>, Diff>
+) -> (
+    Collection<G, Result<Row, DataflowError>, Diff>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+)
 where
     G::Timestamp: TotalOrder,
 {
@@ -218,7 +229,10 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::RawSourceCreationConfig,
     state: F,
-) -> Collection<G, Result<Row, DataflowError>, Diff>
+) -> (
+    Collection<G, Result<Row, DataflowError>, Diff>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
+)
 where
     G::Timestamp: TotalOrder,
     F: FnOnce() -> Fut + 'static,
@@ -252,10 +266,11 @@ where
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
     );
     let (mut output_handle, output) = builder.new_output();
+    let (mut health_output, health_stream) = builder.new_output();
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     builder.build(move |caps| async move {
-        let mut output_cap = caps.into_element();
+        let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
         let mut state = UpsertState::new(
             state().await,
@@ -298,13 +313,25 @@ where
                 }
             }
 
-            state
+            match state
                 .merge_snapshot_chunk(
                     events.drain(..),
                     PartialOrder::less_equal(&resume_upper, &snapshot_upper),
                 )
                 .await
-                .expect("hashmap impl to not fail");
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    process_upsert_state_error::<G>(
+                        "Failed to rehydrate state".to_string(),
+                        e,
+                        source_config.worker_id,
+                        &mut health_output,
+                        &health_cap,
+                    )
+                    .await;
+                }
+            }
         }
 
         drop(events);
@@ -354,10 +381,22 @@ where
                     // is an `IndexMap`.
                     multi_get_scratch.clear();
                     multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
-                    state
+                    match state
                         .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
                         .await
-                        .expect("hashmap impl to not fail");
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            process_upsert_state_error::<G>(
+                                "Failed to fetch records from state".to_string(),
+                                e,
+                                source_config.worker_id,
+                                &mut health_output,
+                                &health_cap,
+                            )
+                            .await;
+                        }
+                    }
 
                     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
                     // order to only process the command with the maximum order within the (ts,
@@ -406,7 +445,7 @@ where
                         }
                     }
 
-                    state
+                    match state
                         .multi_put(commands_state.drain(..).map(|(k, cv)| {
                             (
                                 k,
@@ -419,7 +458,19 @@ where
                             )
                         }))
                         .await
-                        .expect("hashmap impl to not fail");
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            process_upsert_state_error::<G>(
+                                "Failed to update records in state".to_string(),
+                                e,
+                                source_config.worker_id,
+                                &mut health_output,
+                                &health_cap,
+                            )
+                            .await;
+                        }
+                    }
 
                     // Emit the _consolidated_ changes to the output.
                     output_handle
@@ -434,8 +485,35 @@ where
         }
     });
 
-    output.as_collection().map(|result| match result {
-        Ok(ok) => Ok(ok),
-        Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
-    })
+    (
+        output.as_collection().map(|result| match result {
+            Ok(ok) => Ok(ok),
+            Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
+        }),
+        health_stream,
+    )
+}
+
+/// Emit the given error, and stall till the dataflow is restarted.
+async fn process_upsert_state_error<G: Scope>(
+    context: String,
+    e: anyhow::Error,
+    worker_id: usize,
+    health_output: &mut AsyncOutputHandle<
+        <G as ScopeParent>::Timestamp,
+        Vec<(usize, usize, HealthStatusUpdate)>,
+        TeeCore<<G as ScopeParent>::Timestamp, Vec<(usize, usize, HealthStatusUpdate)>>,
+    >,
+    health_cap: &Capability<<G as ScopeParent>::Timestamp>,
+) {
+    let update = HealthStatusUpdate {
+        update: HealthStatus::StalledWithError {
+            error: e.context(context).to_string_with_causes(),
+            hint: None,
+        },
+        should_halt: true,
+    };
+    health_output.give(health_cap, (worker_id, 0, update)).await;
+    std::future::pending::<()>().await;
+    unreachable!("pending future never returns");
 }
