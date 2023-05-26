@@ -930,8 +930,7 @@ class WhereExpression(Generator):
 
 class WhereConditionAnd(Generator):
     # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
-    # Also runs into https://github.com/MaterializeInc/materialize/issues/19399
-    COUNT = min(Generator.COUNT, 75)
+    COUNT = min(Generator.COUNT, 500)
 
     @classmethod
     def body(cls) -> None:
@@ -948,8 +947,7 @@ class WhereConditionAnd(Generator):
 
 class WhereConditionAndSameColumn(Generator):
     # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
-    # Also runs into https://github.com/MaterializeInc/materialize/issues/19399
-    COUNT = min(Generator.COUNT, 75)
+    COUNT = min(Generator.COUNT, 500)
 
     @classmethod
     def body(cls) -> None:
@@ -964,8 +962,7 @@ class WhereConditionAndSameColumn(Generator):
 
 class WhereConditionOr(Generator):
     # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
-    # Also runs into https://github.com/MaterializeInc/materialize/issues/19399
-    COUNT = min(Generator.COUNT, 75)
+    COUNT = min(Generator.COUNT, 500)
 
     @classmethod
     def body(cls) -> None:
@@ -982,8 +979,7 @@ class WhereConditionOr(Generator):
 
 class WhereConditionOrSameColumn(Generator):
     # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
-    # Also runs into https://github.com/MaterializeInc/materialize/issues/19399
-    COUNT = min(Generator.COUNT, 75)
+    COUNT = min(Generator.COUNT, 500)
 
     @classmethod
     def body(cls) -> None:
