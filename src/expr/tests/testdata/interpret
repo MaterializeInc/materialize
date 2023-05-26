@@ -140,3 +140,48 @@ interpret
 ["string" (7 int32) (8 int32) true false null]
 ----
 may contain: [true]
+
+# Expression: #0 = #1
+interpret
+[numeric numeric]
+[
+    [(0 numeric) (1 numeric)]
+    [(1 numeric) (2 numeric)]
+]
+(call_binary eq #0 #1)
+[true false null 13]
+----
+may contain: [true false]
+
+interpret
+[numeric numeric]
+[
+    [(1 numeric)]
+    [(1 numeric)]
+]
+(call_binary eq #0 #1)
+[true false null 13]
+----
+may contain: [true]
+
+interpret
+[numeric numeric]
+[
+    [(0 numeric)]
+    [(2 numeric)]
+]
+(call_binary eq #0 #1)
+[true false null 13]
+----
+may contain: [false]
+
+interpret
+[numeric numeric]
+[
+    [(0 numeric) null]
+    [(2 numeric) null]
+]
+(call_binary eq #0 #1)
+[true false null 13]
+----
+may contain: [false null]

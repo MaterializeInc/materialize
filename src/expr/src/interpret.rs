@@ -654,6 +654,25 @@ impl SpecialBinary {
             })
         }
 
+        fn eq<'b>(left: ResultSpec<'b>, right: ResultSpec<'b>) -> ResultSpec<'b> {
+            eagerly(left, right, |left, right| {
+                // `eq` might return true if there's any overlap between the range of its two arguments...
+                let maybe_true = match left.clone().intersect(right.clone()) {
+                    Values::Empty => ResultSpec::nothing(),
+                    _ => ResultSpec::value(Datum::True),
+                };
+
+                // ...and may return false if the union contains at least two distinct values.
+                // Note that the `Empty` case is handled by `eagerly` above.
+                let maybe_false = match left.union(right) {
+                    Values::Within(a, b) if a == b => ResultSpec::nothing(),
+                    _ => ResultSpec::value(Datum::False),
+                };
+
+                maybe_true.union(maybe_false)
+            })
+        }
+
         match func {
             BinaryFunc::JsonbGetString { stringify } => Some(SpecialBinary {
                 map_fn: if *stringify {
@@ -662,6 +681,10 @@ impl SpecialBinary {
                     |l, r| jsonb_get_string(l, r, false)
                 },
                 pushdownable: (Pushdownable::Yes, Pushdownable::No),
+            }),
+            BinaryFunc::Eq => Some(SpecialBinary {
+                map_fn: eq,
+                pushdownable: (Pushdownable::Yes, Pushdownable::Yes),
             }),
             _ => None,
         }
