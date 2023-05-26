@@ -13,6 +13,8 @@ breaking:
     - WIRE
   ignore:
     # does currently not require backward-compatibility
+    - cluster-client
+    # does currently not require backward-compatibility
     - compute-client
     # does currently not require backward-compatibility
     - storage-client
