@@ -85,7 +85,6 @@ class InconsistencyIgnoreFilter:
                 # tracked with https://github.com/MaterializeInc/materialize/issues/19511
                 return True
 
-        if db_function.function_name in {"sum", "avg", "stddev_samp", "stddev_pop"}:
             if (
                 ExpressionCharacteristics.DECIMAL in all_involved_characteristics
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
