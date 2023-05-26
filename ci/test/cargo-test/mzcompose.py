@@ -8,12 +8,10 @@
 # by the Apache License, Version 2.0.
 
 import os
-from pathlib import Path
 
 from materialize import ROOT, spawn, ui
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
-    Clusterd,
     Cockroach,
     Kafka,
     Postgres,
@@ -36,16 +34,13 @@ SERVICES = [
     SchemaRegistry(),
     Postgres(image="postgres:14.2"),
     Cockroach(),
-    # Clusterd is not actually used but only here so that we can copy the
-    # executable from it instead of rebuilding it.
-    Clusterd(),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
-    c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach", "clusterd")
+    c.up("zookeeper", "kafka", "schema-registry", "postgres", "cockroach")
     # Heads up: this intentionally runs on the host rather than in a Docker
     # image. See #13010.
     postgres_url = (
@@ -112,15 +107,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ["buildkite-agent", "artifact", "upload", "coverage/cargotest.lcov.xz"]
             )
     else:
-        clusterd_path = Path("target/build/debug")
-        clusterd_path.mkdir(parents=True, exist_ok=True)
-        c.cp("clusterd:/usr/local/bin/clusterd", clusterd_path)
-
-        cmd = [
-            "cargo",
-            "nextest",
-            "run",
-            "--profile=ci",
-        ]
-
-        spawn.runv(cmd + args.args, env=env)
+        spawn.runv(
+            [
+                "cargo",
+                "build",
+                "--bin",
+                "clusterd",
+            ],
+            env=env,
+        )
+        cpu_count = os.cpu_count()
+        assert cpu_count
+        spawn.runv(
+            [
+                "cargo",
+                "nextest",
+                "run",
+                "--profile=ci",
+                # Most tests don't use 100% of a CPU core, so run two tests per CPU.
+                f"--test-threads={cpu_count * 2}",
+                *args.args,
+            ],
+            env=env,
+        )

@@ -134,7 +134,6 @@ steps:
 
   - id: cargo-test
     label: Cargo test
-    depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
     inputs:
