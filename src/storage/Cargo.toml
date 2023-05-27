@@ -21,7 +21,7 @@ clap = { version = "3.2.24", features = ["derive", "env"] }
 crossbeam-channel = "0.5.8"
 csv-core = { version = "0.1.10" }
 dec = "0.4.8"
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+differential-dataflow = "0.12.0"
 either = { version = "1.8.0", features = ["serde"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
@@ -54,20 +54,20 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 mz-timely-util = { path = "../timely-util" }
 once_cell = { version = "1.16.0" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { version = "0.6.5" }
 prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rand = "0.8.5"
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = { version = "1.7.0" }
 rocksdb = { version = "0.21.0", default-features = false, features = ["snappy"] }
 seahash = "4"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.89" }
 sha2 = "0.10.6"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "test-util"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde"] }
+tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.4", features = ["io"] }
 tracing = "0.1.37"

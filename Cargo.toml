@@ -105,27 +105,74 @@ rustc-demangle = { opt-level = 3 }
 # production installations, but we still want useful crash reports.
 debug = 1
 
-# Use this section only to change the source of dependencies that appear as
-# transitive dependencies of other external dependencies in the dependency
-# graph. For everything else (e.g. rust-postgres, rdkafka,
-# differential-dataflow, proptest, timely), use a `git` source directly in each
-# Cargo.toml.
-#
-# The reasons for each of these overrides are listed in deny.toml.
+# IMPORTANT: when patching a dependency, you should only depend on "main",
+# "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a
+# feature/patch branch (e.g., "fix-thing" or "pr-1234"). Feature/patch branches
+# tend to get rewritten or disappear (e.g., because a PR is force pushed or gets
+# merged), after which point it becomes impossible to build that historical
+# version of Materialize.
 [patch.crates-io]
-# IMPORTANT: you should only depend on "main", "master", or an upstream release
-# branch (e.g., "v7.x"). Do *not* depend on a feature/patch branch (e.g.,
-# "fix-thing" or "pr-1234"). Feature/patch branches tend to get rewritten or
-# disappear (e.g., because a PR is force pushed or gets merged), after which
-# point it becomes impossible to build that historical version of Materialize.
-chrono = { git = "https://github.com/chronotope/chrono.git", branch = "0.4.x" }
+# Projects that do not reliably release to crates.io.
+columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
+timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+
+# Waiting for hashlink, indexmap, and lru to upgrade to hashbrown v0.13,
+# which depends on ahash v0.8 instead of v0.7. In the meantime we've
+# backported the ahash v0.8 bump into hashbrown v0.12.
 hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+
+# Waiting on https://github.com/sfackler/rust-postgres/pull/752.
+postgres  = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+
+# Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
-vte = { git = "https://github.com/alacritty/vte" }
+
+# Waiting for a new release of strip-ansi-escapes that avoids the indirect
+# dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
+vte = { git = "https://github.com/MaterializeInc/vte", rev = "45670c47cebd7af050def2f80a307bdeec7caba3" }
+
+# Waiting on https://github.com/tokio-rs/prost/pull/833 to make it into a
+# release.
 prost = { git = "https://github.com/MaterializeInc/prost" }
 prost-build = { git = "https://github.com/MaterializeInc/prost" }
 prost-derive = { git = "https://github.com/MaterializeInc/prost" }
 prost-types = { git = "https://github.com/MaterializeInc/prost" }
+
+# Waiting on https://github.com/hyperium/tonic/pull/1398.
 tonic-build = { git = "https://github.com/MaterializeInc/tonic" }
+
+# Waiting on v0.18.
+# See: https://github.com/open-telemetry/opentelemetry-rust/pull/779
+opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
+opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
+
+# Waiting on tracing-opentelemetry to upgrade to the as-yet unreleased
+# v0.18 of opentelemetry.
+tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing.git", branch = "v0.1.x" }
+
+# Waiting on https://github.com/tokio-rs/console/pull/388.
+console-api = { git = "https://github.com/MaterializeInc/tokio-console.git" }
+console-subscriber = { git = "https://github.com/MaterializeInc/tokio-console.git" }
+
+# Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
+# it into a release.
+launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk" }
+
+# Waiting on https://github.com/AltSysrq/proptest/pull/264.
+proptest = { git = "https://github.com/MaterializeInc/proptest.git" }
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
+
+# Waiting on https://github.com/edenhill/librdkafka/pull/4051.
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
