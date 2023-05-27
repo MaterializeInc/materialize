@@ -112,7 +112,7 @@ impl Client {
             build_info: self.build_info,
             conn_id: self
                 .id_alloc
-                .alloc_owned()
+                .alloc()
                 .ok_or(AdapterError::IdExhaustionError)?,
             inner: self.clone(),
         })

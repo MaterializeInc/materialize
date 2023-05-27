@@ -75,7 +75,14 @@ where
     /// Allocates a new ID.
     ///
     /// Returns `None` if the allocator is exhausted.
-    pub fn alloc(&self) -> Option<T> {
+    ///
+    /// The ID associated with the [`IdHandle`] will be freed when all of the
+    /// outstanding [`IdHandle`]s have been dropped.
+    pub fn alloc(&self) -> Option<IdHandle<T>> {
+        IdHandle::new(self)
+    }
+
+    fn alloc_internal(&self) -> Option<T> {
         let mut inner = self.0.lock().expect("lock poisoned");
         if let Some(id) = inner.free.pop_front() {
             Some(id)
@@ -90,19 +97,7 @@ where
         }
     }
 
-    /// Allocates a new _owned_ ID.
-    ///
-    /// The ID associated with the [`IdHandle`] will be freed when all of the referencing
-    /// [`IdHandle`]s have been dropped.
-    pub fn alloc_owned(&self) -> Option<IdHandle<T>> {
-        IdHandle::new(self)
-    }
-
-    /// Releases a new ID back to the pool.
-    ///
-    /// It is undefined behavior to free an ID twice, or to free an ID that was
-    /// not allocated by this allocator.
-    pub fn free(&self, id: T) {
+    fn free_internal(&self, id: T) {
         let mut inner = self.0.lock().expect("lock poisoned");
         inner.free.push_back(id);
     }
@@ -126,8 +121,8 @@ where
 {
     /// Creates a new [`IdHandle`] with the provided ID.
     ///
-    /// Note: It is __entirely__ up to the caller to make sure the provided ID is not already being
-    /// used.
+    /// Note: It is *entirely* up to the caller to make sure the provided ID is
+    /// not already being used.
     pub const fn new_static(id: T) -> Self {
         IdHandle::Static(id)
     }
@@ -202,7 +197,7 @@ mod internal {
         T: From<u8> + AddAssign + PartialOrd + Copy,
     {
         pub fn new(allocator: &IdAllocator<T>) -> Option<Self> {
-            let id = allocator.alloc()?;
+            let id = allocator.alloc_internal()?;
             Some(IdHandleInner {
                 allocator: allocator.clone(),
                 id,
@@ -248,7 +243,7 @@ mod internal {
     {
         fn drop(&mut self) {
             // Release our ID for later re-use.
-            self.allocator.free(self.id);
+            self.allocator.free_internal(self.id);
         }
     }
 }
@@ -262,15 +257,21 @@ mod tests {
     #[test]
     fn test_id_alloc() {
         let ida = IdAllocator::new(3, 5);
-        assert_eq!(ida.alloc().unwrap(), 3);
-        assert_eq!(ida.alloc().unwrap(), 4);
-        assert_eq!(ida.alloc().unwrap(), 5);
-        ida.free(4);
-        assert_eq!(ida.alloc().unwrap(), 4);
-        ida.free(5);
-        ida.free(3);
-        assert_eq!(ida.alloc().unwrap(), 5);
-        assert_eq!(ida.alloc().unwrap(), 3);
+        let id3 = ida.alloc().unwrap();
+        let id4 = ida.alloc().unwrap();
+        let id5 = ida.alloc().unwrap();
+        assert_eq!(id3.val(), 3);
+        assert_eq!(id4.val(), 4);
+        assert_eq!(id5.val(), 5);
+        drop(id4);
+        let id4 = ida.alloc().unwrap();
+        assert_eq!(id4.val(), 4);
+        drop(id5);
+        drop(id3);
+        let id5 = ida.alloc().unwrap();
+        let id3 = ida.alloc().unwrap();
+        assert_eq!(id5.val(), 5);
+        assert_eq!(id3.val(), 3);
         match ida.alloc() {
             Some(id) => panic!(
                 "id allocator returned {}, not expected id exhaustion error",
@@ -284,7 +285,7 @@ mod tests {
     fn test_id_reuse() {
         let allocator = IdAllocator::new(10, 13);
 
-        let id_a = allocator.alloc_owned().unwrap();
+        let id_a = allocator.alloc().unwrap();
         assert_eq!(id_a.val(), 10);
 
         let id_a_clone = id_a.clone();
@@ -293,14 +294,14 @@ mod tests {
         // 10 should not get freed.
         drop(id_a);
 
-        let id_b = allocator.alloc_owned().unwrap();
+        let id_b = allocator.alloc().unwrap();
         assert_eq!(id_b.val(), 11);
 
         // 10 should get freed since all outstanding references have been dropped.
         drop(id_a_clone);
 
         // We should re-use 10.
-        let id_c = allocator.alloc_owned().unwrap();
+        let id_c = allocator.alloc().unwrap();
         assert_eq!(id_c.val(), 10);
     }
 
@@ -308,7 +309,7 @@ mod tests {
     fn test_display() {
         let allocator = IdAllocator::<u32>::new(65_000, 65_101);
 
-        let id_a = allocator.alloc_owned().unwrap();
+        let id_a = allocator.alloc().unwrap();
         assert_eq!(id_a.val(), 65_000);
 
         // An IdHandle should use the inner type's Display impl.
@@ -322,7 +323,7 @@ mod tests {
     fn test_map_lookup() {
         let allocator = IdAllocator::<u32>::new(99, 101);
 
-        let id_a = allocator.alloc_owned().unwrap();
+        let id_a = allocator.alloc().unwrap();
         assert_eq!(id_a.val(), 99);
 
         let mut btree = BTreeMap::new();
@@ -340,7 +341,7 @@ mod tests {
     fn test_serialization() {
         let allocator = IdAllocator::<u32>::new(42, 43);
 
-        let id_a = allocator.alloc_owned().unwrap();
+        let id_a = allocator.alloc().unwrap();
         assert_eq!(id_a.val(), 42);
 
         // An IdHandle should serialize the same as the inner value.
