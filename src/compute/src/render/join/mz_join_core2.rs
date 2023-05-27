@@ -252,6 +252,7 @@ where
                     let mut capability1 = None;
                     let mut capability2 = None;
                     let result = Rc::new(RefCell::new(result));
+                    let temp = Rc::new(RefCell::new(Vec::new()));
                     let fuel1 = Rc::new(Cell::new(0));
                     let fuel2 = Rc::new(Cell::new(0));
                     // TODO explain this
@@ -370,7 +371,6 @@ where
                         // input must scan all batches from the other input).
 
                         // Perform some amount of outstanding work.
-                        let temp = Default::default();
                         fuel1.set(1_000_000);
                         fuel2.set(1_000_000);
 
@@ -438,8 +438,6 @@ where
                                 if done {
                                     remaining_work2.set(None);
                                     capability2 = None;
-                                } else {
-                                    tracing::error!("yielded 2");
                                 }
                             }
                         }
