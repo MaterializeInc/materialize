@@ -107,7 +107,7 @@ where
 ///
 /// Once all of the [`IdHandle`]s referencing an ID have been dropped, we will then free the ID
 /// for later re-use.
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Clone, Debug)]
 pub enum IdHandle<T: From<u8> + AddAssign + PartialOrd + Copy> {
     /// An ID "allocated" a compile time.
     Static(T),
@@ -131,6 +131,34 @@ where
     fn new(allocator: &IdAllocator<T>) -> Option<Self> {
         let inner = Arc::new(internal::IdHandleInner::new(allocator)?);
         Some(IdHandle::Dynamic(inner))
+    }
+}
+
+impl<T> PartialEq for IdHandle<T>
+where
+    T: PartialEq + From<u8> + AddAssign + PartialOrd + Copy,
+{
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+impl<T> Eq for IdHandle<T> where T: PartialEq + From<u8> + AddAssign + PartialOrd + Copy {}
+
+impl<T> PartialOrd for IdHandle<T>
+where
+    T: PartialOrd + From<u8> + AddAssign + Copy,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        (**self).partial_cmp(other)
+    }
+}
+
+impl<T> Ord for IdHandle<T>
+where
+    T: Ord + From<u8> + AddAssign + PartialOrd + Copy,
+{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (**self).cmp(other)
     }
 }
 
@@ -219,34 +247,6 @@ mod internal {
         }
     }
 
-    impl<T> PartialEq for IdHandleInner<T>
-    where
-        T: PartialEq + From<u8> + AddAssign + PartialOrd + Copy,
-    {
-        fn eq(&self, other: &Self) -> bool {
-            self.id == other.id
-        }
-    }
-    impl<T> Eq for IdHandleInner<T> where T: PartialEq + From<u8> + AddAssign + PartialOrd + Copy {}
-
-    impl<T> PartialOrd for IdHandleInner<T>
-    where
-        T: PartialOrd + From<u8> + AddAssign + Copy,
-    {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            self.id.partial_cmp(&other.id)
-        }
-    }
-
-    impl<T> Ord for IdHandleInner<T>
-    where
-        T: Ord + From<u8> + AddAssign + PartialOrd + Copy,
-    {
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.id.cmp(&other.id)
-        }
-    }
-
     impl<T> Drop for IdHandleInner<T>
     where
         T: From<u8> + AddAssign + PartialOrd + Copy,
@@ -289,6 +289,19 @@ mod tests {
             ),
             None => (),
         }
+    }
+
+    #[test]
+    fn test_static_id_sorting() {
+        let ida = IdAllocator::new(0, 0);
+        let id0 = ida.alloc().unwrap();
+        let id1 = IdHandle::new_static(1);
+        assert!(id0 < id1);
+
+        let ida = IdAllocator::new(1, 1);
+        let id0 = IdHandle::new_static(0);
+        let id1 = ida.alloc().unwrap();
+        assert!(id0 < id1);
     }
 
     #[test]
