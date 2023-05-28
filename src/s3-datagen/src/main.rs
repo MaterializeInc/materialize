@@ -113,7 +113,7 @@ struct Args {
     bucket: String,
 
     /// Which region to operate in
-    #[clap(short = 'r', long, default_value = "us-east-2")]
+    #[clap(short = 'r', long, default_value = "us-east-1")]
     region: String,
 
     /// Number of copy operations to run concurrently
