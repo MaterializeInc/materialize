@@ -398,9 +398,14 @@ where
                                 // TODO: Perhaps `thinker` should have the buffer, do smarter
                                 //       consolidation, and then deposit results in `session`.
                                 consolidate_updates(&mut *temp.borrow_mut());
-                                output
-                                    .session(capability1.as_ref().unwrap())
-                                    .give_container(&mut *temp.borrow_mut());
+
+                                // TODO: Without this check the output frontier can hang.
+                                //       This seems like a bug in `give_container`.
+                                if !temp.borrow().is_empty() {
+                                    output
+                                        .session(capability1.as_ref().unwrap())
+                                        .give_container(&mut *temp.borrow_mut());
+                                }
                                 if done {
                                     remaining_work1.set(None);
                                     capability1 = None;
@@ -432,9 +437,14 @@ where
                                 // TODO: Perhaps `thinker` should have the buffer, do smarter
                                 //       consolidation, and then deposit results in `session`.
                                 consolidate_updates(&mut *temp.borrow_mut());
-                                output
-                                    .session(capability2.as_ref().unwrap())
-                                    .give_container(&mut *temp.borrow_mut());
+
+                                // TODO: Without this check the output frontier can hang.
+                                //       This seems like a bug in `give_container`.
+                                if !temp.borrow().is_empty() {
+                                    output
+                                        .session(capability2.as_ref().unwrap())
+                                        .give_container(&mut *temp.borrow_mut());
+                                }
                                 if done {
                                     remaining_work2.set(None);
                                     capability2 = None;
