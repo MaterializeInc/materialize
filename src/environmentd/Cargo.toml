@@ -60,7 +60,7 @@ nix = "0.26.1"
 num_cpus = "1.14.0"
 openssl = { version = "0.10.48", features = ["vendored"] }
 openssl-sys = { version = "0.9.80", features = ["vendored"] }
-opentelemetry = { version = "0.17.0", features = ["rt-tokio", "trace"] }
+opentelemetry = { version = "0.19.0", features = ["rt-tokio", "trace"] }
 prometheus = { version = "0.13.3", default-features = false }
 rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 rand = "0.8.5"
@@ -82,7 +82,7 @@ tokio-stream = { version = "0.1.11", features = ["net"] }
 tower-http = { version = "0.3.5", features = ["cors"] }
 tracing = "0.1.37"
 tracing-core = "0.1.30"
-tracing-opentelemetry = { version = "0.17.4" }
+tracing-opentelemetry = { version = "0.19.0" }
 tracing-subscriber = "0.3.16"
 tungstenite = { version = "0.18.0", features = ["native-tls"] }
 url = "2.3.1"
