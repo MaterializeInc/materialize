@@ -152,14 +152,9 @@ prost-types = { git = "https://github.com/MaterializeInc/prost" }
 # Waiting on https://github.com/hyperium/tonic/pull/1398.
 tonic-build = { git = "https://github.com/MaterializeInc/tonic" }
 
-# Waiting on v0.18.
-# See: https://github.com/open-telemetry/opentelemetry-rust/pull/779
-opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
-opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
-
-# Waiting on tracing-opentelemetry to upgrade to the as-yet unreleased
-# v0.18 of opentelemetry.
-tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing.git", branch = "v0.1.x" }
+# Waiting on https://github.com/MaterializeInc/tracing/pull/1 to be submitted
+# upstream.
+tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git" }
 
 # Waiting on https://github.com/tokio-rs/console/pull/388.
 console-api = { git = "https://github.com/MaterializeInc/tokio-console.git" }
