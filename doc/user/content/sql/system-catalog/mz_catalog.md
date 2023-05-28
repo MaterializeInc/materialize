@@ -360,7 +360,7 @@ Field            | Type                 | Meaning
 `oid`            | [`oid`]              | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`      | [`uint8`]            | The ID of the schema to which the source belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`           | [`text`]             | The name of the source.
-`type`           | [`text`]             | The type of the source: `kafka`, `postgres`, `load-generator`, or `subsource`.
+`type`           | [`text`]             | The type of the source: `kafka`, `postgres`, `load-generator`, `progress`, or `subsource`.
 `connection_id`  | [`text`]             | The ID of the connection associated with the source, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
 `size`           | [`text`]             | The [size](/sql/create-source/#sizing-a-source) of the source.
 `envelope_type`  | [`text`]             | The [envelope](/sql/create-source/#envelopes) of the source: `none`, `upsert`, or `debezium`.

@@ -24,7 +24,7 @@ SHOW SOURCES FROM foo;
 ----
 accounts         subsource      NULL
 auction          load-generator 1
-auction_progress subsource      NULL
+auction_progress progress       NULL
 auctions         subsource      NULL
 bids             subsource      NULL
 organizations    subsource      NULL
@@ -41,7 +41,7 @@ query TTT
 SHOW SOURCES FROM bar;
 ----
 auction          load-generator 1
-auction_progress subsource      NULL
+auction_progress progress       NULL
 bids             subsource      NULL
 
 statement ok
@@ -59,7 +59,7 @@ query TTT
 SHOW SOURCES FROM baz;
 ----
 auction          load-generator 1
-auction_progress subsource      NULL
+auction_progress progress       NULL
 baz_bids         subsource      NULL
 
 query TTT

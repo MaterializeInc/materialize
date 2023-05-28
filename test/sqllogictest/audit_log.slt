@@ -110,7 +110,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 25  create  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
 26  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
 27  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
-28  create  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public","size":null,"type":"subsource"}  materialize
+28  create  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public","size":null,"type":"progress"}  materialize
 29  create  cluster  {"id":"u3","name":"materialize_public_s"}  materialize
 30  create  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","logical_size":"1","replica_id":"5","replica_name":"linked"}  materialize
 31  create  source  {"database":"materialize","id":"u8","item":"s","schema":"public","size":"1","type":"load-generator"}  materialize
@@ -126,7 +126,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 41  create  source  {"database":"materialize","id":"u11","item":"bids","schema":"public","size":null,"type":"subsource"}  materialize
 42  create  source  {"database":"materialize","id":"u12","item":"organizations","schema":"public","size":null,"type":"subsource"}  materialize
 43  create  source  {"database":"materialize","id":"u13","item":"users","schema":"public","size":null,"type":"subsource"}  materialize
-44  create  source  {"database":"materialize","id":"u14","item":"multiplex_progress","schema":"public","size":null,"type":"subsource"}  materialize
+44  create  source  {"database":"materialize","id":"u14","item":"multiplex_progress","schema":"public","size":null,"type":"progress"}  materialize
 45  create  cluster  {"id":"u4","name":"materialize_public_multiplex"}  materialize
 46  create  cluster-replica  {"cluster_id":"u4","cluster_name":"materialize_public_multiplex","logical_size":"1","replica_id":"7","replica_name":"linked"}  materialize
 47  create  source  {"database":"materialize","id":"u15","item":"multiplex","schema":"public","size":"1","type":"load-generator"}  materialize

@@ -48,7 +48,7 @@ contains:multiple tables with name "t": "postgres"."other"."t", "postgres"."publ
 
 > SHOW sources
  mz_source          postgres  ${arg.default-storage-size}
- mz_source_progress subsource <null>
+ mz_source_progress progress  <null>
  t                  subsource <null>
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
