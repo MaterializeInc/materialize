@@ -715,6 +715,8 @@ impl<'a> Runner<'a> {
             )
             .await?;
 
+        inner.system_client.batch_execute("ALTER SYSTEM RESET ALL").await?;
+
         // Drop all databases, then recreate the `materialize` database.
         for row in inner
             .system_client
