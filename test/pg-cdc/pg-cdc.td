@@ -267,7 +267,7 @@ escaped_text_table    subsource <null>
 large_text            subsource <null>
 multipart_pk          subsource <null>
 mz_source             postgres  ${arg.default-storage-size}
-mz_source_progress    subsource <null>
+mz_source_progress    progress  <null>
 no_replica_identity   subsource <null>
 nonpk_table           subsource <null>
 nulls_table           subsource <null>
@@ -643,7 +643,7 @@ contains: invalid TEXT COLUMNS option value: table utf8_table not found in sourc
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 another_enum_table      subsource <null>
 enum_source             postgres  ${arg.default-storage-size}
-enum_source_progress    subsource <null>
+enum_source_progress    progress  <null>
 enum_table              subsource <null>
 
 > SELECT * FROM enum_table
@@ -685,7 +685,7 @@ regex:Source error: .*: db error: ERROR: publication "mz_source" does not exist
 
 > SHOW SOURCES
 another_source          postgres  ${arg.default-storage-size}
-another_source_progress subsource <null>
+another_source_progress progress  <null>
 another_table           subsource <null>
 
 > DROP SOURCE another_source

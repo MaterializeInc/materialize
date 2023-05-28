@@ -1930,7 +1930,8 @@ impl Source {
     pub fn source_type(&self) -> &str {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
-            DataSourceDesc::Progress | DataSourceDesc::Source => "subsource",
+            DataSourceDesc::Progress => "progress",
+            DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
         }
     }
