@@ -75,6 +75,9 @@ $ set-regex match=s\d+ replacement=SID
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_peek_durations_histogram);
 1
 
+> SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_dataflow_shutdown_durations_histogram);
+1
+
 > SELECT count(*) FROM (SELECT count (*) FROM mz_internal.mz_records_per_dataflow);
 1
 
