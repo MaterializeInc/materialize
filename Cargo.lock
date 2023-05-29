@@ -5228,6 +5228,7 @@ dependencies = [
  "itertools",
  "mz-compute-client",
  "mz-expr",
+ "mz-expr-parser",
  "mz-expr-test-util",
  "mz-lowertest",
  "mz-ore",
