@@ -253,9 +253,9 @@ query T multiline
 EXPLAIN WITH(types, no_fast_path) SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
 ----
 Explained Query:
-  Return // { types: "(integer?, integer?, double precision?, numeric?, integer list?)" }
-    Project (#0, #1, #8, #9, #7) // { types: "(integer?, integer?, double precision?, numeric?, integer list?)" }
-      Map ((bigint_to_double(#2) / bigint_to_double(case when (#3 = 0) then null else #3 end)), sqrtnumeric(((#4 - ((#5 * #5) / bigint_to_numeric(case when (#6 = 0) then null else #6 end))) / bigint_to_numeric(case when (0 = (#6 - 1)) then null else (#6 - 1) end)))) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, double precision?, numeric?)" }
+  Return // { types: "(integer?, integer?, numeric?, numeric?, integer list?)" }
+    Project (#0, #1, #8, #9, #7) // { types: "(integer?, integer?, numeric?, numeric?, integer list?)" }
+      Map ((bigint_to_numeric(#2) / bigint_to_numeric(case when (#3 = 0) then null else #3 end)), sqrtnumeric(((#4 - ((#5 * #5) / bigint_to_numeric(case when (#6 = 0) then null else #6 end))) / bigint_to_numeric(case when (0 = (#6 - 1)) then null else (#6 - 1) end)))) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, numeric?, numeric?)" }
         Union // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
           Get l0 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
           Map (null, null, null, 0, null, null, 0, null) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }

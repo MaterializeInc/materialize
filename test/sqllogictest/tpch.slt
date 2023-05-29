@@ -188,7 +188,7 @@ ORDER BY
 Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#9]
     Project (#0..=#5, #9..=#11, #6) // { arity: 10 }
-      Map (bigint_to_double(case when (#6 = 0) then null else #6 end), (numeric_to_double(#2) / #8), (numeric_to_double(#3) / #8), (numeric_to_double(#7) / #8)) // { arity: 12 }
+      Map (bigint_to_numeric(case when (#6 = 0) then null else #6 end), (#2 / #8), (#3 / #8), (#7 / #8)) // { arity: 12 }
         Reduce group_by=[#4, #5] aggregates=[sum(#0), sum(#1), sum((#1 * (1 - #2))), sum(((#1 * (1 - #2)) * (1 + #3))), count(*), sum(#2)] // { arity: 8 }
           Project (#4..=#9) // { arity: 6 }
             Filter (date_to_timestamp(#10) <= 1998-10-02 00:00:00) // { arity: 16 }
@@ -1256,7 +1256,7 @@ Explained Query:
     cte l2 =
       Reduce aggregates=[sum(#0)] // { arity: 1 }
         Project (#2) // { arity: 1 }
-          Filter (numeric_to_double(#1) < (0.2 * (numeric_to_double(#4) / bigint_to_double(case when (#5 = 0) then null else #5 end)))) // { arity: 6 }
+          Filter (#1 < (0.2 * (#4 / bigint_to_numeric(case when (#5 = 0) then null else #5 end)))) // { arity: 6 }
             Join on=(#0 = #3) type=differential // { arity: 6 }
               implementation
                 %1[#0]UKA » %0:l1[#0]K
@@ -1763,7 +1763,7 @@ Explained Query:
             Get l1 // { arity: 3 }
       cte l1 =
         Project (#0..=#2) // { arity: 3 }
-          Filter (numeric_to_double(#2) > (numeric_to_double(#3) / bigint_to_double(case when (#4 = 0) then null else #4 end))) // { arity: 5 }
+          Filter (#2 > (#3 / bigint_to_numeric(case when (#4 = 0) then null else #4 end))) // { arity: 5 }
             CrossJoin type=differential // { arity: 5 }
               implementation
                 %1[×]UA » %0:l0[×]ef

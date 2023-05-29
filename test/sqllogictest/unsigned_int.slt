@@ -1303,7 +1303,7 @@ SELECT MIN(a) FROM t8
 query R
 SELECT AVG(a) FROM t2
 ----
-16390.500
+16390.5
 
 query R
 SELECT AVG(a) FROM t4
@@ -1313,7 +1313,7 @@ SELECT AVG(a) FROM t4
 query R
 SELECT AVG(a) FROM t8
 ----
-2305843010287452160.000
+2305843010287452163.25
 
 # Stddev
 
@@ -1327,10 +1327,12 @@ SELECT STDDEV(a) FROM t4
 ----
 1239831340.320
 
-# This query overflows, thus the result is wrong
-# known issue https://github.com/MaterializeInc/materialize/issues/15186
-query error cannot take square root
+# This query no longer overflows, since we avoid transiting through floating-point
+# intermediates when computing average-related functions over integer data.
+query R
 SELECT STDDEV(a) FROM t8
+----
+4611686017711549096.944
 
 # Avoid overflow (known issue https://github.com/MaterializeInc/materialize/issues/14695)
 statement ok
@@ -1362,7 +1364,7 @@ SELECT STDDEV_POP(a) FROM t4
 query R
 SELECT STDDEV_POP(a) FROM t8
 ----
-16.000
+16
 
 # Stddev Samp
 
@@ -1396,7 +1398,7 @@ SELECT VARIANCE(a) FROM t4
 query R
 SELECT VARIANCE(a) FROM t8
 ----
-512.000
+512
 
 # Var Pop
 
@@ -1413,7 +1415,7 @@ SELECT VAR_POP(a) FROM t4
 query R
 SELECT VAR_POP(a) FROM t8
 ----
-256.000
+256
 
 # Var Samp
 
@@ -1430,7 +1432,7 @@ SELECT VAR_SAMP(a) FROM t4
 query R
 SELECT VAR_SAMP(a) FROM t8
 ----
-512.000
+512
 
 # Dropping rows
 
