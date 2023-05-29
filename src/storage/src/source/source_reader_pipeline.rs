@@ -58,7 +58,7 @@ use mz_storage_client::types::connections::ConnectionContext;
 use mz_storage_client::types::errors::SourceError;
 use mz_storage_client::types::sources::encoding::SourceDataEncoding;
 use mz_storage_client::types::sources::{
-    MzOffset, SourceConnection, SourceExport, SourceTimestamp, SourceToken,
+    MzOffset, SourceConnection, SourceExport, SourceTimestamp,
 };
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -232,8 +232,7 @@ where
     let (remap_stream, remap_token) =
         remap_operator(scope, config.clone(), source_upper_rx, timestamp_desc);
 
-    let (streams, _reclock_token) =
-        reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
+    let streams = reclock_operator(scope, config, reclock_follower, source_rx, remap_stream);
 
     let token = Rc::new((token, remap_token, resume_token));
 
@@ -286,10 +285,7 @@ where
     let mut data_input = builder.new_input(&data.inner, Pipeline);
     let (mut data_output, data) = builder.new_output();
     let (mut _progress_output, derived_progress) = builder.new_output();
-    let (mut health_output, derived_health): (
-        _,
-        timely::dataflow::StreamCore<G, Vec<(OutputIndex, HealthStatusUpdate)>>,
-    ) = builder.new_output();
+    let (mut health_output, derived_health) = builder.new_output();
 
     builder.build(move |mut caps| async move {
         let health_cap = caps.pop().unwrap();
@@ -819,13 +815,10 @@ fn reclock_operator<G, K, V, FromTime, D>(
         >,
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
-) -> (
-    Vec<(
-        Collection<G, SourceOutput<K, V>, D>,
-        Collection<G, SourceError, Diff>,
-    )>,
-    Option<SourceToken>,
-)
+) -> Vec<(
+    Collection<G, SourceOutput<K, V>, D>,
+    Collection<G, SourceError, Diff>,
+)>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     K: timely::Data + MaybeLength,
@@ -1084,13 +1077,10 @@ where
         .map(|stream| stream.as_collection())
         .collect();
 
-    (
-        ok_streams
-            .into_iter()
-            .zip_eq(err_streams.into_iter())
-            .collect(),
-        None,
-    )
+    ok_streams
+        .into_iter()
+        .zip_eq(err_streams.into_iter())
+        .collect()
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
