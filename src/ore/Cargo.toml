@@ -48,22 +48,22 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 atty = { version = "0.2.14", optional = true }
 http = { version = "0.2.8", optional = true }
 tracing = { version = "0.1.37", optional = true }
-tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing.git", branch = "v0.1.x", optional = true }
+tracing-opentelemetry = { version = "0.19.0", optional = true }
 tonic = { version = "0.8.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.0", optional = true }
 native-tls = { version = "0.2.11", features = ["alpn"], optional = true }
 hyper = { version = "0.14.23", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
-opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"], optional = true }
-opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", optional = true }
-console-subscriber = { git = "https://github.com/MaterializeInc/tokio-console.git", optional = true }
+opentelemetry = { version = "0.19.0", features = ["rt-tokio", "trace"], optional = true }
+opentelemetry-otlp = { version = "0.12.0", optional = true }
+console-subscriber = { version = "0.1.8", optional = true }
 sentry-tracing = { version = "0.29.1", optional = true }
 yansi = { version = "0.5.1", optional = true }
 
 [dev-dependencies]
 anyhow = { version = "1.0.66" }
 scopeguard = "1.1.0"
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 serde_json = "1.0.89"
 tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.2"

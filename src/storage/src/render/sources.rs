@@ -26,7 +26,8 @@ use mz_storage_client::types::sources::encoding::*;
 use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{self, Exchange, OkErr};
+use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::operators::{Concat, Exchange, Leave, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
@@ -133,7 +134,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (streams, health, capability) = match connection {
+    let (streams, mut health, capability) = match connection {
         GenericSourceConnection::Kafka(connection) => {
             let (streams, health, cap) = source::create_raw_source(
                 scope,
@@ -203,7 +204,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         // All subsources include the non-definite errors of the ingestion
         let error_collections = vec![err_source.map(DataflowError::from)];
 
-        let (ok, err, extra_tokens) = render_source_stream(
+        let (ok, err, extra_tokens, health_stream) = render_source_stream(
             scope,
             dataflow_debug_name,
             id,
@@ -216,6 +217,8 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         );
         needed_tokens.extend(extra_tokens);
         outputs.push((ok, err));
+
+        health = health.concat(&health_stream.leave());
     }
     (outputs, health, Rc::new(needed_tokens))
 }
@@ -236,6 +239,7 @@ fn render_source_stream<G>(
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,
     Vec<Rc<dyn Any>>,
+    Stream<G, (WorkerId, OutputIndex, HealthStatusUpdate)>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -248,7 +252,7 @@ where
         metadata_columns,
         ..
     } = description.desc;
-    let (stream, errors) = {
+    let (stream, errors, health) = {
         let (key_encoding, value_encoding) = match encoding {
             SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
             SourceDataEncoding::Single(value) => (None, value),
@@ -283,7 +287,7 @@ where
                 confluent_wire_format,
             );
             needed_tokens.push(Rc::new(token));
-            (oks, None)
+            (oks, None, empty(scope))
         } else {
             // Depending on the type of _raw_ source produced for the given source
             // connection, render the _decode_ part of the pipeline, that turns a raw data
@@ -351,7 +355,7 @@ where
                         }
                         None => super::debezium::render(dbz_envelope, &results),
                     };
-                    (debezium_ok, Some(errors))
+                    (debezium_ok, Some(errors), empty(scope))
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => {
                     let upsert_input = upsert_commands(results, upsert_envelope.clone());
@@ -379,12 +383,9 @@ where
                         );
                         (stream.as_collection(), Some(tok))
                     } else {
-                        (
-                            Collection::new(operators::generic::operator::empty(scope)),
-                            None,
-                        )
+                        (Collection::new(empty(scope)), None)
                     };
-                    let upsert = crate::render::upsert::upsert(
+                    let (upsert, health_update) = crate::render::upsert::upsert(
                         &upsert_input,
                         upsert_envelope.clone(),
                         resume_upper,
@@ -397,7 +398,11 @@ where
 
                     let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
 
-                    (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
+                    (
+                        upsert_ok.as_collection(),
+                        Some(upsert_err.as_collection()),
+                        health_update,
+                    )
                 }
                 SourceEnvelope::None(none_envelope) => {
                     let results = append_metadata_to_value(results);
@@ -407,7 +412,7 @@ where
                     let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
 
                     let errors = errors.as_collection();
-                    (stream.as_collection(), Some(errors))
+                    (stream.as_collection(), Some(errors), empty(scope))
                 }
                 SourceEnvelope::CdcV2 => unreachable!(),
             }
@@ -431,7 +436,7 @@ where
     };
 
     // Return the collections and any needed tokens.
-    (collection, err_collection, needed_tokens)
+    (collection, err_collection, needed_tokens, health)
 }
 
 // TODO: Maybe we should finally move this to some central place and re-use. There seem to be

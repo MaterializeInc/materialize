@@ -355,7 +355,7 @@ impl CatalogState {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
             CatalogItem::Secret(_) => {
-                self.pack_secret_update(id, schema_id, name, owner_id, privileges, diff)
+                self.pack_secret_update(id, schema_id, name, owner_id, privileges, oid, diff)
             }
             CatalogItem::Connection(connection) => self.pack_connection_update(
                 id, oid, schema_id, name, owner_id, privileges, connection, diff,
@@ -983,6 +983,7 @@ impl CatalogState {
         name: &str,
         owner_id: &RoleId,
         privileges: Datum,
+        oid: u32,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -993,6 +994,7 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&owner_id.to_string()),
                 privileges,
+                Datum::UInt32(oid),
             ]),
             diff,
         }]
