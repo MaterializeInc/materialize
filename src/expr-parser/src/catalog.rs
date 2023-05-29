@@ -15,7 +15,7 @@ use mz_repr::{GlobalId, RelationType, ScalarType};
 
 /// A catalog that holds types of objects previously created for the unit test.
 ///
-/// This is for the purpose of allowing `MirRelationExpr`s can refer to them
+/// This is for the purpose of allowing `MirRelationExpr`s to refer to them
 /// later.
 #[derive(Debug, Default)]
 pub struct TestCatalog {
@@ -51,8 +51,7 @@ impl<'a> TestCatalog {
         Ok(id)
     }
 
-    #[allow(dead_code)]
-    fn get(&'a self, name: &str) -> Option<&'a (GlobalId, RelationType)> {
+    pub fn get(&'a self, name: &str) -> Option<&'a (GlobalId, RelationType)> {
         self.objects.get(name)
     }
 

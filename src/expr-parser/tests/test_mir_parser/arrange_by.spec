@@ -7,18 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# test being able to add sources of different types to the catalog
-
+# TopK
 roundtrip
-Constant <empty>
+ArrangeBy keys=[[#1], [#2, #3]]
+  Constant // { types: "(bigint, bigint)" }
+    - (1, 2)
+    - (3, 4)
 ----
 roundtrip OK
-
-
-roundtrip
-Constant type=(int64, int64)
-  - (1, 2)
-----
-roundtrip produced a different output:
-parse error at 1:9:
-non-empty constants not supported yet

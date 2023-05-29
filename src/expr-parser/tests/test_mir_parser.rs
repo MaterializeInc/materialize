@@ -45,8 +45,6 @@
 #![warn(clippy::double_neg)]
 #![warn(clippy::unnecessary_mut_passed)]
 #![warn(clippy::wildcard_in_or_patterns)]
-#![warn(clippy::collapsible_if)]
-#![warn(clippy::collapsible_else_if)]
 #![warn(clippy::crosspointer_transmute)]
 #![warn(clippy::excessive_precision)]
 #![warn(clippy::overflow_check_conditional)]
@@ -75,37 +73,19 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-mod test {
-    use mz_expr::test_util::{try_parse_mir, TestCatalog};
+use mz_expr_parser::{handle_define, handle_roundtrip, TestCatalog};
 
-    #[test]
-    fn run_roundtrip_tests() {
-        datadriven::walk("testdata/test_mir_parser", |f| {
-            f.run(move |test_case| -> String {
-                let catalog = TestCatalog::default();
-                match test_case.directive.as_str() {
-                    "roundtrip" => handle_roundtrip(&test_case.input, &catalog),
-                    _ => format!("unknown directive: {}", test_case.directive),
-                }
-            })
-        });
-    }
-
-    fn handle_roundtrip(input: &str, catalog: &TestCatalog) -> String {
-        let output = match try_parse_mir(input, catalog) {
-            Ok(expr) => expr.pretty(),
-            Err(err) => format!(
-                "parse error at {}:{}:\n{}",
-                err.span().start().line,
-                err.span().start().column,
-                err
-            ),
-        };
-
-        if input == output {
-            "roundtrip OK\n".to_string()
-        } else {
-            format!("roundtrip produced a different output:\n{}\n", output)
-        }
-    }
+#[mz_ore::test]
+fn run_roundtrip_tests() {
+    // Interpret datadriven tests.
+    datadriven::walk("tests/test_mir_parser", |f| {
+        let mut catalog = TestCatalog::default();
+        f.run(|test_case| -> String {
+            match test_case.directive.as_str() {
+                "define" => handle_define(&mut catalog, &test_case.input),
+                "roundtrip" => handle_roundtrip(&catalog, &test_case.input),
+                _ => format!("unknown directive: {}", test_case.directive),
+            }
+        })
+    });
 }

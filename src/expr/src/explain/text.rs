@@ -395,8 +395,12 @@ impl MirRelationExpr {
             Filter { predicates, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let predicates = separated(" AND ", predicates);
-                        write!(f, "{}Filter {}", ctx.indent, predicates)?;
+                        if predicates.is_empty() {
+                            write!(f, "{}Filter", ctx.indent)?;
+                        } else {
+                            let predicates = separated(" AND ", predicates);
+                            write!(f, "{}Filter {}", ctx.indent, predicates)?;
+                        }
                         self.fmt_attributes(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),

@@ -1,0 +1,21 @@
+[package]
+name = "mz-expr-parser"
+description = "Utilities for creating objects in the expr crate for testing"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+mz-expr = { path = "../expr" }
+mz-ore = { path = "../ore" }
+mz-repr = { path = "../repr" }
+proc-macro2 = { version = "1.0.47", features = ["span-locations"] }
+syn = { version = "2.0.18", features = ["full"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[dev-dependencies]
+datadriven = "0.6.0"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

@@ -3962,10 +3962,22 @@ dependencies = [
  "serde_regex",
  "sha1",
  "sha2",
- "syn 2.0.18",
  "tracing",
  "uncased",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-expr-parser"
+version = "0.0.0"
+dependencies = [
+ "datadriven",
+ "mz-expr",
+ "mz-ore",
+ "mz-repr",
+ "proc-macro2",
+ "syn 2.0.18",
  "workspace-hack",
 ]
 
