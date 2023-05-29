@@ -23,6 +23,7 @@ sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(NegNumeric)]
+    #[is_monotone = true]
     fn neg_numeric(mut a: Numeric) -> Numeric {
         numeric::cx_datum().neg(&mut a);
         numeric::munge_numeric(&mut a).unwrap();
@@ -40,6 +41,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "ceilnumeric"]
+    #[is_monotone = true]
     fn ceil_numeric(mut a: Numeric) -> Numeric {
         // ceil will be nop if has no fractional digits.
         if a.exponent() >= 0 {
@@ -72,6 +74,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "floornumeric"]
+    #[is_monotone = true]
     fn floor_numeric(mut a: Numeric) -> Numeric {
         // floor will be nop if has no fractional digits.
         if a.exponent() >= 0 {
@@ -127,6 +130,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "roundnumeric"]
+    #[is_monotone = true]
     fn round_numeric(mut a: Numeric) -> Numeric {
         // round will be nop if has no fractional digits.
         if a.exponent() >= 0 {
@@ -139,6 +143,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "truncnumeric"]
+    #[is_monotone = true]
     fn trunc_numeric(mut a: Numeric) -> Numeric {
         // trunc will be nop if has no fractional digits.
         if a.exponent() >= 0 {

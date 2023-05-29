@@ -21,6 +21,7 @@ sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(NegFloat32)]
+    #[is_monotone = true]
     fn neg_float32(a: f32) -> f32 {
         -a
     }

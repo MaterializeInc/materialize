@@ -23,6 +23,7 @@ sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(NegInt32)]
+    #[is_monotone = true]
     fn neg_int32(a: i32) -> Result<i32, EvalError> {
         a.checked_neg().ok_or(EvalError::Int32OutOfRange)
     }

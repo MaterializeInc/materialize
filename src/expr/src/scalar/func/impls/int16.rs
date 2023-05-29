@@ -21,6 +21,7 @@ sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(NegInt16)]
+    #[is_monotone = true]
     fn neg_int16(a: i16) -> Result<i16, EvalError> {
         a.checked_neg().ok_or(EvalError::Int16OutOfRange)
     }
