@@ -594,6 +594,12 @@ impl From<bool> for Pushdownable {
 }
 
 /// An interpreter that traces how information about the source columns flows through the expression.
+///
+/// Consider some arbitrary variadic function call f(a, ...). We say that this expression is "pushdownable" if both:
+/// - Any of the arguments are pushdownable. (eg. a column reference, or another pushdownable expression.)
+///   If the first argument is pushdownable but not the second we consider the whole thing pushdownable.
+/// - The function itself is monotonic / similar. This is the meet; the #0 in 5 / #0 is pushdownable,
+///   but the overall expression is not, because division is not pushdownable in its righ-hand side.
 #[derive(Debug)]
 pub struct Trace;
 
