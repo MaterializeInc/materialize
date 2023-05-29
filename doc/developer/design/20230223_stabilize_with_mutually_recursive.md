@@ -123,7 +123,7 @@ transformation              | estimate | tracked in
 `reduction_pushdown`        | &check;  | MaterializeInc/materialize#18171
 `redundant_join`            | &check;  | MaterializeInc/materialize#18172
 `relation_cse`              | &check;  | MaterializeInc/materialize#18173
-`semijoin_idempotence`      | L?       | MaterializeInc/materialize#18174
+`semijoin_idempotence`      | &check;  | MaterializeInc/materialize#18174 (depends on type inference)
 `threshold_elision`         | &check;  | MaterializeInc/materialize#18175
 `topk_elision`              | &check;  | MaterializeInc/materialize#18123
 `topk_fusion`               | &check;  | MaterializeInc/materialize#18123
@@ -209,7 +209,7 @@ We can implement such driver in Python and integrate it in our `mzcompose` tests
 ### By test scenario
 [By test scenario]: #by-test-scenario
 
-1. **Synthetic tests.**
+1. **Synthetic tests.** (punted as follow-up work)
 The best synthetic use case that we have identified so far seems to be the LDBC social network benchmark[^ldbc].
 With the scope of the dedicated epic (MaterializeInc/materialize#17591), we will select a subset of the work in order to bootstrap a testing environment that consists of
   (a) LDBC data + updates, and
@@ -223,7 +223,7 @@ Also, might need to be careful about the specific problems we try to solve and u
 The power of incremental recursive computation only shines if the data dependency that is carried across iterations is somewhat bounded.
 Intuitively, this means an algorithm that does something like dynamic programming or reachability on graphs with some locality properties might handle small deltas in its input better than something like gradient descent.
 
-1. **Sourced from elsewhere.**
+1. **Sourced from elsewhere.** (punted as follow-up work)
 We can check what tests Postgres has for their `WITH RECURSIVE` support.
 
 ## Lifecycle
@@ -250,6 +250,7 @@ The feature will be promoted to `beta` when the following conditions are met:
 
 For the `beta` testing phase, we will work with selected customers / prospects, who have previously explicitly voiced their interest in the feature and have a clear use case to demonstrate its value.
 We will remain in close contact with those customers and treat their use cases as proof-of-concept in order to iron out potential operational and stability issues.
+We will create dedicated metrics so we can track (a) number of environments that have used the feature vs the number of environments where the feature has been enabled.
 
 Once we have established the above and have build up confidence about the optimizer and runtime stability of recursive dataflows running in production, we will open the feature to everybody.
 This needs to be coordinated with the GTM team, as most probably we will want to advertise this accordingly.
@@ -309,6 +310,7 @@ If you can't think of any, please note this down.
 
 Due to time constraints proper benchmarking of WMR queries has to be punted until we the basic infrastructure to load and ingest LDBC benchmark data in an incremental way.
 The tracking epic for this is MaterializeInc/materialize#17591.
+Consequently, the the pool of available E2E test scenarios in MaterializeInc/materialize#17912 and MaterializeInc/materialize#17916 was narrowed only to those that can be implemented and tested within a reasonable time frame.
 
 ---
 
@@ -317,6 +319,31 @@ Improve query planning by implementing the TODO from the `plan_ctes` function:
 https://github.com/MaterializeInc/materialize/blob/dcd02a44a4355d9b6841d609e0097cd50b5bbdd3/src/sql/src/plan/query.rs#L1207-L1223
 
 This should be done only after investigating the impacts of having an extra `Map` and `Project` on our optimization potential.
+
+---
+
+Within the scope of MaterializeInc/materialize#17012 we only provided the _basic case_ for most non-trivial transforms.
+The following issues describe an _advanced case_ (and optionally an _intermediate case_) represent opportunities for improvement.
+
+- MaterializeInc/materialize#18162
+- MaterializeInc/materialize#18163
+- MaterializeInc/materialize#18165
+- MaterializeInc/materialize#18166
+- MaterializeInc/materialize#18167
+- MaterializeInc/materialize#18170 (can be improved by MaterializeInc/materialize#18553)
+- MaterializeInc/materialize#18172
+- MaterializeInc/materialize#18173
+- MaterializeInc/materialize#18174 (can be improved by MaterializeInc/materialize#18553)
+- MaterializeInc/materialize#18175
+
+---
+
+The following issues remain
+
+- MaterializeInc/materialize#18022
+- MaterializeInc/materialize#18553
+- MaterializeInc/materialize#19012
+- MaterializeInc/materialize#19334
 
 # Appendix: Internal Use Cases
 
