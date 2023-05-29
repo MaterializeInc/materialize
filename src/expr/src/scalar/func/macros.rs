@@ -38,6 +38,18 @@ macro_rules! sqlfunc {
         );
     };
 
+    (
+        #[sqlname = $name:expr]
+        #[is_monotone = $is_monotone:expr]
+        fn $fn_name:ident $($tail:tt)*
+    ) => {
+        sqlfunc!(
+            #[sqlname = $name]
+            #[preserves_uniqueness = false]
+#[is_monotone = $is_monotone]            fn $fn_name $($tail)*
+        );
+    };
+
     // Add the inverse attribute if it was omitted
     (
         #[sqlname = $name:expr]
@@ -52,17 +64,50 @@ macro_rules! sqlfunc {
         );
     };
 
+    (
+        #[sqlname = $name:expr]
+        #[preserves_uniqueness = $preserves_uniqueness:expr]
+        #[is_monotone = $is_monotone:expr]
+        fn $fn_name:ident $($tail:tt)*
+    ) => {
+        sqlfunc!(
+            #[sqlname = $name]
+            #[preserves_uniqueness = $preserves_uniqueness]
+            #[inverse = None]
+            #[is_monotone = $is_monotone]
+            fn $fn_name $($tail)*
+        );
+    };
+
+    // Add the monotone attribute if it was omitted
+    (
+        #[sqlname = $name:expr]
+        #[preserves_uniqueness = $preserves_uniqueness:expr]
+        #[inverse = $inverse:expr]
+        fn $fn_name:ident $($tail:tt)*
+    ) => {
+        sqlfunc!(
+            #[sqlname = $name]
+            #[preserves_uniqueness = $preserves_uniqueness]
+            #[inverse = $inverse]
+            #[is_monotone = false]
+            fn $fn_name $($tail)*
+        );
+    };
+
     // Add lifetime parameter if it was omitted
     (
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
         #[inverse = $inverse:expr]
+        #[is_monotone = $is_monotone:expr]
         fn $fn_name:ident ($($params:tt)*) $($tail:tt)*
     ) => {
         sqlfunc!(
             #[sqlname = $name]
             #[preserves_uniqueness = $preserves_uniqueness]
             #[inverse = $inverse]
+            #[is_monotone = $is_monotone]
             fn $fn_name<'a>($($params)*) $($tail)*
         );
     };
@@ -72,6 +117,7 @@ macro_rules! sqlfunc {
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
         #[inverse = $inverse:expr]
+        #[is_monotone = $is_monotone:expr]
         fn $fn_name:ident<$lt:lifetime>(mut $param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
             $body:block
     ) => {
@@ -79,6 +125,7 @@ macro_rules! sqlfunc {
             #[sqlname = $name]
             #[preserves_uniqueness = $preserves_uniqueness]
             #[inverse = $inverse]
+            #[is_monotone = $is_monotone]
             fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
                 let mut $param_name = $param_name;
                 $body
@@ -90,6 +137,7 @@ macro_rules! sqlfunc {
         #[sqlname = $name:expr]
         #[preserves_uniqueness = $preserves_uniqueness:expr]
         #[inverse = $inverse:expr]
+        #[is_monotone = $is_monotone:expr]
         fn $fn_name:ident<$lt:lifetime>($param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
             $body:block
     ) => {
@@ -121,6 +169,10 @@ macro_rules! sqlfunc {
 
                 fn inverse(&self) -> Option<crate::UnaryFunc> {
                     $inverse
+                }
+
+                fn is_monotone(&self) -> bool {
+                    $is_monotone
                 }
             }
 
