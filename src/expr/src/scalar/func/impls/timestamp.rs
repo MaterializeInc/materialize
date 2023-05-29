@@ -221,6 +221,19 @@ where
     }
 }
 
+/// Will extracting this unit from the timestamp include the "most significant bits" of
+/// the timestamp?
+pub(crate) fn most_significant_unit(unit: DateTimeUnits) -> bool {
+    match unit {
+        DateTimeUnits::Epoch
+        | DateTimeUnits::Millennium
+        | DateTimeUnits::Century
+        | DateTimeUnits::Decade
+        | DateTimeUnits::Year => true,
+        _ => false,
+    }
+}
+
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
@@ -236,6 +249,10 @@ impl<'a> EagerUnaryFunc<'a> for ExtractTimestamp {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    }
+
+    fn is_monotone(&self) -> bool {
+        most_significant_unit(self.0)
     }
 }
 
@@ -260,6 +277,13 @@ impl<'a> EagerUnaryFunc<'a> for ExtractTimestampTz {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    }
+
+    fn is_monotone(&self) -> bool {
+        // Unlike the timezone-less timestamp, it's not safe to extract the "high-order bits" like
+        // year: year takes timezone into account, and it's quite possible for a different timezone
+        // to be in a previous year while having a later UTC-equivalent time.
+        self.0 == DateTimeUnits::Epoch
     }
 }
 
@@ -365,6 +389,10 @@ impl<'a> EagerUnaryFunc<'a> for DateTruncTimestamp {
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Timestamp.nullable(input.nullable)
     }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
 }
 
 impl fmt::Display for DateTruncTimestamp {
@@ -391,6 +419,10 @@ impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::TimestampTz.nullable(input.nullable)
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
     }
 }
 

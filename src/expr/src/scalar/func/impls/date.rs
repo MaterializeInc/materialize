@@ -19,6 +19,7 @@ use mz_repr::{strconv, ColumnType, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::func::most_significant_unit;
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
 
@@ -104,6 +105,10 @@ impl<'a> EagerUnaryFunc<'a> for ExtractDate {
 
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    }
+
+    fn is_monotone(&self) -> bool {
+        most_significant_unit(self.0)
     }
 }
 
