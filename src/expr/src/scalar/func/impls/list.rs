@@ -60,6 +60,10 @@ impl LazyUnaryFunc for CastListToString {
         // TODO? if typeconv was in expr, we could determine this
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastListToString {
@@ -122,6 +126,10 @@ impl LazyUnaryFunc for CastList1ToList2 {
         // TODO: this could be figured out--might be easier after enum dispatch?
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastList1ToList2 {
@@ -170,6 +178,10 @@ impl LazyUnaryFunc for ListLength {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

@@ -61,6 +61,10 @@ impl LazyUnaryFunc for CastRangeToString {
         // TODO? if typeconv was in expr, we could determine this
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastRangeToString {
@@ -114,6 +118,10 @@ impl LazyUnaryFunc for RangeLower {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        true // Ranges are sorted by lower first.
+    }
 }
 
 impl fmt::Display for RangeLower {
@@ -166,6 +174,10 @@ impl LazyUnaryFunc for RangeUpper {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

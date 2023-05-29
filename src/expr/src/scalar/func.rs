@@ -4101,6 +4101,14 @@ trait LazyUnaryFunc {
     ///
     /// [inverse]: https://en.wikipedia.org/wiki/Inverse_function
     fn inverse(&self) -> Option<crate::UnaryFunc>;
+
+    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
+    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
+    /// determine the range of possible outputs just by mapping the endpoints.
+    ///
+    /// This property describes the behaviour of the function over ranges where the function is defined:
+    /// ie. the argument and the result are non-null (and non-error) datums.
+    fn is_monotone(&self) -> bool;
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
@@ -4132,6 +4140,10 @@ trait EagerUnaryFunc<'a> {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -4172,6 +4184,10 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         self.inverse()
+    }
+
+    fn is_monotone(&self) -> bool {
+        self.is_monotone()
     }
 }
 
@@ -7388,7 +7404,7 @@ impl VariadicFunc {
         }
     }
 
-    /// Returns true if the function is monotone. (Non-strict; eithern increasing or decreasing.)
+    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
     /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
     /// determine the range of possible outputs just by mapping the endpoints.
     ///
@@ -7397,9 +7413,6 @@ impl VariadicFunc {
     /// any specific argument as the others are held constant. (For example, `COALESCE(a, b)` is
     /// monotone in `a` because for any particular non-null value of `b`, increasing `a` will never
     /// cause the result to decrease.)
-    ///
-    /// For monotone functions, this will return true whether the function is *non-decreasing*
-    /// or *non-increasing*.
     ///
     /// This property describes the behaviour of the function over ranges where the function is defined:
     /// ie. the arguments and the result are non-null (and non-error) datums.

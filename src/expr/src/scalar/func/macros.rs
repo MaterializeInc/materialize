@@ -317,6 +317,11 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::inverse(f),)*
                 }
             }
+            pub fn is_monotone(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::is_monotone(f),)*
+                }
+            }
         }
 
         impl fmt::Display for UnaryFunc {
