@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::{max, min};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
@@ -636,8 +637,10 @@ impl Interpreter for Trace {
             BinaryFunc::JsonbGetString { stringify: false } => (true, false),
             _ => func.is_monotone(),
         };
-        left.min(left_pushdownable.into())
-            .max(right.min(right_pushdownable.into()))
+        max(
+            min(left, left_pushdownable.into()),
+            min(right, right_pushdownable.into()),
+        )
     }
 
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
@@ -649,7 +652,7 @@ impl Interpreter for Trace {
 
         let pushdownable_fn: Pushdownable = func.is_monotone().into();
         exprs.into_iter().fold(Pushdownable::No, |acc, arg| {
-            acc.max(arg.min(pushdownable_fn))
+            max(acc, min(arg, pushdownable_fn))
         })
     }
 
