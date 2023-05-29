@@ -416,6 +416,17 @@ mod columnation {
     use timely::container::columnation::{CloneRegion, Columnation};
 
     impl Columnation for DataflowError {
+        // Discussion of `Region` for `DataflowError`: Although `DataflowError` contains pointers,
+        // we treat it as a type that doesn't and can simply be cloned. The reason for this is
+        // threefold:
+        // 1. Cloning the type does not violate correctness. It comes with the disadvantage that its
+        //    `heap_size` will not be accurate.
+        // 2. It is hard to implement a region allocator for `DataflowError`, because it contains
+        //    many pointers across various enum types. Some are boxed, and it contains a box to
+        //    itself, meaning we have to pass the outer region inwards to avoid creating recursive
+        //    regions.
+        // 3. We accept the performance implication of not storing the errors in a region allocator,
+        //    which should be similar to storing errors in vectors on the heap.
         type InnerRegion = CloneRegion<DataflowError>;
     }
 }

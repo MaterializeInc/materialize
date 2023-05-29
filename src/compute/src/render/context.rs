@@ -36,7 +36,7 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
-use crate::extensions::operator::{IntoKeyCollection, MzArrange};
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinImpl;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
@@ -783,10 +783,8 @@ where
                 });
 
                 let oks = oks_keyed.mz_arrange::<RowSpine<Row, Row, _, _>>(&name);
-                let errs = errs
-                    .concat(&errs_keyed)
-                    .into_key_collection()
-                    .mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
+                let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
+                let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }

@@ -20,7 +20,8 @@ use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 
-use crate::extensions::operator::{IntoKeyCollection, MzArrange, MzReduce};
+use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::reduce::MzReduce;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::typedefs::RowSpine;
 
@@ -69,10 +70,8 @@ where
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_arrangement(&oks, "Threshold trace", |count| *count > 0);
-            let errs = errs
-                .as_collection(|k, _| k.clone())
-                .into_key_collection()
-                .mz_arrange("Arrange threshold basic err");
+            let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
+            let errs = errs.mz_arrange("Arrange threshold basic err");
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
     }

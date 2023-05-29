@@ -20,7 +20,7 @@ use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::Scope;
 
-use crate::extensions::operator::{ArrangementSize, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, MzArrange};
 
 /// Extension methods for differential [`Collection`]s.
 pub(crate) trait ConsolidateExt<G, D1, R>

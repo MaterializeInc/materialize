@@ -34,7 +34,7 @@ use timely::logging::{
 };
 use tracing::error;
 
-use crate::extensions::operator::MzArrange;
+use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -245,23 +245,22 @@ pub(super) fn construct<A: Allocate>(
                 row
             });
 
+        use TimelyLog::*;
         let logs = [
-            (LogVariant::Timely(TimelyLog::Operates), operates),
-            (LogVariant::Timely(TimelyLog::Channels), channels),
-            (LogVariant::Timely(TimelyLog::Elapsed), elapsed),
-            (LogVariant::Timely(TimelyLog::Histogram), histogram),
-            (LogVariant::Timely(TimelyLog::Addresses), addresses),
-            (LogVariant::Timely(TimelyLog::Parks), parks),
-            (LogVariant::Timely(TimelyLog::MessagesSent), messages_sent),
-            (
-                LogVariant::Timely(TimelyLog::MessagesReceived),
-                messages_received,
-            ),
+            (Operates, operates),
+            (Channels, channels),
+            (Elapsed, elapsed),
+            (Histogram, histogram),
+            (Addresses, addresses),
+            (Parks, parks),
+            (MessagesSent, messages_sent),
+            (MessagesReceived, messages_received),
         ];
 
         // Build the output arrangements.
         let mut traces = BTreeMap::new();
         for (variant, collection) in logs {
+            let variant = LogVariant::Timely(variant);
             if config.index_logs.contains_key(&variant) {
                 let key = variant.index_by();
                 let (_, value) = permutation_for_arrangement(

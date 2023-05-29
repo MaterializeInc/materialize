@@ -34,9 +34,9 @@ use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
 use tracing::warn;
 
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::collection::ConsolidateExt;
-use crate::extensions::operator::{IntoKeyCollection, MzArrange, MzReduce};
-use crate::extensions::reduce::ReduceExt;
+use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{Arrangement, CollectionBundle, Context, KeyArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::ReductionMonoid;
@@ -166,15 +166,10 @@ where
     {
         let mut errors = Default::default();
         let arrangement = self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity);
+        let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
         CollectionBundle::from_columns(
             0..key_arity,
-            ArrangementFlavor::Local(
-                arrangement,
-                err_input
-                    .concatenate(errors)
-                    .into_key_collection()
-                    .mz_arrange("Arrange bundle err"),
-            ),
+            ArrangementFlavor::Local(arrangement, errs.mz_arrange("Arrange bundle err")),
         )
     }
 

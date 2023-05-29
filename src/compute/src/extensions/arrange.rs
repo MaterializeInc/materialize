@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use differential_dataflow::difference::{Abelian, Semigroup};
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
-use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
 use timely::container::columnation::Columnation;
@@ -125,20 +124,12 @@ where
 
 /// A specialized collection where data only has a key, but no associated value.
 ///
-/// Created by calling `collection.into_key_collection()`.
-pub struct KeyCollection<G: Scope, D, R: Semigroup = usize>(Collection<G, D, R>);
+/// Created by calling `collection.into()`.
+pub struct KeyCollection<G: Scope, K, R: Semigroup = usize>(Collection<G, K, R>);
 
-/// Convert the target into a key collection.
-pub trait IntoKeyCollection {
-    type Output;
-    fn into_key_collection(self) -> Self::Output;
-}
-
-impl<G: Scope, D, R: Semigroup> IntoKeyCollection for Collection<G, D, R> {
-    type Output = KeyCollection<G, D, R>;
-
-    fn into_key_collection(self) -> Self::Output {
-        KeyCollection(self)
+impl<G: Scope, K, R: Semigroup> From<Collection<G, K, R>> for KeyCollection<G, K, R> {
+    fn from(value: Collection<G, K, R>) -> Self {
+        KeyCollection(value)
     }
 }
 
@@ -196,7 +187,7 @@ fn vec_size<T>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
 ///
 /// * `arranged`: The arrangement to inspect.
 /// * `logic`: Closure that calculates the heap size/capacity/allocations for a trace. The return
-///    value are size and capacity in bytes, and number of allocations.
+///    value are size and capacity in bytes, and number of allocations, all in absolute values.
 fn log_arrangement_size_inner<G, Tr, L>(
     arranged: Arranged<G, TraceAgent<Tr>>,
     mut logic: L,
@@ -239,7 +230,7 @@ where
                 if size != old_size {
                     logger.log(ComputeEvent::ArrangementHeapSize {
                         operator,
-                        size: size - old_size,
+                        delta_size: size - old_size,
                     });
                 }
 
@@ -247,7 +238,7 @@ where
                 if capacity != old_capacity {
                     logger.log(ComputeEvent::ArrangementHeapCapacity {
                         operator,
-                        capacity: capacity - old_capacity,
+                        delta_capacity: capacity - old_capacity,
                     });
                 }
 
@@ -255,7 +246,7 @@ where
                 if allocations != old_allocations {
                     logger.log(ComputeEvent::ArrangementHeapAllocations {
                         operator,
-                        allocations: allocations - old_allocations,
+                        delta_allocations: allocations - old_allocations,
                     });
                 }
 
@@ -323,43 +314,4 @@ where
             (size, capacity, allocations)
         })
     }
-}
-
-/// Extension trait for the `reduce_core` differential dataflow method.
-pub(crate) trait MzReduce<G: Scope, K: Data, V: Data, R: Semigroup>:
-    ReduceCore<G, K, V, R>
-where
-    G::Timestamp: Lattice + Ord,
-{
-    /// Applies `reduce` to arranged data, and returns an arrangement of output data.
-    fn mz_reduce_abelian<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
-    where
-        T2: Trace + TraceReader<Key = K, Time = G::Timestamp> + 'static,
-        T2::Val: Data,
-        T2::R: Abelian,
-        T2::Batch: Batch,
-        L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>) + 'static,
-        Arranged<G, TraceAgent<T2>>: ArrangementSize,
-    {
-        // Allow access to `reduce_core` since we're within Mz's wrapper.
-        #[allow(clippy::disallowed_methods)]
-        self.reduce_core::<_, T2>(name, move |key, input, output, change| {
-            if !input.is_empty() {
-                logic(key, input, change);
-            }
-            change.extend(output.drain(..).map(|(x, d)| (x, d.negate())));
-        })
-        .log_arrangement_size()
-    }
-}
-
-impl<G, K, V, T1, R> MzReduce<G, K, V, R> for Arranged<G, T1>
-where
-    G::Timestamp: Lattice + Ord,
-    G: Scope,
-    K: Data,
-    V: Data,
-    R: Semigroup,
-    T1: TraceReader<Key = K, Val = V, Time = G::Timestamp, R = R> + Clone + 'static,
-{
 }

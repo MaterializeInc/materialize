@@ -36,7 +36,7 @@ use timely::Container;
 use tracing::error;
 use uuid::Uuid;
 
-use crate::extensions::operator::MzArrange;
+use crate::extensions::arrange::MzArrange;
 use crate::logging::{ComputeLog, EventQueue, LogVariant, SharedLoggingState};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -84,22 +84,22 @@ pub enum ComputeEvent {
     ArrangementHeapSize {
         /// Operator index
         operator: usize,
-        /// Heap size in bytes of the arrangement.
-        size: isize,
+        /// Delta of the heap size in bytes of the arrangement.
+        delta_size: isize,
     },
     /// Arrangement heap size update
     ArrangementHeapCapacity {
         /// Operator index
         operator: usize,
-        /// Heap capacity in bytes of the arrangement.
-        capacity: isize,
+        /// Delta of the heap capacity in bytes of the arrangement.
+        delta_capacity: isize,
     },
     /// Arrangement heap size update
     ArrangementHeapAllocations {
         /// Operator index
         operator: usize,
-        /// Number of distinct heap allocations backing the arrangement.
-        allocations: isize,
+        /// Delta of distinct heap allocations backing the arrangement.
+        delta_allocations: isize,
     },
     /// Arrangement size operator address
     ArrangementHeapSizeOperator {
@@ -355,7 +355,7 @@ pub(super) fn construct<A: Allocate + 'static>(
 
 /// State maintained by the demux operator.
 struct DemuxState<A: Allocate> {
-    /// The scope of this operator.
+    /// The worker hosting this operator.
     worker: Worker<A>,
     /// Maps dataflow exports to dataflow IDs.
     export_dataflows: BTreeMap<GlobalId, usize>,
@@ -496,15 +496,17 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 time,
                 diff,
             } => self.handle_import_frontier(import_id, export_id, time, diff),
-            ArrangementHeapSize { operator, size } => {
-                self.handle_arrangement_heap_size(operator, size)
-            }
-            ArrangementHeapCapacity { operator, capacity } => {
-                self.handle_arrangement_heap_capacity(operator, capacity)
-            }
+            ArrangementHeapSize {
+                operator,
+                delta_size: size,
+            } => self.handle_arrangement_heap_size(operator, size),
+            ArrangementHeapCapacity {
+                operator,
+                delta_capacity: capacity,
+            } => self.handle_arrangement_heap_capacity(operator, capacity),
             ArrangementHeapAllocations {
                 operator,
-                allocations,
+                delta_allocations: allocations,
             } => self.handle_arrangement_heap_allocations(operator, allocations),
             ArrangementHeapSizeOperator { operator, address } => {
                 self.handle_arrangement_heap_size_operator(operator, address)
@@ -703,7 +705,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             .arrangement_heap_size
             .give((datum, ts, Diff::cast_from(size)));
 
-        state.size = size;
+        state.size += size;
     }
 
     /// Update the allocation capacity for an arrangement.
@@ -716,7 +718,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             .arrangement_heap_capacity
             .give((datum, ts, Diff::cast_from(capacity)));
 
-        state.capacity = capacity;
+        state.capacity += capacity;
     }
 
     /// Update the allocation count for an arrangement.
@@ -729,7 +731,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             .arrangement_heap_allocations
             .give((datum, ts, Diff::cast_from(count)));
 
-        state.count = count;
+        state.count += count;
     }
 
     /// Indicate that a new arrangement exists, start maintaining the heap size state.

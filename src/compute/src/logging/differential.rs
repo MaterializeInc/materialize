@@ -31,7 +31,8 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability, Operator};
 use timely::worker::AsWorker;
 
-use crate::extensions::operator::{MzArrange, MzReduce};
+use crate::extensions::arrange::MzArrange;
+use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::{DifferentialLog, EventQueue, LogVariant, SharedLoggingState};
 use crate::typedefs::{KeysValsHandle, RowSpine};
@@ -171,21 +172,17 @@ pub(super) fn construct<A: Allocate>(
             ])
         });
 
+        use DifferentialLog::*;
         let logs = [
-            (
-                LogVariant::Differential(DifferentialLog::ArrangementBatches),
-                arrangement_batches,
-            ),
-            (
-                LogVariant::Differential(DifferentialLog::ArrangementRecords),
-                arrangement_records,
-            ),
-            (LogVariant::Differential(DifferentialLog::Sharing), sharing),
+            (ArrangementBatches, arrangement_batches),
+            (ArrangementRecords, arrangement_records),
+            (Sharing, sharing),
         ];
 
         // Build the output arrangements.
         let mut traces = BTreeMap::new();
         for (variant, collection) in logs {
+            let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
                 let key = variant.index_by();
                 let (_, value) = permutation_for_arrangement(

@@ -131,8 +131,9 @@ use timely::PartialOrder;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::collection::ConsolidateExt;
-use crate::extensions::operator::{IntoKeyCollection, MzArrange, MzReduce};
+use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::LogImportFrontiers;
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::typedefs::{ErrSpine, RowKeySpine};
@@ -686,8 +687,8 @@ where
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
+                let err: KeyCollection<_, _, _> = err.into();
                 let mut errs = err
-                    .into_key_collection()
                     .mz_arrange::<ErrSpine<DataflowError, _, _>>("Arrange recursive err")
                     .mz_reduce_abelian::<_, ErrSpine<_, _, _>>(
                         "Distinct recursive err",
