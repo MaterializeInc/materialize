@@ -34,6 +34,7 @@ sqlfunc!(
     #[sqlname = "boolean_to_nonstandard_text"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastStringToBool)]
+    #[is_monotone = true]
     fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
         // N.B. this function differs from `cast_bool_to_string` because
         // the SQL specification requires `true` and `false` to be spelled out in

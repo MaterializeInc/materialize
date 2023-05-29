@@ -71,6 +71,7 @@ sqlfunc!(
     #[sqlname = "real_to_smallint"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt16ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_int16(a: f32) -> Result<i16, EvalError> {
         let f = round_float32(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -87,6 +88,7 @@ sqlfunc!(
     #[sqlname = "real_to_integer"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt32ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_int32(a: f32) -> Result<i32, EvalError> {
         let f = round_float32(a);
         // This condition is delicate because i32::MIN can be represented exactly by
@@ -107,6 +109,7 @@ sqlfunc!(
     #[sqlname = "real_to_bigint"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt64ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_int64(a: f32) -> Result<i64, EvalError> {
         let f = round_float32(a);
         // This condition is delicate because i64::MIN can be represented exactly by
@@ -127,6 +130,7 @@ sqlfunc!(
     #[sqlname = "real_to_double"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat64ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_float64(a: f32) -> f64 {
         a.into()
     }
@@ -147,6 +151,7 @@ sqlfunc!(
     #[sqlname = "real_to_uint2"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint16ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
         let f = round_float32(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -163,6 +168,7 @@ sqlfunc!(
     #[sqlname = "real_to_uint4"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint32ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
         let f = round_float32(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -179,6 +185,7 @@ sqlfunc!(
     #[sqlname = "real_to_uint8"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint64ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
         let f = round_float32(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -220,6 +227,10 @@ impl<'a> EagerUnaryFunc<'a> for CastFloat32ToNumeric {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToFloat32)
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
     }
 }
 

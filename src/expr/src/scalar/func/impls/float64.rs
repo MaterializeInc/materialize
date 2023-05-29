@@ -75,6 +75,7 @@ sqlfunc!(
     #[sqlname = "double_to_smallint"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt16ToFloat64)]
+    #[is_monotone = true]
     fn cast_float64_to_int16(a: f64) -> Result<i16, EvalError> {
         let f = round_float64(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -91,6 +92,7 @@ sqlfunc!(
     #[sqlname = "double_to_integer"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt32ToFloat64)]
+    #[is_monotone = true]
     fn cast_float64_to_int32(a: f64) -> Result<i32, EvalError> {
         let f = round_float64(a);
         // This condition is delicate because i32::MIN can be represented exactly by
@@ -111,6 +113,7 @@ sqlfunc!(
     #[sqlname = "f64toi64"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt64ToFloat64)]
+    #[is_monotone = true]
     fn cast_float64_to_int64(a: f64) -> Result<i64, EvalError> {
         let f = round_float64(a);
         // This condition is delicate because i64::MIN can be represented exactly by
@@ -131,6 +134,7 @@ sqlfunc!(
     #[sqlname = "double_to_real"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToFloat64)]
+    #[is_monotone = true]
     fn cast_float64_to_float32(a: f64) -> Result<f32, EvalError> {
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
@@ -160,6 +164,7 @@ sqlfunc!(
     #[sqlname = "double_to_uint2"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint16ToFloat64)]
+    #[is_monotone = true]
     fn cast_float64_to_uint16(a: f64) -> Result<u16, EvalError> {
         let f = round_float64(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -176,6 +181,7 @@ sqlfunc!(
     #[sqlname = "double_to_uint4"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint32ToFloat64)]
+    #[is_monotone = true]
     fn cast_float64_to_uint32(a: f64) -> Result<u32, EvalError> {
         let f = round_float64(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -192,6 +198,7 @@ sqlfunc!(
     #[sqlname = "double_to_uint8"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint64ToFloat64)]
+    #[is_monotone = true]
     fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
         let f = round_float64(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -235,6 +242,10 @@ impl<'a> EagerUnaryFunc<'a> for CastFloat64ToNumeric {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToFloat64)
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
     }
 }
 

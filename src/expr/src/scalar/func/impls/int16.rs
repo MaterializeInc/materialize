@@ -46,6 +46,7 @@ sqlfunc!(
     #[sqlname = "smallint_to_real"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastFloat32ToInt16)]
+    #[is_monotone = true]
     fn cast_int16_to_float32(a: i16) -> f32 {
         f32::from(a)
     }
@@ -55,6 +56,7 @@ sqlfunc!(
     #[sqlname = "smallint_to_double"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastFloat64ToInt16)]
+    #[is_monotone = true]
     fn cast_int16_to_float64(a: i16) -> f64 {
         f64::from(a)
     }
@@ -64,6 +66,7 @@ sqlfunc!(
     #[sqlname = "smallint_to_integer"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt32ToInt16)]
+    #[is_monotone = true]
     fn cast_int16_to_int32(a: i16) -> i32 {
         i32::from(a)
     }
@@ -73,6 +76,7 @@ sqlfunc!(
     #[sqlname = "smallint_to_bigint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt64ToInt16)]
+    #[is_monotone = true]
     fn cast_int16_to_int64(a: i16) -> i64 {
         i64::from(a)
     }
@@ -93,6 +97,7 @@ sqlfunc!(
     #[sqlname = "smallint_to_uint2"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint16ToInt16)]
+    #[is_monotone = true]
     fn cast_int16_to_uint16(a: i16) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
     }
@@ -102,6 +107,7 @@ sqlfunc!(
     #[sqlname = "smallint_to_uint4"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint32ToInt16)]
+    #[is_monotone = true]
     fn cast_int16_to_uint32(a: i16) -> Result<u32, EvalError> {
         u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
     }
@@ -111,6 +117,7 @@ sqlfunc!(
     #[sqlname = "smallint_to_uint8"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint64ToInt16)]
+    #[is_monotone = true]
     fn cast_int16_to_uint64(a: i16) -> Result<u64, EvalError> {
         u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))
     }
@@ -139,6 +146,10 @@ impl<'a> EagerUnaryFunc<'a> for CastInt16ToNumeric {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToInt16)
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
     }
 }
 

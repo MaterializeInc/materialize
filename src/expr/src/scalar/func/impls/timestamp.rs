@@ -50,6 +50,7 @@ sqlfunc!(
     #[sqlname = "timestamp_to_date"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastDateToTimestamp)]
+    #[is_monotone = true]
     fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
         Ok(a.date().try_into()?)
     }
@@ -59,6 +60,7 @@ sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_date"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastDateToTimestampTz)]
+    #[is_monotone = true]
     fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {
         Ok(a.naive_utc().date().try_into()?)
     }
@@ -68,6 +70,7 @@ sqlfunc!(
     #[sqlname = "timestamp_to_timestamp_with_time_zone"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastTimestampTzToTimestamp)]
+    #[is_monotone = true]
     fn cast_timestamp_to_timestamp_tz(
         a: CheckedTimestamp<NaiveDateTime>,
     ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
@@ -81,6 +84,7 @@ sqlfunc!(
     #[sqlname = "timestamp_with_time_zone_to_timestamp"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastTimestampToTimestampTz)]
+    #[is_monotone = true]
     fn cast_timestamp_tz_to_timestamp(
         a: CheckedTimestamp<DateTime<Utc>>,
     ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {

@@ -57,6 +57,7 @@ sqlfunc!(
     #[sqlname = "integer_to_real"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToInt32)]
+    #[is_monotone = true]
     fn cast_int32_to_float32(a: i32) -> f32 {
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
@@ -70,6 +71,7 @@ sqlfunc!(
     #[sqlname = "integer_to_double"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastFloat64ToInt32)]
+    #[is_monotone = true]
     fn cast_int32_to_float64(a: i32) -> f64 {
         f64::from(a)
     }
@@ -79,6 +81,7 @@ sqlfunc!(
     #[sqlname = "integer_to_smallint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt16ToInt32)]
+    #[is_monotone = true]
     fn cast_int32_to_int16(a: i32) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
     }
@@ -88,6 +91,7 @@ sqlfunc!(
     #[sqlname = "integer_to_bigint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt64ToInt32)]
+    #[is_monotone = true]
     fn cast_int32_to_int64(a: i32) -> i64 {
         i64::from(a)
     }
@@ -108,6 +112,7 @@ sqlfunc!(
     #[sqlname = "integer_to_uint2"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint16ToInt32)]
+    #[is_monotone = true]
     fn cast_int32_to_uint16(a: i32) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
     }
@@ -117,6 +122,7 @@ sqlfunc!(
     #[sqlname = "integer_to_uint4"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint32ToInt32)]
+    #[is_monotone = true]
     fn cast_int32_to_uint32(a: i32) -> Result<u32, EvalError> {
         u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
     }
@@ -126,6 +132,7 @@ sqlfunc!(
     #[sqlname = "integer_to_uint8"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint64ToInt32)]
+    #[is_monotone = true]
     fn cast_int32_to_uint64(a: i32) -> Result<u64, EvalError> {
         u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))
     }
@@ -155,6 +162,10 @@ impl<'a> EagerUnaryFunc<'a> for CastInt32ToNumeric {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToInt32)
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
     }
 }
 

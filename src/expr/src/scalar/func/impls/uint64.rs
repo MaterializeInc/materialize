@@ -30,6 +30,7 @@ sqlfunc!(
     #[sqlname = "uint8_to_real"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToUint64)]
+    #[is_monotone = true]
     fn cast_uint64_to_float32(a: u64) -> f32 {
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
@@ -43,6 +44,7 @@ sqlfunc!(
     #[sqlname = "uint8_to_double"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat64ToUint64)]
+    #[is_monotone = true]
     fn cast_uint64_to_float64(a: u64) -> f64 {
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
@@ -56,6 +58,7 @@ sqlfunc!(
     #[sqlname = "uint8_to_uint2"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint16ToUint64)]
+    #[is_monotone = true]
     fn cast_uint64_to_uint16(a: u64) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
     }
@@ -65,6 +68,7 @@ sqlfunc!(
     #[sqlname = "uint8_to_uint4"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint32ToUint64)]
+    #[is_monotone = true]
     fn cast_uint64_to_uint32(a: u64) -> Result<u32, EvalError> {
         u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
     }
@@ -74,6 +78,7 @@ sqlfunc!(
     #[sqlname = "uint8_to_smallint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt16ToUint64)]
+    #[is_monotone = true]
     fn cast_uint64_to_int16(a: u64) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
     }
@@ -83,6 +88,7 @@ sqlfunc!(
     #[sqlname = "uint8_to_integer"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt32ToUint64)]
+    #[is_monotone = true]
     fn cast_uint64_to_int32(a: u64) -> Result<i32, EvalError> {
         i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
     }
@@ -92,6 +98,7 @@ sqlfunc!(
     #[sqlname = "uint8_to_bigint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt64ToUint64)]
+    #[is_monotone = true]
     fn cast_uint64_to_int64(a: u64) -> Result<i64, EvalError> {
         i64::try_from(a).or(Err(EvalError::Int64OutOfRange))
     }
@@ -132,6 +139,10 @@ impl<'a> EagerUnaryFunc<'a> for CastUint64ToNumeric {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToUint64)
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
     }
 }
 
