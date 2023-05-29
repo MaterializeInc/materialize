@@ -33,6 +33,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_smallint"]
+    #[is_monotone = true]
     fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),
@@ -46,6 +47,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_integer"]
+    #[is_monotone = true]
     fn cast_jsonb_to_int32<'a>(a: JsonbRef<'a>) -> Result<i32, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int32(a.into_inner()),
@@ -59,6 +61,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_bigint"]
+    #[is_monotone = true]
     fn cast_jsonb_to_int64<'a>(a: JsonbRef<'a>) -> Result<i64, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int64(a.into_inner()),
@@ -72,6 +75,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_real"]
+    #[is_monotone = true]
     fn cast_jsonb_to_float32<'a>(a: JsonbRef<'a>) -> Result<f32, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_float32(a.into_inner()),
@@ -85,6 +89,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "jsonb_to_double"]
+    #[is_monotone = true]
     fn cast_jsonb_to_float64<'a>(a: JsonbRef<'a>) -> Result<f64, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_float64(a.into_inner()),
@@ -126,6 +131,10 @@ impl<'a> EagerUnaryFunc<'a> for CastJsonbToNumeric {
     fn output_type(&self, input: ColumnType) -> ColumnType {
         ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
 }
 
 impl fmt::Display for CastJsonbToNumeric {
@@ -136,6 +145,7 @@ impl fmt::Display for CastJsonbToNumeric {
 
 sqlfunc!(
     #[sqlname = "jsonb_to_boolean"]
+    #[is_monotone = true]
     fn cast_jsonb_to_bool<'a>(a: JsonbRef<'a>) -> Result<bool, EvalError> {
         match a.into_datum() {
             Datum::True => Ok(true),

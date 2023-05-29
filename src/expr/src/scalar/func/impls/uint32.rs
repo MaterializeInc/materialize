@@ -30,6 +30,7 @@ sqlfunc!(
     #[sqlname = "uint4_to_real"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToUint32)]
+    #[is_monotone = true]
     fn cast_uint32_to_float32(a: u32) -> f32 {
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
@@ -43,6 +44,7 @@ sqlfunc!(
     #[sqlname = "uint4_to_double"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastFloat64ToUint32)]
+    #[is_monotone = true]
     fn cast_uint32_to_float64(a: u32) -> f64 {
         f64::from(a)
     }
@@ -52,6 +54,7 @@ sqlfunc!(
     #[sqlname = "uint4_to_uint2"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint16ToUint32)]
+    #[is_monotone = true]
     fn cast_uint32_to_uint16(a: u32) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
     }
@@ -61,6 +64,7 @@ sqlfunc!(
     #[sqlname = "uint4_to_uint8"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint64ToUint32)]
+    #[is_monotone = true]
     fn cast_uint32_to_uint64(a: u32) -> u64 {
         u64::from(a)
     }
@@ -70,6 +74,7 @@ sqlfunc!(
     #[sqlname = "uint4_to_smallint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt16ToUint32)]
+    #[is_monotone = true]
     fn cast_uint32_to_int16(a: u32) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
     }
@@ -79,6 +84,7 @@ sqlfunc!(
     #[sqlname = "uint4_to_integer"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt32ToUint32)]
+    #[is_monotone = true]
     fn cast_uint32_to_int32(a: u32) -> Result<i32, EvalError> {
         i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
     }
@@ -88,6 +94,7 @@ sqlfunc!(
     #[sqlname = "uint4_to_bigint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt64ToUint32)]
+    #[is_monotone = true]
     fn cast_uint32_to_int64(a: u32) -> i64 {
         i64::from(a)
     }
@@ -128,6 +135,10 @@ impl<'a> EagerUnaryFunc<'a> for CastUint32ToNumeric {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToUint32)
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
     }
 }
 

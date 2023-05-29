@@ -56,6 +56,7 @@ sqlfunc!(
     #[sqlname = "bigint_to_smallint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt16ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_int16(a: i64) -> Result<i16, EvalError> {
         i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
     }
@@ -65,6 +66,7 @@ sqlfunc!(
     #[sqlname = "bigint_to_integer"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt32ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_int32(a: i64) -> Result<i32, EvalError> {
         i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
     }
@@ -85,6 +87,7 @@ sqlfunc!(
     #[sqlname = "bigint_to_uint2"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint16ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {
         u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
     }
@@ -94,6 +97,7 @@ sqlfunc!(
     #[sqlname = "bigint_to_uint4"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint32ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_uint32(a: i64) -> Result<u32, EvalError> {
         u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
     }
@@ -103,6 +107,7 @@ sqlfunc!(
     #[sqlname = "bigint_to_uint8"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint64ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
         u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))
     }
@@ -133,6 +138,10 @@ impl<'a> EagerUnaryFunc<'a> for CastInt64ToNumeric {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToInt64)
     }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
 }
 
 impl fmt::Display for CastInt64ToNumeric {
@@ -145,6 +154,7 @@ sqlfunc!(
     #[sqlname = "bigint_to_real"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_float32(a: i64) -> f32 {
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
@@ -158,6 +168,7 @@ sqlfunc!(
     #[sqlname = "bigint_to_double"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat64ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_float64(a: i64) -> f64 {
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]

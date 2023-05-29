@@ -169,6 +169,7 @@ sqlfunc!(
     #[sqlname = "numeric_to_smallint"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt16ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_int16(mut a: Numeric) -> Result<i16, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -182,6 +183,7 @@ sqlfunc!(
     #[sqlname = "numeric_to_integer"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt32ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_int32(mut a: Numeric) -> Result<i32, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -194,6 +196,7 @@ sqlfunc!(
     #[sqlname = "numeric_to_bigint"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt64ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -206,6 +209,7 @@ sqlfunc!(
     #[sqlname = "numeric_to_real"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
         let i = a.to_string().parse::<f32>().unwrap();
         if i.is_infinite() {
@@ -220,6 +224,7 @@ sqlfunc!(
     #[sqlname = "numeric_to_double"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat64ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
         let i = a.to_string().parse::<f64>().unwrap();
         if i.is_infinite() {
@@ -245,6 +250,7 @@ sqlfunc!(
     #[sqlname = "numeric_to_uint2"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint16ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -258,6 +264,7 @@ sqlfunc!(
     #[sqlname = "numeric_to_uint4"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint32ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_uint32(mut a: Numeric) -> Result<u32, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
@@ -270,6 +277,7 @@ sqlfunc!(
     #[sqlname = "numeric_to_uint8"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint64ToNumeric(None))]
+    #[is_monotone = true]
     fn cast_numeric_to_uint64(mut a: Numeric) -> Result<u64, EvalError> {
         let mut cx = numeric::cx_datum();
         cx.round(&mut a);
