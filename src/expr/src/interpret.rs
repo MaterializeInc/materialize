@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::{max, min};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
@@ -34,6 +35,16 @@ enum Monotonic {
     Maybe,
     /// We don't know any useful properties of this function.
     No,
+}
+
+impl From<bool> for Monotonic {
+    fn from(value: bool) -> Self {
+        if value {
+            Monotonic::Yes
+        } else {
+            Monotonic::No
+        }
+    }
 }
 
 fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
@@ -73,43 +84,6 @@ fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
         // Trivially monotonic, since all non-null values map to `false`.
         IsNull(_) => Yes,
         AbsInt64(_) => No,
-        _ => Maybe,
-    }
-}
-
-/// Describes the pointwise behaviour of each of the two arguments of the function.
-/// (ie. the first element of the tuple is `Monotonic::Yes` if, for any value of the second argument
-/// increasing the first argument causes the result of the function to either monotonically
-/// increase or decrease.) For example, subtraction is considered monotonic in both arguments:
-/// in the first because `a - C` increases monotonically as `a` increases, and in the second because
-/// `C - b` decreases monotonically as `b` increases.
-fn binary_monotonic(func: &BinaryFunc) -> (Monotonic, Monotonic) {
-    use BinaryFunc::*;
-    use Monotonic::*;
-
-    match func {
-        AddInt64 | MulInt64 | AddNumeric | MulNumeric | SubInt64 | SubNumeric => (Yes, Yes),
-        AddInterval | SubInterval => (Yes, Yes),
-        AddTimestampInterval
-        | AddTimestampTzInterval
-        | SubTimestampInterval
-        | SubTimestampTzInterval => (Yes, Yes),
-        // Monotonic in the left argument, but the right hand side has a discontinuity.
-        // Could be treated as monotonic if we also captured the valid domain of the function args.
-        DivInt64 | DivNumeric => (Yes, No),
-        Lt | Lte | Gt | Gte => (Yes, Yes),
-        _ => (Maybe, Maybe),
-    }
-}
-
-/// Describes the pointwise behaviour of each of the arguments to our variadic function.
-/// (ie. returns `Monotonic::Yes` if, for each argument of the function, increasing that argument
-/// causes the result of the function to either monotonically increase or decrease.)
-fn variadic_monotonic(func: &VariadicFunc) -> Monotonic {
-    use Monotonic::*;
-    use VariadicFunc::*;
-    match func {
-        And | Or | Coalesce => Yes,
         _ => Maybe,
     }
 }
@@ -360,7 +334,7 @@ impl<'a> ResultSpec<'a> {
     /// - using a safe default when we can't infer a tighter bound on the set, eg. [Self::anything].
     fn flat_map(
         &self,
-        is_monotonic: Monotonic,
+        is_monotonic: bool,
         mut result_map: impl FnMut(Result<Datum<'a>, EvalError>) -> ResultSpec<'a>,
     ) -> ResultSpec<'a> {
         let null_spec = if self.nullable {
@@ -394,24 +368,21 @@ impl<'a> ResultSpec<'a> {
             }
             // Otherwise, if our function is monotonic, we can try mapping the input
             // range to an output range.
-            Values::Within(min, max) => match is_monotonic {
-                Monotonic::Yes => {
-                    let min_column = result_map(Ok(min));
-                    let max_column = result_map(Ok(max));
-                    if min_column.nullable
-                        || min_column.fallible
-                        || max_column.nullable
-                        || max_column.fallible
-                    {
-                        ResultSpec::anything()
-                    } else {
-                        min_column.union(max_column)
-                    }
+            Values::Within(min, max) if is_monotonic => {
+                let min_column = result_map(Ok(min));
+                let max_column = result_map(Ok(max));
+                if min_column.nullable
+                    || min_column.fallible
+                    || max_column.nullable
+                    || max_column.fallible
+                {
+                    ResultSpec::anything()
+                } else {
+                    min_column.union(max_column)
                 }
-                Monotonic::Maybe | Monotonic::No => ResultSpec::anything(),
-            },
+            }
             // TODO: we could return a narrower result for eg. `Values::Nested` with all-`Within` fields.
-            Values::Nested(_) | Values::All => ResultSpec::anything(),
+            Values::Within(_, _) | Values::Nested(_) | Values::All => ResultSpec::anything(),
         };
 
         null_spec.union(error_spec).union(values_spec)
@@ -614,7 +585,22 @@ impl From<Monotonic> for Pushdownable {
     }
 }
 
+impl From<bool> for Pushdownable {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Pushdownable::Yes,
+            false => Pushdownable::No,
+        }
+    }
+}
+
 /// An interpreter that traces how information about the source columns flows through the expression.
+///
+/// Consider some arbitrary variadic function call f(a, ...). We say that this expression is "pushdownable" if both:
+/// - Any of the arguments are pushdownable. (eg. a column reference, or another pushdownable expression.)
+///   If the first argument is pushdownable but not the second we consider the whole thing pushdownable.
+/// - The function itself is monotonic / similar. This is the meet; the #0 in 5 / #0 is pushdownable,
+///   but the overall expression is not, because division is not pushdownable in its righ-hand side.
 #[derive(Debug)]
 pub struct Trace;
 
@@ -647,12 +633,14 @@ impl Interpreter for Trace {
     ) -> Self::Summary {
         // TODO: this is duplicative! If we have more than one or two special-cased functions
         // we should find some way to share the list between `Trace` and `ColumnSpecs`.
-        let (left_monotonic, right_monotonic) = match func {
-            BinaryFunc::JsonbGetString { stringify: false } => (Monotonic::Yes, Monotonic::No),
-            _ => binary_monotonic(func),
+        let (left_pushdownable, right_pushdownable) = match func {
+            BinaryFunc::JsonbGetString { stringify: false } => (true, false),
+            _ => func.is_monotone(),
         };
-        left.min(left_monotonic.into())
-            .max(right.min(right_monotonic.into()))
+        max(
+            min(left, left_pushdownable.into()),
+            min(right, right_pushdownable.into()),
+        )
     }
 
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
@@ -662,9 +650,9 @@ impl Interpreter for Trace {
             return Pushdownable::No;
         }
 
-        let is_monotonic = variadic_monotonic(func);
+        let pushdownable_fn: Pushdownable = func.is_monotone().into();
         exprs.into_iter().fold(Pushdownable::No, |acc, arg| {
-            acc.max(arg.min(is_monotonic.into()))
+            max(acc, min(arg, pushdownable_fn))
         })
     }
 
@@ -820,7 +808,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
-        let is_monotonic = unary_monotonic(func);
+        let is_monotonic = unary_monotonic(func) == Monotonic::Yes;
         let mut expr = MirScalarExpr::CallUnary {
             func: func.clone(),
             expr: Box::new(Self::placeholder(summary.col_type.clone())),
@@ -842,7 +830,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         left: Self::Summary,
         right: Self::Summary,
     ) -> Self::Summary {
-        let (left_monotonic, right_monotonic) = binary_monotonic(func);
+        let (left_monotonic, right_monotonic) = func.is_monotone();
 
         let special_spec = match func {
             BinaryFunc::JsonbGetString { stringify } => {
@@ -916,7 +904,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                     Self::placeholder(col_type),
                 ],
             };
-            let is_monotone = variadic_monotonic(func);
+            let is_monotone = func.is_monotone();
             args.iter()
                 .map(|cs| cs.range.clone())
                 .reduce(|left, right| {
@@ -933,7 +921,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             ResultSpec::anything()
         } else {
             fn eval_loop<'a>(
-                is_monotonic: Monotonic,
+                is_monotonic: bool,
                 expr: &mut MirScalarExpr,
                 args: &[ColumnSpec<'a>],
                 index: usize,
@@ -956,13 +944,9 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                     .map(|spec| Self::placeholder(spec.col_type.clone()))
                     .collect(),
             };
-            eval_loop(
-                variadic_monotonic(func),
-                &mut fn_expr,
-                &args,
-                0,
-                &mut |expr| self.eval_result(expr.eval(&[], self.arena)),
-            )
+            eval_loop(func.is_monotone(), &mut fn_expr, &args, 0, &mut |expr| {
+                self.eval_result(expr.eval(&[], self.arena))
+            })
         };
 
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
@@ -981,7 +965,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         let range = cond
             .range
-            .flat_map(Monotonic::Yes, |datum| match datum {
+            .flat_map(true, |datum| match datum {
                 Ok(Datum::True) => then.range.clone(),
                 Ok(Datum::False) => els.range.clone(),
                 _ => ResultSpec::fails(),
