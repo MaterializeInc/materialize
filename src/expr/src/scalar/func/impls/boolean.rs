@@ -13,6 +13,7 @@ sqlfunc!(
     #[sqlname = "NOT"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(Not)]
+    #[is_monotone = true]
     fn not(a: bool) -> bool {
         !a
     }
@@ -22,6 +23,7 @@ sqlfunc!(
     #[sqlname = "boolean_to_text"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastStringToBool)]
+    #[is_monotone = true]
     fn cast_bool_to_string<'a>(a: bool) -> &'a str {
         match a {
             true => "true",
@@ -48,6 +50,7 @@ sqlfunc!(
     #[sqlname = "boolean_to_integer"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt32ToBool)]
+    #[is_monotone = true]
     fn cast_bool_to_int32(a: bool) -> i32 {
         match a {
             true => 1,
@@ -60,6 +63,7 @@ sqlfunc!(
     #[sqlname = "boolean_to_bigint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt64ToBool)]
+    #[is_monotone = true]
     fn cast_bool_to_int64(a: bool) -> i64 {
         match a {
             true => 1,

@@ -13,6 +13,7 @@ use crate::EvalError;
 
 sqlfunc!(
     #[sqlname = "isnull"]
+    #[is_monotone = true]
     fn is_null<'a>(a: Datum<'a>) -> bool {
         a.is_null()
     }
