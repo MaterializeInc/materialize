@@ -541,18 +541,18 @@ where
         if distinct {
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, Result<Row, String>>(partial)
+                    .build_reduce_inaccumulable_distinct::<_, Result<(), String>>(partial)
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .map_fallible("Demux Errors", move |(key, result)| match result {
-                        Ok(value) => Ok((key, value)),
+                        Ok(()) => Ok(key),
                         Err(m) => Err(EvalError::Internal(m).into()),
                     });
                 err_output = Some(errs);
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, Row>(partial)
-                    .as_collection(|k, v| (k.clone(), v.clone()));
+                    .build_reduce_inaccumulable_distinct::<_, ()>(partial)
+                    .as_collection(|k, _| k.clone());
             }
         }
 
@@ -607,15 +607,16 @@ where
     fn build_reduce_inaccumulable_distinct<S, R>(
         &self,
         input: Collection<S, (Row, Row), Diff>,
-    ) -> KeyArrangement<S, Row, R>
+    ) -> KeyArrangement<S, (Row, Row), R>
     where
         S: Scope<Timestamp = G::Timestamp>,
-        R: MaybeValidatingRow<Row, String>,
+        R: MaybeValidatingRow<(), String>,
     {
         let error_logger = self.error_logger();
 
+        let input: KeyCollection<_, _, _> = input.into();
         input
-            .mz_arrange::<RowSpine<Row, Row, _, _>>("Arranged ReduceInaccumulable")
+            .mz_arrange::<RowSpine<(Row, Row), _, _, _>>("Arranged ReduceInaccumulable")
             .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>(
                 "ReduceInaccumulable",
                 move |_, source, t| {
@@ -632,11 +633,7 @@ where
                             return;
                         }
                     }
-                    t.extend(
-                        source
-                            .iter()
-                            .map(|(value, _count)| (R::ok((*value).clone()), 1)),
-                    );
+                    t.push((R::ok(()), 1))
                 },
             )
     }
@@ -897,8 +894,9 @@ where
                     "hierarchical aggregations are expected to have monoid implementations",
                 ));
             }
-            ((key, ()), output)
+            (key, output)
         });
+        let partial: KeyCollection<_, _, _> = partial.into();
         let output = partial
             .mz_arrange::<RowKeySpine<_, _, Vec<ReductionMonoid>>>("ArrangeMonotonic")
             .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
@@ -1455,7 +1453,7 @@ where
 /// point representation has less precision than a double. It is entirely possible
 /// that the values of the accumulator overflow, thus we have to use wrapping arithmetic
 /// to preserve group guarantees.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum Accum {
     /// Accumulates boolean values.
     Bool {
