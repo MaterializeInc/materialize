@@ -492,6 +492,11 @@ impl crate::coord::Coordinator {
         // The peek is present on some specific compute instance.
         // Allow dataflow to cancel any pending peeks.
         if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
+            self.metrics
+                .canceled_peeks
+                .with_label_values(&[])
+                .inc_by(u64::cast_from(uuids.len()));
+
             let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
             for (uuid, compute_instance) in &uuids {
                 inverse.entry(*compute_instance).or_default().insert(*uuid);
