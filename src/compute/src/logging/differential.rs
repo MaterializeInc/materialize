@@ -138,9 +138,9 @@ pub(super) fn construct<A: Allocate>(
             .log_register()
             .get::<ComputeEvent>("materialize/compute");
         if let Some(logger) = compute_logger {
-            // Arrange the sharing information and reduce it. This will reveal when an arrangement
-            // is created and when it is dropped. On drop, we notify compute logging to clean up
-            // the arrangement state.
+            // Reduce the sharing information. This will reveal when an arrangement is created and
+            // when it is dropped. On drop, we notify compute logging to clean up the arrangement
+            // state.
             sharing
                 .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>(
                     "Reduce Differential sharing",
