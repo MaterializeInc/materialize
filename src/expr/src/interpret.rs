@@ -11,82 +11,12 @@ use std::cmp::{max, min};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::{
     BinaryFunc, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
     UnmaterializableFunc, VariadicFunc,
 };
-
-/// Tracks whether a function is monotonic, either increasing or decreasing.
-/// This property is useful for static analysis because a monotonic function maps ranges to ranges:
-/// ie. if `a` is between `b` and `c` inclusive, then `f(a)` is between `f(b)` and `f(c)` inclusive.
-/// (However, if either `f(b)` and `f(c)` error or return null, we don't assume anything about `f(a)`.
-///
-/// This should likely be moved to a function annotation in the future.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-enum Monotonic {
-    /// Monotonic in this argument. (Either increasing or decreasing, non-strict.)
-    Yes,
-    /// We haven't classified this one yet. (Conservatively treated as "no", but a distinct
-    /// enum so it's easy to tell whether someone's thought about a particular function yet.)
-    /// This should likely be removed when this becomes a function annotation.
-    Maybe,
-    /// We don't know any useful properties of this function.
-    No,
-}
-
-impl From<bool> for Monotonic {
-    fn from(value: bool) -> Self {
-        if value {
-            Monotonic::Yes
-        } else {
-            Monotonic::No
-        }
-    }
-}
-
-fn unary_monotonic(func: &UnaryFunc) -> Monotonic {
-    use Monotonic::*;
-    use UnaryFunc::*;
-
-    use crate::func::impls as funcs;
-    match func {
-        // Casts are generally monotonic.
-        CastUint64ToNumeric(_)
-        | CastNumericToUint64(_)
-        | CastNumericToMzTimestamp(_)
-        | CastUint64ToMzTimestamp(_)
-        | CastInt64ToMzTimestamp(_)
-        | CastTimestampToMzTimestamp(_)
-        | CastTimestampTzToMzTimestamp(_) => Yes,
-        // Including JSON casts.
-        CastJsonbToNumeric(_)
-        | CastJsonbToBool(_)
-        | CastJsonbToString(_)
-        | CastJsonbToInt64(_)
-        | CastJsonbToFloat64(_) => Yes,
-
-        // Extracting the "most significant bits" of the a timestamp is monotonic.
-        ExtractTimestamp(funcs::ExtractTimestamp(units))
-        | ExtractTimestampTz(funcs::ExtractTimestampTz(units)) => match units {
-            DateTimeUnits::Epoch
-            | DateTimeUnits::Millennium
-            | DateTimeUnits::Century
-            | DateTimeUnits::Decade
-            | DateTimeUnits::Year => Yes,
-            _ => No,
-        },
-        DateTruncTimestamp(_) | DateTruncTimestampTz(_) => Yes,
-        // Negation is monotonically decreasing, but that's fine.
-        NegInt64(_) | NegNumeric(_) | Not(_) => Yes,
-        // Trivially monotonic, since all non-null values map to `false`.
-        IsNull(_) => Yes,
-        AbsInt64(_) => No,
-        _ => Maybe,
-    }
-}
 
 /// An inclusive range of non-null datum values.
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -329,12 +259,12 @@ impl<'a> ResultSpec<'a> {
     /// each result to the function one-by-one and unioning the resulting sets. This is possible
     /// when our values set is empty or contains a single datum, but when it contains a range,
     /// we can't enumerate all possible values of the set. We handle this by:
-    /// - tracking whether the function is monotonic, in which case we can map the range by just
+    /// - tracking whether the function is monotone, in which case we can map the range by just
     ///   mapping the endpoints;
     /// - using a safe default when we can't infer a tighter bound on the set, eg. [Self::anything].
     fn flat_map(
         &self,
-        is_monotonic: bool,
+        is_monotone: bool,
         mut result_map: impl FnMut(Result<Datum<'a>, EvalError>) -> ResultSpec<'a>,
     ) -> ResultSpec<'a> {
         let null_spec = if self.nullable {
@@ -368,7 +298,7 @@ impl<'a> ResultSpec<'a> {
             }
             // Otherwise, if our function is monotonic, we can try mapping the input
             // range to an output range.
-            Values::Within(min, max) if is_monotonic => {
+            Values::Within(min, max) if is_monotone => {
                 let min_column = result_map(Ok(min));
                 let max_column = result_map(Ok(max));
                 if min_column.nullable
@@ -575,16 +505,6 @@ pub enum Pushdownable {
     Yes,
 }
 
-impl From<Monotonic> for Pushdownable {
-    fn from(value: Monotonic) -> Self {
-        match value {
-            Monotonic::Yes => Pushdownable::Yes,
-            Monotonic::Maybe => Pushdownable::Maybe,
-            Monotonic::No => Pushdownable::No,
-        }
-    }
-}
-
 /// A binary function we've added special-case handling for; including:
 /// - A two-argument function, taking and returning [ResultSpec]s. This overrides the
 ///   default function-handling logic entirely.
@@ -728,7 +648,7 @@ impl Interpreter for Trace {
     }
 
     fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-        expr.min(unary_monotonic(func).into())
+        expr.min(func.is_monotone().into())
     }
 
     fn binary(
@@ -913,12 +833,12 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
-        let is_monotonic = unary_monotonic(func) == Monotonic::Yes;
+        let is_monotone = func.is_monotone();
         let mut expr = MirScalarExpr::CallUnary {
             func: func.clone(),
             expr: Box::new(Self::placeholder(summary.col_type.clone())),
         };
-        let mapped_spec = summary.range.flat_map(is_monotonic, |datum| {
+        let mapped_spec = summary.range.flat_map(is_monotone, |datum| {
             Self::set_argument(&mut expr, 0, datum);
             self.eval_result(expr.eval(&[], self.arena))
         });
@@ -1044,6 +964,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
 #[cfg(test)]
 mod tests {
+    use mz_repr::adt::datetime::DateTimeUnits;
     use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
     use proptest::prelude::*;
     use proptest::sample::{select, Index};
