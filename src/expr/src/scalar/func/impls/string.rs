@@ -294,6 +294,10 @@ impl LazyUnaryFunc for CastStringToArray {
             ty: self.return_ty.clone(),
         })
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToArray {
@@ -366,6 +370,10 @@ impl LazyUnaryFunc for CastStringToList {
         to_unary!(super::CastListToString {
             ty: self.return_ty.clone(),
         })
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -447,6 +455,10 @@ impl LazyUnaryFunc for CastStringToMap {
         to_unary!(super::CastMapToString {
             ty: self.return_ty.clone(),
         })
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -561,6 +573,10 @@ impl LazyUnaryFunc for CastStringToRange {
             ty: self.return_ty.clone(),
         })
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToRange {
@@ -672,6 +688,10 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastInt2VectorToString)
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -878,6 +898,10 @@ impl LazyUnaryFunc for RegexpMatch {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

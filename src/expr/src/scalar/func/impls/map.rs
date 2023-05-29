@@ -60,6 +60,10 @@ impl LazyUnaryFunc for CastMapToString {
         // TODO? If we moved typeconv into expr, we could evaluate this
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastMapToString {
@@ -108,6 +112,10 @@ impl LazyUnaryFunc for MapLength {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

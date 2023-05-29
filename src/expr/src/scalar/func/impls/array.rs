@@ -77,6 +77,10 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastArrayToListOneDim {
@@ -128,6 +132,10 @@ impl LazyUnaryFunc for CastArrayToString {
         // TODO? If we moved typeconv into `expr` we could determine the right
         // inverse of this.
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -190,6 +198,10 @@ impl LazyUnaryFunc for CastArrayToArray {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
