@@ -626,12 +626,12 @@ impl Interpreter for Trace {
     ) -> Self::Summary {
         // TODO: this is duplicative! If we have more than one or two special-cased functions
         // we should find some way to share the list between `Trace` and `ColumnSpecs`.
-        let (left_monotonic, right_monotonic) = match func {
+        let (left_pushdownable, right_pushdownable) = match func {
             BinaryFunc::JsonbGetString { stringify: false } => (true, false),
             _ => func.is_monotone(),
         };
-        left.min(left_monotonic.into())
-            .max(right.min(right_monotonic.into()))
+        left.min(left_pushdownable.into())
+            .max(right.min(right_pushdownable.into()))
     }
 
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
@@ -641,9 +641,9 @@ impl Interpreter for Trace {
             return Pushdownable::No;
         }
 
-        let is_monotone = func.is_monotone();
+        let pushdownable_fn: Pushdownable = func.is_monotone().into();
         exprs.into_iter().fold(Pushdownable::No, |acc, arg| {
-            acc.max(arg.min(is_monotone.into()))
+            acc.max(arg.min(pushdownable_fn))
         })
     }
 

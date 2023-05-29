@@ -7149,8 +7149,8 @@ impl VariadicFunc {
     /// This describes the *pointwise* behaviour of the function:
     /// ie. if more than one argument is provided, this describes the behaviour of
     /// any specific argument as the others are held constant. (For example, `COALESCE(a, b)` is
-    /// monotone because for any particular value of `b`, increasing `a` will never cause the result
-    /// to decrease.)
+    /// monotone in `a` because for any particular non-null value of `b`, increasing `a` will never
+    /// cause the result to decrease.)
     ///
     /// For monotone functions, this will return true whether the function is *non-decreasing*
     /// or *non-increasing*.
