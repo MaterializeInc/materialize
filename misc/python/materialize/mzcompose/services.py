@@ -81,8 +81,9 @@ class Materialized(Service):
             "MZ_ORCHESTRATOR=process",
             # The following settings can not be baked in the default image, as they
             # are enabled for testing purposes only
-            "ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
-            "ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
+            "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
+            "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
+            "MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=/mzdata/source_data",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
@@ -97,6 +98,8 @@ class Materialized(Service):
 
         if system_parameter_defaults is None:
             system_parameter_defaults = {
+                "enable_upsert_source_disk": "true",
+                "upsert_source_disk_default": "true",
                 "persist_sink_minimum_batch_updates": "128",
                 "enable_multi_worker_storage_persist_sink": "true",
                 "storage_persist_sink_minimum_batch_updates": "100",
@@ -238,6 +241,7 @@ class Clusterd(Service):
         environment = [
             "CLUSTERD_LOG_FILTER",
             "MZ_SOFT_ASSERTIONS=1",
+            "CLUSTERD_SCRATCH_DIRECTORY=/mzdata/source_data",
             *environment_extra,
         ]
 
