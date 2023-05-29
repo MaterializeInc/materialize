@@ -108,19 +108,27 @@ def run_one_scenario(
     common_seed = round(time.time())
 
     for mz_id, instance in enumerate(["this", "other"]):
-        tag, size = (
-            (args.this_tag, args.this_size)
+        tag, size, params = (
+            (args.this_tag, args.this_size, args.this_params)
             if instance == "this"
-            else (args.other_tag, args.other_size)
+            else (args.other_tag, args.other_size, args.other_params)
         )
 
         c.up("testdrive", persistent=True)
+
+        additional_system_parameter_defaults = None
+        if params is not None:
+            additional_system_parameter_defaults = {}
+            for param in params.split(";"):
+                param_name, param_value = param.split("=")
+                additional_system_parameter_defaults[param_name] = param_value
 
         mz = Materialized(
             image=f"materialize/materialized:{tag}" if tag else None,
             default_size=size,
             # Avoid clashes with the Kafka sink progress topic across restarts
             environment_id=f"local-az1-{uuid.uuid4()}-0",
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
         )
 
         with c.override(mz):
@@ -176,11 +184,27 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--this-params",
+        metavar="PARAMS",
+        type=str,
+        default=os.getenv("THIS_PARAMS", None),
+        help="Semicolon-separated list of parameter=value pairs to apply to the 'THIS' Mz instance",
+    )
+
+    parser.add_argument(
         "--other-tag",
         metavar="TAG",
         type=str,
         default=os.getenv("OTHER_TAG", str(VersionsFromDocs().all_versions()[-1])),
         help="'Other' Materialize container tag to benchmark. If not provided, the last released Mz version will be used.",
+    )
+
+    parser.add_argument(
+        "--other-params",
+        metavar="PARAMS",
+        type=str,
+        default=os.getenv("OTHER_PARAMS", None),
+        help="Semicolon-separated list of parameter=value pairs to apply to the 'OTHER' Mz instance",
     )
 
     parser.add_argument(
