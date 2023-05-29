@@ -22,7 +22,7 @@ use mz_repr::explain::{
     UnsupportedFormat, UsedIndexes,
 };
 
-use crate::interpret::{Interpreter, MfpEval, Pushdownable, Trace};
+use crate::interpret::{Interpreter, MfpEval, Trace};
 use crate::visit::Visit;
 use crate::{Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 
@@ -56,26 +56,15 @@ pub struct ExplainSinglePlan<'a, T> {
 pub struct PushdownInfo<'a> {
     /// Pushdown-able filters in the source, by index.
     pub pushdown: Vec<&'a MirScalarExpr>,
-    /// Filters that might be pushdownable. This is expected to go away once
-    /// we've gone through / annotated every function.
-    pub potential_pushdown: Vec<&'a MirScalarExpr>,
 }
 
 impl<C: AsMut<Indent>> DisplayText<C> for PushdownInfo<'_> {
     fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        let Self {
-            pushdown,
-            potential_pushdown,
-        } = self;
+        let Self { pushdown } = self;
 
         if !pushdown.is_empty() {
             let separated = separated(" AND ", pushdown);
             writeln!(f, "{}pushdown=({})", ctx.as_mut(), separated)?;
-        }
-
-        if !potential_pushdown.is_empty() {
-            let separated = separated(" AND ", potential_pushdown);
-            writeln!(f, "{}potential_pushdown=({})", ctx.as_mut(), separated)?;
         }
 
         Ok(())
@@ -97,23 +86,13 @@ impl<'a> ExplainSource<'a> {
     ) -> ExplainSource<'a> {
         let pushdown_info = if context.config.mfp_pushdown {
             let mfp_mapped = MfpEval::new(&Trace, op.input_arity, &op.expressions);
-            let mut pushdown = vec![];
-            let mut potential_pushdown = vec![];
-            for (_, expr) in op.predicates.iter() {
-                match mfp_mapped.expr(expr) {
-                    Pushdownable::No => {}
-                    Pushdownable::Maybe => {
-                        potential_pushdown.push(expr);
-                    }
-                    Pushdownable::Yes => {
-                        pushdown.push(expr);
-                    }
-                }
-            }
-            Some(PushdownInfo {
-                pushdown,
-                potential_pushdown,
-            })
+            let pushdown = op
+                .predicates
+                .iter()
+                .filter(|(_, e)| mfp_mapped.expr(e))
+                .map(|(_, e)| e)
+                .collect();
+            Some(PushdownInfo { pushdown })
         } else {
             None
         };

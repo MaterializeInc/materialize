@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp::{max, min};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
@@ -487,31 +486,13 @@ impl<'a, E: Interpreter + ?Sized> Interpreter for MfpEval<'a, E> {
     }
 }
 
-/// For a given column and expression, does the range of the column influence the range of the
-/// expression? (ie. if the expression is a filter, could we tell that the filter
-/// will never return True?)
-#[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Debug)]
-pub enum Pushdownable {
-    /// We don't have any information to push down filters on this column:
-    /// either it's not referenced at all, or we've applied some non-monotonic function that we can't
-    /// push filters through. (This is the default.)
-    No,
-    /// We may or may not be able to push down filters on the given column. (The expression
-    /// includes a function we haven't classified yet.)
-    Maybe,
-    /// We can definitely push down a filter on this column. (The expression references the column
-    /// in such a way that the range of possible values of the column affects the range of output
-    /// values of the expression in a particular way.)
-    Yes,
-}
-
 /// A binary function we've added special-case handling for; including:
 /// - A two-argument function, taking and returning [ResultSpec]s. This overrides the
 ///   default function-handling logic entirely.
 /// - Metadata on whether / not this function is pushdownable. See [Trace].
 struct SpecialBinary {
     map_fn: for<'a> fn(ResultSpec<'a>, ResultSpec<'a>) -> ResultSpec<'a>,
-    pushdownable: (Pushdownable, Pushdownable),
+    pushdownable: (bool, bool),
 }
 
 impl SpecialBinary {
@@ -600,89 +581,14 @@ impl SpecialBinary {
                 } else {
                     |l, r| jsonb_get_string(l, r, false)
                 },
-                pushdownable: (Pushdownable::Yes, Pushdownable::No),
+                pushdownable: (true, false),
             }),
             BinaryFunc::Eq => Some(SpecialBinary {
                 map_fn: eq,
-                pushdownable: (Pushdownable::Yes, Pushdownable::Yes),
+                pushdownable: (true, true),
             }),
             _ => None,
         }
-    }
-}
-
-impl From<bool> for Pushdownable {
-    fn from(value: bool) -> Self {
-        match value {
-            true => Pushdownable::Yes,
-            false => Pushdownable::No,
-        }
-    }
-}
-
-/// An interpreter that traces how information about the source columns flows through the expression.
-///
-/// Consider some arbitrary variadic function call f(a, ...). We say that this expression is "pushdownable" if both:
-/// - Any of the arguments are pushdownable. (eg. a column reference, or another pushdownable expression.)
-///   If the first argument is pushdownable but not the second we consider the whole thing pushdownable.
-/// - The function itself is monotonic / similar. This is the meet; the #0 in 5 / #0 is pushdownable,
-///   but the overall expression is not, because division is not pushdownable in its righ-hand side.
-#[derive(Debug)]
-pub struct Trace;
-
-impl Interpreter for Trace {
-    /// For every column in the data, we track whether or not that column is "pusdownable".
-    /// (If the column is not present in the summary, we default to `false`.
-    type Summary = Pushdownable;
-
-    fn column(&self, _id: usize) -> Self::Summary {
-        Pushdownable::Yes
-    }
-
-    fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
-        Pushdownable::No
-    }
-
-    fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
-        Pushdownable::No
-    }
-
-    fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
-        expr.min(func.is_monotone().into())
-    }
-
-    fn binary(
-        &self,
-        func: &BinaryFunc,
-        left: Self::Summary,
-        right: Self::Summary,
-    ) -> Self::Summary {
-        // TODO: this is duplicative! If we have more than one or two special-cased functions
-        // we should find some way to share the list between `Trace` and `ColumnSpecs`.
-        let (left_pushdown, right_pushdown) = if let Some(special) = SpecialBinary::for_func(func) {
-            special.pushdownable
-        } else {
-            let (left, right) = func.is_monotone();
-            (left.into(), right.into())
-        };
-        max(min(left, left_pushdown), min(right, right_pushdown))
-    }
-
-    fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
-        if !func.is_associative() && exprs.len() >= ColumnSpecs::MAX_EVAL_ARGS {
-            // We can't efficiently evaluate functions with very large argument lists;
-            // see the comment on ColumnSpecs::MAX_EVAL_ARGS for details.
-            return Pushdownable::No;
-        }
-
-        let pushdownable_fn: Pushdownable = func.is_monotone().into();
-        exprs.into_iter().fold(Pushdownable::No, |acc, arg| {
-            max(acc, min(arg, pushdownable_fn))
-        })
-    }
-
-    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
-        cond.max(then.max(els))
     }
 }
 
@@ -959,6 +865,75 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             .intersect(ResultSpec::has_type(&col_type, true));
 
         ColumnSpec { col_type, range }
+    }
+}
+
+/// An interpreter that returns whether or not a particular expression is "pushdownable".
+/// Broadly speaking, an expression is pushdownable if the result of evaluating the expression
+/// depends on the range of possible column values in a way that `ColumnSpecs` is able to reason about.
+/// `Column` is trivially pushdownable; `Literal` and `CallUnmaterializable`
+/// are not, since their results don't depend on the range of possible values in any column.
+///
+/// Functions are the most complex case. We say that a function is pushdownable for a particular
+/// argument if `ColumnSpecs` can determine the spec of the function's output given the input spec for
+/// that argument. (In practice, this is true when either the function is monotone in that argument
+/// or it's been special-cased in the interpreter.) And we say a function-call expression is
+/// pushdownable overall if at least one of its arguments is pushdownable, and the function is
+/// is pushdownable in that argument. For example, `3 + #0` is pushdownable (because the second
+/// argument to `+` is pushdownable and `+` is monotone) but `3 / #0` is not (because while the
+/// second argument is pushdownable, `/` is not monotone on the right-hand side).
+#[derive(Debug)]
+pub struct Trace;
+
+impl Interpreter for Trace {
+    type Summary = bool;
+
+    fn column(&self, _id: usize) -> Self::Summary {
+        true
+    }
+
+    fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
+        false
+    }
+
+    fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
+        false
+    }
+
+    fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
+        expr && func.is_monotone()
+    }
+
+    fn binary(
+        &self,
+        func: &BinaryFunc,
+        left: Self::Summary,
+        right: Self::Summary,
+    ) -> Self::Summary {
+        // TODO: this is duplicative! If we have more than one or two special-cased functions
+        // we should find some way to share the list between `Trace` and `ColumnSpecs`.
+        let (left_pushdownable, right_pushdownable) = match SpecialBinary::for_func(func) {
+            None => func.is_monotone(),
+            Some(special) => special.pushdownable,
+        };
+        (left && left_pushdownable) || (right && right_pushdownable)
+    }
+
+    fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
+        if !func.is_associative() && exprs.len() >= ColumnSpecs::MAX_EVAL_ARGS {
+            // We can't efficiently evaluate functions with very large argument lists;
+            // see the comment on ColumnSpecs::MAX_EVAL_ARGS for details.
+            return false;
+        }
+
+        let pushdownable_fn = func.is_monotone();
+        exprs
+            .into_iter()
+            .any(|pushdownable_arg| pushdownable_arg && pushdownable_fn)
+    }
+
+    fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
+        cond || (then || els)
     }
 }
 
@@ -1447,7 +1422,7 @@ mod tests {
                 }),
             }),
         };
-        let trace = Trace.expr(&expr);
-        assert_eq!(trace, Pushdownable::Yes);
+        let pushdownable = Trace.expr(&expr);
+        assert!(pushdownable);
     }
 }
