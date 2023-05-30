@@ -3189,6 +3189,38 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     )
             ") => ReturnType::set_of(String.into()), oid::FUNC_MZ_NAME_TO_GLOBAL_ID_ITEM_NAME;
         },
+        "mz_global_id_to_name" => Scalar {
+            params!(String) => sql_impl_func("
+            CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    SELECT mz_internal.mz_error_if_null(
+                        (
+                            SELECT concat(qual.d, qual.s, item.name)
+                            FROM
+                                mz_objects AS item
+                            JOIN
+                            (
+                                SELECT
+                                    d.name || '.' AS d,
+                                    s.name || '.' AS s,
+                                    s.id AS schema_id
+                                FROM
+                                    mz_schemas AS s
+                                    LEFT JOIN
+                                        (SELECT id, name FROM mz_databases)
+                                        AS d
+                                        ON s.database_id = d.id
+                            ) AS qual
+                            ON qual.schema_id = item.schema_id
+                            WHERE item.id = CAST($1 AS text)
+                        ),
+                        'global ID ' || $1 || ' does not exist'
+                    )
+                )
+                END
+            ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
+        },
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },
