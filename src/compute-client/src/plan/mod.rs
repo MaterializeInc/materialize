@@ -38,6 +38,7 @@ use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
 use crate::types::dataflows::{BuildDesc, DataflowDescription};
 
+pub mod interpret;
 pub mod join;
 pub mod reduce;
 pub mod threshold;
