@@ -11,18 +11,6 @@ mode cockroach
 
 reset-server
 
-# Enable rbac checks.
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO true;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
-----
-COMPLETE 0
-
 simple conn=mz_system,user=mz_system
 CREATE ROLE joe CREATEDB CREATECLUSTER;
 ----
@@ -2633,17 +2621,5 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
-----
-COMPLETE 0
-
-# Disable rbac checks.
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
 ----
 COMPLETE 0
