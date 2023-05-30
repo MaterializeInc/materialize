@@ -43,6 +43,7 @@ pub mod join;
 pub mod reduce;
 pub mod threshold;
 pub mod top_k;
+pub mod transform;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.plan.rs"));
 
