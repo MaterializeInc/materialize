@@ -24,6 +24,7 @@ class NumberDataType(DataType):
         max_value: str,
         max_negative_value: Optional[str],
         further_tiny_dec_values: Optional[Set[str]] = None,
+        is_floating_point_type: bool = False,
     ):
         super().__init__(identifier, type_name, DataTypeCategory.NUMERIC)
         self.is_signed = is_signed
@@ -34,6 +35,7 @@ class NumberDataType(DataType):
         self.further_tiny_dec_values = (
             further_tiny_dec_values if further_tiny_dec_values is not None else set()
         )
+        self.is_floating_point_type = is_floating_point_type
 
 
 INT2_TYPE = NumberDataType(
@@ -127,6 +129,7 @@ REAL_TYPE = NumberDataType(
         "0.999999999999999999999999999999999999999",
         "1.000000000000000000000000000000000000001",
     },
+    is_floating_point_type=True,
 )
 DOUBLE_TYPE = NumberDataType(
     "DOUBLE",
@@ -142,6 +145,7 @@ DOUBLE_TYPE = NumberDataType(
         "0.999999999999999999999999999999999999999",
         "1.000000000000000000000000000000000000001",
     },
+    is_floating_point_type=True,
 )
 
 SIGNED_INT_TYPES: List[NumberDataType] = [

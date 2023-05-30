@@ -27,12 +27,3 @@ class ExpressionCharacteristics(Enum):
     NEGATIVE = 121
     DECIMAL = 122
     """value is not an integer"""
-
-    DECIMAL_OR_FLOAT_TYPED = 150
-    FLOAT_TYPED = 151
-    UNSIGNED_TYPED = 152
-
-    TYPE_LARGER_INT4_SIZED = 160
-    """INT8 or UINT4 or UINT8"""
-    TYPE_INT8_SIZED = 161
-    """INT8 or UINT8"""
