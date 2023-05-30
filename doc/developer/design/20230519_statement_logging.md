@@ -33,13 +33,11 @@ Chapter One is a prerequisite for implementing Chapter Two.
 
 ## Goals
 
-* Administrators should be able to access a table that records all
-  statements issued in the recent past (e.g., last 30 days), along
-  with other relevvant information (e.g., timestamp information, time
-  to return, current cluster, current user, plan information, etc.)
-* (Stretch goal) unprivileged users should be able to access a view
-  that filters `mz_statement_history` to only surface queries that
-  that user has 
+* Administrators should be able to access a table that records a
+  representative sample of the statements issued in the recent past
+  (e.g., last 30 days), along with other relevant information (e.g.,
+  timestamp information, time to return, current cluster, current
+  user, plan information, etc.)
 
 ## Non-Goals
 
@@ -47,11 +45,19 @@ Chapter One is a prerequisite for implementing Chapter Two.
   analytics) is explicitly out of scope of _this_ design, but is
   necessary to unlock its full value, and so should be done as a
   follow-up ASAP.
-* 100% durability of queries is permanently out of scope. We have to
-  accept the possibility of losing data under adverse conditions. The
-  reason for this design choice is that otherwise we would have to
-  persist the text of every statement (in either Cockroach or S3),
-  which we consider unacceptable for `SELECT` queries.
+* 100% durability of queries for all customers is permanently out of
+  scope. We have to accept the possibility of losing data under
+  adverse conditions. The reason for this design choice is that
+  otherwise we would have to persist the text of every statement (in
+  either Cockroach or S3), which we consider unacceptable for `SELECT`
+  queries.
+  
+  In the future, we may allow such durability as a specially feature
+  for users who request it, are willing to pay for it, and are also
+  willing to accept increased latency on the read path. It is not hard
+  to implement, but we would want to be careful about the tradeoffs
+  involves. That feature is, however, _temporarily_ out of scope;
+  i.e., it is not discussed further in this document.
 
 ## Overview
 
