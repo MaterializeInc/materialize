@@ -6,36 +6,53 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
+from typing import Callable, List, Set
 
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
+)
+from materialize.output_consistency.input_data.types.number_types_provider import (
+    UINT8_TYPE,
+    NumberDataType,
 )
 from materialize.output_consistency.operation.operation_args_validator import (
     OperationArgsValidator,
 )
 
 
-class Uint8MixedWithTypedArgsValidator(OperationArgsValidator):
+class NumericArgsValidator(OperationArgsValidator):
+    def index_of_type_with_properties(
+        self,
+        args: List[Expression],
+        match_type_properties: Callable[[NumberDataType], bool],
+    ) -> int:
+        def has_numeric_type_properties(
+            arg: Expression,
+            _arg_characteristics: Set[ExpressionCharacteristics],
+            _index: int,
+        ) -> bool:
+            data_type = arg.try_resolve_exact_data_type()
+
+            if data_type is not None and isinstance(data_type, NumberDataType):
+                return match_type_properties(data_type)
+            return False
+
+        return self.index_of(args, has_numeric_type_properties)
+
+
+class Uint8MixedWithTypedArgsValidator(NumericArgsValidator):
     """To identify expressions that contain a value of UINT8 type and a value of an unsigned numeric type (heuristic to identify no matching operators)"""
 
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
         if len(args) < 2:
             return False
 
-        index_of_uint8 = self.index_of_characteristic_combination(
-            args,
-            {
-                ExpressionCharacteristics.TYPE_INT8_SIZED,
-                ExpressionCharacteristics.UNSIGNED_TYPED,
-            },
+        index_of_uint8 = self.index_of_type_with_properties(
+            args, lambda number_type: number_type == UINT8_TYPE
         )
-
-        index_of_signed = self.index_of(
-            args,
-            lambda arg, arg_characteristics, index: ExpressionCharacteristics.UNSIGNED_TYPED
-            not in arg_characteristics,
+        index_of_signed = self.index_of_type_with_properties(
+            args, lambda number_type: number_type.is_signed
         )
 
         return index_of_uint8 != -1 and index_of_signed != -1
