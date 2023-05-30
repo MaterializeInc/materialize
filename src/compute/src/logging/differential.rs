@@ -28,11 +28,9 @@ use timely::communication::Allocate;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Filter, InputCapability, Operator};
-use timely::worker::AsWorker;
+use timely::dataflow::operators::{Filter, InputCapability};
 
 use crate::extensions::arrange::MzArrange;
-use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::{DifferentialLog, EventQueue, LogVariant, SharedLoggingState};
 use crate::typedefs::{KeysValsHandle, RowSpine};
@@ -78,6 +76,7 @@ pub(super) fn construct<A: Allocate>(
         let (mut sharing_out, sharing) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
+        let mut demux_state = Default::default();
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut batches = batches_out.activate();
@@ -100,6 +99,7 @@ pub(super) fn construct<A: Allocate>(
                         assert_eq!(logger_id, worker_id);
 
                         DemuxHandler {
+                            state: &mut demux_state,
                             output: &mut output_buffers,
                             logging_interval_ms,
                             time,
@@ -132,38 +132,6 @@ pub(super) fn construct<A: Allocate>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Differential sharing",
             );
-
-        // Track arrangement sharing to determine when an arrangement trace is dropped
-        let compute_logger = scope
-            .log_register()
-            .get::<ComputeEvent>("materialize/compute");
-        if let Some(logger) = compute_logger {
-            // Reduce the sharing information. This will reveal when an arrangement is created and
-            // when it is dropped. On drop, we notify compute logging to clean up the arrangement
-            // state.
-            sharing
-                .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>(
-                    "Reduce Differential sharing",
-                    |_key, s, t| {
-                        for ((), count) in s.iter() {
-                            if *count > 0 {
-                                t.push(((), 1));
-                            }
-                        }
-                    },
-                )
-                .as_collection(|op, ()| *op)
-                .inner
-                .sink(Pipeline, "Sink Differential sharing", move |input| {
-                    while let Some((_time, batch)) = input.next() {
-                        logger.log_many(batch.iter().filter(|(_op, _t, diff)| *diff == -1).map(
-                            |(operator, _t, _diff)| ComputeEvent::ArrangementHeapSizeOperatorDrop {
-                                operator: *operator,
-                            },
-                        ))
-                    }
-                });
-        }
 
         let sharing = sharing.as_collection(move |op, ()| {
             Row::pack_slice(&[
@@ -225,8 +193,17 @@ struct DemuxOutput<'a, 'b> {
     sharing: OutputBuffer<'a, 'b, (usize, ())>,
 }
 
+/// State maintained by the demux operator.
+#[derive(Default)]
+struct DemuxState {
+    /// Arrangement trace sharing
+    sharing: BTreeMap<usize, usize>,
+}
+
 /// Event handler of the demux operator.
 struct DemuxHandler<'a, 'b, 'c> {
+    /// State kept by the demux operator
+    state: &'a mut DemuxState,
     /// Demux output buffers.
     output: &'a mut DemuxOutput<'b, 'c>,
     /// The logging interval specifying the time granularity for the updates.
@@ -305,6 +282,17 @@ impl DemuxHandler<'_, '_, '_> {
         let diff = Diff::cast_from(event.diff);
         debug_assert_ne!(diff, 0);
         self.output.sharing.give(self.cap, ((op, ()), ts, diff));
+
+        if let Some(logger) = &mut self.shared_state.compute_logger {
+            let sharing = self.state.sharing.entry(op).or_default();
+            *sharing = (i64::try_from(*sharing).expect("must fit") + diff)
+                .try_into()
+                .expect("under/overflow");
+            if *sharing == 0 {
+                self.state.sharing.remove(&op);
+                logger.log(ComputeEvent::ArrangementHeapSizeOperatorDrop { operator: op });
+            }
+        }
     }
 
     fn notify_arrangement_size(&self, operator: usize) {

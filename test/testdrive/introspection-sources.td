@@ -294,3 +294,29 @@ true true true
 
 > SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_empty'
 0 0 0 0 0
+
+# Tests that arrangement sizes are approximate
+
+> CREATE TABLE t4 (c int8)
+
+> CREATE INDEX ii_t4 ON t4(c)
+
+> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+0 0 0 0 0
+
+> INSERT INTO t4 SELECT 1
+
+> SELECT records, batches, size > 96 AND size < 2*96, capacity > 96, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+1 1 true true true
+
+> INSERT INTO t4 SELECT generate_series(1, 1000)
+
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 96*1000 AND size < 2*96*1000, capacity > 96*1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+true true true true true
+
+> DROP INDEX ii_t4
+
+> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name='ii_t4'
+
+> SELECT count(*) from mz_internal.mz_arrangement_heap_size_raw
+0

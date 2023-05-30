@@ -27,6 +27,8 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_repr::Timestamp;
 use mz_timely_util::activator::RcActivator;
 
+use crate::logging::compute::Logger as ComputeLogger;
+
 pub use crate::logging::initialize::initialize;
 
 /// Logs events as a timely stream, with progress statements.
@@ -145,7 +147,11 @@ impl<E> EventQueue<E> {
     }
 }
 
+/// State shared between different logging dataflows.
 #[derive(Default)]
 struct SharedLoggingState {
+    /// Activators for arrangement heap size operators.
     arrangement_size_activators: BTreeMap<usize, Activator>,
+    /// Shared compute logger.
+    compute_logger: Option<ComputeLogger>,
 }

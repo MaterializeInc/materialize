@@ -141,10 +141,11 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             "differential/arrange",
             self.simple_logger(self.d_event_queue.clone()),
         );
-        self.worker.log_register().insert_logger(
-            "materialize/compute",
-            self.simple_logger(self.c_event_queue.clone()),
-        );
+        let compute_logger = self.simple_logger(self.c_event_queue.clone());
+        self.worker
+            .log_register()
+            .insert_logger("materialize/compute", compute_logger.clone());
+        self.shared_state.borrow_mut().compute_logger = Some(compute_logger);
     }
 
     fn simple_logger<E: 'static>(&self, event_queue: EventQueue<E>) -> Logger<E> {
