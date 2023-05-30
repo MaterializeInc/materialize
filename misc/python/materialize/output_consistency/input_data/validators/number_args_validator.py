@@ -34,7 +34,7 @@ class Uint8MixedWithTypedArgsValidator(OperationArgsValidator):
 
         index_of_signed = self.index_of(
             args,
-            lambda arg_characteristics, index: ExpressionCharacteristics.UNSIGNED_TYPED
+            lambda arg, arg_characteristics, index: ExpressionCharacteristics.UNSIGNED_TYPED
             not in arg_characteristics,
         )
 
