@@ -28,7 +28,7 @@ $ set schema={
 > SELECT * from upsert
 key           f1       f2
 ---------------------------
-fish          fish     1000
+fish          fish     1001
 birdmore      geese    56
 mammalmore    moose    2
 

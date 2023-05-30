@@ -26,9 +26,10 @@ use mz_storage_client::types::errors::{
 use mz_storage_client::types::sources::encoding::*;
 use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, Exchange, Leave, OkErr};
+use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
@@ -364,34 +365,82 @@ where
                         .as_option()
                         .expect("resuming an already finished ingestion")
                         .clone();
-                    let (previous, previous_token) = if Timestamp::minimum() < upper_ts {
-                        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+                    let (upsert, health_update) = scope.scoped(
+                        &format!("upsert_rehydration_backpressure({})", id),
+                        |scope| {
+                            let (previous, previous_token, feedback_handle) =
+                                if Timestamp::minimum() < upper_ts {
+                                    let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
-                        let (stream, tok) = persist_source::persist_source_core(
-                            scope,
-                            id,
-                            persist_clients,
-                            description.ingestion_metadata,
-                            Some(as_of),
-                            Antichain::new(),
-                            None,
-                            None,
-                            // Copy the logic in DeltaJoin/Get/Join to start.
-                            |_timer, count| count > 1_000_000,
-                        );
-                        (stream.as_collection(), Some(tok))
-                    } else {
-                        (Collection::new(empty(scope)), None)
-                    };
-                    let (upsert, health_update) = crate::render::upsert::upsert(
-                        &upsert_input,
-                        upsert_envelope.clone(),
-                        resume_upper,
-                        previous,
-                        previous_token,
-                        base_source_config,
-                        &storage_state.instance_context,
-                        &storage_state.dataflow_parameters,
+                                    let (feedback_handle, flow_control) =
+                                        if let Some(storage_dataflow_max_inflight_bytes) =
+                                            storage_state
+                                                .dataflow_parameters
+                                                .storage_dataflow_max_inflight_bytes
+                                        {
+                                            let (feedback_handle, feedback_data) =
+                                                scope.feedback(Default::default());
+
+                                            (
+                                                Some(feedback_handle),
+                                                Some(persist_source::FlowControl {
+                                                    progress_stream: feedback_data,
+                                                    max_inflight_bytes:
+                                                        storage_dataflow_max_inflight_bytes,
+                                                    summary: (Default::default(), 1),
+                                                }),
+                                            )
+                                        } else {
+                                            (None, None)
+                                        };
+                                    let (stream, tok) = persist_source::persist_source_core(
+                                        scope,
+                                        id,
+                                        persist_clients,
+                                        description.ingestion_metadata,
+                                        Some(as_of),
+                                        Antichain::new(),
+                                        None,
+                                        flow_control,
+                                        // Copy the logic in DeltaJoin/Get/Join to start.
+                                        |_timer, count| count > 1_000_000,
+                                    );
+                                    (stream.as_collection(), Some(tok), feedback_handle)
+                                } else {
+                                    (Collection::new(empty(scope)), None, None)
+                                };
+                            let (upsert, health_update) = crate::render::upsert::upsert(
+                                &upsert_input.enter(scope),
+                                upsert_envelope.clone(),
+                                refine_antichain(&resume_upper),
+                                previous,
+                                previous_token,
+                                base_source_config,
+                                &storage_state.instance_context,
+                                &storage_state.dataflow_parameters,
+                            );
+
+                            // If backpressure is enabled, we probe the upsert operator's
+                            // output, which is the easiest way to extract frontier information.
+                            let upsert = match feedback_handle {
+                                Some(feedback_handle) => {
+                                    use mz_timely_util::probe::ProbeNotify;
+                                    let handle = mz_timely_util::probe::Handle::default();
+                                    let upsert =
+                                        upsert.inner.probe_notify_with(vec![handle.clone()]);
+                                    mz_timely_util::probe::source(
+                                        scope.clone(),
+                                        format!("upsert_probe({id})"),
+                                        handle,
+                                    )
+                                    .connect_loop(feedback_handle);
+                                    upsert.as_collection()
+                                }
+                                None => upsert,
+                            };
+
+                            (upsert.leave(), health_update.leave())
+                        },
                     );
 
                     let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);

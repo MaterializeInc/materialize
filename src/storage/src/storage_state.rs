@@ -846,10 +846,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // control flow from external command to this internal command.
                 self.storage_state.dropped_ids.extend(ids);
             }
-            InternalStorageCommand::UpdateConfiguration(pg, rocksdb, auto_spill_config) => self
-                .storage_state
-                .dataflow_parameters
-                .update(pg, rocksdb, auto_spill_config),
+            InternalStorageCommand::UpdateConfiguration {
+                pg,
+                rocksdb,
+                storage_dataflow_max_inflight_bytes,
+                auto_spill_config
+            } => self.storage_state.dataflow_parameters.update(
+                pg,
+                rocksdb,
+                auto_spill_config,
+                storage_dataflow_max_inflight_bytes,
+            ),
         }
     }
 
@@ -1158,11 +1165,13 @@ impl StorageState {
                 // the internal command fabric, to ensure consistent
                 // ordering of dataflow rendering across all workers.
                 if worker_index == 0 {
-                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration(
-                        params.pg_replication_timeouts,
-                        params.upsert_rocksdb_tuning_config,
-                        params.upsert_auto_spill_config,
-                    ))
+                    internal_cmd_tx.broadcast(InternalStorageCommand::UpdateConfiguration {
+                        pg: params.pg_replication_timeouts,
+                        rocksdb: params.upsert_rocksdb_tuning_config,
+                        storage_dataflow_max_inflight_bytes: params
+                            .storage_dataflow_max_inflight_bytes,
+                        auto_spill_config:params.upsert_auto_spill_config,
+                    })
                 }
             }
             StorageCommand::RunIngestions(ingestions) => {

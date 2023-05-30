@@ -350,7 +350,11 @@ where
                 )
                 .await
             {
-                Ok(_) => {}
+                Ok(_) => {
+                    if let Some(ts) = snapshot_upper.clone().into_option() {
+                        output_cap.downgrade(&ts);
+                    }
+                }
                 Err(e) => {
                     process_upsert_state_error::<G>(
                         "Failed to rehydrate state".to_string(),

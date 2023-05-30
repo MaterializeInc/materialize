@@ -95,7 +95,7 @@ where
     // current shard upper anyway.
     let source_as_of = None;
     let (ok_stream, err_stream, token) = mz_storage_client::source::persist_source::persist_source(
-        &desired_collection.scope(),
+        &mut desired_collection.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
         target.clone(),

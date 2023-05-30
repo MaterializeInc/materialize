@@ -840,6 +840,17 @@ const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+/// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
+/// dataflows_. This is distinct from `DATAFLOW_MAX_INFLIGHT_BYTES`, as this will
+/// supports more granular control (within a single timestamp).
+const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
+    name: UncasedStr::new("storage_dataflow_max_inflight_bytes"),
+    value: &None,
+    description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
+                  storage dataflows. Defaults to not backpressure enabled (Materialize).",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
 const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_sink_minimum_batch_updates"),
@@ -1802,6 +1813,7 @@ impl SystemVars {
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
+            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
@@ -2259,6 +2271,11 @@ impl SystemVars {
     /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
     pub fn dataflow_max_inflight_bytes(&self) -> usize {
         *self.expect_value(&DATAFLOW_MAX_INFLIGHT_BYTES)
+    }
+
+    /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
+    pub fn storage_dataflow_max_inflight_bytes(&self) -> Option<usize> {
+        *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
     }
 
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
@@ -3718,6 +3735,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_REPLICATION_KEEPALIVES_INTERVAL.name()
         || name == PG_REPLICATION_KEEPALIVES_RETRIES.name()
         || name == PG_REPLICATION_TCP_USER_TIMEOUT.name()
+        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
