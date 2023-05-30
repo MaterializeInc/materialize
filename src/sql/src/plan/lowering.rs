@@ -298,7 +298,7 @@ impl HirRelationExpr {
                     })?
                 }
                 LetRec {
-                    max_iter,
+                    limit,
                     bindings,
                     body,
                 } => {
@@ -354,7 +354,8 @@ impl HirRelationExpr {
                     mz_expr::MirRelationExpr::LetRec {
                         ids: mir_ids,
                         values: mir_values,
-                        max_iters: repeat(max_iter).take(num_bindings).collect(),
+                        // Copy the limit to each binding.
+                        limits: repeat(limit).take(num_bindings).collect(),
                         body: Box::new(mir_body),
                     }
                 }

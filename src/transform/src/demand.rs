@@ -135,7 +135,7 @@ impl Demand {
                 MirRelationExpr::LetRec {
                     ids,
                     values,
-                    max_iters: _,
+                    limits: _,
                     body,
                 } => {
                     let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values)?

@@ -437,13 +437,17 @@ impl_display_t!(CteMutRecColumnDef);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MutRecBlockOptionName {
-    IterLimit,
+    RecursionLimit,
+    ErrorAtRecursionLimit,
+    ReturnAtRecursionLimit,
 }
 
 impl AstDisplay for MutRecBlockOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            MutRecBlockOptionName::IterLimit => "ITERATION LIMIT",
+            MutRecBlockOptionName::RecursionLimit => "RECURSION LIMIT",
+            MutRecBlockOptionName::ErrorAtRecursionLimit => "ERROR AT RECURSION LIMIT",
+            MutRecBlockOptionName::ReturnAtRecursionLimit => "RETURN AT RECURSION LIMIT",
         })
     }
 }

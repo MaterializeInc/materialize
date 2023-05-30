@@ -25,7 +25,7 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{MutRecBlockOptionName, ObjectType, Privilege, UnresolvedItemName};
+use mz_sql_parser::ast::{ObjectType, Privilege, UnresolvedItemName};
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
@@ -80,7 +80,7 @@ pub enum PlanError {
     StrconvParse(strconv::ParseError),
     Catalog(CatalogError),
     UpsertSinkWithoutKey,
-    InvalidIterationLimit,
+    InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidId(GlobalId),
@@ -354,7 +354,7 @@ impl fmt::Display for PlanError {
             Self::StrconvParse(e) => write!(f, "{}", e),
             Self::Catalog(e) => write!(f, "{}", e),
             Self::UpsertSinkWithoutKey => write!(f, "upsert sinks must specify a key"),
-            Self::InvalidIterationLimit => write!(f, "{} has to be greater than 0", MutRecBlockOptionName::IterLimit),
+            Self::InvalidWmrRecursionLimit(msg) => write!(f, "Invalid WITH MUTUALLY RECURSIVE recursion limit. {}", msg),
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),

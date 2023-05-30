@@ -123,7 +123,7 @@ impl Bindings {
                     ids,
                     values,
                     body,
-                    max_iters: _,
+                    limits: _,
                 } => {
                     // Extend this.rebindings with (id, id) pairs for each
                     // recursive ID before descending into values and body.

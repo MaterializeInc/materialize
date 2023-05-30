@@ -112,7 +112,7 @@ use differential_dataflow::{AsCollection, Collection};
 use itertools::izip;
 use mz_compute_client::plan::Plan;
 use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
-use mz_expr::Id;
+use mz_expr::{EvalError, Id};
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::controller::CollectionMetadata;
 use mz_storage_client::source::persist_source;
@@ -617,12 +617,12 @@ where
         if let Plan::LetRec {
             ids,
             values,
-            max_iters,
+            limits,
             body,
         } = plan
         {
             assert_eq!(ids.len(), values.len());
-            assert_eq!(ids.len(), max_iters.len());
+            assert_eq!(ids.len(), limits.len());
             // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
             let mut variables = BTreeMap::new();
@@ -643,13 +643,11 @@ where
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
             // Now render each of the bindings.
-            for (id, value, max_iter) in
-                izip!(ids.iter(), values.into_iter(), max_iters.into_iter())
-            {
+            for (id, value, limit) in izip!(ids.iter(), values.into_iter(), limits.into_iter()) {
                 let bundle = self.render_recursive_plan(level + 1, value);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
-                let (oks, err) = bundle.collection.clone().unwrap();
+                let (oks, mut err) = bundle.collection.clone().unwrap();
                 self.insert_id(Id::Local(*id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
 
@@ -659,19 +657,26 @@ where
                     oks = oks.with_token(Weak::clone(token));
                 }
 
-                if let Some(max_iter) = max_iter {
+                if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
                     // these results would go into the `max_iter + 1`th iteration.
-                    let (in_limit, _over_limit) =
+                    let (in_limit, over_limit) =
                         oks.inner.branch_when(move |Product { inner: ps, .. }| {
                             // We get None in the first iteration, because the `PointStamp` doesn't yet have
                             // the `level`th element. It will get created when applying the summary for the
                             // first time.
                             let iteration_index = *ps.vector.get(level).unwrap_or(&0);
                             // The pointstamp starts counting from 0, so we need to add 1.
-                            iteration_index + 1 >= max_iter.into()
+                            iteration_index + 1 >= limit.max_iters.into()
                         });
                     oks = Collection::new(in_limit);
+                    if !limit.return_at_limit {
+                        err = err.concat(&Collection::new(over_limit).map(move |_data| {
+                            DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(
+                                format!("{}", limit.max_iters.get()),
+                            )))
+                        }));
+                    }
                 }
 
                 oks_v.set(&oks);

@@ -93,7 +93,7 @@ For an example, see [Using CTEs](#using-ctes).
 CTEs have the following limitations, which we are working to improve:
 
 - `INSERT`/`UPDATE`/`DELETE` (with `RETURNING`) is not supported inside a CTE. {{% gh 19486 %}}
-- `WITH RECURSIVE` CTEs are not supported. Non-standard support for recursive CTEs is under active development (see {{% gh 17012 %}}).
+- `WITH RECURSIVE` CTEs are not supported. Non-standard support for recursive CTEs is under active development {{% gh 17012 %}}.
 
 ### Query hints
 

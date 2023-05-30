@@ -12,6 +12,7 @@
 use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fmt::Display;
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use bytesize::ByteSize;
@@ -51,7 +52,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.rs"));
 ///
 /// For example, in MIR we could have long chains of
 /// - (1) `Let` bindings,
-/// - (2) `CallBinary` calls with associative functions such as `OR` and `+`
+/// - (2) `CallBinary` calls with associative functions such as `+`
 ///
 /// Until we fix those, we need to stick with the larger recursion limit.
 pub const RECURSION_LIMIT: usize = 2048;
@@ -136,9 +137,9 @@ pub enum MirRelationExpr {
         /// Maximum number of iterations, after which we should artificially force a fixpoint.
         /// (We don't error when reaching the limit, just return the current state as final result.)
         /// The per-`LetRec` limit that the user specified is initially copied to each binding to
-        /// accommodate slicing and merging of `LetRec`s in MIR transforms (`NormalizeLets`).
+        /// accommodate slicing and merging of `LetRec`s in MIR transforms (e.g., `NormalizeLets`).
         #[mzreflect(ignore)]
-        max_iters: Vec<Option<NonZeroU64>>,
+        limits: Vec<Option<LetRecLimit>>,
         /// The result of the `Let`, evaluated with `id` bound to `value`.
         body: Box<MirRelationExpr>,
     },
@@ -1856,7 +1857,7 @@ impl MirRelationExpr {
             if let MirRelationExpr::LetRec {
                 ids,
                 values,
-                max_iters: _,
+                limits: _,
                 body,
             } = expr
             {
@@ -3200,6 +3201,40 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
                 ))
             }
         })
+    }
+}
+
+/// Maximum iterations for a LetRec.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct LetRecLimit {
+    /// Maximum number of iterations to evaluate.
+    pub max_iters: NonZeroU64,
+    /// Whether to throw an error when reaching the above limit.
+    /// If true, we simply use the current contents of each Id as the final result.
+    pub return_at_limit: bool,
+}
+
+impl LetRecLimit {
+    /// Compute the smallest limit from a Vec of `LetRecLimit`s.
+    pub fn min_max_iter(limits: &Vec<Option<LetRecLimit>>) -> Option<u64> {
+        limits
+            .iter()
+            .filter_map(|l| l.as_ref().map(|l| l.max_iters.get()))
+            .min()
+    }
+
+    /// The default value of `LetRecLimit::return_at_limit` when using the RECURSION LIMIT option of
+    /// WMR without ERROR AT or RETURN AT.
+    pub const RETURN_AT_LIMIT_DEFAULT: bool = false;
+}
+
+impl Display for LetRecLimit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[recursion_limit={}", self.max_iters)?;
+        if self.return_at_limit != LetRecLimit::RETURN_AT_LIMIT_DEFAULT {
+            write!(f, ", return_at_limit")?;
+        }
+        write!(f, "]")
     }
 }
 

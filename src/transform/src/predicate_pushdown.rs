@@ -510,7 +510,7 @@ impl PredicatePushdown {
                 MirRelationExpr::LetRec {
                     ids,
                     values,
-                    max_iters: _,
+                    limits: _,
                     body,
                 } => {
                     // Note: This could be extended to be able to do a little more pushdowns, see
