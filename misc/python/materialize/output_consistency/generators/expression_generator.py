@@ -230,9 +230,7 @@ class ExpressionGenerator:
         self, param: OperationParam, storage_layout: ValueStorageLayout
     ) -> LeafExpression:
         # only consider the data type category, do not check incompatibilities and other validations at this point
-        suitable_types_with_values = self._get_data_type_values_of_category(
-            param.type_category
-        )
+        suitable_types_with_values = self._get_data_type_values_of_category(param)
 
         if len(suitable_types_with_values) == 0:
             raise NoSuitableExpressionFound()
@@ -256,6 +254,7 @@ class ExpressionGenerator:
         allow_aggregation: bool,
         must_use_aggregation: bool,
         nesting_level: int,
+        try_number: int = 1,
     ) -> ExpressionWithArgs:
         suitable_operations = self._get_operations_of_category(param.type_category)
 
@@ -283,11 +282,27 @@ class ExpressionGenerator:
         if nested_expression is None:
             raise NoSuitableExpressionFound()
 
+        data_type = nested_expression.try_resolve_exact_data_type()
+
+        if data_type is not None and not param.supports_type(data_type):
+            if try_number < 5:
+                return self._generate_complex_arg_for_param(
+                    param,
+                    storage_layout,
+                    allow_aggregation,
+                    must_use_aggregation,
+                    nesting_level,
+                    try_number=try_number + 1,
+                )
+            else:
+                raise NoSuitableExpressionFound()
+
         return nested_expression
 
     def _get_data_type_values_of_category(
-        self, category: DataTypeCategory
+        self, param: OperationParam
     ) -> List[DataTypeWithValues]:
+        category = param.type_category
         if category == DataTypeCategory.ANY:
             return self.input_data.all_data_types_with_values
 
@@ -296,7 +311,14 @@ class ExpressionGenerator:
                 f"Type {DataTypeCategory.DYNAMIC} not allowed for parameters"
             )
 
-        return self.types_with_values_by_category[category]
+        preselected_types_with_values = self.types_with_values_by_category[category]
+        suitable_types_with_values = []
+
+        for type_with_values in preselected_types_with_values:
+            if param.supports_type(type_with_values.data_type):
+                suitable_types_with_values.append(type_with_values)
+
+        return suitable_types_with_values
 
     def _get_operations_of_category(
         self, category: DataTypeCategory
