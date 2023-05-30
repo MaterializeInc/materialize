@@ -50,25 +50,24 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             self.__get_involved_column_names(query_template, query_column_selection)
         )
 
-        self.print_major_separator()
-        self._print_text("Minimal code for reproduction is:")
-        self.print_minor_separator()
+        self.start_section("Minimal code for reproduction", collapsed=True)
+        self.print_separator_line()
         self.__print_setup_code_for_error(
             query_template, error.strategy1, table_column_selection
         )
-        self.print_minor_separator()
+        self.print_separator_line()
         self.__print_setup_code_for_error(
             query_template, error.strategy2, table_column_selection
         )
-        self.print_minor_separator()
+        self.print_separator_line()
         self.__print_query_of_error(
             query_template, error.strategy1, query_column_selection
         )
-        self.print_minor_separator()
+        self.print_separator_line()
         self.__print_query_of_error(
             query_template, error.strategy2, query_column_selection
         )
-        self.print_minor_separator()
+        self.print_separator_line()
         characteristics = self.__get_involved_characteristics(
             query_template, query_column_selection
         )

@@ -7,8 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-OUTPUT_LINE_SEPARATOR_MAJOR = "=============================="
-OUTPUT_LINE_SEPARATOR_MINOR = "------------------------------"
+SECTION_COLLAPSED_PREFIX = "--- "
+SECTION_EXPANDED_PREFIX = "+++ "
+
+OUTPUT_LINE_SEPARATOR = "------------------------------"
 
 COMMENT_PREFIX = "-- "
 LI_PREFIX = "* "

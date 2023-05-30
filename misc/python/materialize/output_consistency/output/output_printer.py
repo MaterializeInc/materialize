@@ -41,14 +41,15 @@ class OutputPrinter(BaseOutputPrinter):
         self._print_text(error_message)
 
     def print_test_summary(self, summary: ConsistencyTestSummary) -> None:
-        self._print_text(f"Test summary: {summary}")
+        self.start_section("Test summary", collapsed=False)
+        self._print_text(str(summary))
 
     def print_status(self, status_message: str) -> None:
         self._print_text(status_message)
 
     def print_config(self, config: ConsistencyTestConfiguration) -> None:
         config_properties = vars(config)
-        self._print_text("Configuration is:")
+        self.start_section("Configuration", collapsed=False)
         self._print_text(
             "\n".join(f"  {item[0]} = {item[1]}" for item in config_properties.items())
         )

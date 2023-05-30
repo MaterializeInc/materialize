@@ -158,7 +158,6 @@ def _run_output_consistency_tests_internal(
 
     test_summary = test_runner.start()
 
-    output_printer.print_major_separator()
     output_printer.print_test_summary(test_summary)
 
     return test_summary

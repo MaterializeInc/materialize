@@ -62,6 +62,7 @@ class QueryExecutionManager:
         input_data: ConsistencyTestInputData,
         evaluation_strategies: List[EvaluationStrategy],
     ) -> None:
+        self.output_printer.start_section("Setup code", collapsed=True)
         for strategy in evaluation_strategies:
             self.output_printer.print_info(
                 f"Setup for evaluation strategy '{strategy.name}'"
@@ -239,8 +240,9 @@ class QueryExecutionManager:
         ):
             return
 
-        self.output_printer.print_major_separator()
-        self.output_printer.print_info(f"Test query #{query_id}:")
+        self.output_printer.start_section(
+            f"Test query #{query_id}", collapsed=validation_outcome.success()
+        )
         self.output_printer.print_non_executable_sql(query_execution.generic_sql)
 
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
