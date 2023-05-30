@@ -78,11 +78,11 @@ class ValidationError(ValidationMessage):
         message: str,
         strategy1: EvaluationStrategy,
         strategy2: EvaluationStrategy,
-        description: Optional[str] = None,
-        value1: Optional[str] = None,
-        value2: Optional[str] = None,
+        value1: str,
+        value2: str,
         sql1: Optional[str] = None,
         sql2: Optional[str] = None,
+        description: Optional[str] = None,
         col_index: Optional[int] = None,
         location: Optional[str] = None,
     ):
@@ -98,37 +98,16 @@ class ValidationError(ValidationMessage):
         self.col_index = col_index
         self.location = location
 
-        if value1 is None and value2 is not None:
-            raise RuntimeError("value1 must be set if value2 is set")
-
-        if sql1 is None and sql2 is not None:
-            raise RuntimeError("sql1 must be set if sql2 is set")
-
     def __str__(self) -> str:
         error_desc = f" ({self.description})" if self.description else ""
         location_desc = f" at {self.location}" if self.location is not None else ""
-        value_and_strategy_desc = ""
 
-        if self.value2 is not None:
-            # self.value1 will never be null in this case
-            strategy1_desc = f" ({self.strategy1})"
-            strategy2_desc = f" ({self.strategy2})"
-            value_and_strategy_desc = (
-                f"\n  Value 1{strategy1_desc}: '{self.value1}' (type: {type(self.value1)})"
-                f"\n  Value 2{strategy2_desc}: '{self.value2}' (type: {type(self.value2)})"
-            )
-        elif self.value1 is not None:
-            strategy1_desc = f" ({self.strategy1})"
-            value_and_strategy_desc = f"\n  Value{strategy1_desc}: '{self.value1}'  (type: {type(self.value1)})"
-        else:
-            value_and_strategy_desc = (
-                f"\n  Strategy 1: {self.strategy1}\nStrategy 2:   {self.strategy2}"
-            )
+        strategy1_desc = f" ({self.strategy1})"
+        strategy2_desc = f" ({self.strategy2})"
+        value_and_strategy_desc = (
+            f"\n  Value 1{strategy1_desc}: '{self.value1}' (type: {type(self.value1)})"
+            f"\n  Value 2{strategy2_desc}: '{self.value2}' (type: {type(self.value2)})"
+        )
 
-        sql_desc = ""
-        if self.sql1 is not None:
-            sql_desc = f"\n  Query 1: {self.sql1}"
-        if self.sql2 is not None:
-            sql_desc += f"\n  Query 2: {self.sql2}"
-
+        sql_desc = f"\n  Query 1: {self.sql1}\n  Query 2: {self.sql2}"
         return f"{self.error_type}: {self.message}{location_desc}{error_desc}.{value_and_strategy_desc}{sql_desc}"
