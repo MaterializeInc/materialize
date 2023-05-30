@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 from typing import List, Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
@@ -74,6 +75,9 @@ class ExpressionWithArgs(Expression):
                 return self.args[0].resolve_return_type_category()
 
         return self.return_type_category
+
+    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+        return self.operation.try_resolve_exact_data_type(self.args)
 
     def __str__(self) -> str:
         args_desc = ", ".join(arg.__str__() for arg in self.args)

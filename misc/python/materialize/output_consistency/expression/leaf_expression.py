@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List, Set
+from typing import List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
@@ -35,6 +35,9 @@ class LeafExpression(Expression):
 
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category
+
+    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+        return self.data_type
 
     def to_sql(self) -> str:
         return self.to_sql_as_column()

@@ -10,6 +10,7 @@
 from enum import Enum
 from typing import List, Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -74,6 +75,9 @@ class DbOperationOrFunction:
 
     def __str__(self) -> str:
         raise RuntimeError("Not implemented")
+
+    def try_resolve_exact_data_type(self, args: List[Expression]) -> Optional[DataType]:
+        return None
 
     def is_expected_to_cause_db_error(self, args: List[Expression]) -> bool:
         """checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max
