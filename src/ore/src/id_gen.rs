@@ -19,7 +19,7 @@ use std::borrow::Borrow;
 use std::collections::VecDeque;
 use std::fmt;
 use std::marker::PhantomData;
-use std::ops::AddAssign;
+use std::ops::{AddAssign, Deref};
 use std::sync::{Arc, Mutex};
 
 /// Manages the allocation of unique IDs.
@@ -75,7 +75,14 @@ where
     /// Allocates a new ID.
     ///
     /// Returns `None` if the allocator is exhausted.
-    pub fn alloc(&self) -> Option<T> {
+    ///
+    /// The ID associated with the [`IdHandle`] will be freed when all of the
+    /// outstanding [`IdHandle`]s have been dropped.
+    pub fn alloc(&self) -> Option<IdHandle<T>> {
+        IdHandle::new(self)
+    }
+
+    fn alloc_internal(&self) -> Option<T> {
         let mut inner = self.0.lock().expect("lock poisoned");
         if let Some(id) = inner.free.pop_front() {
             Some(id)
@@ -90,19 +97,7 @@ where
         }
     }
 
-    /// Allocates a new _owned_ ID.
-    ///
-    /// The ID associated with the [`IdHandle`] will be freed when all of the referencing
-    /// [`IdHandle`]s have been dropped.
-    pub fn alloc_owned(&self) -> Option<IdHandle<T>> {
-        IdHandle::new(self)
-    }
-
-    /// Releases a new ID back to the pool.
-    ///
-    /// It is undefined behavior to free an ID twice, or to free an ID that was
-    /// not allocated by this allocator.
-    pub fn free(&self, id: T) {
+    fn free_internal(&self, id: T) {
         let mut inner = self.0.lock().expect("lock poisoned");
         inner.free.push_back(id);
     }
@@ -112,7 +107,7 @@ where
 ///
 /// Once all of the [`IdHandle`]s referencing an ID have been dropped, we will then free the ID
 /// for later re-use.
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Clone, Debug)]
 pub enum IdHandle<T: From<u8> + AddAssign + PartialOrd + Copy> {
     /// An ID "allocated" a compile time.
     Static(T),
@@ -126,18 +121,10 @@ where
 {
     /// Creates a new [`IdHandle`] with the provided ID.
     ///
-    /// Note: It is __entirely__ up to the caller to make sure the provided ID is not already being
-    /// used.
+    /// Note: It is *entirely* up to the caller to make sure the provided ID is
+    /// not already being used.
     pub const fn new_static(id: T) -> Self {
         IdHandle::Static(id)
-    }
-
-    /// Returns the ID associated with this [`IdHandle`].
-    pub fn val(&self) -> T {
-        match self {
-            IdHandle::Static(id) => *id,
-            IdHandle::Dynamic(inner) => *inner.id(),
-        }
     }
 
     /// Allocates a new ID and returns an owned [`IdHandle`] that can be cloned.
@@ -147,14 +134,53 @@ where
     }
 }
 
+impl<T> PartialEq for IdHandle<T>
+where
+    T: PartialEq + From<u8> + AddAssign + PartialOrd + Copy,
+{
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+impl<T> Eq for IdHandle<T> where T: PartialEq + From<u8> + AddAssign + PartialOrd + Copy {}
+
+impl<T> PartialOrd for IdHandle<T>
+where
+    T: PartialOrd + From<u8> + AddAssign + Copy,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        (**self).partial_cmp(other)
+    }
+}
+
+impl<T> Ord for IdHandle<T>
+where
+    T: Ord + From<u8> + AddAssign + PartialOrd + Copy,
+{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (**self).cmp(other)
+    }
+}
+
 impl<T> Borrow<T> for IdHandle<T>
 where
     T: From<u8> + AddAssign + PartialOrd + Copy,
 {
     fn borrow(&self) -> &T {
+        &**self
+    }
+}
+
+impl<T> Deref for IdHandle<T>
+where
+    T: From<u8> + AddAssign + PartialOrd + Copy,
+{
+    type Target = T;
+
+    fn deref(&self) -> &T {
         match self {
             IdHandle::Static(id) => id,
-            IdHandle::Dynamic(inner) => inner.id(),
+            IdHandle::Dynamic(inner) => inner,
         }
     }
 }
@@ -164,7 +190,7 @@ where
     T: fmt::Display + From<u8> + AddAssign + PartialOrd + Copy,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.val().fmt(f)
+        (**self).fmt(f)
     }
 }
 
@@ -177,12 +203,12 @@ where
     where
         S: serde::Serializer,
     {
-        self.val().serialize(serializer)
+        (**self).serialize(serializer)
     }
 }
 
 mod internal {
-    use std::ops::AddAssign;
+    use std::ops::{AddAssign, Deref};
 
     use crate::id_gen::IdAllocator;
 
@@ -202,43 +228,22 @@ mod internal {
         T: From<u8> + AddAssign + PartialOrd + Copy,
     {
         pub fn new(allocator: &IdAllocator<T>) -> Option<Self> {
-            let id = allocator.alloc()?;
+            let id = allocator.alloc_internal()?;
             Some(IdHandleInner {
                 allocator: allocator.clone(),
                 id,
             })
         }
+    }
 
-        pub fn id(&self) -> &T {
+    impl<T> Deref for IdHandleInner<T>
+    where
+        T: From<u8> + AddAssign + PartialOrd + Copy,
+    {
+        type Target = T;
+
+        fn deref(&self) -> &T {
             &self.id
-        }
-    }
-
-    impl<T> PartialEq for IdHandleInner<T>
-    where
-        T: PartialEq + From<u8> + AddAssign + PartialOrd + Copy,
-    {
-        fn eq(&self, other: &Self) -> bool {
-            self.id == other.id
-        }
-    }
-    impl<T> Eq for IdHandleInner<T> where T: PartialEq + From<u8> + AddAssign + PartialOrd + Copy {}
-
-    impl<T> PartialOrd for IdHandleInner<T>
-    where
-        T: PartialOrd + From<u8> + AddAssign + Copy,
-    {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            self.id.partial_cmp(&other.id)
-        }
-    }
-
-    impl<T> Ord for IdHandleInner<T>
-    where
-        T: Ord + From<u8> + AddAssign + PartialOrd + Copy,
-    {
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.id.cmp(&other.id)
         }
     }
 
@@ -248,7 +253,7 @@ mod internal {
     {
         fn drop(&mut self) {
             // Release our ID for later re-use.
-            self.allocator.free(self.id);
+            self.allocator.free_internal(self.id);
         }
     }
 }
@@ -262,15 +267,21 @@ mod tests {
     #[test]
     fn test_id_alloc() {
         let ida = IdAllocator::new(3, 5);
-        assert_eq!(ida.alloc().unwrap(), 3);
-        assert_eq!(ida.alloc().unwrap(), 4);
-        assert_eq!(ida.alloc().unwrap(), 5);
-        ida.free(4);
-        assert_eq!(ida.alloc().unwrap(), 4);
-        ida.free(5);
-        ida.free(3);
-        assert_eq!(ida.alloc().unwrap(), 5);
-        assert_eq!(ida.alloc().unwrap(), 3);
+        let id3 = ida.alloc().unwrap();
+        let id4 = ida.alloc().unwrap();
+        let id5 = ida.alloc().unwrap();
+        assert_eq!(*id3, 3);
+        assert_eq!(*id4, 4);
+        assert_eq!(*id5, 5);
+        drop(id4);
+        let id4 = ida.alloc().unwrap();
+        assert_eq!(*id4, 4);
+        drop(id5);
+        drop(id3);
+        let id5 = ida.alloc().unwrap();
+        let id3 = ida.alloc().unwrap();
+        assert_eq!(*id5, 5);
+        assert_eq!(*id3, 3);
         match ida.alloc() {
             Some(id) => panic!(
                 "id allocator returned {}, not expected id exhaustion error",
@@ -281,39 +292,52 @@ mod tests {
     }
 
     #[test]
+    fn test_static_id_sorting() {
+        let ida = IdAllocator::new(0, 0);
+        let id0 = ida.alloc().unwrap();
+        let id1 = IdHandle::new_static(1);
+        assert!(id0 < id1);
+
+        let ida = IdAllocator::new(1, 1);
+        let id0 = IdHandle::new_static(0);
+        let id1 = ida.alloc().unwrap();
+        assert!(id0 < id1);
+    }
+
+    #[test]
     fn test_id_reuse() {
         let allocator = IdAllocator::new(10, 13);
 
-        let id_a = allocator.alloc_owned().unwrap();
-        assert_eq!(id_a.val(), 10);
+        let id_a = allocator.alloc().unwrap();
+        assert_eq!(*id_a, 10);
 
         let id_a_clone = id_a.clone();
-        assert_eq!(id_a_clone.val(), 10);
+        assert_eq!(*id_a_clone, 10);
 
         // 10 should not get freed.
         drop(id_a);
 
-        let id_b = allocator.alloc_owned().unwrap();
-        assert_eq!(id_b.val(), 11);
+        let id_b = allocator.alloc().unwrap();
+        assert_eq!(*id_b, 11);
 
         // 10 should get freed since all outstanding references have been dropped.
         drop(id_a_clone);
 
         // We should re-use 10.
-        let id_c = allocator.alloc_owned().unwrap();
-        assert_eq!(id_c.val(), 10);
+        let id_c = allocator.alloc().unwrap();
+        assert_eq!(*id_c, 10);
     }
 
     #[test]
     fn test_display() {
         let allocator = IdAllocator::<u32>::new(65_000, 65_101);
 
-        let id_a = allocator.alloc_owned().unwrap();
-        assert_eq!(id_a.val(), 65_000);
+        let id_a = allocator.alloc().unwrap();
+        assert_eq!(*id_a, 65_000);
 
         // An IdHandle should use the inner type's Display impl.
         let id_display = format!("{id_a}");
-        let val_display = format!("{}", id_a.val());
+        let val_display = format!("{}", *id_a);
 
         assert_eq!(id_display, val_display);
     }
@@ -322,8 +346,8 @@ mod tests {
     fn test_map_lookup() {
         let allocator = IdAllocator::<u32>::new(99, 101);
 
-        let id_a = allocator.alloc_owned().unwrap();
-        assert_eq!(id_a.val(), 99);
+        let id_a = allocator.alloc().unwrap();
+        assert_eq!(*id_a, 99);
 
         let mut btree = BTreeMap::new();
         btree.insert(id_a, "hello world");
@@ -340,12 +364,12 @@ mod tests {
     fn test_serialization() {
         let allocator = IdAllocator::<u32>::new(42, 43);
 
-        let id_a = allocator.alloc_owned().unwrap();
-        assert_eq!(id_a.val(), 42);
+        let id_a = allocator.alloc().unwrap();
+        assert_eq!(*id_a, 42);
 
         // An IdHandle should serialize the same as the inner value.
         let id_json = serde_json::to_string(&id_a).unwrap();
-        let val_json = serde_json::to_string(&id_a.val()).unwrap();
+        let val_json = serde_json::to_string(&*id_a).unwrap();
 
         assert_eq!(id_json, val_json);
     }

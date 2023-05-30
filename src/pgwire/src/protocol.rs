@@ -260,7 +260,7 @@ where
         buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
     }
     buf.push(BackendMessage::BackendKeyData {
-        conn_id: session.conn_id().val(),
+        conn_id: **session.conn_id(),
         secret_key: session.secret_key(),
     });
     // Immediately respond with connection success without waiting on the
