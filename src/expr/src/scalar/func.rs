@@ -2947,6 +2947,200 @@ impl BinaryFunc {
             _ => true,
         }
     }
+
+    /// Returns true if the function is monotone. (Non-strict; either increasing or decreasing.)
+    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
+    /// determine the range of possible outputs just by mapping the endpoints.
+    ///
+    /// This describes the *pointwise* behaviour of the function:
+    /// ie. the behaviour of any specific argument as the others are held constant. (For example, `a - b` is
+    /// monotone in the first argument because for any particular value of `b`, increasing `a` will
+    /// always cause the result to increase... and in the second argument because for any specific `a`,
+    /// increasing `b` will always cause the result to _decrease_.)
+    ///
+    /// This property describes the behaviour of the function over ranges where the function is defined:
+    /// ie. the arguments and the result are non-null (and non-error) datums.
+    pub fn is_monotone(&self) -> (bool, bool) {
+        match self {
+            BinaryFunc::AddInt16
+            | BinaryFunc::AddInt32
+            | BinaryFunc::AddInt64
+            | BinaryFunc::AddUInt16
+            | BinaryFunc::AddUInt32
+            | BinaryFunc::AddUInt64
+            | BinaryFunc::AddFloat32
+            | BinaryFunc::AddFloat64
+            | BinaryFunc::AddInterval
+            | BinaryFunc::AddTimestampInterval
+            | BinaryFunc::AddTimestampTzInterval
+            | BinaryFunc::AddDateInterval
+            | BinaryFunc::AddDateTime
+            | BinaryFunc::AddTimeInterval
+            | BinaryFunc::AddNumeric => (true, true),
+            BinaryFunc::BitAndInt16
+            | BinaryFunc::BitAndInt32
+            | BinaryFunc::BitAndInt64
+            | BinaryFunc::BitAndUInt16
+            | BinaryFunc::BitAndUInt32
+            | BinaryFunc::BitAndUInt64
+            | BinaryFunc::BitOrInt16
+            | BinaryFunc::BitOrInt32
+            | BinaryFunc::BitOrInt64
+            | BinaryFunc::BitOrUInt16
+            | BinaryFunc::BitOrUInt32
+            | BinaryFunc::BitOrUInt64
+            | BinaryFunc::BitXorInt16
+            | BinaryFunc::BitXorInt32
+            | BinaryFunc::BitXorInt64
+            | BinaryFunc::BitXorUInt16
+            | BinaryFunc::BitXorUInt32
+            | BinaryFunc::BitXorUInt64 => (false, false),
+            // The shift functions wrap, which means they are monotonic in neither argument.
+            BinaryFunc::BitShiftLeftInt16
+            | BinaryFunc::BitShiftLeftInt32
+            | BinaryFunc::BitShiftLeftInt64
+            | BinaryFunc::BitShiftLeftUInt16
+            | BinaryFunc::BitShiftLeftUInt32
+            | BinaryFunc::BitShiftLeftUInt64
+            | BinaryFunc::BitShiftRightInt16
+            | BinaryFunc::BitShiftRightInt32
+            | BinaryFunc::BitShiftRightInt64
+            | BinaryFunc::BitShiftRightUInt16
+            | BinaryFunc::BitShiftRightUInt32
+            | BinaryFunc::BitShiftRightUInt64 => (false, false),
+            BinaryFunc::SubInt16
+            | BinaryFunc::SubInt32
+            | BinaryFunc::SubInt64
+            | BinaryFunc::SubUInt16
+            | BinaryFunc::SubUInt32
+            | BinaryFunc::SubUInt64
+            | BinaryFunc::SubFloat32
+            | BinaryFunc::SubFloat64
+            | BinaryFunc::SubInterval
+            | BinaryFunc::SubTimestamp
+            | BinaryFunc::SubTimestampTz
+            | BinaryFunc::SubTimestampInterval
+            | BinaryFunc::SubTimestampTzInterval
+            | BinaryFunc::SubDate
+            | BinaryFunc::SubDateInterval
+            | BinaryFunc::SubTime
+            | BinaryFunc::SubTimeInterval
+            | BinaryFunc::SubNumeric => (true, true),
+            BinaryFunc::MulInt16
+            | BinaryFunc::MulInt32
+            | BinaryFunc::MulInt64
+            | BinaryFunc::MulUInt16
+            | BinaryFunc::MulUInt32
+            | BinaryFunc::MulUInt64
+            | BinaryFunc::MulFloat32
+            | BinaryFunc::MulFloat64
+            | BinaryFunc::MulNumeric
+            | BinaryFunc::MulInterval => (true, true),
+            BinaryFunc::DivInt16
+            | BinaryFunc::DivInt32
+            | BinaryFunc::DivInt64
+            | BinaryFunc::DivUInt16
+            | BinaryFunc::DivUInt32
+            | BinaryFunc::DivUInt64
+            | BinaryFunc::DivFloat32
+            | BinaryFunc::DivFloat64
+            | BinaryFunc::DivNumeric
+            | BinaryFunc::DivInterval => (true, false),
+            BinaryFunc::ModInt16
+            | BinaryFunc::ModInt32
+            | BinaryFunc::ModInt64
+            | BinaryFunc::ModUInt16
+            | BinaryFunc::ModUInt32
+            | BinaryFunc::ModUInt64
+            | BinaryFunc::ModFloat32
+            | BinaryFunc::ModFloat64
+            | BinaryFunc::ModNumeric => (false, false),
+            BinaryFunc::RoundNumeric => (true, false),
+            BinaryFunc::Eq | BinaryFunc::NotEq => (false, false),
+            BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte => (true, true),
+            BinaryFunc::LikeEscape
+            | BinaryFunc::IsLikeMatch { .. }
+            | BinaryFunc::IsRegexpMatch { .. } => (false, false),
+            BinaryFunc::ToCharTimestamp | BinaryFunc::ToCharTimestampTz => (false, false),
+            BinaryFunc::DateBinTimestamp | BinaryFunc::DateBinTimestampTz => (true, true),
+            // TODO: can these ever be treated as monotone? It's safe to treat the unary versions
+            // as monotone in some cases, but only when extracting specific parts.
+            BinaryFunc::ExtractInterval
+            | BinaryFunc::ExtractTime
+            | BinaryFunc::ExtractTimestamp
+            | BinaryFunc::ExtractTimestampTz
+            | BinaryFunc::ExtractDate => (false, false),
+            BinaryFunc::DatePartInterval
+            | BinaryFunc::DatePartTime
+            | BinaryFunc::DatePartTimestamp
+            | BinaryFunc::DatePartTimestampTz => (false, false),
+            BinaryFunc::DateTruncTimestamp
+            | BinaryFunc::DateTruncTimestampTz
+            | BinaryFunc::DateTruncInterval => (false, false),
+            BinaryFunc::TimezoneTimestamp
+            | BinaryFunc::TimezoneTimestampTz
+            | BinaryFunc::TimezoneTime { .. }
+            | BinaryFunc::TimezoneIntervalTimestamp
+            | BinaryFunc::TimezoneIntervalTimestampTz
+            | BinaryFunc::TimezoneIntervalTime => (false, false),
+            BinaryFunc::TextConcat
+            | BinaryFunc::JsonbGetInt64 { .. }
+            | BinaryFunc::JsonbGetString { .. }
+            | BinaryFunc::JsonbGetPath { .. }
+            | BinaryFunc::JsonbContainsString
+            | BinaryFunc::JsonbConcat
+            | BinaryFunc::JsonbContainsJsonb
+            | BinaryFunc::JsonbDeleteInt64
+            | BinaryFunc::JsonbDeleteString
+            | BinaryFunc::MapContainsKey
+            | BinaryFunc::MapGetValue
+            | BinaryFunc::MapGetValues
+            | BinaryFunc::MapContainsAllKeys
+            | BinaryFunc::MapContainsAnyKeys
+            | BinaryFunc::MapContainsMap => (false, false),
+            BinaryFunc::ConvertFrom
+            | BinaryFunc::Left
+            | BinaryFunc::Position
+            | BinaryFunc::Right
+            | BinaryFunc::RepeatString
+            | BinaryFunc::Trim
+            | BinaryFunc::TrimLeading
+            | BinaryFunc::TrimTrailing
+            | BinaryFunc::EncodedBytesCharLength
+            | BinaryFunc::ListLengthMax { .. }
+            | BinaryFunc::ArrayContains
+            | BinaryFunc::ArrayLength
+            | BinaryFunc::ArrayLower
+            | BinaryFunc::ArrayRemove
+            | BinaryFunc::ArrayUpper
+            | BinaryFunc::ArrayArrayConcat
+            | BinaryFunc::ListListConcat
+            | BinaryFunc::ListElementConcat
+            | BinaryFunc::ElementListConcat
+            | BinaryFunc::ListRemove
+            | BinaryFunc::DigestString
+            | BinaryFunc::DigestBytes
+            | BinaryFunc::MzRenderTypmod
+            | BinaryFunc::Encode
+            | BinaryFunc::Decode => (false, false),
+            // TODO: it may be safe to treat these as monotone.
+            BinaryFunc::LogNumeric | BinaryFunc::Power | BinaryFunc::PowerNumeric => (false, false),
+            BinaryFunc::GetByte
+            | BinaryFunc::RangeContainsElem { .. }
+            | BinaryFunc::RangeContainsRange { .. }
+            | BinaryFunc::RangeOverlaps
+            | BinaryFunc::RangeAfter
+            | BinaryFunc::RangeBefore
+            | BinaryFunc::RangeOverleft
+            | BinaryFunc::RangeOverright
+            | BinaryFunc::RangeAdjacent
+            | BinaryFunc::RangeUnion
+            | BinaryFunc::RangeIntersection
+            | BinaryFunc::RangeDifference => (false, false),
+            BinaryFunc::UuidGenerateV5 => (false, false),
+            BinaryFunc::MzAclItemContainsPrivilege => (false, false),
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {
@@ -6945,6 +7139,55 @@ impl VariadicFunc {
             VariadicFunc::And | VariadicFunc::Or => false,
             // All other cases are unknown
             _ => true,
+        }
+    }
+
+    /// Returns true if the function is monotone. (Non-strict; eithern increasing or decreasing.)
+    /// Monotone functions map ranges to ranges: ie. given a range of possible inputs, we can
+    /// determine the range of possible outputs just by mapping the endpoints.
+    ///
+    /// This describes the *pointwise* behaviour of the function:
+    /// ie. if more than one argument is provided, this describes the behaviour of
+    /// any specific argument as the others are held constant. (For example, `COALESCE(a, b)` is
+    /// monotone in `a` because for any particular non-null value of `b`, increasing `a` will never
+    /// cause the result to decrease.)
+    ///
+    /// For monotone functions, this will return true whether the function is *non-decreasing*
+    /// or *non-increasing*.
+    ///
+    /// This property describes the behaviour of the function over ranges where the function is defined:
+    /// ie. the arguments and the result are non-null (and non-error) datums.
+    pub fn is_monotone(&self) -> bool {
+        match self {
+            VariadicFunc::Coalesce
+            | VariadicFunc::Greatest
+            | VariadicFunc::Least
+            | VariadicFunc::And
+            | VariadicFunc::Or => true,
+            VariadicFunc::Concat
+            | VariadicFunc::MakeTimestamp
+            | VariadicFunc::PadLeading
+            | VariadicFunc::Substr
+            | VariadicFunc::Replace
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::ArrayCreate { .. }
+            | VariadicFunc::ArrayToString { .. }
+            | VariadicFunc::ArrayIndex { .. }
+            | VariadicFunc::ListCreate { .. }
+            | VariadicFunc::RecordCreate { .. }
+            | VariadicFunc::ListIndex
+            | VariadicFunc::ListSliceLinear
+            | VariadicFunc::SplitPart
+            | VariadicFunc::RegexpMatch
+            | VariadicFunc::HmacString
+            | VariadicFunc::HmacBytes
+            | VariadicFunc::ErrorIfNull
+            | VariadicFunc::DateBinTimestamp
+            | VariadicFunc::DateBinTimestampTz
+            | VariadicFunc::RangeCreate { .. }
+            | VariadicFunc::MakeMzAclItem
+            | VariadicFunc::Translate => false,
         }
     }
 }

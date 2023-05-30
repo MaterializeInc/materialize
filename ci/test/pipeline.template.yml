@@ -134,7 +134,6 @@ steps:
 
   - id: cargo-test
     label: Cargo test
-    depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
     inputs:
@@ -175,7 +174,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2]
+          args: [--aws-region=us-east-1]
     agents:
       queue: linux-x86_64
 
@@ -556,7 +555,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [--exitfirst, -m, "not long", --aws-region=us-east-2, test/cloudtest/]
+          args: [--exitfirst, -m, "not long", --aws-region=us-east-1, test/cloudtest/]
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
