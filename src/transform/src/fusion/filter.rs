@@ -54,10 +54,6 @@ use crate::TransformArgs;
 pub struct Filter;
 
 impl crate::Transform for Filter {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

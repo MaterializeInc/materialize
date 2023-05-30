@@ -19,10 +19,6 @@ use crate::TransformArgs;
 pub struct TopKElision;
 
 impl crate::Transform for TopKElision {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

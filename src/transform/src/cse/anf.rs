@@ -30,10 +30,6 @@ pub struct ANF;
 use crate::TransformArgs;
 
 impl crate::Transform for ANF {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

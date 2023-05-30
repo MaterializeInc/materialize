@@ -69,10 +69,6 @@ impl CheckedRecursion for Demand {
 }
 
 impl crate::Transform for Demand {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

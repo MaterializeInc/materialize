@@ -51,10 +51,6 @@ impl CheckedRecursion for NonNullRequirements {
 }
 
 impl crate::Transform for NonNullRequirements {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
