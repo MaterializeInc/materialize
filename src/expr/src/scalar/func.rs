@@ -2522,7 +2522,7 @@ impl BinaryFunc {
                 input1_type.scalar_type.without_modifiers().nullable(true)
             }
 
-            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(false)
+            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable)
         }
     }
 
