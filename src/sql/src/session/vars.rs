@@ -533,6 +533,15 @@ const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+/// Controls [`mz_persist_client::cfg::DynamicConfig::blob_cache_mem_limit_bytes`].
+const PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_blob_cache_mem_limit_bytes"),
+    value: &PersistConfig::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
+    description:
+        "Capacity of in-mem blob cache in bytes. Only takes effect on restart (Materialize).",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
 const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_compaction_minimum_timeout"),
@@ -1652,6 +1661,7 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
             .with_var(&PERSIST_BLOB_TARGET_SIZE)
+            .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
             .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
@@ -2017,6 +2027,11 @@ impl SystemVars {
     /// Returns the `persist_blob_target_size` configuration parameter.
     pub fn persist_blob_target_size(&self) -> usize {
         *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
+    }
+
+    /// Returns the `persist_blob_cache_mem_limit_bytes` configuration parameter.
+    pub fn persist_blob_cache_mem_limit_bytes(&self) -> usize {
+        *self.expect_value(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
     }
 
     /// Returns the `persist_next_listen_batch_retryer_initial_backoff` configuration parameter.
@@ -3504,6 +3519,7 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
 /// Returns whether the named variable is a persist configuration parameter.
 fn is_persist_config_var(name: &str) -> bool {
     name == PERSIST_BLOB_TARGET_SIZE.name()
+        || name == PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES.name()
         || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()

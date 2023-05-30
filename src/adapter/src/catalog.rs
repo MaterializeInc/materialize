@@ -6898,6 +6898,7 @@ impl Catalog {
         let config = self.system_config();
         PersistParameters {
             blob_target_size: Some(config.persist_blob_target_size()),
+            blob_cache_mem_limit_bytes: Some(config.persist_blob_cache_mem_limit_bytes()),
             compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
             consensus_connect_timeout: Some(config.crdb_connect_timeout()),
             consensus_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),

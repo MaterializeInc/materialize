@@ -131,6 +131,9 @@ impl PersistConfig {
             dynamic: Arc::new(DynamicConfig {
                 batch_builder_max_outstanding_parts: AtomicUsize::new(2),
                 blob_target_size: AtomicUsize::new(Self::DEFAULT_BLOB_TARGET_SIZE),
+                blob_cache_mem_limit_bytes: AtomicUsize::new(
+                    Self::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
+                ),
                 compaction_heuristic_min_inputs: AtomicUsize::new(8),
                 compaction_heuristic_min_parts: AtomicUsize::new(8),
                 compaction_heuristic_min_updates: AtomicUsize::new(1024),
@@ -245,6 +248,15 @@ impl PersistConfig {
 
     pub(crate) const DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER: usize = 3;
 
+    /// Default value for [`DynamicConfig::blob_cache_mem_limit_bytes`].
+    ///
+    /// This initial value was tuned via a one-time experiment that showed an
+    /// environment running our demo "auction" source + mv got 90%+ cache hits
+    /// with a 1 MiB cache. This doesn't scale up to prod data sizes and doesn't
+    /// help with multi-process replicas, but the memory usage seems
+    /// unobjectionable enough to have it for the cases that it does help.
+    pub const DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES: usize = 1024 * 1024;
+
     // Move this to a PersistConfig field when we actually have read leases.
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
@@ -313,6 +325,7 @@ impl ConsensusKnobs for PersistConfig {
 pub struct DynamicConfig {
     batch_builder_max_outstanding_parts: AtomicUsize,
     blob_target_size: AtomicUsize,
+    blob_cache_mem_limit_bytes: AtomicUsize,
     compaction_heuristic_min_inputs: AtomicUsize,
     compaction_heuristic_min_parts: AtomicUsize,
     compaction_heuristic_min_updates: AtomicUsize,
@@ -406,6 +419,11 @@ impl DynamicConfig {
     /// mis-use of the system.
     pub fn blob_target_size(&self) -> usize {
         self.blob_target_size.load(Self::LOAD_ORDERING)
+    }
+
+    /// Capacity of in-mem blob cache in bytes.
+    pub fn blob_cache_mem_limit_bytes(&self) -> usize {
+        self.blob_cache_mem_limit_bytes.load(Self::LOAD_ORDERING)
     }
 
     /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
@@ -606,6 +624,8 @@ impl BlobKnobs for PersistConfig {
 pub struct PersistParameters {
     /// Configures [`DynamicConfig::blob_target_size`].
     pub blob_target_size: Option<usize>,
+    /// Configures [`DynamicConfig::blob_cache_mem_limit_bytes`].
+    pub blob_cache_mem_limit_bytes: Option<usize>,
     /// Configures [`DynamicConfig::compaction_minimum_timeout`].
     pub compaction_minimum_timeout: Option<Duration>,
     /// Configures [`DynamicConfig::consensus_connect_timeout`].
@@ -639,6 +659,7 @@ impl PersistParameters {
         // are added.
         let Self {
             blob_target_size: self_blob_target_size,
+            blob_cache_mem_limit_bytes: self_blob_cache_mem_limit_bytes,
             compaction_minimum_timeout: self_compaction_minimum_timeout,
             consensus_connect_timeout: self_consensus_connect_timeout,
             consensus_tcp_user_timeout: self_consensus_tcp_user_timeout,
@@ -654,6 +675,7 @@ impl PersistParameters {
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
+            blob_cache_mem_limit_bytes: other_blob_cache_mem_limit_bytes,
             compaction_minimum_timeout: other_compaction_minimum_timeout,
             consensus_connect_timeout: other_consensus_connect_timeout,
             consensus_tcp_user_timeout: other_consensus_tcp_user_timeout,
@@ -669,6 +691,9 @@ impl PersistParameters {
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
+        }
+        if let Some(v) = other_blob_cache_mem_limit_bytes {
+            *self_blob_cache_mem_limit_bytes = Some(v);
         }
         if let Some(v) = other_compaction_minimum_timeout {
             *self_compaction_minimum_timeout = Some(v);
@@ -716,6 +741,7 @@ impl PersistParameters {
         // Deconstruct self so we get a compile failure if new fields are added.
         let Self {
             blob_target_size,
+            blob_cache_mem_limit_bytes,
             compaction_minimum_timeout,
             consensus_connect_timeout,
             consensus_tcp_user_timeout,
@@ -730,6 +756,7 @@ impl PersistParameters {
             rollup_threshold,
         } = self;
         blob_target_size.is_none()
+            && blob_cache_mem_limit_bytes.is_none()
             && compaction_minimum_timeout.is_none()
             && consensus_connect_timeout.is_none()
             && consensus_tcp_user_timeout.is_none()
@@ -753,6 +780,7 @@ impl PersistParameters {
         // Deconstruct self so we get a compile failure if new fields are added.
         let Self {
             blob_target_size,
+            blob_cache_mem_limit_bytes,
             compaction_minimum_timeout,
             consensus_connect_timeout,
             consensus_tcp_user_timeout,
@@ -770,6 +798,11 @@ impl PersistParameters {
             cfg.dynamic
                 .blob_target_size
                 .store(*blob_target_size, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(blob_cache_mem_limit_bytes) = blob_cache_mem_limit_bytes {
+            cfg.dynamic
+                .blob_cache_mem_limit_bytes
+                .store(*blob_cache_mem_limit_bytes, DynamicConfig::STORE_ORDERING);
         }
         if let Some(_compaction_minimum_timeout) = compaction_minimum_timeout {
             // TODO: Figure out how to represent Durations in DynamicConfig.
@@ -846,6 +879,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
     fn into_proto(&self) -> ProtoPersistParameters {
         ProtoPersistParameters {
             blob_target_size: self.blob_target_size.into_proto(),
+            blob_cache_mem_limit_bytes: self.blob_cache_mem_limit_bytes.into_proto(),
             compaction_minimum_timeout: self.compaction_minimum_timeout.into_proto(),
             consensus_connect_timeout: self.consensus_connect_timeout.into_proto(),
             consensus_tcp_user_timeout: self.consensus_tcp_user_timeout.into_proto(),
@@ -866,6 +900,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
     fn from_proto(proto: ProtoPersistParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             blob_target_size: proto.blob_target_size.into_rust()?,
+            blob_cache_mem_limit_bytes: proto.blob_cache_mem_limit_bytes.into_rust()?,
             compaction_minimum_timeout: proto.compaction_minimum_timeout.into_rust()?,
             consensus_connect_timeout: proto.consensus_connect_timeout.into_rust()?,
             consensus_tcp_user_timeout: proto.consensus_tcp_user_timeout.into_rust()?,
