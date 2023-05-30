@@ -9,9 +9,13 @@
 
 from typing import List, Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
+)
+from materialize.output_consistency.input_data.types.number_types_provider import (
+    NumberDataType,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
 
@@ -37,3 +41,11 @@ class NumericOperationParam(OperationParam):
             incompatibilities,
             incompatibility_combinations,
         )
+
+    def supports_type(self, data_type: DataType) -> bool:
+        if not isinstance(data_type, NumberDataType):
+            return False
+
+        # TODO further filtering
+
+        return True

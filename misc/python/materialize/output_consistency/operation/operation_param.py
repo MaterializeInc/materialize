@@ -9,6 +9,7 @@
 
 from typing import List, Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
@@ -45,6 +46,9 @@ class OperationParam:
         if incompatibilities is not None:
             for incompatibility in incompatibilities:
                 self.incompatibility_combinations.append({incompatibility})
+
+    def supports_type(self, data_type: DataType) -> bool:
+        raise RuntimeError("Not implemented")
 
     def supports_expression(self, arg: Expression) -> bool:
         for incompatibility_combination in self.incompatibility_combinations:

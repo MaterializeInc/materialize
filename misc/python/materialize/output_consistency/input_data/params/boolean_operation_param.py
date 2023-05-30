@@ -9,9 +9,13 @@
 
 from typing import Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
+)
+from materialize.output_consistency.input_data.types.boolean_type_provider import (
+    BOOLEAN_DATA_TYPE,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
 
@@ -28,3 +32,6 @@ class BooleanOperationParam(OperationParam):
             incompatibilities,
             incompatibility_combinations=None,
         )
+
+    def supports_type(self, data_type: DataType) -> bool:
+        return data_type == BOOLEAN_DATA_TYPE
