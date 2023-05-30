@@ -52,10 +52,6 @@ impl CheckedRecursion for LiteralLifting {
 }
 
 impl crate::Transform for LiteralLifting {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

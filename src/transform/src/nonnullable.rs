@@ -26,10 +26,6 @@ use crate::{TransformArgs, TransformError};
 pub struct NonNullable;
 
 impl crate::Transform for NonNullable {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

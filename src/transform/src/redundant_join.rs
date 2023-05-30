@@ -52,10 +52,6 @@ impl CheckedRecursion for RedundantJoin {
 }
 
 impl crate::Transform for RedundantJoin {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

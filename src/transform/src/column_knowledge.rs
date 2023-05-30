@@ -43,10 +43,6 @@ impl CheckedRecursion for ColumnKnowledge {
 }
 
 impl crate::Transform for ColumnKnowledge {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     /// Transforms an expression through accumulated knowledge.
     #[tracing::instrument(
         target = "optimizer"

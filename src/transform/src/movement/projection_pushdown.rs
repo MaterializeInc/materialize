@@ -43,10 +43,6 @@ use crate::{TransformArgs, TransformError};
 pub struct ProjectionPushdown;
 
 impl crate::Transform for ProjectionPushdown {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     // This method is only used during unit testing.
     #[tracing::instrument(
         target = "optimizer"

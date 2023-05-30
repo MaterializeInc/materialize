@@ -55,10 +55,6 @@ impl CheckedRecursion for SemijoinIdempotence {
 }
 
 impl crate::Transform for SemijoinIdempotence {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
