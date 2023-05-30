@@ -41,7 +41,7 @@ class ResultComparator:
             raise RuntimeError("Contains only one outcome, nothing to compare against!")
 
         if query_execution.query.expect_error:
-            validation_outcome.add_remark(ValidationRemark("DB error was expected"))
+            validation_outcome.add_remark(ValidationRemark("DB error is possible"))
 
         self.validate_outcomes_metadata(query_execution, validation_outcome)
 
