@@ -1009,9 +1009,11 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "chrono"
 version = "0.4.24"
-source = "git+https://github.com/chronotope/chrono.git?branch=0.4.x#ada0629bb45cf08e9ff72f0ac18fe5eb43d628cb"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e3c5919066adf22df73762e50cffcde3a758f2a848b113b586d1f86728b673b"
 dependencies = [
  "iana-time-zone",
+ "num-integer",
  "num-traits",
  "serde",
  "winapi",
@@ -1148,7 +1150,7 @@ dependencies = [
 [[package]]
 name = "columnation"
 version = "0.1.0"
-source = "git+https://github.com/frankmcsherry/columnation#eb8e20c10e748dcbfe6266be8e24e14422d3de0f"
+source = "git+https://github.com/MaterializeInc/columnation.git#16e53d69878847979457f3d5ae867ebf4922f1ee"
 dependencies = [
  "paste",
 ]
@@ -1531,9 +1533,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "5.1.0"
+version = "5.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0834a35a3fce649144119e18da2a4d8ed12ef3862f47183fd46f625d072d96c"
+checksum = "4c8858831f7781322e539ea39e72449c46b059638250c14344fec8d0aa6e539c"
 dependencies = [
  "cfg-if",
  "num_cpus",
@@ -1662,7 +1664,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#438804d98d1888416ef20288570b804bdba8bea9"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7c79e0c1827eec2639aa628ab54722087c00ac86"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1739,7 +1741,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#438804d98d1888416ef20288570b804bdba8bea9"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7c79e0c1827eec2639aa628ab54722087c00ac86"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3649,7 +3651,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.56.0-dev"
+version = "0.57.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3799,7 +3801,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.56.0-dev"
+version = "0.57.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4326,7 +4328,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.56.0-dev"
+version = "0.57.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5516,32 +5518,19 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry"
-version = "0.17.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#c22fdfe5c90680f534ef958fb4c2f810a2fe2c56"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f4b8347cc26099d3aeee044065ecc3ae11469796b4d65d065a23a584ed92a6f"
 dependencies = [
- "opentelemetry-api",
- "opentelemetry-sdk",
-]
-
-[[package]]
-name = "opentelemetry-api"
-version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#c22fdfe5c90680f534ef958fb4c2f810a2fe2c56"
-dependencies = [
- "fnv",
- "futures-channel",
- "futures-util",
- "indexmap",
- "js-sys",
- "once_cell",
- "pin-project-lite",
- "thiserror",
+ "opentelemetry_api",
+ "opentelemetry_sdk",
 ]
 
 [[package]]
 name = "opentelemetry-otlp"
-version = "0.10.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8af72d59a4484654ea8eb183fea5ae4eb6a41d7ac3e3bae5f4d2a282a3a7d3ca"
 dependencies = [
  "async-trait",
  "futures",
@@ -5557,22 +5546,38 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-proto"
-version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#fe99cd1c96bb4d0e00001b1575f897fd1e57a378"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "045f8eea8c0fa19f7d48e7bc3128a39c2e5c533d5c61298c548dfefc1064474c"
 dependencies = [
  "futures",
  "futures-util",
  "opentelemetry",
  "prost",
- "protobuf-src",
  "tonic",
- "tonic-build",
 ]
 
 [[package]]
-name = "opentelemetry-sdk"
-version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/opentelemetry-rust.git#c22fdfe5c90680f534ef958fb4c2f810a2fe2c56"
+name = "opentelemetry_api"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed41783a5bf567688eb38372f2b7a8530f5a607a4b49d38dd7573236c23ca7e2"
+dependencies = [
+ "fnv",
+ "futures-channel",
+ "futures-util",
+ "indexmap",
+ "once_cell",
+ "pin-project-lite",
+ "thiserror",
+ "urlencoding",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b3a2a91fdbfdd4d212c0dcc2ab540de2c2bcbbd90be17de7a7daf8822d010c1"
 dependencies = [
  "async-trait",
  "crossbeam-channel",
@@ -5582,7 +5587,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "once_cell",
- "opentelemetry-api",
+ "opentelemetry_api",
  "percent-encoding",
  "rand",
  "thiserror",
@@ -5874,7 +5879,7 @@ checksum = "15eb2c6e362923af47e13c23ca5afb859e83d54452c55b0b9ac763b8f7c1ac16"
 [[package]]
 name = "postgres"
 version = "0.19.5"
-source = "git+https://github.com/MaterializeInc/rust-postgres#dd70a8b9caec1bb056ff66782a8e8b72d446ffa5"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7bdd17b5acf4d7dbc53b08a9038793ab7e49da6c"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -5887,7 +5892,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres#dd70a8b9caec1bb056ff66782a8e8b72d446ffa5"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7bdd17b5acf4d7dbc53b08a9038793ab7e49da6c"
 dependencies = [
  "openssl",
  "tokio",
@@ -5898,7 +5903,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.5"
-source = "git+https://github.com/MaterializeInc/rust-postgres#dd70a8b9caec1bb056ff66782a8e8b72d446ffa5"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7bdd17b5acf4d7dbc53b08a9038793ab7e49da6c"
 dependencies = [
  "base64 0.21.0",
  "byteorder",
@@ -5915,7 +5920,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.5"
-source = "git+https://github.com/MaterializeInc/rust-postgres#dd70a8b9caec1bb056ff66782a8e8b72d446ffa5"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7bdd17b5acf4d7dbc53b08a9038793ab7e49da6c"
 dependencies = [
  "bytes",
  "chrono",
@@ -7487,7 +7492,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7505,12 +7510,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -7526,7 +7531,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 dependencies = [
  "columnation",
  "serde",
@@ -7535,7 +7540,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#432ef57fae761f1e4773833b0474b41f1efe7e7c"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#d5614b78adac5b6b9d7d707396000acbac2478d5"
 
 [[package]]
 name = "tiny-keccak"
@@ -7656,7 +7661,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.8"
-source = "git+https://github.com/MaterializeInc/rust-postgres#dd70a8b9caec1bb056ff66782a8e8b72d446ffa5"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7bdd17b5acf4d7dbc53b08a9038793ab7e49da6c"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -7893,8 +7898,8 @@ dependencies = [
 
 [[package]]
 name = "tracing-opentelemetry"
-version = "0.17.4"
-source = "git+https://github.com/MaterializeInc/tracing.git?branch=v0.1.x#14b55d9aa9abec24cbb7f6d7ef4bc640398395d3"
+version = "0.19.0"
+source = "git+https://github.com/MaterializeInc/tracing-opentelemetry.git#3c7e5779db371735c24394b03a6bd31f67214419"
 dependencies = [
  "once_cell",
  "opentelemetry",
@@ -8113,9 +8118,9 @@ dependencies = [
 
 [[package]]
 name = "urlencoding"
-version = "2.1.0"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68b90931029ab9b034b300b797048cf23723400aa757e8a2bfb9d748102f9821"
+checksum = "e8db7427f936968176eaa7cdf81b7f98b980b18495ec28f1b5791ac3bfe3eea9"
 
 [[package]]
 name = "utf-8"
@@ -8126,7 +8131,7 @@ checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 [[package]]
 name = "utf8parse"
 version = "0.2.0"
-source = "git+https://github.com/alacritty/vte#45670c47cebd7af050def2f80a307bdeec7caba3"
+source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
 
 [[package]]
 name = "uuid"
@@ -8166,7 +8171,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vte"
 version = "0.10.1"
-source = "git+https://github.com/alacritty/vte#45670c47cebd7af050def2f80a307bdeec7caba3"
+source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
 dependencies = [
  "arrayvec",
  "utf8parse",
@@ -8176,7 +8181,7 @@ dependencies = [
 [[package]]
 name = "vte_generate_state_changes"
 version = "0.1.1"
-source = "git+https://github.com/alacritty/vte#45670c47cebd7af050def2f80a307bdeec7caba3"
+source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
 dependencies = [
  "proc-macro2",
  "quote",

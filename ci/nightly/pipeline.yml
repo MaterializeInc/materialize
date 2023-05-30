@@ -129,7 +129,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--redpanda, --aws-region=us-east-2]
+          args: [--redpanda, --aws-region=us-east-1]
 
 # Disabled due to taking too long for the value provided
 #  - id: redpanda-testdrive-aarch64
@@ -142,7 +142,7 @@ steps:
 #      - ./ci/plugins/scratch-aws-access: ~
 #      - ./ci/plugins/mzcompose:
 #          composition: testdrive
-#          args: [--redpanda, --aws-region=us-east-2]
+#          args: [--redpanda, --aws-region=us-east-1]
 
   - id: limits
     label: "Product limits"
@@ -177,7 +177,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --kafka-default-partitions=5]
+          args: [--aws-region=us-east-1, --kafka-default-partitions=5]
 
   - id: testdrive-replicas-4
     label: ":racing_car: testdrive 4 replicas"
@@ -189,7 +189,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --replicas=4]
+          args: [--aws-region=us-east-1, --replicas=4]
 
   - id: testdrive-size-1
     label: ":racing_car: testdrive with SIZE 1"
@@ -201,7 +201,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --default-size=1]
+          args: [--aws-region=us-east-1, --default-size=1]
 
   - id: testdrive-size-8
     label: ":racing_car: testdrive with SIZE 8"
@@ -213,7 +213,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --default-size=8]
+          args: [--aws-region=us-east-1, --default-size=8]
 
   - id: testdrive-in-cloudtest
     label: Full Testdrive in Cloudtest (K8s)
@@ -224,7 +224,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long, --aws-region=us-east-2, test/cloudtest/test_full_testdrive.py]
+          args: [-m=long, --aws-region=us-east-1, test/cloudtest/test_full_testdrive.py]
 
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
@@ -236,7 +236,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          args: [--aws-region=us-east-2, --persistent-user-tables]
+          args: [--aws-region=us-east-1, --persistent-user-tables]
     skip: Persistence tests disabled
 
   - id: zippy-kafka-sources
@@ -504,7 +504,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [-m=long,  --aws-region=us-east-2, test/cloudtest/test_upgrade.py]
+          args: [-m=long,  --aws-region=us-east-1, test/cloudtest/test_upgrade.py]
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist

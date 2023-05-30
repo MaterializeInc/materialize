@@ -13,7 +13,7 @@ bytesize = "1.1.0"
 clap = { version = "3.2.24", features = ["derive", "env"] }
 crossbeam-channel = "0.5.8"
 dec = { version = "0.4.8", features = ["serde"] }
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+differential-dataflow = "0.12.0"
 futures = "0.3.25"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
@@ -34,7 +34,7 @@ rocksdb = { version = "0.21.0", default-features = false, features = ["snappy"] 
 scopeguard = "1.1.0"
 serde = { version = "1.0.152", features = ["derive"] }
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tokio = { version = "1.24.2", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
 uuid = { version = "1.2.2", features = ["serde", "v4"] }

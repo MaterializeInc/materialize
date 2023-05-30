@@ -18,7 +18,6 @@ steps:
       AWS_DEFAULT_REGION: "{{matrix}}"
     matrix:
       - us-east-1
-      - us-east-2
     plugins:
        - ./ci/plugins/scratch-aws-access
 

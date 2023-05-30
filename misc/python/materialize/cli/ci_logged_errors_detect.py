@@ -203,7 +203,7 @@ def get_error_logs(log_files: List[str]) -> List[ErrorLog]:
     return error_logs
 
 
-def get_known_issues_from_github() -> list[KnownIssue]:
+def get_known_issues_from_github_page(page: int = 1) -> Any:
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -213,7 +213,7 @@ def get_known_issues_from_github() -> list[KnownIssue]:
         headers["Authorization"] = f"Bearer {token}"
 
     response = requests.get(
-        'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"',
+        f'https://api.github.com/search/issues?q=repo:MaterializeInc/materialize%20type:issue%20in:body%20"ci-regexp%3A"&per_page=100&page={page}',
         headers=headers,
     )
 
@@ -222,6 +222,18 @@ def get_known_issues_from_github() -> list[KnownIssue]:
 
     issues_json = response.json()
     assert issues_json["incomplete_results"] == False
+    return issues_json
+
+
+def get_known_issues_from_github() -> list[KnownIssue]:
+    page = 1
+    issues_json = get_known_issues_from_github_page(page)
+    while issues_json["total_count"] > len(issues_json["items"]):
+        page += 1
+        next_page_json = get_known_issues_from_github_page(page)
+        if not next_page_json["items"]:
+            break
+        issues_json["items"].extend(next_page_json["items"])
 
     known_issues = []
     for issue in issues_json["items"]:

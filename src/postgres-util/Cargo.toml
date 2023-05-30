@@ -15,14 +15,14 @@ mz-repr = { path = "../repr", optional = true }
 mz-ssh-util = { path = "../ssh-util", optional = true }
 openssl = { version = "0.10.48", features = ["vendored"] }
 openssh = { version = "0.9.8", default-features = false, features = ["native-mux"], optional = true }
-postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", optional = true }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"], optional = true }
+postgres_array = { version = "0.11.0", optional = true }
+postgres-openssl = { version = "0.5.0" }
+proptest = { version = "1.0.0", default-features = false, features = ["std"], optional = true }
 prost = { version = "0.11.3", features = ["no-recursion-limit"], optional = true }
 serde = { version = "1.0.152", features = ["derive"], optional = true }
 thiserror = "1.0.37"
 tokio = { version = "1.24.2", features = ["fs", "rt", "sync"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { version = "0.7.8" }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
