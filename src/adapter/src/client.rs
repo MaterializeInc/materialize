@@ -391,11 +391,6 @@ impl SessionClient {
         result
     }
 
-    /// Cancels the query currently running on another connection.
-    pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner_mut().cancel_request(*conn_id, secret_key)
-    }
-
     /// Ends a transaction.
     pub async fn end_transaction(
         &mut self,
