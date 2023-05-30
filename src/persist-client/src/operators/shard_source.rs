@@ -32,7 +32,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{timestamp::Refines, Antichain, Timestamp};
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
@@ -66,19 +66,19 @@ use crate::{PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<K, V, D, F, G>(
+pub fn shard_source<T, K, V, D, F, G>(
     scope: &mut G,
     name: &str,
     clients: Arc<PersistClientCache>,
     location: PersistLocation,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
-    until: Antichain<G::Timestamp>,
+    as_of: Option<Antichain<T>>,
+    until: Antichain<T>,
     flow_control: Option<FlowControl<G>>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     should_fetch_part: F,
-) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
+) -> (Stream<G, FetchedPart<K, V, T, D>>, Rc<dyn Any>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -86,7 +86,8 @@ where
     F: FnMut(&PartStats) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+    T: Timestamp + Lattice + Codec64 + TotalOrder + Copy,
+    G::Timestamp: Refines<T>,
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -110,7 +111,7 @@ where
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
         scope.feedback(<<G as ScopeParent>::Timestamp as Timestamp>::Summary::default());
 
-    let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
+    let (descs, descs_token) = shard_source_descs::<T, K, V, D, _, G>(
         scope,
         name,
         Arc::clone(&clients),
@@ -159,14 +160,23 @@ impl Drop for ActivateOnDrop {
     }
 }
 
-pub(crate) fn shard_source_descs<K, V, D, F, G>(
+/// Refine an `Antichain<T>` into a `Antichain<Inner>`, using a `Refines`
+/// implementation (in the case of tuple-style timestamps, this usually
+/// means appending a minimum time).
+fn refine_antichain<T: Timestamp + Copy, Inner: Timestamp + Refines<T>>(
+    frontier: &Antichain<T>,
+) -> Antichain<Inner> {
+    Antichain::from_iter(frontier.iter().map(|t| Refines::to_inner(*t)))
+}
+
+pub(crate) fn shard_source_descs<T, K, V, D, F, G>(
     scope: &G,
     name: &str,
     clients: Arc<PersistClientCache>,
     location: PersistLocation,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
-    until: Antichain<G::Timestamp>,
+    as_of: Option<Antichain<T>>,
+    until: Antichain<T>,
     flow_control: Option<FlowControl<G>>,
     completed_fetches_stream: Stream<G, SerdeLeasedBatchPart>,
     chosen_worker: usize,
@@ -181,7 +191,8 @@ where
     F: FnMut(&PartStats) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+    T: Timestamp + Lattice + Codec64 + TotalOrder + Copy,
+    G::Timestamp: Refines<T>,
 {
     let cfg = clients.cfg().clone();
     let metrics = Arc::clone(&clients.metrics);
@@ -247,7 +258,7 @@ where
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
 
         let mut inflight_bytes = 0;
-        let mut inflight_parts: Vec<(Antichain<G::Timestamp>, usize)> = Vec::new();
+        let mut inflight_parts: Vec<(Antichain<T>, usize)> = Vec::new();
 
         let max_inflight_bytes = flow_control_bytes.unwrap_or(usize::MAX);
 
@@ -269,7 +280,7 @@ where
                 .await
                 .expect("location should be valid");
             let read = client
-                .open_leased_reader::<K, V, G::Timestamp, D>(
+                .open_leased_reader::<K, V, T, D>(
                     shard_id,
                     &format!("shard_source({})", name_owned),
                     key_schema,
@@ -320,7 +331,7 @@ where
         // NOTE: We have to do this before our `subscribe()` call (which
         // internally calls `snapshot()` because that call will block when there
         // is no data yet available in the shard.
-        cap_set.downgrade(as_of.clone());
+        cap_set.downgrade(refine_antichain::<_, G::Timestamp>(&as_of));
         let mut current_ts = match as_of.clone().into_option() {
             Some(ts) => ts,
             None => {
@@ -421,7 +432,7 @@ where
                     match completed_fetch {
                         Some(Event::Data(_cap, data)) => {
                             for part in data.drain(..) {
-                                lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
+                                lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<T>(part));
                             }
                         }
                         Some(Event::Progress(frontier)) => {
@@ -445,7 +456,7 @@ where
                             batch_parts.append(&mut parts);
                         }
                         Some(ListenEvent::Progress(progress)) => {
-                            let session_cap = cap_set.delayed(&current_ts);
+                            let session_cap = cap_set.delayed(&Refines::to_inner(current_ts));
 
                             let bytes_emitted = {
                                 let mut bytes_emitted = 0;
@@ -508,7 +519,7 @@ where
                                 );
                             }
 
-                            cap_set.downgrade(progress.iter());
+                            cap_set.downgrade(refine_antichain(&progress).iter());
                             match progress.into_option() {
                                 Some(ts) => {
                                     current_ts = ts;
@@ -547,7 +558,7 @@ where
                     };
 
                     let retired_parts = inflight_parts.drain_filter_swapping(|(upper, _size)| {
-                        PartialOrder::less_equal(&*upper, &flow_control_upper)
+                        PartialOrder::less_equal(&refine_antichain(upper), &flow_control_upper)
                     });
 
                     for (_upper, size_in_bytes) in retired_parts {
@@ -578,7 +589,7 @@ where
             match completed_fetch {
                 Event::Data(_cap, data) => {
                     for part in data.drain(..) {
-                        lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
+                        lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<T>(part));
                     }
                 }
                 Event::Progress(frontier) => {
@@ -611,7 +622,8 @@ where
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
-    G: Scope<Timestamp = T>,
+    G: Scope,
+    G::Timestamp: Refines<T>,
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
@@ -702,7 +714,7 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = shard_source::<String, String, u64, _, _>(
+                let (stream, token) = shard_source::<u64, String, String, u64, _, _>(
                     scope,
                     "test_source",
                     persist_clients,
@@ -760,7 +772,7 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = shard_source::<String, String, u64, _, _>(
+                let (stream, token) = shard_source::<u64, String, String, u64, _, _>(
                     scope,
                     "test_source",
                     persist_clients,
