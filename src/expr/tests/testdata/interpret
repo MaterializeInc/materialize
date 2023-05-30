@@ -71,7 +71,7 @@ interpret
   [("{\"code\": \"00135\"}" jsonb) ("{\"code\": \"22122\"}" jsonb) ("{\"code\": \"34153\"}" jsonb)]
 ]
 (call_binary (jsonb_get_string true) #0 ("code" string))
-["00000" "20000" "2" "80000"]
+["00000" "20000" "2" "80000" null]
 ----
 may contain: ["20000" "2"]
 
@@ -82,10 +82,22 @@ interpret
 [
   [("{\"created_ms\": 1000}" jsonb) ("{\"created_ms\": 2000}" jsonb) ("{\"created_ms\": 3000}" jsonb)]
 ]
-(call_binary (jsonb_get_string true) #0 ("code" string))
-["00000" "20000" "2" "80000"]
+(call_binary (jsonb_get_string true) #0 ("created_ms" string))
+["00000" "20000" "2" "80000" null]
 ----
-may contain: ["00000" "20000" "2" "80000" <err>]
+may contain: ["00000" "20000" "2" "80000"]
+
+# JSONB -> (nulls)
+# Expression: (json_col -> "created_ms")
+interpret
+[jsonb]
+[
+  [null null null]
+]
+(call_binary (jsonb_get_string false) #0 ("created_ms" string))
+["00000" "foo" null true]
+----
+may contain: [null]
 
 # Regression test: `or` may short circuit even when the first argument throws an error
 # Expression: ((((1 / 0) > 0) OR true))
