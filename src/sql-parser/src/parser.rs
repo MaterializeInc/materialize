@@ -5533,6 +5533,13 @@ impl<'a> Parser<'a> {
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
         let table_name = RawItemName::Name(self.parse_item_name()?);
+        // The alias here doesn't support columns, so don't use parse_optional_table_alias.
+        let alias = self.parse_optional_alias(Keyword::is_reserved_in_table_alias)?;
+        let alias = alias.map(|name| TableAlias {
+            name,
+            columns: Vec::new(),
+            strict: false,
+        });
 
         self.expect_keyword(SET)?;
         let assignments = self.parse_comma_separated(Parser::parse_assignment)?;
@@ -5544,6 +5551,7 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::Update(UpdateStatement {
             table_name,
+            alias,
             assignments,
             selection,
         }))
