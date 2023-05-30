@@ -516,29 +516,15 @@ The `mz_records_per_dataflow` view describes the number of records in each [data
 | `capacity`    | [`bigint`]  | The capacity in bytes of the arrangements. Can be larger than the size.    |
 | `allocations` | [`bigint`]  | The number of separate memory allocations backing the arrangements.        |
 
-### `mz_records_per_dataflow_per_worker`
 
-The `mz_records_per_dataflow_per_worker` view describes the number of records in each [dataflow].
+### `mz_records_per_dataflow_operator`
 
-| Field         | Type        | Meaning                                                                    |
-|---------------|-------------|----------------------------------------------------------------------------|
-| `id`          | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`text`]    | The internal name of the dataflow.                                         |
-| `worker_id`   | [`bigint`]  | The ID of the worker thread.                                               |
-| `records`     | [`numeric`] | The number of records in the dataflow.                                     |
-| `size`        | [`bigint`]  | The utilized size in bytes of the arrangements.                            |
-| `capacity`    | [`bigint`]  | The capacity in bytes of the arrangements. Can be larger than the size.    |
-| `allocations` | [`bigint`]  | The number of separate memory allocations backing the arrangements.        |
-
-### `mz_records_per_dataflow_operator_per_worker`
-
-The `mz_records_per_dataflow_operator_per_worker` view describes the number of records in each [dataflow] operator in the system.
+The `mz_records_per_dataflow_operator` view describes the number of records in each [dataflow] operator in the system.
 
 | Field         | Type        | Meaning                                                                                      |
 |---------------|-------------|----------------------------------------------------------------------------------------------|
 | `id`          | [`bigint`]  | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
 | `name`        | [`text`]    | The internal name of the operator.                                                           |
-| `worker_id`   | [`bigint`]  | The ID of the worker thread.                                                                 |
 | `dataflow_id` | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                   |
 | `records`     | [`numeric`] | The number of records in the operator.                                                       |
 | `size`        | [`bigint`]  | The utilized size in bytes of the arrangement.                                               |
