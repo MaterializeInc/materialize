@@ -242,7 +242,7 @@ impl Coordinator {
             .try_get_role_by_name(&session.user().name)
             .expect("created above")
             .id;
-        session.set_role_id(role_id);
+        session.initialize_role_metadata(role_id);
 
         if let Err(e) = self
             .catalog_mut()

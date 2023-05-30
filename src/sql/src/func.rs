@@ -1807,7 +1807,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!() => UnmaterializableFunc::CurrentUser => String, 745;
         },
         "session_user" => Scalar {
-            params!() => UnmaterializableFunc::CurrentUser => String, 746;
+            params!() => UnmaterializableFunc::SessionUser => String, 746;
         },
         "chr" => Scalar {
             params!(Int32) => UnaryFunc::Chr(func::Chr) => String, 1621;
