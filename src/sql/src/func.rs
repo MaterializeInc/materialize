@@ -3252,7 +3252,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     )
                 )
                 END
-            ") => Oid, oid::FUNC_ROLE_OID_OID;
+            ") => Oid, oid::FUNC_DATABASE_OID_OID;
         },
         // There is no regclass equivalent for schemas to look up oids, so we have this helper function instead.
         // TODO: Support qualified names.
