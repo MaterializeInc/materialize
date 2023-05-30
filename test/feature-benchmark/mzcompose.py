@@ -128,6 +128,7 @@ def run_one_scenario(
             default_size=size,
             # Avoid clashes with the Kafka sink progress topic across restarts
             environment_id=f"local-az1-{uuid.uuid4()}-0",
+            soft_assertions=False,
             additional_system_parameter_defaults=additional_system_parameter_defaults,
         )
 
