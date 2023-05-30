@@ -68,6 +68,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             allow_spilling_to_disk: config.upsert_rocksdb_auto_spill_to_disk(),
             spill_to_disk_threshold_bytes: config.upsert_rocksdb_auto_spill_threshold_bytes(),
         },
+        storage_dataflow_max_inflight_bytes: config.storage_dataflow_max_inflight_bytes(),
     }
 }
 

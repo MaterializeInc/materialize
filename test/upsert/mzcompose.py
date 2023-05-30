@@ -165,12 +165,20 @@ def workflow_rehydration(c: Composition) -> None:
                 options=[
                     "--scratch-directory=/scratch",
                 ],
+                additional_system_parameter_defaults={
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": "1",
+                },
             ),
         ),
         (
             "without DISK",
             Clusterd(
                 name="clusterd1",
+                additional_system_parameter_defaults={
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": "1",
+                },
             ),
         ),
     ]:

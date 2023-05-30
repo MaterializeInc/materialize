@@ -166,6 +166,7 @@ struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 
 }
 
 /// An event of an input stream
+#[derive(Debug)]
 pub enum Event<T: Timestamp, D> {
     /// A data event
     Data(InputCapability<T>, D),
