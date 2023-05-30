@@ -1653,6 +1653,7 @@ macro_rules! catalog_name_only {
 pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
+    /// Generates an (OID, OID, TEXT) SQL implementation for has_X_privilege style functions.
     macro_rules! privilege_fn {
         ( $fn_name:expr, $catalog_tbl:expr ) => {
             &format!("
@@ -1931,6 +1932,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "get_byte" => Scalar {
             params!(Bytes, Int32) => BinaryFunc::GetByte => Int32, 721;
         },
+        // We can't use the `privilege_fn!` macro because the macro relies on the object having an
+        // OID, and clusters do not have OIDs.
         "has_cluster_privilege" => Scalar {
             params!(String, String, String) => sql_impl_func("has_cluster_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(Oid, String, String) => sql_impl_func("
