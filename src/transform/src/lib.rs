@@ -208,8 +208,6 @@ pub trait Transform: std::fmt::Debug {
 pub enum TransformError {
     /// An unstructured error.
     Internal(String),
-    /// An ideally temporary error indicating transforms that do not support the `MirRelationExpr::LetRec` variant.
-    LetRecUnsupported,
     /// A reference to an apparently unbound identifier.
     IdentifierMissing(mz_expr::LocalId),
 }
@@ -218,7 +216,6 @@ impl fmt::Display for TransformError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TransformError::Internal(msg) => write!(f, "internal transform error: {}", msg),
-            TransformError::LetRecUnsupported => write!(f, "LetRec AST node not supported"),
             TransformError::IdentifierMissing(i) => {
                 write!(f, "apparently unbound identifier: {:?}", i)
             }
