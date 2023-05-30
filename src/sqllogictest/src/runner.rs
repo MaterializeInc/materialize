@@ -351,6 +351,7 @@ pub struct RunnerInner {
     clients: BTreeMap<String, tokio_postgres::Client>,
     auto_index_tables: bool,
     auto_transactions: bool,
+    enable_table_keys: bool,
     _shutdown_trigger: oneshot::Sender<()>,
     _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
@@ -715,6 +716,11 @@ impl<'a> Runner<'a> {
             )
             .await?;
 
+        inner
+            .system_client
+            .batch_execute("ALTER SYSTEM RESET ALL")
+            .await?;
+
         // Drop all databases, then recreate the `materialize` database.
         for row in inner
             .system_client
@@ -805,6 +811,20 @@ impl<'a> Runner<'a> {
             .system_client
             .batch_execute("GRANT CREATE ON CLUSTER default TO materialize")
             .await?;
+
+        // Some sqllogic tests require more than the default amount of tables, so we increase the
+        // limit for all tests.
+        inner
+            .system_client
+            .simple_query("ALTER SYSTEM SET max_tables = 100")
+            .await?;
+
+        if inner.enable_table_keys {
+            inner
+                .system_client
+                .simple_query("ALTER SYSTEM SET enable_table_keys = true")
+                .await?;
+        }
 
         inner.client = connect(inner.server_addr, None).await;
         inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
@@ -971,22 +991,8 @@ impl RunnerInner {
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
 
-        let client = connect(server_addr, None).await;
-
-        // Some sqllogic tests require more than the default amount of tables, so we increase the
-        // limit for all tests.
         let system_client = connect(internal_server_addr, Some("mz_system")).await;
-        system_client
-            .simple_query("ALTER SYSTEM SET max_tables = 100")
-            .await
-            .unwrap();
-
-        if config.enable_table_keys {
-            system_client
-                .simple_query("ALTER SYSTEM SET enable_table_keys = true")
-                .await
-                .unwrap();
-        }
+        let client = connect(server_addr, None).await;
 
         Ok(RunnerInner {
             server_addr,
@@ -999,6 +1005,7 @@ impl RunnerInner {
             clients: BTreeMap::new(),
             auto_index_tables: config.auto_index_tables,
             auto_transactions: config.auto_transactions,
+            enable_table_keys: config.enable_table_keys,
         })
     }
 
