@@ -5619,7 +5619,14 @@ fn error_if_null<'a>(
         .map(|e| e.eval(datums, temp_storage))
         .collect::<Result<Vec<_>, _>>()?;
     match datums[0] {
-        Datum::Null => Err(EvalError::Internal(datums[1].unwrap_str().to_string())),
+        Datum::Null => {
+            let err_msg = if datums[1].is_null() {
+                "unexpected NULL"
+            } else {
+                datums[1].unwrap_str()
+            };
+            Err(EvalError::Internal(err_msg.to_string()))
+        }
         _ => Ok(datums[0]),
     }
 }
