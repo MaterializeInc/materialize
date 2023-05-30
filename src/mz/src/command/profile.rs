@@ -30,6 +30,7 @@ use mz_cloud_api::config::DEFAULT_ENDPOINT;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 use tokio::{select, sync::mpsc};
+use url::Url;
 
 use crate::ui::OptionalStr;
 use crate::{
@@ -78,7 +79,7 @@ pub async fn init_with_browser() -> Result<AppPassword, Error> {
     }
 }
 
-pub async fn init_without_browser() -> Result<AppPassword, Error> {
+pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPassword, Error> {
     // Handle interactive user input
     let mut email = String::new();
 
@@ -98,7 +99,14 @@ pub async fn init_without_browser() -> Result<AppPassword, Error> {
     let _ = std::io::stdout().flush();
     let password = rpassword::read_password().unwrap();
 
-    let admin_client: AdminClient = AdminClientBuilder::default().build(AdminClientConfig {
+    // Build client
+    let mut admin_client_builder = AdminClientBuilder::default();
+
+    if let Some(admin_endpoint) = admin_endpoint {
+        admin_client_builder = admin_client_builder.endpoint(admin_endpoint.clone());
+    }
+
+    let admin_client: AdminClient = admin_client_builder.build(AdminClientConfig {
         authentication: mz_frontegg_client::client::Authentication::Credentials(Credentials {
             email,
             password,
@@ -118,9 +126,10 @@ pub async fn init(
     scx: &mut Context,
     profile_name: Option<String>,
     no_browser: bool,
+    admin_endpoint: Option<Url>,
 ) -> Result<(), Error> {
     let app_password = match no_browser {
-        true => init_without_browser().await?,
+        true => init_without_browser(admin_endpoint.clone()).await?,
         false => init_with_browser().await?,
     };
 
@@ -128,7 +137,7 @@ pub async fn init(
         app_password: Some(app_password.to_string()),
         vault: None,
         region: None,
-        admin_endpoint: None,
+        admin_endpoint: admin_endpoint.map(|url| url.to_string()),
         cloud_endpoint: None,
     };
 

@@ -19,7 +19,7 @@ use mz::command::profile::{ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs};
 use mz::context::Context;
 use mz::error::Error;
 
-use crate::mixin::ProfileArg;
+use crate::mixin::{EndpointArgs, ProfileArg};
 
 #[derive(Debug, clap::Args)]
 pub struct ProfileCommand {
@@ -36,6 +36,9 @@ pub enum ProfileSubcommand {
         /// Prompt for a username and password on the terminal.
         #[clap(long)]
         no_browser: bool,
+        /// The admin or cloud endpoint to use.
+        #[clap(flatten)]
+        endpoint: EndpointArgs,
     },
     /// List available authentication profiles.
     #[clap(alias = "ls")]
@@ -78,8 +81,17 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
 
     match &cmd.subcommand {
         // Initiating a profile doesn't requires an active profile.
-        ProfileSubcommand::Init { no_browser } => {
-            mz::command::profile::init(&mut cx, profile, *no_browser).await
+        ProfileSubcommand::Init {
+            no_browser,
+            endpoint,
+        } => {
+            mz::command::profile::init(
+                &mut cx,
+                profile,
+                *no_browser,
+                endpoint.admin_endpoint.clone(),
+            )
+            .await
         }
         ProfileSubcommand::List => mz::command::profile::list(&mut cx).await,
         ProfileSubcommand::Remove => mz::command::profile::remove(&mut cx).await,
@@ -103,7 +115,10 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
                             .await
                     }
                 },
-                ProfileSubcommand::Init { no_browser: _ } => panic!("invalid command."),
+                ProfileSubcommand::Init {
+                    no_browser: _,
+                    endpoint: _,
+                } => panic!("invalid command."),
                 ProfileSubcommand::List => panic!("invalid command."),
                 ProfileSubcommand::Remove => panic!("invalid command."),
             }

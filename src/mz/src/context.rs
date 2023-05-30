@@ -87,8 +87,14 @@ impl Context {
         let profile = config_file.load_profile(&profile_name)?;
 
         // Build clients
+        let mut admin_client_builder = AdminClientBuilder::default();
+
+        if let Some(admin_endpoint) = profile.admin_endpoint() {
+            admin_client_builder = admin_client_builder.endpoint(admin_endpoint.parse()?);
+        }
+
         let admin_client: Arc<AdminClient> =
-            Arc::new(AdminClientBuilder::default().build(AdminClientConfig {
+            Arc::new(admin_client_builder.build(AdminClientConfig {
                 authentication: Authentication::AppPassword(profile.app_password().parse()?),
             }));
 

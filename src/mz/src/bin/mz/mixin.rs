@@ -15,11 +15,23 @@
 
 //! Reusable arguments that can be mixed in to commands.
 
+use url::Url;
+
 #[derive(Debug, clap::Args)]
 pub struct ProfileArg {
     /// Use the specified authentication profile.
     #[clap(long, env = "PROFILE")]
     pub profile: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct EndpointArgs {
+    /// Use the specified cloud endpoint.
+    #[clap(long, hidden = true, env = "CLOUD_ENDPOINT")]
+    pub cloud_endpoint: Option<Url>,
+    /// Use the specified admin endpoint.
+    #[clap(long, hidden = true, env = "ADMIN_ENDPOINT")]
+    pub admin_endpoint: Option<Url>,
 }
 
 #[derive(Debug, clap::Args)]
