@@ -13,7 +13,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.input_data.types.number_types_provider import (
-    UINT8_TYPE,
+    UINT8_TYPE_IDENTIFIER,
     NumberDataType,
 )
 from materialize.output_consistency.operation.operation_args_validator import (
@@ -49,7 +49,7 @@ class Uint8MixedWithTypedArgsValidator(NumericArgsValidator):
             return False
 
         index_of_uint8 = self.index_of_type_with_properties(
-            args, lambda number_type: number_type == UINT8_TYPE
+            args, lambda number_type: number_type.identifier == UINT8_TYPE_IDENTIFIER
         )
         index_of_signed = self.index_of_type_with_properties(
             args, lambda number_type: number_type.is_signed

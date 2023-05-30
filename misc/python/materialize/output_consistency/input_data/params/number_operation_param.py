@@ -15,9 +15,9 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.input_data.types.number_types_provider import (
-    INT8_TYPE,
-    UINT4_TYPE,
-    UINT8_TYPE,
+    INT8_TYPE_IDENTIFIER,
+    UINT4_TYPE_IDENTIFIER,
+    UINT8_TYPE_IDENTIFIER,
     NumberDataType,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
@@ -60,10 +60,10 @@ class NumericOperationParam(OperationParam):
         if self.only_int_type and data_type.is_decimal:
             return False
 
-        if self.no_int_type_larger_int4 and data_type in {
-            INT8_TYPE,
-            UINT4_TYPE,
-            UINT8_TYPE,
+        if self.no_int_type_larger_int4 and data_type.identifier in {
+            INT8_TYPE_IDENTIFIER,
+            UINT4_TYPE_IDENTIFIER,
+            UINT8_TYPE_IDENTIFIER,
         }:
             return False
 

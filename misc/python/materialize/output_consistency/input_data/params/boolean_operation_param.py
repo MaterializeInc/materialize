@@ -15,7 +15,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.input_data.types.boolean_type_provider import (
-    BOOLEAN_DATA_TYPE,
+    BOOLEAN_TYPE_IDENTIFIER,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
 
@@ -34,4 +34,4 @@ class BooleanOperationParam(OperationParam):
         )
 
     def supports_type(self, data_type: DataType) -> bool:
-        return data_type == BOOLEAN_DATA_TYPE
+        return data_type.identifier == BOOLEAN_TYPE_IDENTIFIER
