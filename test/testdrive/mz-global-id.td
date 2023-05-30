@@ -26,15 +26,31 @@ reset-server
 > SELECT mz_internal.mz_name_to_global_id('counter');
 u2
 
+> SELECT mz_internal.mz_global_id_to_name('u2');
+materialize.public.counter
+
 > SELECT mz_internal.mz_name_to_global_id('s', 'counter');
 u4
+
+> SELECT mz_internal.mz_global_id_to_name('u4');
+ materialize.s.counter
 
 > SELECT mz_internal.mz_name_to_global_id('d', ARRAY['s'], 'counter');
 u6
 
+> SELECT mz_internal.mz_global_id_to_name('u6');
+d.s.counter
+
 > SELECT mz_internal.mz_name_to_global_id(ARRAY['public', 's'], 'counter');
 u2
 u4
+
+> SELECT id, mz_internal.mz_global_id_to_name(id)
+    FROM
+        mz_internal.mz_name_to_global_id(ARRAY['public', 's'], 'counter') AS t (id)
+    ORDER BY id;
+u2 materialize.public.counter
+u4 materialize.s.counter
 
 # Values that do not exist
 > SELECT mz_internal.mz_name_to_global_id('dne')
@@ -49,6 +65,9 @@ u4
 
 > SELECT mz_internal.mz_name_to_global_id('d', ARRAY[]::text[], 'counter');
 
+! SELECT mz_internal.mz_global_id_to_name('dne');
+contains: global ID dne does not exist
+
 # Null input
 > SELECT mz_internal.mz_name_to_global_id(null)
 
@@ -57,6 +76,9 @@ u4
 > SELECT mz_internal.mz_name_to_global_id('public', null)
 
 > SELECT mz_internal.mz_name_to_global_id(null, ARRAY['public'], 'counter')
+
+> SELECT mz_internal.mz_global_id_to_name(null)
+<null>
 
 # Null input is valid for database when looking up items in ambient mz_schemas
 > SELECT mz_internal.mz_name_to_global_id(null, ARRAY['pg_catalog'], 'int4')
