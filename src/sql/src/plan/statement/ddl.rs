@@ -34,8 +34,8 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DropOwnedStatement, GrantPrivilegeStatement, GrantRoleStatement, Privilege,
-    PrivilegeSpecification, ReassignOwnedStatement, RevokePrivilegeStatement, RevokeRoleStatement,
+    DropOwnedStatement, GrantPrivilegesStatement, GrantRoleStatement, Privilege,
+    PrivilegeSpecification, ReassignOwnedStatement, RevokePrivilegesStatement, RevokeRoleStatement,
     SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
@@ -110,10 +110,10 @@ use crate::plan::{
     CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, FullItemName, GrantPrivilegePlan, GrantRolePlan, HirScalarExpr,
-    Index, Ingestion, MaterializedView, Params, Plan, QueryContext, ReassignOwnedPlan,
-    ReplicaConfig, RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan, Secret, Sink, Source,
-    SourceSinkClusterConfig, Table, Type, View,
+    DropObjectsPlan, DropOwnedPlan, FullItemName, GrantPrivilegesPlan, GrantRolePlan,
+    HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan, QueryContext,
+    ReassignOwnedPlan, ReplicaConfig, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan, Secret,
+    Sink, Source, SourceSinkClusterConfig, Table, Type, UpdatePrivilege, View,
 };
 use crate::session::user::SYSTEM_USER;
 use crate::session::vars;
@@ -4574,85 +4574,75 @@ pub fn plan_revoke_role(
     }))
 }
 
-pub fn describe_grant_privilege(
+pub fn describe_grant_privileges(
     _: &StatementContext,
-    _: GrantPrivilegeStatement<Aug>,
+    _: GrantPrivilegesStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_grant_privilege(
+pub fn plan_grant_privileges(
     scx: &StatementContext,
-    GrantPrivilegeStatement {
+    GrantPrivilegesStatement {
         privileges,
         object_type,
-        name,
+        names,
         roles,
-    }: GrantPrivilegeStatement<Aug>,
+    }: GrantPrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
-    Ok(Plan::GrantPrivilege(plan.into()))
+    let plan = plan_update_privilege(scx, privileges, object_type, names, roles)?;
+    Ok(Plan::GrantPrivileges(plan.into()))
 }
 
-pub fn describe_revoke_privilege(
+pub fn describe_revoke_privileges(
     _: &StatementContext,
-    _: RevokePrivilegeStatement<Aug>,
+    _: RevokePrivilegesStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_revoke_privilege(
+pub fn plan_revoke_privileges(
     scx: &StatementContext,
-    RevokePrivilegeStatement {
+    RevokePrivilegesStatement {
         privileges,
         object_type,
-        name,
+        names,
         roles,
-    }: RevokePrivilegeStatement<Aug>,
+    }: RevokePrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let plan = plan_update_privilege(scx, privileges, object_type, name, roles)?;
-    Ok(Plan::RevokePrivilege(plan.into()))
+    let plan = plan_update_privilege(scx, privileges, object_type, names, roles)?;
+    Ok(Plan::RevokePrivileges(plan.into()))
 }
 
-struct UpdatePrivilegePlan {
-    acl_mode: AclMode,
-    object_id: ObjectId,
+struct UpdatePrivilegesPlan {
+    update_privileges: Vec<UpdatePrivilege>,
     grantees: Vec<RoleId>,
-    grantor: RoleId,
 }
 
-impl From<UpdatePrivilegePlan> for GrantPrivilegePlan {
+impl From<UpdatePrivilegesPlan> for GrantPrivilegesPlan {
     fn from(
-        UpdatePrivilegePlan {
-            acl_mode,
-            object_id,
+        UpdatePrivilegesPlan {
+            update_privileges,
             grantees,
-            grantor,
-        }: UpdatePrivilegePlan,
-    ) -> GrantPrivilegePlan {
-        GrantPrivilegePlan {
-            acl_mode,
-            object_id,
+        }: UpdatePrivilegesPlan,
+    ) -> GrantPrivilegesPlan {
+        GrantPrivilegesPlan {
+            update_privileges,
             grantees,
-            grantor,
         }
     }
 }
 
-impl From<UpdatePrivilegePlan> for RevokePrivilegePlan {
+impl From<UpdatePrivilegesPlan> for RevokePrivilegesPlan {
     fn from(
-        UpdatePrivilegePlan {
-            acl_mode,
-            object_id,
+        UpdatePrivilegesPlan {
+            update_privileges,
             grantees,
-            grantor,
-        }: UpdatePrivilegePlan,
-    ) -> RevokePrivilegePlan {
-        RevokePrivilegePlan {
-            acl_mode,
-            object_id,
+        }: UpdatePrivilegesPlan,
+    ) -> RevokePrivilegesPlan {
+        RevokePrivilegesPlan {
+            update_privileges,
             revokees: grantees,
-            grantor,
         }
     }
 }
@@ -4661,67 +4651,81 @@ fn plan_update_privilege(
     scx: &StatementContext,
     privileges: PrivilegeSpecification,
     object_type: ObjectType,
-    name: ResolvedObjectName,
+    names: Vec<ResolvedObjectName>,
     roles: Vec<ResolvedRoleName>,
-) -> Result<UpdatePrivilegePlan, PlanError> {
-    let object_id = name
-        .try_into()
-        .expect("name resolution should handle invalid objects");
-    let actual_object_type = scx.get_object_type(&object_id);
-    let acl_mode = match privileges {
-        PrivilegeSpecification::All => scx.catalog.all_object_privileges(actual_object_type),
-        PrivilegeSpecification::Privileges(privileges) => privileges
-            .into_iter()
-            .map(privilege_to_acl_mode)
-            // PostgreSQL doesn't care about duplicate privileges, so we don't either.
-            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode)),
-    };
-    if let ObjectId::Item(id) = &object_id {
-        let item = scx.get_item(id);
-        let item_type: ObjectType = item.item_type().into();
-        if (item_type == ObjectType::View
-            || item_type == ObjectType::MaterializedView
-            || item_type == ObjectType::Source)
-            && object_type == ObjectType::Table
-        {
-            // This is an expected mis-match to match PostgreSQL semantics.
-        } else if item_type != object_type {
-            let object_name = scx.catalog.resolve_full_name(item.name()).to_string();
-            return Err(PlanError::InvalidObjectType {
-                expected_type: object_type,
-                actual_type: item_type,
+) -> Result<UpdatePrivilegesPlan, PlanError> {
+    let mut update_privileges = Vec::with_capacity(names.len());
+
+    for name in names {
+        let object_id = name
+            .try_into()
+            .expect("name resolution should handle invalid objects");
+        let actual_object_type = scx.get_object_type(&object_id);
+        let mut reference_object_type = actual_object_type.clone();
+
+        let acl_mode = match &privileges {
+            PrivilegeSpecification::All => scx.catalog.all_object_privileges(actual_object_type),
+            PrivilegeSpecification::Privileges(privileges) => privileges
+                .into_iter()
+                .map(|privilege| privilege_to_acl_mode(privilege.clone()))
+                // PostgreSQL doesn't care about duplicate privileges, so we don't either.
+                .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode)),
+        };
+
+        if let ObjectId::Item(id) = &object_id {
+            let item = scx.get_item(id);
+            let item_type: ObjectType = item.item_type().into();
+            if (item_type == ObjectType::View
+                || item_type == ObjectType::MaterializedView
+                || item_type == ObjectType::Source)
+                && object_type == ObjectType::Table
+            {
+                // This is an expected mis-match to match PostgreSQL semantics.
+                reference_object_type = ObjectType::Table;
+            } else if item_type != object_type {
+                let object_name = scx.catalog.resolve_full_name(item.name()).to_string();
+                return Err(PlanError::InvalidObjectType {
+                    expected_type: object_type,
+                    actual_type: actual_object_type,
+                    object_name,
+                });
+            }
+        }
+
+        let all_object_privileges = scx.catalog.all_object_privileges(reference_object_type);
+        let invalid_privileges = acl_mode.difference(all_object_privileges);
+        if !invalid_privileges.is_empty() {
+            let object_name = scx.catalog.get_object_name(&object_id);
+            return Err(PlanError::InvalidPrivilegeTypes {
+                invalid_privileges,
+                object_type: actual_object_type,
                 object_name,
             });
         }
-    }
 
-    let all_object_privileges = scx.catalog.all_object_privileges(actual_object_type);
-    let invalid_acl_mode = acl_mode.difference(all_object_privileges);
-    if !invalid_acl_mode.is_empty() {
-        let invalid_privileges = acl_mode_to_privileges(invalid_acl_mode);
-        return Err(PlanError::InvalidPrivilegeTypes {
-            privilege_types: invalid_privileges,
-            object_type: actual_object_type,
+        // In PostgreSQL, the grantor must always be either the object owner or some role that has been
+        // been explicitly granted grant options. In Materialize, we haven't implemented grant options
+        // so the grantor is always the object owner.
+        //
+        // For more details see:
+        // https://github.com/postgres/postgres/blob/78d5952dd0e66afc4447eec07f770991fa406cce/src/backend/utils/adt/acl.c#L5154-L5246
+        let grantor = scx
+            .catalog
+            .get_owner_id(&object_id)
+            .expect("cannot revoke privileges on objects without owners");
+
+        update_privileges.push(UpdatePrivilege {
+            acl_mode,
+            object_id,
+            grantor,
         });
     }
 
-    // In PostgreSQL, the grantor must always be either the object owner or some role that has been
-    // been explicitly granted grant options. In Materialize, we haven't implemented grant options
-    // so the grantor is always the object owner.
-    //
-    // For more details see:
-    // https://github.com/postgres/postgres/blob/78d5952dd0e66afc4447eec07f770991fa406cce/src/backend/utils/adt/acl.c#L5154-L5246
-    let grantor = scx
-        .catalog
-        .get_owner_id(&object_id)
-        .expect("cannot revoke privileges on objects without owners");
     let grantees = roles.into_iter().map(|role| role.id).collect();
 
-    Ok(UpdatePrivilegePlan {
-        acl_mode,
-        object_id,
+    Ok(UpdatePrivilegesPlan {
+        update_privileges,
         grantees,
-        grantor,
     })
 }
 
@@ -4734,24 +4738,6 @@ fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
         Privilege::USAGE => AclMode::USAGE,
         Privilege::CREATE => AclMode::CREATE,
     }
-}
-
-fn acl_mode_to_privileges(acl_mode: AclMode) -> Vec<Privilege> {
-    let mut privileges = Vec::new();
-    const ALL_PRIVILEGES: [Privilege; 6] = [
-        Privilege::SELECT,
-        Privilege::INSERT,
-        Privilege::UPDATE,
-        Privilege::DELETE,
-        Privilege::USAGE,
-        Privilege::CREATE,
-    ];
-    for privilege in ALL_PRIVILEGES {
-        if acl_mode.contains(privilege_to_acl_mode(privilege.clone())) {
-            privileges.push(privilege);
-        }
-    }
-    privileges
 }
 
 pub fn describe_reassign_owned(

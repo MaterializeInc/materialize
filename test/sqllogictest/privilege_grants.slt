@@ -778,7 +778,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 'v'
 ----
 v  materialize=r/materialize
 
-statement error invalid privilege types INSERT, UPDATE, DELETE, USAGE, CREATE for VIEW
+statement error invalid privilege types USAGE, CREATE for VIEW
 GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE v TO joe
 
 ## Materialized View
@@ -913,7 +913,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 'mv'
 ----
 mv  materialize=r/materialize
 
-statement error invalid privilege types INSERT, UPDATE, DELETE, USAGE, CREATE for MATERIALIZED VIEW
+statement error invalid privilege types USAGE, CREATE for MATERIALIZED VIEW
 GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE mv TO joe
 
 ## Source
@@ -1048,7 +1048,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  materialize=r/materialize
 
-statement error invalid privilege types INSERT, UPDATE, DELETE, USAGE, CREATE for SOURCE
+statement error invalid privilege types USAGE, CREATE for SOURCE
 GRANT INSERT, UPDATE, DELETE, USAGE, CREATE ON TABLE s TO joe
 
 ## Type
@@ -1834,6 +1834,63 @@ query B
 SELECT has_table_privilege((SELECT oid FROM mz_tables WHERE name = 't'), 'SELECT')
 ----
 true
+
+# Test multi-object GRANT/REVOKE
+
+simple conn=mz_system,user=mz_system
+DROP TABLE t1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE t1 ();
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE t2 ();
+----
+COMPLETE 0
+
+query B
+SELECT has_table_privilege('t1', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('t2', 'SELECT')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON TABLE t1, t2 TO materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_table_privilege('t1', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('t2', 'SELECT')
+----
+true
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON TABLE t1, t2 FROM materialize
+----
+COMPLETE 0
+
+query B
+SELECT has_table_privilege('t1', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('t2', 'SELECT')
+----
+false
 
 # Disable rbac checks.
 

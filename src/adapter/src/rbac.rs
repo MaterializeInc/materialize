@@ -29,11 +29,11 @@ use mz_sql::plan::{
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
     CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
-    ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegePlan, GrantRolePlan, InsertPlan,
+    ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
     MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan, ReadThenWritePlan,
-    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegePlan, RevokeRolePlan, RotateKeysPlan,
+    ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan, RotateKeysPlan,
     SetVariablePlan, ShowCreatePlan, ShowVariablePlan, SourceSinkClusterConfig,
-    StartTransactionPlan, SubscribePlan,
+    StartTransactionPlan, SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -305,8 +305,8 @@ pub fn generate_required_role_membership(plan: &Plan) -> Vec<RoleId> {
         | Plan::RotateKeys(_)
         | Plan::GrantRole(_)
         | Plan::RevokeRole(_)
-        | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_) => Vec::new(),
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_) => Vec::new(),
     }
 }
 
@@ -399,8 +399,8 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::Deallocate(_)
         | Plan::Raise(_)
         | Plan::RotateKeys(_)
-        | Plan::GrantPrivilege(_)
-        | Plan::RevokePrivilege(_)
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_)
         | Plan::ReassignOwned(_) => Vec::new(),
     }
 }
@@ -568,8 +568,16 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         Plan::AlterSecret(plan) => vec![ObjectId::Item(plan.id)],
         Plan::RotateKeys(plan) => vec![ObjectId::Item(plan.id)],
         Plan::AlterOwner(plan) => vec![plan.id.clone()],
-        Plan::GrantPrivilege(plan) => vec![plan.object_id.clone()],
-        Plan::RevokePrivilege(plan) => vec![plan.object_id.clone()],
+        Plan::GrantPrivileges(plan) => plan
+            .update_privileges
+            .iter()
+            .map(|update_privilege| update_privilege.object_id.clone())
+            .collect(),
+        Plan::RevokePrivileges(plan) => plan
+            .update_privileges
+            .iter()
+            .map(|update_privilege| update_privilege.object_id.clone())
+            .collect(),
     }
 }
 
@@ -1046,37 +1054,39 @@ fn generate_required_privileges(
             }
             ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
         },
-        Plan::GrantPrivilege(GrantPrivilegePlan {
-            acl_mode: _,
-            object_id,
+        Plan::GrantPrivileges(GrantPrivilegesPlan {
+            update_privileges,
             grantees: _,
-            grantor: _,
         })
-        | Plan::RevokePrivilege(RevokePrivilegePlan {
-            acl_mode: _,
-            object_id,
+        | Plan::RevokePrivileges(RevokePrivilegesPlan {
+            update_privileges,
             revokees: _,
-            grantor: _,
-        }) => match object_id {
-            ObjectId::ClusterReplica((cluster_id, _)) => {
-                vec![(cluster_id.into(), AclMode::USAGE, role_id)]
-            }
-            ObjectId::Schema((database_spec, _)) => match database_spec {
-                ResolvedDatabaseSpecifier::Ambient => Vec::new(),
-                ResolvedDatabaseSpecifier::Id(database_id) => {
-                    vec![(database_id.into(), AclMode::USAGE, role_id)]
+        }) => {
+            let mut privleges = Vec::with_capacity(update_privileges.len());
+            for UpdatePrivilege { object_id, .. } in update_privileges {
+                match object_id {
+                    ObjectId::ClusterReplica((cluster_id, _)) => {
+                        privleges.push((cluster_id.into(), AclMode::USAGE, role_id));
+                    }
+                    ObjectId::Schema((database_spec, _)) => match database_spec {
+                        ResolvedDatabaseSpecifier::Ambient => {}
+                        ResolvedDatabaseSpecifier::Id(database_id) => {
+                            privleges.push((database_id.into(), AclMode::USAGE, role_id));
+                        }
+                    },
+                    ObjectId::Item(item_id) => {
+                        let item = catalog.get_item(item_id);
+                        privleges.push((
+                            item.name().qualifiers.clone().into(),
+                            AclMode::USAGE,
+                            role_id,
+                        ))
+                    }
+                    ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => {}
                 }
-            },
-            ObjectId::Item(item_id) => {
-                let item = catalog.get_item(item_id);
-                vec![(
-                    item.name().qualifiers.clone().into(),
-                    AclMode::USAGE,
-                    role_id,
-                )]
             }
-            ObjectId::Cluster(_) | ObjectId::Database(_) | ObjectId::Role(_) => Vec::new(),
-        },
+            privleges
+        }
         Plan::CreateDatabase(CreateDatabasePlan {
             name: _,
             if_not_exists: _,

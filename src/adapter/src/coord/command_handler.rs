@@ -472,10 +472,10 @@ impl Coordinator {
                     | Statement::Delete(_)
                     | Statement::DropObjects(_)
                     | Statement::DropOwned(_)
-                    | Statement::GrantPrivilege(_)
+                    | Statement::GrantPrivileges(_)
                     | Statement::GrantRole(_)
                     | Statement::Insert(_)
-                    | Statement::RevokePrivilege(_)
+                    | Statement::RevokePrivileges(_)
                     | Statement::RevokeRole(_)
                     | Statement::Update(_)
                     | Statement::ReassignOwned(_) => {

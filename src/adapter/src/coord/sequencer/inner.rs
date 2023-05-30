@@ -35,7 +35,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt as OreResultExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExplainFormat, Explainee};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, Timestamp};
@@ -52,11 +52,11 @@ use mz_sql::plan::{
     CreateClusterPlan, CreateClusterReplicaPlan, CreateConnectionPlan, CreateDatabasePlan,
     CreateIndexPlan, CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegePlan,
+    CreateViewPlan, DropObjectsPlan, DropOwnedPlan, ExecutePlan, ExplainPlan, GrantPrivilegesPlan,
     GrantRolePlan, IndexOption, InsertPlan, MaterializedView, MutationKind, OptimizerConfig,
     PeekPlan, Plan, QueryWhen, ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan,
-    RevokePrivilegePlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, VariableValue, View,
+    RevokePrivilegesPlan, RevokeRolePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    SourceSinkClusterConfig, SubscribeFrom, SubscribePlan, UpdatePrivilege, VariableValue, View,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -3979,126 +3979,146 @@ impl Coordinator {
         session.create_new_portal(stmt, desc, plan.params, Vec::new(), revision)
     }
 
-    pub(super) async fn sequence_grant_privilege(
+    pub(super) async fn sequence_grant_privileges(
         &mut self,
         session: &mut Session,
-        GrantPrivilegePlan {
-            acl_mode,
-            object_id,
+        GrantPrivilegesPlan {
+            update_privileges,
             grantees,
-            grantor,
-        }: GrantPrivilegePlan,
+        }: GrantPrivilegesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_update_privilege(
+        self.sequence_update_privileges(
             session,
-            acl_mode,
-            object_id,
+            update_privileges,
             grantees,
-            grantor,
             UpdatePrivilegeVariant::Grant,
         )
         .await
     }
 
-    pub(super) async fn sequence_revoke_privilege(
+    pub(super) async fn sequence_revoke_privileges(
         &mut self,
         session: &mut Session,
-        RevokePrivilegePlan {
-            acl_mode,
-            object_id,
+        RevokePrivilegesPlan {
+            update_privileges,
             revokees,
-            grantor,
-        }: RevokePrivilegePlan,
+        }: RevokePrivilegesPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.sequence_update_privilege(
+        self.sequence_update_privileges(
             session,
-            acl_mode,
-            object_id,
+            update_privileges,
             revokees,
-            grantor,
             UpdatePrivilegeVariant::Revoke,
         )
         .await
     }
 
-    async fn sequence_update_privilege(
+    async fn sequence_update_privileges(
         &mut self,
         session: &mut Session,
-        acl_mode: AclMode,
-        object_id: ObjectId,
+        update_privileges: Vec<UpdatePrivilege>,
         grantees: Vec<RoleId>,
-        grantor: RoleId,
         variant: UpdatePrivilegeVariant,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.catalog()
-            .ensure_not_reserved_object(&object_id, session.conn_id())?;
-        for grantee in &grantees {
-            self.catalog().ensure_not_system_role(grantee)?;
-        }
+        let mut ops = Vec::with_capacity(update_privileges.len() * grantees.len());
+        let mut warnings = Vec::new();
+        let catalog = self.catalog().for_session(session);
 
-        let privileges = self
-            .catalog()
-            .get_privileges(&object_id, session.conn_id())
-            .expect("cannot grant privileges on objects without privileges");
+        for UpdatePrivilege {
+            acl_mode,
+            object_id,
+            grantor,
+        } in update_privileges
+        {
+            self.catalog()
+                .ensure_not_reserved_object(&object_id, session.conn_id())?;
 
-        let mut ops = Vec::with_capacity(grantees.len());
-        for grantee in grantees {
-            let existing_privilege = privileges
-                .0
-                .get(&grantee)
-                .and_then(|privileges| {
-                    privileges
-                        .into_iter()
-                        .find(|mz_acl_item| mz_acl_item.grantor == grantor)
-                })
-                .map(Cow::Borrowed)
-                .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(grantee, grantor)));
-
-            match variant {
-                UpdatePrivilegeVariant::Grant
-                    if !existing_privilege.acl_mode.contains(acl_mode) =>
-                {
-                    ops.push(catalog::Op::UpdatePrivilege {
-                        object_id: object_id.clone(),
-                        privilege: MzAclItem {
-                            grantee,
-                            grantor,
-                            acl_mode,
-                        },
-                        variant,
-                    });
+            let actual_object_type = catalog.get_object_type(&object_id);
+            // For all relations we allow all applicable table privileges, but send a warning if the
+            // privilege isn't actually applicable to the object type.
+            if actual_object_type.is_relation() {
+                let applicable_privileges = rbac::all_object_privileges(actual_object_type);
+                let non_applicable_privileges = acl_mode.difference(applicable_privileges);
+                if !non_applicable_privileges.is_empty() {
+                    let object_name = catalog.get_object_name(&object_id);
+                    warnings.push(AdapterNotice::NonApplicablePrivilegeTypes {
+                        non_applicable_privileges,
+                        object_type: actual_object_type,
+                        object_name,
+                    })
                 }
-                UpdatePrivilegeVariant::Revoke
-                    if !existing_privilege
-                        .acl_mode
-                        .intersection(acl_mode)
-                        .is_empty() =>
-                {
-                    ops.push(catalog::Op::UpdatePrivilege {
-                        object_id: object_id.clone(),
-                        privilege: MzAclItem {
-                            grantee,
-                            grantor,
-                            acl_mode,
-                        },
-                        variant,
-                    });
+            }
+
+            let privileges = self
+                .catalog()
+                .get_privileges(&object_id, session.conn_id())
+                .expect("cannot grant privileges on objects without privileges");
+
+            for grantee in &grantees {
+                self.catalog().ensure_not_system_role(grantee)?;
+                let existing_privilege = privileges
+                    .0
+                    .get(grantee)
+                    .and_then(|privileges| {
+                        privileges
+                            .into_iter()
+                            .find(|mz_acl_item| mz_acl_item.grantor == grantor)
+                    })
+                    .map(Cow::Borrowed)
+                    .unwrap_or_else(|| Cow::Owned(MzAclItem::empty(*grantee, grantor)));
+
+                match variant {
+                    UpdatePrivilegeVariant::Grant
+                        if !existing_privilege.acl_mode.contains(acl_mode) =>
+                    {
+                        ops.push(catalog::Op::UpdatePrivilege {
+                            object_id: object_id.clone(),
+                            privilege: MzAclItem {
+                                grantee: *grantee,
+                                grantor,
+                                acl_mode,
+                            },
+                            variant,
+                        });
+                    }
+                    UpdatePrivilegeVariant::Revoke
+                        if !existing_privilege
+                            .acl_mode
+                            .intersection(acl_mode)
+                            .is_empty() =>
+                    {
+                        ops.push(catalog::Op::UpdatePrivilege {
+                            object_id: object_id.clone(),
+                            privilege: MzAclItem {
+                                grantee: *grantee,
+                                grantor,
+                                acl_mode,
+                            },
+                            variant,
+                        });
+                    }
+                    // no-op
+                    _ => {}
                 }
-                // no-op
-                _ => {}
             }
         }
 
         if ops.is_empty() {
+            session.add_notices(warnings);
             return Ok(variant.into());
         }
 
-        self.catalog_transact(Some(session), ops)
+        let res = self
+            .catalog_transact(Some(session), ops)
             .await
             .map(|_| match variant {
                 UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
                 UpdatePrivilegeVariant::Revoke => ExecuteResponse::RevokedPrivilege,
-            })
+            });
+        if res.is_ok() {
+            session.add_notices(warnings);
+        }
+        res
     }
 
     pub(super) async fn sequence_grant_role(

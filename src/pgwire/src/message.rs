@@ -436,6 +436,7 @@ impl ErrorResponse {
             AdapterNotice::AutoRunOnIntrospectionCluster => SqlState::WARNING,
             AdapterNotice::AlterIndexOwner { .. } => SqlState::WARNING,
             AdapterNotice::CannotRevoke { .. } => SqlState::WARNING,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => SqlState::WARNING,
         };
         ErrorResponse {
             severity: Severity::for_adapter_notice(&notice),
@@ -601,6 +602,7 @@ impl Severity {
             AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
             AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
             AdapterNotice::CannotRevoke { .. } => Severity::Warning,
+            AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
         }
     }
 }

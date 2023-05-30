@@ -20,12 +20,13 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{separated, StrExt};
 use mz_postgres_util::PostgresError;
 use mz_repr::adt::char::InvalidCharLengthError;
+use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{MutRecBlockOptionName, ObjectType, Privilege, UnresolvedItemName};
+use mz_sql_parser::ast::{MutRecBlockOptionName, ObjectType, UnresolvedItemName};
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
@@ -91,8 +92,9 @@ pub enum PlanError {
         object_name: String,
     },
     InvalidPrivilegeTypes {
-        privilege_types: Vec<Privilege>,
+        invalid_privileges: AclMode,
         object_type: ObjectType,
+        object_name: String,
     },
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedItemName>),
@@ -363,8 +365,8 @@ impl fmt::Display for PlanError {
             Self::InvalidId(id) => write!(f, "invalid id {}", id),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
             Self::InvalidObjectType{expected_type, actual_type, object_name} => write!(f, "{actual_type} {object_name} is not a {expected_type}"),
-            Self::InvalidPrivilegeTypes{privilege_types, object_type} => {
-                write!(f, "invalid privilege types {} for {}", privilege_types.into_iter().join(", "), object_type)
+            Self::InvalidPrivilegeTypes{ invalid_privileges, object_type, object_name} => {
+                write!(f, "invalid privilege types {} for {} {}", invalid_privileges.to_error_string(), object_type, object_name.quoted())
             },
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {

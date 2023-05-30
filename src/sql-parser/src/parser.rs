@@ -6018,13 +6018,14 @@ impl<'a> Parser<'a> {
                     | ObjectType::Database
                     | ObjectType::Schema => {}
                 }
-                let name = self.parse_object_name(object_type)?;
+                let names =
+                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
                 self.expect_keyword(TO)?;
                 let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::GrantPrivilege(GrantPrivilegeStatement {
+                Ok(Statement::GrantPrivileges(GrantPrivilegesStatement {
                     privileges,
                     object_type,
-                    name,
+                    names,
                     roles,
                 }))
             }
@@ -6075,13 +6076,14 @@ impl<'a> Parser<'a> {
                     | ObjectType::Database
                     | ObjectType::Schema => {}
                 }
-                let name = self.parse_object_name(object_type)?;
+                let names =
+                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
                 self.expect_keyword(FROM)?;
                 let roles = self.parse_comma_separated(Parser::expect_role_specification)?;
-                Ok(Statement::RevokePrivilege(RevokePrivilegeStatement {
+                Ok(Statement::RevokePrivileges(RevokePrivilegesStatement {
                     privileges,
                     object_type,
-                    name,
+                    names,
                     roles,
                 }))
             }
