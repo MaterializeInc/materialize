@@ -28,6 +28,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::order::hybrid::Hybrid;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, ScopeParent, Stream};
@@ -84,10 +85,9 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
     F: FnMut(&PartStats) -> bool + 'static,
-    G: Scope,
+    G: Scope<Timestamp = Hybrid<T, u64>>,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     T: Timestamp + Lattice + Codec64 + TotalOrder + Copy,
-    G::Timestamp: Refines<T>,
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -189,10 +189,9 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
     F: FnMut(&PartStats) -> bool + 'static,
-    G: Scope,
+    G: Scope<Timestamp = Hybrid<T, u64>>,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     T: Timestamp + Lattice + Codec64 + TotalOrder + Copy,
-    G::Timestamp: Refines<T>,
 {
     let cfg = clients.cfg().clone();
     let metrics = Arc::clone(&clients.metrics);
@@ -304,7 +303,7 @@ where
                 // The token dropped before we finished creating our `ReadHandle.
                 // We can return immediately, as we could not have emitted any
                 // parts to fetch.
-                cap_set.downgrade(&[]);
+                cap_set.downgrade([]);
                 return;
             }
             Either::Right((read, _)) => {
@@ -357,7 +356,7 @@ where
                 // the token dropped before we finished creating our Subscribe.
                 // we can return immediately, as we could not have emitted any
                 // parts to fetch.
-                cap_set.downgrade(&[]);
+                cap_set.downgrade([]);
                 return;
             }
             Either::Right((subscription, _)) => {
@@ -533,7 +532,7 @@ where
                         // We never expect any further output from our subscribe,
                         // so propagate that information downstream.
                         None => {
-                            cap_set.downgrade(&[]);
+                            cap_set.downgrade([]);
                             break 'emitting_parts;
                         }
                     }
@@ -681,7 +680,9 @@ where
 mod tests {
     use std::sync::Arc;
 
+    use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
+    use timely::dataflow::Scope;
     use timely::progress::Antichain;
 
     use crate::cache::PersistClientCache;
@@ -714,19 +715,26 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = shard_source::<u64, String, String, u64, _, _>(
-                    scope,
-                    "test_source",
-                    persist_clients,
-                    location,
-                    shard_id,
-                    None, // No explicit as_of!
-                    until,
-                    None,
-                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                    |_fetch| true,
-                );
+                let (stream, token) = scope.scoped("hybrid", |scope| {
+                    let (stream, token) = shard_source::<u64, String, String, u64, _, _>(
+                        scope,
+                        "test_source",
+                        persist_clients,
+                        location,
+                        shard_id,
+                        None, // No explicit as_of!
+                        until,
+                        None,
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        |_fetch| true,
+                    );
+                    (stream.leave(), token)
+                });
 
                 let probe = stream.probe();
 
@@ -772,19 +780,26 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let (stream, token) = shard_source::<u64, String, String, u64, _, _>(
-                    scope,
-                    "test_source",
-                    persist_clients,
-                    location,
-                    shard_id,
-                    Some(as_of), // We specify the as_of explicitly!
-                    until,
-                    None,
-                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                    Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
-                    |_fetch| true,
-                );
+                let (stream, token) = scope.scoped("hybrid", |scope| {
+                    let (stream, token) = shard_source::<u64, String, String, u64, _, _>(
+                        scope,
+                        "test_source",
+                        persist_clients,
+                        location,
+                        shard_id,
+                        Some(as_of), // We specify the as_of explicitly!
+                        until,
+                        None,
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        |_fetch| true,
+                    );
+                    (stream.leave(), token)
+                });
 
                 let probe = stream.probe();
 
