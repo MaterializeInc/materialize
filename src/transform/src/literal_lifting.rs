@@ -265,7 +265,7 @@ impl LiteralLifting {
                 MirRelationExpr::LetRec {
                     ids,
                     values,
-                    max_iters: _,
+                    limits: _,
                     body,
                 } => {
                     let recursive_ids = MirRelationExpr::recursive_ids(ids, values)?;

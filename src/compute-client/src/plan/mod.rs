@@ -11,13 +11,14 @@
 
 #![warn(missing_debug_implementations)]
 
+use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
-    permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LocalId,
-    MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
+    permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LetRecLimit,
+    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::Indent;
@@ -212,7 +213,7 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The collection that should be bound to `id`.
         values: Vec<Plan<T>>,
         /// Maximum number of iterations. See further info on the MIR `LetRec`.
-        max_iters: Vec<Option<NonZeroU64>>,
+        limits: Vec<Option<LetRecLimit>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
         body: Box<Plan<T>>,
@@ -595,12 +596,32 @@ impl RustType<ProtoPlan> for Plan {
                 Plan::LetRec {
                     ids,
                     values,
-                    max_iters,
+                    limits,
                     body,
                 } => LetRec(
                     ProtoPlanLetRec {
                         ids: ids.into_proto(),
-                        max_iters: max_iters.into_proto(),
+                        limits: limits
+                            .clone()
+                            .into_iter()
+                            .map(|limit| match limit {
+                                Some(limit) => limit,
+                                None => LetRecLimit {
+                                    // The actual value doesn't matter here, because the limit_is_some
+                                    // field will be false, so we won't read this value when converting
+                                    // back.
+                                    max_iters: NonZeroU64::new(1).unwrap(),
+                                    return_at_limit: false,
+                                },
+                            })
+                            .collect_vec()
+                            .into_proto(),
+                        limit_is_some: limits
+                            .clone()
+                            .into_iter()
+                            .map(|limit| limit.is_some())
+                            .collect_vec()
+                            .into_proto(),
                         values: values.into_proto(),
                         body: Some(body.into_proto()),
                     }
@@ -740,13 +761,29 @@ impl RustType<ProtoPlan> for Plan {
             LetRec(proto) => {
                 let ids: Vec<LocalId> = proto.ids.into_rust()?;
                 let values: Vec<Plan> = proto.values.into_rust()?;
-                let max_iters: Vec<Option<NonZeroU64>> = proto.max_iters.into_rust()?;
+                let limits_raw: Vec<LetRecLimit> = proto.limits.into_rust()?;
+                let limit_is_some: Vec<bool> = proto.limit_is_some.into_rust()?;
                 assert_eq!(ids.len(), values.len());
-                assert_eq!(ids.len(), max_iters.len());
+                assert_eq!(ids.len(), limits_raw.len());
+                assert_eq!(ids.len(), limit_is_some.len());
+                let limits = limits_raw
+                    .into_iter()
+                    .zip_eq(limit_is_some.into_iter())
+                    .map(
+                        |(limit_raw, is_some)| {
+                            if is_some {
+                                Some(limit_raw)
+                            } else {
+                                None
+                            }
+                        },
+                    )
+                    .collect_vec();
+                assert_eq!(ids.len(), limits.len());
                 Plan::LetRec {
                     ids,
                     values,
-                    max_iters,
+                    limits,
                     body: proto.body.into_rust_if_some("ProtoPlanLetRec::body")?,
                 }
             }
@@ -884,6 +921,22 @@ impl RustType<ProtoGetPlan> for GetPlan {
             Some(Collection(mfp)) => Ok(GetPlan::Collection(mfp.into_rust()?)),
             None => Err(TryFromProtoError::missing_field("ProtoGetPlan::kind")),
         }
+    }
+}
+
+impl RustType<ProtoLetRecLimit> for LetRecLimit {
+    fn into_proto(&self) -> ProtoLetRecLimit {
+        ProtoLetRecLimit {
+            max_iters: self.max_iters.get(),
+            return_at_limit: self.return_at_limit,
+        }
+    }
+
+    fn from_proto(proto: ProtoLetRecLimit) -> Result<Self, TryFromProtoError> {
+        Ok(LetRecLimit {
+            max_iters: NonZeroU64::new(proto.max_iters).expect("max_iters > 0"),
+            return_at_limit: proto.return_at_limit,
+        })
     }
 }
 
@@ -1104,11 +1157,11 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             MirRelationExpr::LetRec {
                 ids,
                 values,
-                max_iters,
+                limits,
                 body,
             } => {
                 assert_eq!(ids.len(), values.len());
-                assert_eq!(ids.len(), max_iters.len());
+                assert_eq!(ids.len(), limits.len());
                 // Plan the values using only the available arrangements, but
                 // introduce any resulting arrangements bound to each `id`.
                 // Arrangements made available cannot be used by prior bindings,
@@ -1138,12 +1191,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                             Plan::LetRec {
                                 ids,
                                 values,
-                                max_iters,
+                                limits,
                                 body,
                             } => Plan::LetRec {
                                 ids,
                                 values,
-                                max_iters,
+                                limits,
                                 body: Box::new(Plan::ArrangeBy {
                                     input: body,
                                     forms,
@@ -1180,7 +1233,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     Plan::LetRec {
                         ids: ids.clone(),
                         values: lir_values,
-                        max_iters: max_iters.clone(),
+                        limits: limits.clone(),
                         body: Box::new(body),
                     },
                     b_keys,
@@ -1886,7 +1939,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 Plan::LetRec {
                     ids,
                     values,
-                    max_iters,
+                    limits,
                     body,
                 } => {
                     let mut values_parts: Vec<Vec<Self>> = vec![Vec::new(); parts];
@@ -1902,7 +1955,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         .map(|(values, body)| Plan::LetRec {
                             values,
                             body: Box::new(body),
-                            max_iters: max_iters.clone(),
+                            limits: limits.clone(),
                             ids: ids.clone(),
                         })
                         .collect()
@@ -2050,7 +2103,7 @@ impl<T> CollectionPlan for Plan<T> {
             Plan::LetRec {
                 ids: _,
                 values,
-                max_iters: _,
+                limits: _,
                 body,
             } => {
                 for value in values.iter() {

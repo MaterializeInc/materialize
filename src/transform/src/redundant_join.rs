@@ -106,7 +106,7 @@ impl RedundantJoin {
                 MirRelationExpr::LetRec {
                     ids,
                     values,
-                    max_iters: _,
+                    limits: _,
                     body,
                 } => {
                     // As a first approximation, we naively extend the `lets`

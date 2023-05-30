@@ -160,7 +160,7 @@ The following aspects need special attention:
 1. Queries producing wrong results (discussed in [Testing and observability](testing-and-observability)).
 2. Queries that do not terminate.
    This is tricky because some queries might be divergent because of a bad query definition (a user error) instead of an optimization or interpretation bug (a system error).
-   A related issue to track this is MaterializeInc/materialize#16800. The plan is to have maximum iteration limit as a safeguard.
+   A related issue to track this is MaterializeInc/materialize#16800. The plan is to have maximum iteration limit as a safeguard. Edit: We won't have a default limit, because we now have proper dataflow cancellation between iterations. However, the user can set `ERROR AT RECURSION LIMIT 1000`, if she wants an additional guardrail.
 
 To validate (1), I suggest to:
 

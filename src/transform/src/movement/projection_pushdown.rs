@@ -126,7 +126,7 @@ impl ProjectionPushdown {
             MirRelationExpr::LetRec {
                 ids,
                 values,
-                max_iters: _,
+                limits: _,
                 body,
             } => {
                 // Determine the recursive IDs in this LetRec binding.

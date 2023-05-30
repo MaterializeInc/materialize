@@ -116,7 +116,7 @@ impl NonNullRequirements {
                     ids,
                     values,
                     body,
-                    max_iters: _,
+                    limits: _,
                 } => {
                     // Determine the recursive IDs in this LetRec binding.
                     let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;

@@ -2222,6 +2222,7 @@ pub enum EvalError {
     InvalidRange(InvalidRangeError),
     InvalidRoleId(String),
     InvalidPrivileges(String),
+    LetRecLimitExceeded(String),
 }
 
 impl fmt::Display for EvalError {
@@ -2375,6 +2376,10 @@ impl fmt::Display for EvalError {
             EvalError::InvalidRange(e) => e.fmt(f),
             EvalError::InvalidRoleId(msg) => write!(f, "{msg}"),
             EvalError::InvalidPrivileges(msg) => write!(f, "{msg}"),
+            EvalError::LetRecLimitExceeded(max_iters) => {
+                write!(f, "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
+                       max_iters)
+            }
         }
     }
 }
@@ -2578,6 +2583,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidRange(error) => InvalidRange(error.into_proto()),
             EvalError::InvalidRoleId(v) => InvalidRoleId(v.clone()),
             EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.clone()),
+            EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.clone()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2676,6 +2682,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
                 InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v)),
                 InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v)),
+                WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

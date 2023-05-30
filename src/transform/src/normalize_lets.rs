@@ -132,12 +132,12 @@ impl NormalizeLets {
             if let MirRelationExpr::LetRec {
                 ids,
                 values,
-                max_iters,
+                limits,
                 body: _,
             } = relation
             {
-                bindings.extend(ids.drain(..).zip(values.drain(..).zip(max_iters.drain(..))));
-                support::replace_bindings_from_map(bindings, ids, values, max_iters);
+                bindings.extend(ids.drain(..).zip(values.drain(..).zip(limits.drain(..))));
+                support::replace_bindings_from_map(bindings, ids, values, limits);
             } else {
                 for (id, (value, max_iter)) in bindings.into_iter().rev() {
                     assert!(max_iter.is_none());
@@ -155,7 +155,7 @@ impl NormalizeLets {
             if let MirRelationExpr::LetRec {
                 ids: _,
                 values: _,
-                max_iters: _,
+                limits: _,
                 body,
             } = relation
             {
@@ -193,28 +193,27 @@ impl NormalizeLets {
 mod support {
 
     use std::collections::BTreeMap;
-    use std::num::NonZeroU64;
 
-    use mz_expr::{Id, LocalId, MirRelationExpr};
+    use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
 
     pub(super) fn replace_bindings_from_map(
-        map: BTreeMap<LocalId, (MirRelationExpr, Option<NonZeroU64>)>,
+        map: BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)>,
         ids: &mut Vec<LocalId>,
         values: &mut Vec<MirRelationExpr>,
-        max_iters: &mut Vec<Option<NonZeroU64>>,
+        limits: &mut Vec<Option<LetRecLimit>>,
     ) {
-        let (new_ids, new_values, new_max_iters) = map_to_3vecs(map);
+        let (new_ids, new_values, new_limits) = map_to_3vecs(map);
         *ids = new_ids;
         *values = new_values;
-        *max_iters = new_max_iters;
+        *limits = new_limits;
     }
 
     pub(super) fn map_to_3vecs(
-        map: BTreeMap<LocalId, (MirRelationExpr, Option<NonZeroU64>)>,
-    ) -> (Vec<LocalId>, Vec<MirRelationExpr>, Vec<Option<NonZeroU64>>) {
-        let (new_ids, new_values_and_max_iters): (Vec<_>, Vec<_>) = map.into_iter().unzip();
-        let (new_values, new_max_iters) = new_values_and_max_iters.into_iter().unzip();
-        (new_ids, new_values, new_max_iters)
+        map: BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)>,
+    ) -> (Vec<LocalId>, Vec<MirRelationExpr>, Vec<Option<LetRecLimit>>) {
+        let (new_ids, new_values_and_limits): (Vec<_>, Vec<_>) = map.into_iter().unzip();
+        let (new_values, new_limits) = new_values_and_limits.into_iter().unzip();
+        (new_ids, new_values, new_limits)
     }
 
     /// Logic mapped across each use of a `LocalId`.
@@ -258,7 +257,7 @@ mod support {
         if let MirRelationExpr::LetRec {
             ids,
             values,
-            max_iters: _,
+            limits: _,
             body,
         } = expr
         {
@@ -338,10 +337,9 @@ mod support {
 mod let_motion {
 
     use std::collections::{BTreeMap, BTreeSet};
-    use std::num::NonZeroU64;
 
     use itertools::izip;
-    use mz_expr::{LocalId, MirRelationExpr};
+    use mz_expr::{LetRecLimit, LocalId, MirRelationExpr};
     use mz_ore::stack::RecursionLimitError;
 
     use crate::normalize_lets::support::{map_to_3vecs, replace_bindings_from_map};
@@ -358,7 +356,7 @@ mod let_motion {
             if let MirRelationExpr::LetRec {
                 ids: _,
                 values,
-                max_iters: _,
+                limits: _,
                 body,
             } = expr
             {
@@ -378,7 +376,7 @@ mod let_motion {
         if let MirRelationExpr::LetRec {
             ids,
             values,
-            max_iters,
+            limits,
             body,
         } = expr
         {
@@ -389,13 +387,13 @@ mod let_motion {
 
             let mut bindings = BTreeMap::new();
             for (id, mut value, max_iter) in
-                izip!(ids.drain(..), values.drain(..), max_iters.drain(..))
+                izip!(ids.drain(..), values.drain(..), limits.drain(..))
             {
                 bindings.extend(harvest_non_recursive(&mut value));
                 bindings.insert(id, (value, max_iter));
             }
             bindings.extend(harvest_non_recursive(body));
-            replace_bindings_from_map(bindings, ids, values, max_iters);
+            replace_bindings_from_map(bindings, ids, values, limits);
         }
     }
 
@@ -416,11 +414,11 @@ mod let_motion {
             bindings.insert(id, (value, max_iter));
         }
         if !bindings.is_empty() {
-            let (ids, values, max_iters) = map_to_3vecs(bindings);
+            let (ids, values, limits) = map_to_3vecs(bindings);
             *expr = MirRelationExpr::LetRec {
                 ids,
                 values,
-                max_iters,
+                limits,
                 body: Box::new(expr.take_dangerous()),
             }
         }
@@ -433,15 +431,15 @@ mod let_motion {
     /// or into `bindings` if they should not be further processed (e.g. from a `LetRec`).
     fn digest_lets_helper(
         expr: &mut MirRelationExpr,
-        worklist: &mut Vec<(LocalId, MirRelationExpr, Option<NonZeroU64>)>,
-        bindings: &mut BTreeMap<LocalId, (MirRelationExpr, Option<NonZeroU64>)>,
+        worklist: &mut Vec<(LocalId, MirRelationExpr, Option<LetRecLimit>)>,
+        bindings: &mut BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)>,
     ) {
         let mut to_visit = vec![expr];
         while let Some(expr) = to_visit.pop() {
             match expr {
                 MirRelationExpr::Let { id, value, body } => {
                     // push binding into `worklist` as it can be further processed.
-                    // `max_iters` can be None, as we are taking a non-recursive binding.
+                    // `limits` can be None, as we are taking a non-recursive binding.
                     worklist.push((*id, value.take_dangerous(), None));
                     *expr = body.take_dangerous();
                     // Continue through `Let` nodes as they are certainly non-recursive.
@@ -450,11 +448,11 @@ mod let_motion {
                 MirRelationExpr::LetRec {
                     ids,
                     values,
-                    max_iters,
+                    limits,
                     body,
                 } => {
                     // push bindings into `bindings` as they should not be further processed.
-                    bindings.extend(ids.drain(..).zip(values.drain(..).zip(max_iters.drain(..))));
+                    bindings.extend(ids.drain(..).zip(values.drain(..).zip(limits.drain(..))));
                     *expr = body.take_dangerous();
                     // Stop at `LetRec` nodes as we cannot always lift `Let` nodes out of them.
                 }
@@ -479,18 +477,18 @@ mod let_motion {
     /// could be empty.
     pub(crate) fn harvest_non_recursive(
         expr: &mut MirRelationExpr,
-    ) -> BTreeMap<LocalId, (MirRelationExpr, Option<NonZeroU64>)> {
+    ) -> BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)> {
         if let MirRelationExpr::LetRec {
             ids,
             values,
-            max_iters,
+            limits,
             body,
         } = expr
         {
             // Bindings to lift.
-            let mut lifted = BTreeMap::<LocalId, (MirRelationExpr, Option<NonZeroU64>)>::new();
+            let mut lifted = BTreeMap::<LocalId, (MirRelationExpr, Option<LetRecLimit>)>::new();
             // Bindings to retain.
-            let mut retained = BTreeMap::<LocalId, (MirRelationExpr, Option<NonZeroU64>)>::new();
+            let mut retained = BTreeMap::<LocalId, (MirRelationExpr, Option<LetRecLimit>)>::new();
 
             // All remaining LocalIds bound by the enclosing LetRec.
             let mut id_set = ids.iter().cloned().collect::<BTreeSet<LocalId>>();
@@ -499,8 +497,7 @@ mod let_motion {
             // The reference count of the current bindings.
             let mut refcnt = BTreeMap::<LocalId, usize>::new();
 
-            for (id, value, max_iter) in izip!(ids.drain(..), values.drain(..), max_iters.drain(..))
-            {
+            for (id, value, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..)) {
                 refcnt.clear();
                 super::support::count_local_id_uses(&value, &mut refcnt);
 
@@ -519,7 +516,7 @@ mod let_motion {
                 }
             }
 
-            replace_bindings_from_map(retained, ids, values, max_iters);
+            replace_bindings_from_map(retained, ids, values, limits);
             if values.is_empty() {
                 *expr = body.take_dangerous();
             }
@@ -538,7 +535,7 @@ mod let_motion {
         if let MirRelationExpr::LetRec {
             ids,
             values,
-            max_iters,
+            limits,
             body,
         } = expr
         {
@@ -550,7 +547,7 @@ mod let_motion {
             while ids.last().map(|id| !rec_ids.contains(id)).unwrap_or(false) {
                 let id = ids.pop().expect("non-empty ids");
                 let value = values.pop().expect("non-empty values");
-                let _max_iter = max_iters.pop().expect("non-empty max_iters");
+                let _limit = limits.pop().expect("non-empty limits");
 
                 lowered.insert(id, value); // Non-recursive bindings don't need a limit
             }
@@ -575,10 +572,9 @@ mod let_motion {
 mod inlining {
 
     use std::collections::BTreeMap;
-    use std::num::NonZeroU64;
 
     use itertools::izip;
-    use mz_expr::{Id, LocalId, MirRelationExpr};
+    use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
 
     use crate::normalize_lets::support::replace_bindings_from_map;
 
@@ -596,7 +592,7 @@ mod inlining {
             if let MirRelationExpr::LetRec {
                 ids: _,
                 values,
-                max_iters: _,
+                limits: _,
                 body,
             } = expr
             {
@@ -628,9 +624,9 @@ mod inlining {
     ///  2. It is a "sufficiently simple" `Get`, determined in part by the
     ///     `inline_mfp` argument.
     ///
-    /// We don't need extra checks for `max_iters`, because
-    ///  - `max_iters` is only relevant when a binding is directly used through a back edge (because
-    ///    that is where the rendering puts the `max_iters` check);
+    /// We don't need extra checks for `limits`, because
+    ///  - `limits` is only relevant when a binding is directly used through a back edge (because
+    ///    that is where the rendering puts the `limits` check);
     ///  - when a binding is directly used through a back edge, it can't be inlined anyway.
     ///  - Also note that if a `LetRec` completely disappears at the end of `inline_lets_core`, then
     ///    there was no recursion in it.
@@ -653,7 +649,7 @@ mod inlining {
         if let MirRelationExpr::LetRec {
             ids,
             values,
-            max_iters,
+            limits,
             body,
         } = expr
         {
@@ -686,8 +682,7 @@ mod inlining {
             //      identifier beyond one, as all in values with strictly greater identifiers.
             //   2. by performing the substitution before reasoning, the structure of the value
             //      as it would be substituted is fixed.
-            for (id, mut expr, max_iter) in
-                izip!(ids.drain(..), values.drain(..), max_iters.drain(..))
+            for (id, mut expr, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..))
             {
                 // Substitute any appropriate prior let bindings.
                 inline_lets_helper(&mut expr, &mut inline_offers)?;
@@ -771,7 +766,7 @@ mod inlining {
 
             // If bindings remain we update the `LetRec`, otherwise we remove it.
             if !let_bindings.is_empty() {
-                replace_bindings_from_map(let_bindings, ids, values, max_iters);
+                replace_bindings_from_map(let_bindings, ids, values, limits);
             } else {
                 *expr = body.take_dangerous();
             }
@@ -782,11 +777,11 @@ mod inlining {
     /// Possible states of let binding inlineability.
     enum InlineOffer {
         /// There is a unique reference to this value and given the option it should take this expression.
-        Take(Option<MirRelationExpr>, Option<NonZeroU64>),
+        Take(Option<MirRelationExpr>, Option<LetRecLimit>),
         /// Any reference to this value should clone this expression.
-        Clone(MirRelationExpr, Option<NonZeroU64>),
+        Clone(MirRelationExpr, Option<LetRecLimit>),
         /// Any reference to this value should do no inlining of it.
-        Unavailable(MirRelationExpr, Option<NonZeroU64>),
+        Unavailable(MirRelationExpr, Option<LetRecLimit>),
     }
 
     /// Substitute `Get{id}` expressions for any proposed expressions.
@@ -887,7 +882,7 @@ mod renumbering {
                     MirRelationExpr::LetRec {
                         ids,
                         values,
-                        max_iters: _,
+                        limits: _,
                         body,
                     } => {
                         stack.push(Err(body));

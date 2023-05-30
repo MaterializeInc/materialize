@@ -119,15 +119,15 @@ impl HirRelationExpr {
                 })?;
             }
             LetRec {
-                max_iter,
+                limit,
                 bindings,
                 body,
             } => {
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| body.fmt_text(f, ctx))?;
                 write!(f, "{}With Mutually Recursive", ctx.indent)?;
-                if let Some(max_iter) = max_iter {
-                    write!(f, "{}", max_iter)?;
+                if let Some(limit) = limit {
+                    write!(f, " {}", limit)?;
                 }
                 writeln!(f)?;
                 ctx.indented(|ctx| {
