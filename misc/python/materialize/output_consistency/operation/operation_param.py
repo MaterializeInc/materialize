@@ -46,7 +46,7 @@ class OperationParam:
             for incompatibility in incompatibilities:
                 self.incompatibility_combinations.append({incompatibility})
 
-    def supports_arg(self, arg: Expression) -> bool:
+    def supports_expression(self, arg: Expression) -> bool:
         for incompatibility_combination in self.incompatibility_combinations:
             if arg.has_all_characteristics(incompatibility_combination):
                 return False

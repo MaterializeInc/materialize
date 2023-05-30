@@ -89,7 +89,7 @@ class DbOperationOrFunction:
         for arg_index, arg in enumerate(args):
             param = self.params[arg_index]
 
-            if not param.supports_arg(arg):
+            if not param.supports_expression(arg):
                 return True
 
         return False
