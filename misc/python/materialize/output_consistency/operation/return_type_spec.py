@@ -6,10 +6,9 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
+from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.expression.expression import Expression
 
 
 class ReturnTypeSpec:
@@ -26,5 +25,7 @@ class ReturnTypeSpec:
                 f"{DataTypeCategory.ANY} is not allowed as return type category"
             )
 
-    def resolve_type_category(self, args: List[Expression]) -> DataTypeCategory:
+    def resolve_type_category(
+        self, first_arg_type_category: Optional[DataTypeCategory]
+    ) -> DataTypeCategory:
         return self.type_category

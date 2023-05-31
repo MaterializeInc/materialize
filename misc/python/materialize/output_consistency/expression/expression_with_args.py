@@ -59,7 +59,15 @@ class ExpressionWithArgs(Expression):
         return sql
 
     def resolve_return_type_category(self) -> DataTypeCategory:
-        return self.return_type_spec.resolve_type_category(self.args)
+        first_arg_type_category_hint = None
+
+        if self.return_type_spec.type_category == DataTypeCategory.DYNAMIC:
+            # Only compute the hint for this category
+            first_arg_type_category_hint = (
+                self.args[0].resolve_return_type_category() if self.has_args() else None
+            )
+
+        return self.return_type_spec.resolve_type_category(first_arg_type_category_hint)
 
     def try_resolve_exact_data_type(self) -> Optional[DataType]:
         return self.operation.try_resolve_exact_data_type(self.args)

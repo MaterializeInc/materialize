@@ -7,10 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
+from typing import Optional
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
@@ -20,10 +19,12 @@ class DynamicReturnTypeSpec(ReturnTypeSpec):
     ) -> None:
         super().__init__(DataTypeCategory.DYNAMIC)
 
-    def resolve_type_category(self, args: List[Expression]) -> DataTypeCategory:
-        if len(args) == 0:
+    def resolve_type_category(
+        self, first_arg_type_category: Optional[DataTypeCategory]
+    ) -> DataTypeCategory:
+        if first_arg_type_category is None:
             raise RuntimeError(
                 f"Return type category {DataTypeCategory.DYNAMIC} must not be used without arguments"
             )
-        else:
-            return args[0].resolve_return_type_category()
+
+        return first_arg_type_category
