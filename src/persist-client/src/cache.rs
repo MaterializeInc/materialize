@@ -35,6 +35,7 @@ use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus, ShardMetrics};
+use crate::internal::sim::BlobCacheSim;
 use crate::internal::state::TypedState;
 use crate::internal::watch::StateWatchNotifier;
 use crate::rpc::{PubSubClientConnection, PubSubSender, ShardSubscriptionToken};
@@ -199,6 +200,7 @@ impl PersistClientCache {
                     Self::PROMETHEUS_SCRAPE_INTERVAL,
                 )
                 .await;
+                let blob = BlobCacheSim::new(blob, Arc::clone(&self.metrics));
                 Arc::clone(&x.insert((RttLatencyTask(task), blob)).1)
             }
         };

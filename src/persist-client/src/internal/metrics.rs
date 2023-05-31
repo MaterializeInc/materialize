@@ -79,6 +79,8 @@ pub struct Metrics {
     pub pubsub_client: PubSubClientMetrics,
     /// Metrics for mfp/filter pushdown.
     pub pushdown: PushdownMetrics,
+    /// Metrics for blob cache simulation.
+    pub cache_sim: BlobCacheSimMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -123,6 +125,7 @@ impl Metrics {
             watch: WatchMetrics::new(registry),
             pubsub_client: PubSubClientMetrics::new(registry),
             pushdown: PushdownMetrics::new(registry),
+            cache_sim: BlobCacheSimMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresConsensusMetrics::new(registry),
@@ -1889,6 +1892,53 @@ impl PushdownMetrics {
                 name: "mz_persist_pushdown_parts_audited_bytes",
                 help: "total size of parts fetched only for pushdown audit",
             )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BlobCacheSimMetrics {
+    pub(crate) cached_blobs: Histogram,
+    pub(crate) cached_bytes_buckets: Vec<(u64, IntCounter)>,
+    pub(crate) cached_bytes_inf: IntCounter,
+}
+
+impl BlobCacheSimMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let buckets = prometheus::exponential_buckets(1024.0, 4.0, 17).expect("buckets");
+        let cached_bytes_vec: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_blob_cache_sim_cached_bytes_bucket",
+            help: "sum of bytes of cache hits by size",
+            var_labels: ["le"],
+        ));
+        let cached_bytes_buckets = buckets
+            .iter()
+            .copied()
+            .map(|bucket| {
+                // WIP
+                #[allow(clippy::as_conversions)]
+                let bucket = bucket as u64;
+                let counter = cached_bytes_vec.with_label_values(&[bucket.to_string().as_str()]);
+                (bucket, counter)
+            })
+            .collect::<Vec<_>>();
+        BlobCacheSimMetrics {
+            cached_blobs: registry.register(metric!(
+                name: "mz_persist_blob_cache_sim_cached_blobs",
+                help: "count of cache hits by size",
+                buckets: buckets,
+            )),
+            cached_bytes_buckets,
+            cached_bytes_inf: cached_bytes_vec.with_label_values(&["+Inf"]),
+        }
+    }
+
+    pub(crate) fn observe_bytes(&self, bytes: u64, necessary: u64) {
+        self.cached_bytes_inf.inc_by(bytes);
+        for (bucket, counter) in self.cached_bytes_buckets.iter() {
+            if *bucket >= necessary {
+                counter.inc_by(bytes);
+            }
         }
     }
 }
