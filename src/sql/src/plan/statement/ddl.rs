@@ -891,7 +891,17 @@ pub fn plan_create_source(
         // unused table casts from this connection; this represents the
         // authoritative statement about which publication tables should be
         // used within storage.
-        let used_pos: BTreeSet<_> = subsource_exports.values().collect();
+
+        // we want to temporarily test if any users are referring to the same table in their PG
+        // sources.
+        let mut used_pos: Vec<_> = subsource_exports.values().collect();
+        used_pos.sort();
+
+        if let Some(_) = used_pos.iter().duplicates().next() {
+            tracing::warn!("multiple references to same upstream table in PG source");
+        }
+
+        let used_pos: BTreeSet<_> = used_pos.into_iter().collect();
         conn.table_casts.retain(|pos, _| used_pos.contains(pos));
     }
 

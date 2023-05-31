@@ -25,7 +25,7 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{MutRecBlockOptionName, ObjectType, Privilege, UnresolvedItemName};
+use mz_sql_parser::ast::{ObjectType, Privilege, UnresolvedItemName};
 use mz_sql_parser::parser::ParserError;
 
 use crate::catalog::{CatalogError, CatalogItemType};
@@ -80,7 +80,7 @@ pub enum PlanError {
     StrconvParse(strconv::ParseError),
     Catalog(CatalogError),
     UpsertSinkWithoutKey,
-    InvalidIterationLimit,
+    InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidId(GlobalId),
@@ -161,9 +161,13 @@ pub enum PlanError {
         linked_object_name: String,
     },
     EmptyPublication(String),
-    DuplicateSubsourceReference {
+    SubsourceNameConflict {
         name: UnresolvedItemName,
         upstream_references: Vec<UnresolvedItemName>,
+    },
+    SubsourceDuplicateReference {
+        name: UnresolvedItemName,
+        target_names: Vec<UnresolvedItemName>,
     },
     PostgresDatabaseMissingFilteredSchemas {
         schemas: Vec<String>,
@@ -252,7 +256,7 @@ impl PlanError {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
                 Some(format!("Did you supply an availability zone name instead of an ID? Known availability zone IDs:\n  {}", supported_azs_str))
             }
-            Self::DuplicateSubsourceReference { .. } => {
+            Self::SubsourceNameConflict { .. } => {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             }
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
@@ -354,7 +358,7 @@ impl fmt::Display for PlanError {
             Self::StrconvParse(e) => write!(f, "{}", e),
             Self::Catalog(e) => write!(f, "{}", e),
             Self::UpsertSinkWithoutKey => write!(f, "upsert sinks must specify a key"),
-            Self::InvalidIterationLimit => write!(f, "{} has to be greater than 0", MutRecBlockOptionName::IterLimit),
+            Self::InvalidWmrRecursionLimit(msg) => write!(f, "Invalid WITH MUTUALLY RECURSIVE recursion limit. {}", msg),
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
@@ -434,8 +438,11 @@ impl fmt::Display for PlanError {
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
             Self::EmptyPublication(publication) => write!(f, "PostgreSQL PUBLICATION {publication} is empty"),
-            Self::DuplicateSubsourceReference { name, upstream_references } => {
+            Self::SubsourceNameConflict { name, upstream_references } => {
                 write!(f, "multiple tables with name {}: {}", name.to_ast_string_stable(), itertools::join(upstream_references.iter().map(|n| n.to_ast_string_stable()), ", "))
+            },
+            Self::SubsourceDuplicateReference { name, target_names } => {
+                write!(f, "table {} referred to by multiple subsources: {}", name.to_ast_string_stable(), itertools::join(target_names.iter().map(|n| n.to_ast_string_stable()), ", "))
             },
             Self::PostgresDatabaseMissingFilteredSchemas { schemas} => {
                 write!(f, "FOR SCHEMAS (..) included {}, but PostgreSQL database has no schema with that name", itertools::join(schemas.iter(), ", "))

@@ -15,7 +15,6 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -24,7 +23,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
 use futures_util::future::Either;
-use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
@@ -462,7 +460,7 @@ where
                                         } else {
                                             metrics.pushdown.parts_filtered_count.inc();
                                             metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-                                            let should_audit = SOFT_ASSERTIONS.load(Ordering::Relaxed) || {
+                                            let should_audit = {
                                                 let mut h = DefaultHasher::new();
                                                 part_desc.key.hash(&mut h);
                                                 usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()

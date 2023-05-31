@@ -115,7 +115,7 @@ impl SinkToken {
     }
 }
 
-impl<'a, A: Allocate> ActiveComputeState<'a, A> {
+impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {

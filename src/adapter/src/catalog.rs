@@ -1916,21 +1916,12 @@ pub struct Source {
 }
 
 impl Source {
-    /// Returns whether this source ingests data from an external source.
-    pub fn is_external(&self) -> bool {
-        match self.data_source {
-            DataSourceDesc::Ingestion(_) => true,
-            DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Progress
-            | DataSourceDesc::Source => false,
-        }
-    }
-
     /// Type of the source.
     pub fn source_type(&self) -> &str {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
-            DataSourceDesc::Progress | DataSourceDesc::Source => "subsource",
+            DataSourceDesc::Progress => "progress",
+            DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
         }
     }
@@ -1981,6 +1972,30 @@ impl Source {
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => None,
+        }
+    }
+
+    /// The expensive resource that each source consumes is persist shards. To
+    /// prevent abuse, we want to prevent users from creating sources that use an
+    /// unbounded number of persist shards. But we also don't want to count
+    /// persist shards that are mandated by teh system (e.g., the progress
+    /// shard) so that future versions of Materialize can introduce additional
+    /// per-source shards (e.g., a per-source status shard) without impacting
+    /// the limit calculation.
+    pub fn user_controllable_persist_shard_count(&self) -> i64 {
+        match &self.data_source {
+            DataSourceDesc::Ingestion(ingestion) => {
+                // Ingestions with subsources only use persist shards for their subsources; those
+                // without subsources use 1.
+                std::cmp::max(1, i64::try_from(ingestion.subsource_exports.len()).expect("fewer than i64::MAX persist shards"))
+            }
+            //  DataSourceDesc::Source represents subsources, which are accounted for in their
+            //  primary source's ingestion.
+            DataSourceDesc::Source
+            // Introspection and progress subsources are not under the user's control, so shouldn't
+            // count toward their quota.
+            | DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress => 0,
         }
     }
 }

@@ -24,6 +24,7 @@ pub struct Metrics {
     pub commands: IntCounterVec,
     pub storage_usage_collection_time_seconds: HistogramVec,
     pub subscribe_outputs: IntCounterVec,
+    pub canceled_peeks: IntCounterVec,
 }
 
 impl Metrics {
@@ -68,6 +69,10 @@ impl Metrics {
                 name: "mz_subscribe_outputs",
                 help: "The total number of different subscribe outputs used",
                 var_labels: ["session_type", "subscribe_output"],
+            )),
+            canceled_peeks: registry.register(metric!(
+                name: "mz_canceled_peeks_total",
+                help: "The total number of canceled peeks since process start.",
             )),
         }
     }

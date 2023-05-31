@@ -95,7 +95,7 @@ use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{stack, task};
-use mz_persist_client::usage::{ShardsUsage, StorageUsageClient};
+use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
 use mz_secrets::SecretsController;
@@ -203,7 +203,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     LinearizeReads(Vec<PendingReadTxn>),
     StorageUsageFetch,
-    StorageUsageUpdate(ShardsUsage),
+    StorageUsageUpdate(ShardsUsageReferenced),
     RealTimeRecencyTimestamp {
         conn_id: ConnectionId,
         real_time_recency_ts: Timestamp,

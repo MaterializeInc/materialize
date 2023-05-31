@@ -48,6 +48,15 @@ To use a specific SIZE for sources, sinks and dataflows:
 ./mzcompose run default --this-size 2 --other-size 4 ...
 ```
 
+To benchmark specific product features:
+
+```
+./mzcompose run default --this-params="enable_upsert_source_disk=false;upsert_source_disk_default=false" --other-params="..."
+```
+
+Make sure to describe the desired state of any relevant flags exhaustively in order to avoid the unwanted
+interference of any defaults that may be in effect and that can change over time from release to release.
+
 ## Running manually in Buildkite
 
 Go to the [Buildkite Nightly Job](https://buildkite.com/materialize/nightlies), click the down arrow button

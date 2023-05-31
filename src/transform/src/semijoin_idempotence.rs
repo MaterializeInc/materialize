@@ -25,15 +25,34 @@
 //! Should we find such, allowing arbitrary filters of `Get{id}` on the equated columns,
 //! which we will transfer to the columns of `D` thereby forming `C`.
 
+use itertools::Itertools;
 use std::collections::BTreeMap;
 
-use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_ore::id_gen::IdGen;
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::TransformArgs;
 
 /// Remove redundant semijoin operators
 #[derive(Debug)]
-pub struct SemijoinIdempotence;
+pub struct SemijoinIdempotence {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for SemijoinIdempotence {
+    fn default() -> SemijoinIdempotence {
+        SemijoinIdempotence {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for SemijoinIdempotence {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for SemijoinIdempotence {
     #[tracing::instrument(
@@ -47,45 +66,120 @@ impl crate::Transform for SemijoinIdempotence {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
-        {
-            // Iteratively descend the expression, at each node attempting to simplify a join.
-            let mut let_replacements = BTreeMap::<Id, Vec<Replacement>>::new();
-            let mut gets_behind_gets = BTreeMap::<Id, Vec<(Id, Vec<MirScalarExpr>)>>::new();
-            let mut worklist = vec![&mut *relation];
-            while let Some(expr) = worklist.pop() {
-                match expr {
-                    MirRelationExpr::Let { id, value, .. } => {
-                        let_replacements.insert(
-                            Id::Local(*id),
-                            list_replacements(&*value, &let_replacements, &gets_behind_gets),
-                        );
-                        gets_behind_gets
-                            .insert(Id::Local(*id), as_filtered_get(value, &gets_behind_gets));
-                    }
-                    MirRelationExpr::Join {
-                        inputs,
-                        equivalences,
-                        implementation,
-                        ..
-                    } => {
-                        attempt_join_simplification(
-                            inputs,
-                            equivalences,
-                            implementation,
-                            &let_replacements,
-                            &gets_behind_gets,
-                        );
-                    }
-                    _ => {}
-                }
+        // We need to call `renumber_bindings` because we will call
+        // `MirRelationExpr::collect_expirations`, which relies on this invariant.
+        crate::normalize_lets::renumber_bindings(relation, &mut IdGen::default())?;
 
-                // Continue to process the children.
-                worklist.extend(expr.children_mut());
-            }
-        }
+        let mut let_replacements = BTreeMap::<LocalId, Vec<Replacement>>::new();
+        let mut gets_behind_gets = BTreeMap::<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>::new();
+        self.action(relation, &mut let_replacements, &mut gets_behind_gets)?;
 
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
+    }
+}
+
+impl SemijoinIdempotence {
+    /// * `let_replacements` - `Replacement`s offered up by CTEs.
+    /// * `gets_behind_gets` - The result of `as_filtered_get` called on CTEs.
+    fn action(
+        &self,
+        expr: &mut MirRelationExpr,
+        let_replacements: &mut BTreeMap<LocalId, Vec<Replacement>>,
+        gets_behind_gets: &mut BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
+    ) -> Result<(), crate::TransformError> {
+        // At each node, either gather info about Let bindings or attempt to simplify a join.
+        self.checked_recur(move |_| {
+            match expr {
+                MirRelationExpr::Let { id, value, body } => {
+                    let_replacements.insert(
+                        *id,
+                        list_replacements(&*value, let_replacements, gets_behind_gets),
+                    );
+                    gets_behind_gets.insert(*id, as_filtered_get(value, gets_behind_gets));
+                    self.action(value, let_replacements, gets_behind_gets)?;
+                    self.action(body, let_replacements, gets_behind_gets)?;
+                    // No need to do expirations here, as there is only one CTE (and it can't be
+                    // recursive).
+                }
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    limits: _,
+                    body,
+                } => {
+                    // Expirations. See comments on `collect_expirations` and `do_expirations`.
+                    // Note that `expirations` is local to one `LetRec`, because a `LetRec` can't
+                    // reference something that is defined in an inner `LetRec`, so a definition in
+                    // an inner `LetRec` can't expire something from an outer `LetRec`.
+                    let mut expirations = BTreeMap::new();
+                    for (id, value) in ids.iter().zip_eq(values.iter_mut()) {
+                        // 1. Recursive call. This has to be before 2. to avoid problems when a
+                        // binding refers to itself.
+                        self.action(value, let_replacements, gets_behind_gets)?;
+
+                        // 2. Gather info from the `value` for use in later bindings and the body.
+                        let replacements_from_value =
+                            list_replacements(&*value, let_replacements, gets_behind_gets);
+                        let_replacements.insert(*id, replacements_from_value.clone());
+                        let value_as_filtered_gets = as_filtered_get(value, gets_behind_gets);
+                        gets_behind_gets.insert(*id, value_as_filtered_gets.clone());
+
+                        // 3. Collect expirations.
+                        for replacement in replacements_from_value {
+                            MirRelationExpr::collect_expirations(
+                                *id,
+                                &replacement.replacement,
+                                &mut expirations,
+                            );
+                        }
+                        for referenced_id in
+                            value_as_filtered_gets
+                                .iter()
+                                .filter_map(|(id, _filter)| match id {
+                                    Id::Local(lid) => Some(lid),
+                                    _ => None,
+                                })
+                        {
+                            if referenced_id >= id {
+                                expirations
+                                    .entry(*referenced_id)
+                                    .or_insert_with(Vec::new)
+                                    .push(*id);
+                            }
+                        }
+
+                        // 4. Perform expirations.
+                        MirRelationExpr::do_expirations(*id, &mut expirations, let_replacements);
+                        MirRelationExpr::do_expirations(*id, &mut expirations, gets_behind_gets);
+                    }
+                    self.action(body, let_replacements, gets_behind_gets)?;
+                }
+                MirRelationExpr::Join {
+                    inputs,
+                    equivalences,
+                    implementation,
+                    ..
+                } => {
+                    attempt_join_simplification(
+                        inputs,
+                        equivalences,
+                        implementation,
+                        let_replacements,
+                        gets_behind_gets,
+                    );
+                    for input in inputs {
+                        self.action(input, let_replacements, gets_behind_gets)?;
+                    }
+                }
+                _ => {
+                    for child in expr.children_mut() {
+                        self.action(child, let_replacements, gets_behind_gets)?;
+                    }
+                }
+            }
+            Ok::<(), crate::TransformError>(())
+        })
     }
 }
 
@@ -94,8 +188,8 @@ fn attempt_join_simplification(
     inputs: &mut [MirRelationExpr],
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
     implementation: &mut mz_expr::JoinImplementation,
-    let_replacements: &BTreeMap<Id, Vec<Replacement>>,
-    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    let_replacements: &BTreeMap<LocalId, Vec<Replacement>>,
+    gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) {
     // Useful join manipulation helper.
     let input_mapper = JoinInputMapper::new(inputs);
@@ -208,7 +302,7 @@ fn validate_replacement(
 
 /// A restricted form of a semijoin idempotence information.
 ///
-/// A `Replacement` may be offered up by any `MirRelationExpression`, meant to be `B` from above or similar,
+/// A `Replacement` may be offered up by any `MirRelationExpr`, meant to be `B` from above or similar,
 /// and indicates that the offered expression can be projected onto columns such that it then exactly equals
 /// a column projection of `Get{id} semijoin replacement`.
 
@@ -230,14 +324,16 @@ struct Replacement {
 /// looking for a `Join` operator, at which point it defers to the `list_replacements_join` method.
 fn list_replacements(
     expr: &MirRelationExpr,
-    let_replacements: &BTreeMap<Id, Vec<Replacement>>,
-    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    let_replacements: &BTreeMap<LocalId, Vec<Replacement>>,
+    gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) -> Vec<Replacement> {
     let mut results = Vec::new();
     match expr {
-        MirRelationExpr::Get { id, .. } => {
+        MirRelationExpr::Get {
+            id: Id::Local(lid), ..
+        } => {
             // The `Get` may reference an `id` that offers semijoin replacements.
-            if let Some(replacements) = let_replacements.get(id) {
+            if let Some(replacements) = let_replacements.get(lid) {
                 results.extend(replacements.iter().cloned());
             }
         }
@@ -313,7 +409,7 @@ fn list_replacements(
 fn list_replacements_join(
     inputs: &[MirRelationExpr],
     equivalences: &Vec<Vec<MirScalarExpr>>,
-    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) -> Vec<Replacement> {
     // Result replacements.
     let mut results = Vec::new();
@@ -398,7 +494,7 @@ fn distinct_on_keys_of(expr: &MirRelationExpr, map: &BTreeMap<usize, usize>) -> 
 /// Returns a list of such interpretations, potentially spanning `Let` bindings.
 fn as_filtered_get(
     mut expr: &MirRelationExpr,
-    gets_behind_gets: &BTreeMap<Id, Vec<(Id, Vec<MirScalarExpr>)>>,
+    gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,
 ) -> Vec<(Id, Vec<MirScalarExpr>)> {
     let mut results = Vec::new();
     while let MirRelationExpr::Filter { input, predicates } = expr {
@@ -407,11 +503,13 @@ fn as_filtered_get(
     }
     if let MirRelationExpr::Get { id, .. } = expr {
         let mut output = Vec::new();
-        if let Some(bound) = gets_behind_gets.get(id) {
-            for (id, list) in bound.iter() {
-                let mut predicates = list.clone();
-                predicates.extend(results.iter().cloned());
-                output.push((*id, predicates));
+        if let Id::Local(lid) = id {
+            if let Some(bound) = gets_behind_gets.get(lid) {
+                for (id, list) in bound.iter() {
+                    let mut predicates = list.clone();
+                    predicates.extend(results.iter().cloned());
+                    output.push((*id, predicates));
+                }
             }
         }
         output.push((*id, results));

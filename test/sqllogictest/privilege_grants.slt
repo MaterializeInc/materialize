@@ -161,6 +161,23 @@ SELECT mz_internal.make_mz_aclitem('sd98fas9df8', 's1', 'CREATE')
 query error unrecognized privilege type: "asdfa ljefioj"
 SELECT mz_internal.make_mz_aclitem('u1', 's1', 'asdfa ljefioj')
 
+# Test mz_acl_item_contains_privilege NULLs
+
+query B
+SELECT mz_internal.mz_acl_item_contains_privilege(NULL, 'SELECT')
+----
+NULL
+
+query B
+SELECT mz_internal.mz_acl_item_contains_privilege(mz_internal.make_mz_aclitem('u1', 'u2', 'CREATE'), NULL)
+----
+NULL
+
+query B
+SELECT mz_internal.mz_acl_item_contains_privilege(NULL, NULL)
+----
+NULL
+
 # Test default privileges
 
 ## Create some helper views

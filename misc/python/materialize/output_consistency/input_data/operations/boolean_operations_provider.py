@@ -27,6 +27,15 @@ BOOLEAN_OPERATION_TYPES: List[DbOperationOrFunction] = []
 
 BOOLEAN_OPERATION_TYPES.append(
     DbOperation(
+        "$ = $",
+        [AnyOperationParam(), AnyOperationParam()],
+        DataTypeCategory.BOOLEAN,
+        {DataTypeCategoryMatchesArgsValidator(0, 1)},
+    )
+)
+
+BOOLEAN_OPERATION_TYPES.append(
+    DbOperation(
         "CASE WHEN $ THEN $ ELSE $ END",
         [BooleanOperationParam(), AnyOperationParam(), AnyOperationParam()],
         DataTypeCategory.DYNAMIC,

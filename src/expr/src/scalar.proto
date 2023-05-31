@@ -764,5 +764,6 @@ message ProtoEvalError {
         mz_repr.adt.range.ProtoInvalidRangeError invalid_range = 62;
         string invalid_role_id = 63;
         string invalid_privileges = 64;
+        string wmr_recursion_limit_exceeded = 65;
     }
 }

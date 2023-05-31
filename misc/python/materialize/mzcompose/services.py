@@ -68,13 +68,14 @@ class Materialized(Service):
         ports: Optional[List[str]] = None,
         system_parameter_defaults: Optional[Dict[str, str]] = None,
         additional_system_parameter_defaults: Optional[Dict[str, str]] = None,
+        soft_assertions: bool = True,
     ) -> None:
         depends_on: Dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
 
         environment = [
-            "MZ_SOFT_ASSERTIONS=1",
+            f"MZ_SOFT_ASSERTIONS={int(soft_assertions)}",
             # TODO(benesch): remove the following environment variables
             # after v0.38 ships, since these environment variables will be
             # baked into the Docker image.

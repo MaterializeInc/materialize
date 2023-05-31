@@ -1565,6 +1565,9 @@ SELECT mz_internal.mz_error_if_null(1, '')
 ----
 1
 
+query error unexpected NULL
+SELECT mz_internal.mz_error_if_null(NULL, NULL)
+
 query B
 SELECT pg_backend_pid() > 0
 ----

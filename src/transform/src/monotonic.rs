@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 use itertools::zip_eq;
 use mz_expr::visit::VisitChildren;
-use mz_expr::{Id, LocalId, MirRelationExpr, RECURSION_LIMIT};
+use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr, RECURSION_LIMIT};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -123,7 +123,7 @@ impl MonotonicFlag {
                 MirRelationExpr::LetRec {
                     ids,
                     values,
-                    max_iters,
+                    limits,
                     body,
                 } => {
                     // Optimistically assume that all bindings were monotonic
@@ -150,18 +150,18 @@ impl MonotonicFlag {
                     //    is the case we reset the locals entries for all
                     //    recursive CTEs to `false` by removing them from
                     //    `locals` (pessimistic approximation).
-                    // 3. We reach the user-specified iteration limit of any of
+                    // 3. We reach the user-specified recursion limit of any of
                     //    the bindings. In this case, we also give up similarly
                     //    to (2), because we don't want to complicate things
                     //    with handling different limits per binding.
-                    let min_max_iter = max_iters.into_iter().filter_map(|md| *md).min();
+                    let min_max_iter = LetRecLimit::min_max_iter(limits);
                     let max_iterations = 100;
                     let mut curr_iteration = 0;
                     loop {
                         // Check for conditions (2) and (3).
                         if curr_iteration >= max_iterations
                             || min_max_iter
-                                .map(|min_max_iter| curr_iteration >= min_max_iter.get())
+                                .map(|min_max_iter| curr_iteration >= min_max_iter)
                                 .unwrap_or(false)
                         {
                             if curr_iteration > u64::cast_from(ids.len()) {

@@ -15,7 +15,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::arrange::arrangement::Arrange;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
@@ -35,6 +34,7 @@ use timely::logging::{
 };
 use tracing::error;
 
+use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -140,11 +140,11 @@ pub(super) fn construct<A: Allocate>(
         // updates that reach `Row` encoding.
         let operates = operates
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely operates",
             )
-            .as_collection(move |(id, name), _| {
+            .as_collection(move |id, name| {
                 Row::pack_slice(&[
                     Datum::UInt64(u64::cast_from(*id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -153,7 +153,7 @@ pub(super) fn construct<A: Allocate>(
             });
         let channels = channels
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely operates",
             )
@@ -171,14 +171,14 @@ pub(super) fn construct<A: Allocate>(
             });
         let addresses = addresses
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely addresses",
             )
-            .as_collection(move |(id, address), _| create_address_row(*id, address, worker_id));
+            .as_collection(move |id, address| create_address_row(*id, address, worker_id));
         let parks = parks
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely parks",
             )
@@ -194,7 +194,7 @@ pub(super) fn construct<A: Allocate>(
             });
         let messages_sent = messages_sent
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely messages sent",
             )
@@ -207,7 +207,7 @@ pub(super) fn construct<A: Allocate>(
             });
         let messages_received = messages_received
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely messages received",
             )
@@ -220,7 +220,7 @@ pub(super) fn construct<A: Allocate>(
             });
         let elapsed = schedules_duration
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely duration",
             )
@@ -232,7 +232,7 @@ pub(super) fn construct<A: Allocate>(
             });
         let histogram = schedules_histogram
             .as_collection()
-            .arrange_core::<_, RowSpine<_, _, _, _>>(
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely histogram",
             )
@@ -245,23 +245,22 @@ pub(super) fn construct<A: Allocate>(
                 row
             });
 
+        use TimelyLog::*;
         let logs = [
-            (LogVariant::Timely(TimelyLog::Operates), operates),
-            (LogVariant::Timely(TimelyLog::Channels), channels),
-            (LogVariant::Timely(TimelyLog::Elapsed), elapsed),
-            (LogVariant::Timely(TimelyLog::Histogram), histogram),
-            (LogVariant::Timely(TimelyLog::Addresses), addresses),
-            (LogVariant::Timely(TimelyLog::Parks), parks),
-            (LogVariant::Timely(TimelyLog::MessagesSent), messages_sent),
-            (
-                LogVariant::Timely(TimelyLog::MessagesReceived),
-                messages_received,
-            ),
+            (Operates, operates),
+            (Channels, channels),
+            (Elapsed, elapsed),
+            (Histogram, histogram),
+            (Addresses, addresses),
+            (Parks, parks),
+            (MessagesSent, messages_sent),
+            (MessagesReceived, messages_received),
         ];
 
         // Build the output arrangements.
         let mut traces = BTreeMap::new();
         for (variant, collection) in logs {
+            let variant = LogVariant::Timely(variant);
             if config.index_logs.contains_key(&variant) {
                 let key = variant.index_by();
                 let (_, value) = permutation_for_arrangement(
@@ -284,7 +283,7 @@ pub(super) fn construct<A: Allocate>(
                             (row_key, row_val)
                         }
                     })
-                    .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
                 traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
@@ -354,13 +353,13 @@ type OutputBuffer<'a, 'b, D> = ConsolidateBuffer<'a, 'b, Timestamp, D, Diff, Pus
 // wouldn't be an issue.
 struct DemuxOutput<'a, 'b> {
     operates: OutputBuffer<'a, 'b, (usize, String)>,
-    channels: OutputBuffer<'a, 'b, ChannelDatum>,
+    channels: OutputBuffer<'a, 'b, (ChannelDatum, ())>,
     addresses: OutputBuffer<'a, 'b, (usize, Vec<usize>)>,
-    parks: OutputBuffer<'a, 'b, ParkDatum>,
-    messages_sent: OutputBuffer<'a, 'b, MessageDatum>,
-    messages_received: OutputBuffer<'a, 'b, MessageDatum>,
-    schedules_duration: OutputBuffer<'a, 'b, usize>,
-    schedules_histogram: OutputBuffer<'a, 'b, ScheduleHistogramDatum>,
+    parks: OutputBuffer<'a, 'b, (ParkDatum, ())>,
+    messages_sent: OutputBuffer<'a, 'b, (MessageDatum, ())>,
+    messages_received: OutputBuffer<'a, 'b, (MessageDatum, ())>,
+    schedules_duration: OutputBuffer<'a, 'b, (usize, ())>,
+    schedules_histogram: OutputBuffer<'a, 'b, (ScheduleHistogramDatum, ())>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -463,7 +462,7 @@ impl DemuxHandler<'_, '_, '_> {
             source: event.source,
             target: event.target,
         };
-        self.output.channels.give(self.cap, (datum, ts, 1));
+        self.output.channels.give(self.cap, ((datum, ()), ts, 1));
 
         let datum = (event.id, event.scope_addr.clone());
         self.output.addresses.give(self.cap, (datum, ts, 1));
@@ -501,7 +500,7 @@ impl DemuxHandler<'_, '_, '_> {
             {
                 self.output
                     .schedules_duration
-                    .give(self.cap, (event.id, ts, -elapsed_ns));
+                    .give(self.cap, ((event.id, ()), ts, -elapsed_ns));
 
                 let datum = ScheduleHistogramDatum {
                     operator: event.id,
@@ -510,7 +509,7 @@ impl DemuxHandler<'_, '_, '_> {
                 let diff = Diff::cast_from(-count);
                 self.output
                     .schedules_histogram
-                    .give(self.cap, (datum, ts, diff));
+                    .give(self.cap, ((datum, ()), ts, diff));
             }
         }
 
@@ -538,7 +537,7 @@ impl DemuxHandler<'_, '_, '_> {
                 source: channel.source,
                 target: channel.target,
             };
-            self.output.channels.give(self.cap, (datum, ts, -1));
+            self.output.channels.give(self.cap, ((datum, ()), ts, -1));
 
             let datum = (channel.id, channel.scope_addr);
             self.output.addresses.give(self.cap, (datum, ts, -1));
@@ -552,7 +551,7 @@ impl DemuxHandler<'_, '_, '_> {
                     };
                     self.output
                         .messages_sent
-                        .give(self.cap, (datum, ts, -count));
+                        .give(self.cap, ((datum, ()), ts, -count));
                 }
             }
             if let Some(received) = self.state.messages_received.remove(&channel.id) {
@@ -563,7 +562,7 @@ impl DemuxHandler<'_, '_, '_> {
                     };
                     self.output
                         .messages_received
-                        .give(self.cap, (datum, ts, -count));
+                        .give(self.cap, ((datum, ()), ts, -count));
                 }
             }
         }
@@ -594,7 +593,7 @@ impl DemuxHandler<'_, '_, '_> {
                     duration_pow,
                     requested_pow,
                 };
-                self.output.parks.give(self.cap, (datum, ts, 1));
+                self.output.parks.give(self.cap, ((datum, ()), ts, 1));
             }
         }
     }
@@ -608,7 +607,9 @@ impl DemuxHandler<'_, '_, '_> {
                 channel: event.channel,
                 worker: event.target,
             };
-            self.output.messages_sent.give(self.cap, (datum, ts, count));
+            self.output
+                .messages_sent
+                .give(self.cap, ((datum, ()), ts, count));
 
             let sent_counts = self
                 .state
@@ -623,7 +624,7 @@ impl DemuxHandler<'_, '_, '_> {
             };
             self.output
                 .messages_received
-                .give(self.cap, (datum, ts, count));
+                .give(self.cap, ((datum, ()), ts, count));
 
             let received_counts = self
                 .state
@@ -658,7 +659,7 @@ impl DemuxHandler<'_, '_, '_> {
                 let datum = event.id;
                 self.output
                     .schedules_duration
-                    .give(self.cap, (datum, ts, elapsed_diff));
+                    .give(self.cap, ((datum, ()), ts, elapsed_diff));
 
                 let datum = ScheduleHistogramDatum {
                     operator: event.id,
@@ -666,7 +667,7 @@ impl DemuxHandler<'_, '_, '_> {
                 };
                 self.output
                     .schedules_histogram
-                    .give(self.cap, (datum, ts, 1));
+                    .give(self.cap, ((datum, ()), ts, 1));
 
                 // Record count and elapsed time for later retraction.
                 let index = usize::cast_from(elapsed_pow.trailing_zeros());

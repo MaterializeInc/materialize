@@ -1297,6 +1297,24 @@ pub const MZ_PEEK_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
 };
 
+pub const MZ_ARRANGEMENT_HEAP_SIZE_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_heap_size_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ArrangementHeapSize),
+};
+
+pub const MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_heap_capacity_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ArrangementHeapCapacity),
+};
+
+pub const MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_heap_allocations_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
+};
+
 pub const MZ_MESSAGE_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1693,14 +1711,14 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
+        .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column(
             "privileges",
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
-        )
-        .with_column("oid", ScalarType::Oid.nullable(false)),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2172,28 +2190,21 @@ pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: BuiltinView = BuiltinView
     name: "mz_records_per_dataflow_operator_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_operator_per_worker AS
-WITH records_cte AS (
-    SELECT
-        operator_id,
-        worker_id,
-        pg_catalog.count(*) AS records
-    FROM
-        mz_internal.mz_arrangement_records_raw
-    GROUP BY
-        operator_id, worker_id
-)
 SELECT
     dod.id,
     dod.name,
     dod.worker_id,
     dod.dataflow_id,
-    records_cte.records
+    ar_size.records,
+    ar_size.size,
+    ar_size.capacity,
+    ar_size.allocations
 FROM
-    records_cte,
+    mz_internal.mz_arrangement_sizes_per_worker ar_size,
     mz_internal.mz_dataflow_operator_dataflows_per_worker dod
 WHERE
-    dod.id = records_cte.operator_id AND
-    dod.worker_id = records_cte.worker_id",
+    dod.id = ar_size.operator_id AND
+    dod.worker_id = ar_size.worker_id",
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -2204,7 +2215,10 @@ SELECT
     id,
     name,
     dataflow_id,
-    pg_catalog.sum(records) AS records
+    pg_catalog.sum(records) AS records,
+    pg_catalog.sum(size) AS size,
+    pg_catalog.sum(capacity) AS capacity,
+    pg_catalog.sum(allocations) AS allocations
 FROM mz_internal.mz_records_per_dataflow_operator_per_worker
 GROUP BY id, name, dataflow_id",
 };
@@ -2212,11 +2226,15 @@ GROUP BY id, name, dataflow_id",
 pub const MZ_RECORDS_PER_DATAFLOW_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_per_worker AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow_per_worker AS
+SELECT
     rdo.dataflow_id as id,
     dfs.name,
     rdo.worker_id,
-    pg_catalog.SUM(rdo.records) as records
+    pg_catalog.SUM(rdo.records) as records,
+    pg_catalog.SUM(rdo.size) as size,
+    pg_catalog.SUM(rdo.capacity) as capacity,
+    pg_catalog.SUM(rdo.allocations) as allocations
 FROM
     mz_internal.mz_records_per_dataflow_operator_per_worker rdo,
     mz_internal.mz_dataflows_per_worker dfs
@@ -2232,10 +2250,14 @@ GROUP BY
 pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow AS SELECT
+    sql: "CREATE VIEW mz_internal.mz_records_per_dataflow AS
+SELECT
     id,
     name,
-    pg_catalog.SUM(records) as records
+    pg_catalog.SUM(records) as records,
+    pg_catalog.SUM(size) as size,
+    pg_catalog.SUM(capacity) as capacity,
+    pg_catalog.SUM(allocations) as allocations
 FROM
     mz_internal.mz_records_per_dataflow_per_worker
 GROUP BY
@@ -2817,13 +2839,50 @@ records_cte AS (
         mz_internal.mz_arrangement_records_raw
     GROUP BY
         operator_id, worker_id
+),
+heap_size_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS size
+    FROM
+        mz_internal.mz_arrangement_heap_size_raw
+    GROUP BY
+        operator_id, worker_id
+),
+heap_capacity_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS capacity
+    FROM
+        mz_internal.mz_arrangement_heap_capacity_raw
+    GROUP BY
+        operator_id, worker_id
+),
+heap_allocations_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS allocations
+    FROM
+        mz_internal.mz_arrangement_heap_allocations_raw
+    GROUP BY
+        operator_id, worker_id
 )
 SELECT
     batches_cte.operator_id,
     batches_cte.worker_id,
     records_cte.records,
-    batches_cte.batches
-FROM batches_cte JOIN records_cte USING (operator_id, worker_id)",
+    batches_cte.batches,
+    heap_size_cte.size,
+    heap_capacity_cte.capacity,
+    heap_allocations_cte.allocations
+FROM batches_cte
+JOIN records_cte USING (operator_id, worker_id)
+JOIN heap_size_cte USING (operator_id, worker_id)
+JOIN heap_capacity_cte USING (operator_id, worker_id)
+JOIN heap_allocations_cte USING (operator_id, worker_id)",
 };
 
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
@@ -2833,7 +2892,10 @@ pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
 SELECT
     operator_id,
     pg_catalog.sum(records) AS records,
-    pg_catalog.sum(batches) AS batches
+    pg_catalog.sum(batches) AS batches,
+    pg_catalog.sum(size) AS size,
+    pg_catalog.sum(capacity) AS capacity,
+    pg_catalog.sum(allocations) AS allocations
 FROM mz_internal.mz_arrangement_sizes_per_worker
 GROUP BY operator_id",
 };
@@ -2919,7 +2981,10 @@ pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
             mdod.dataflow_id AS id,
             mo.name,
             COALESCE(sum(mas.records), 0) AS records,
-            COALESCE(sum(mas.batches), 0) AS batches
+            COALESCE(sum(mas.batches), 0) AS batches,
+            COALESCE(sum(mas.size), 0) AS size,
+            COALESCE(sum(mas.capacity), 0) AS capacity,
+            COALESCE(sum(mas.allocations), 0) AS allocations
         FROM
             mz_internal.mz_dataflow_operators AS mdo
                 LEFT JOIN mz_internal.mz_arrangement_sizes AS mas ON mdo.id = mas.operator_id
@@ -3695,6 +3760,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_ACTIVE_PEEKS_PER_WORKER),
         Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_HEAP_CAPACITY_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW),
+        Builtin::Log(&MZ_ARRANGEMENT_HEAP_SIZE_RAW),
         Builtin::Log(&MZ_SCHEDULING_ELAPSED_RAW),
         Builtin::Log(&MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_SCHEDULING_PARKS_HISTOGRAM_RAW),

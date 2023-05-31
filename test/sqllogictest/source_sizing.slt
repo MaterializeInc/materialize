@@ -23,13 +23,13 @@ SELECT id, schema_id, name, type, connection_id, size FROM mz_sources WHERE id L
 ----
 u2  u3  s1  load-generator  NULL  1
 u4  u3  s2  load-generator  NULL  1
-u1  u3  s1_progress  subsource  NULL  NULL
-u3  u3  s2_progress  subsource  NULL  NULL
+u1  u3  s1_progress  progress   NULL  NULL
+u3  u3  s2_progress  progress   NULL  NULL
 
 query TTT
 SHOW SOURCES
 ----
-s1  load-generator  1
-s1_progress  subsource  NULL
-s2  load-generator  1
-s2_progress  subsource  NULL
+s1          load-generator  1
+s1_progress progress        NULL
+s2          load-generator  1
+s2_progress progress        NULL
