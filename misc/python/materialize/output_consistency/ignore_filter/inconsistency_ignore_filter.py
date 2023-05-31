@@ -39,9 +39,7 @@ class InconsistencyIgnoreFilter:
         row_selection: DataRowSelection,
     ) -> bool:
         # check expression itself
-        if self._shall_ignore_expression_with_args_no_recursion(
-            expression, row_selection
-        ):
+        if self._visit_expression_with_args(expression, row_selection):
             return True
 
         # recursively check arguments
@@ -51,11 +49,12 @@ class InconsistencyIgnoreFilter:
 
         return False
 
-    def _shall_ignore_expression_with_args_no_recursion(
+    def _visit_expression_with_args(
         self,
         expression: ExpressionWithArgs,
         row_selection: DataRowSelection,
     ) -> bool:
+        """True if the expression shall be ignored."""
         if not expression.operation.is_aggregation:
             # currently no issues without aggregation are known
             return False
