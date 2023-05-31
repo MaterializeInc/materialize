@@ -11,9 +11,6 @@ from typing import List
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
-from materialize.output_consistency.data_type.data_type_with_values import (
-    DataTypeWithValues,
-)
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
@@ -22,6 +19,9 @@ from materialize.output_consistency.execution.sql_executor import (
     SqlExecutor,
 )
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
+)
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_result import (
@@ -30,6 +30,9 @@ from materialize.output_consistency.query.query_result import (
     QueryResult,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.selection import (
+    ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+)
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 from materialize.output_consistency.validation.validation_outcome import (
     ValidationOutcome,
@@ -56,14 +59,15 @@ class QueryExecutionManager:
 
     def setup_database_objects(
         self,
-        data_type_with_values: List[DataTypeWithValues],
+        input_data: ConsistencyTestInputData,
         evaluation_strategies: List[EvaluationStrategy],
     ) -> None:
+        self.output_printer.start_section("Setup code", collapsed=True)
         for strategy in evaluation_strategies:
             self.output_printer.print_info(
                 f"Setup for evaluation strategy '{strategy.name}'"
             )
-            ddl_statements = strategy.generate_source(data_type_with_values)
+            ddl_statements = strategy.generate_sources(input_data)
 
             for sql_statement in ddl_statements:
                 self.output_printer.print_sql(sql_statement)
@@ -139,7 +143,9 @@ class QueryExecutionManager:
 
         for strategy in evaluation_strategies:
             sql_query_string = query_template.to_sql(
-                strategy, QueryOutputFormat.SINGLE_LINE
+                strategy,
+                QueryOutputFormat.SINGLE_LINE,
+                ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
             )
 
             try:
@@ -191,8 +197,20 @@ class QueryExecutionManager:
         query1_args = original_query_template.select_expressions[arg_split_index:]
         query2_args = original_query_template.select_expressions[:arg_split_index]
 
-        new_query_template1 = QueryTemplate(False, query1_args)
-        new_query_template2 = QueryTemplate(False, query2_args)
+        new_query_template1 = QueryTemplate(
+            False,
+            query1_args,
+            original_query_template.storage_layout,
+            original_query_template.contains_aggregations,
+            original_query_template.row_selection,
+        )
+        new_query_template2 = QueryTemplate(
+            False,
+            query2_args,
+            original_query_template.storage_layout,
+            original_query_template.contains_aggregations,
+            original_query_template.row_selection,
+        )
         query_id_prefix = f"{query_id}."
 
         validation_outcomes = []
@@ -222,8 +240,9 @@ class QueryExecutionManager:
         ):
             return
 
-        self.output_printer.print_separator()
-        self.output_printer.print_info(f"Test query #{query_id}:")
+        self.output_printer.start_section(
+            f"Test query #{query_id}", collapsed=validation_outcome.success()
+        )
         self.output_printer.print_non_executable_sql(query_execution.generic_sql)
 
         result_desc = "PASSED" if validation_outcome.success() else "FAILED"
@@ -242,6 +261,9 @@ class QueryExecutionManager:
             self.output_printer.print_info(
                 f"Errors:\n{validation_outcome.error_output()}"
             )
+
+            if self.config.print_reproduction_code:
+                self.output_printer.print_reproduction_code(validation_outcome.errors)
 
         if validation_outcome.has_warnings():
             self.output_printer.print_info(

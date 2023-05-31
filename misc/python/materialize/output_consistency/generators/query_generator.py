@@ -6,54 +6,252 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 from typing import List
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
 )
+from materialize.output_consistency.execution.test_summary import ConsistencyTestLogger
+from materialize.output_consistency.execution.value_storage_layout import (
+    ValueStorageLayout,
+)
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
+    InconsistencyIgnoreFilter,
+)
+from materialize.output_consistency.input_data.test_input_data import (
+    ConsistencyTestInputData,
+)
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
+from materialize.output_consistency.selection.selection import (
+    ALL_ROWS_SELECTION,
+    DataRowSelection,
+)
 
 
 class QueryGenerator:
     """Generates query templates based on expressions"""
 
-    def __init__(self, config: ConsistencyTestConfiguration):
+    def __init__(
+        self,
+        config: ConsistencyTestConfiguration,
+        randomized_picker: RandomizedPicker,
+        input_data: ConsistencyTestInputData,
+        ignore_filter: InconsistencyIgnoreFilter,
+    ):
         self.config = config
-        # put all of these expressions into a single query
-        self.current_presumably_succeeding_expressions: List[Expression] = []
-        # put these expressions in separate queries
-        self.current_presumably_failing_expressions: List[Expression] = []
+        self.randomized_picker = randomized_picker
+        self.vertical_storage_row_count = input_data.max_value_count
+        self.ignore_filter = ignore_filter
+
+        self.count_pending_expressions = 0
+        # ONE query PER expression using the storage layout specified in the expression, expressions presumably fail
+        self.any_layout_presumably_failing_expressions: List[Expression] = []
+        # ONE query FOR ALL expressions accessing the horizontal storage layout; expressions presumably succeed and do
+        # not contain aggregations
+        self.horizontal_layout_normal_expressions: List[Expression] = []
+        # ONE query FOR ALL expressions accessing the horizontal storage layout and applying aggregations; expressions
+        # presumably succeed
+        self.horizontal_layout_aggregate_expressions: List[Expression] = []
+        # ONE query FOR ALL expressions accessing the vertical storage layout; expressions presumably succeed and do not
+        # contain aggregations
+        self.vertical_layout_normal_expressions: List[Expression] = []
+        # ONE query FOR ALL expressions accessing the vertical storage layout and applying aggregations; expressions
+        # presumably succeed
+        self.vertical_layout_aggregate_expressions: List[Expression] = []
 
     def push_expression(self, expression: Expression) -> None:
         if expression.is_expect_error:
-            self.current_presumably_failing_expressions.append(expression)
+            self.any_layout_presumably_failing_expressions.append(expression)
+            return
+
+        if expression.storage_layout == ValueStorageLayout.HORIZONTAL:
+            if expression.is_aggregate:
+                self.horizontal_layout_aggregate_expressions.append(expression)
+            else:
+                self.horizontal_layout_normal_expressions.append(expression)
+        elif expression.storage_layout == ValueStorageLayout.VERTICAL:
+            if expression.is_aggregate:
+                self.vertical_layout_aggregate_expressions.append(expression)
+            else:
+                self.vertical_layout_normal_expressions.append(expression)
         else:
-            self.current_presumably_succeeding_expressions.append(expression)
+            raise RuntimeError(f"Unknown storage layout: {expression.storage_layout}")
+
+        self.count_pending_expressions += 1
 
     def shall_consume_queries(self) -> bool:
-        return (
-            len(self.current_presumably_succeeding_expressions)
-            >= self.config.max_cols_per_query
-        )
+        return self.count_pending_expressions > self.config.max_pending_expressions
 
-    def consume_queries(self) -> List[QueryTemplate]:
+    def consume_queries(
+        self,
+        logger: ConsistencyTestLogger,
+    ) -> List[QueryTemplate]:
         queries = []
-
-        if len(self.current_presumably_succeeding_expressions) > 0:
-            # one query for all presumably succeeding expressions
-            queries.append(
-                QueryTemplate(False, self.current_presumably_succeeding_expressions)
+        queries.extend(
+            self._create_multi_column_queries(
+                logger,
+                self.horizontal_layout_normal_expressions,
+                False,
+                ValueStorageLayout.HORIZONTAL,
+                False,
             )
-
-        for failing_expression in self.current_presumably_failing_expressions:
-            # one query for each failing expression
-            queries.append(QueryTemplate(True, [failing_expression]))
+        )
+        queries.extend(
+            self._create_multi_column_queries(
+                logger,
+                self.horizontal_layout_aggregate_expressions,
+                False,
+                ValueStorageLayout.HORIZONTAL,
+                True,
+            )
+        )
+        queries.extend(
+            self._create_multi_column_queries(
+                logger,
+                self.vertical_layout_normal_expressions,
+                False,
+                ValueStorageLayout.VERTICAL,
+                False,
+            )
+        )
+        queries.extend(
+            self._create_multi_column_queries(
+                logger,
+                self.vertical_layout_aggregate_expressions,
+                False,
+                ValueStorageLayout.VERTICAL,
+                True,
+            )
+        )
+        queries.extend(
+            self._create_single_column_queries(
+                logger, self.any_layout_presumably_failing_expressions
+            )
+        )
 
         self.reset_state()
 
         return queries
 
+    def _create_multi_column_queries(
+        self,
+        logger: ConsistencyTestLogger,
+        expressions: List[Expression],
+        expect_error: bool,
+        storage_layout: ValueStorageLayout,
+        contains_aggregations: bool,
+    ) -> List[QueryTemplate]:
+        """Creates queries not exceeding the maximum column count"""
+        if len(expressions) == 0:
+            return []
+
+        queries = []
+        for offset_index in range(0, len(expressions), self.config.max_cols_per_query):
+            expression_chunk = expressions[
+                offset_index : offset_index + self.config.max_cols_per_query
+            ]
+
+            row_selection = self._select_rows(storage_layout)
+
+            expression_chunk = self._remove_known_inconsistencies(
+                logger, expression_chunk, row_selection
+            )
+
+            if len(expression_chunk) == 0:
+                continue
+
+            query = QueryTemplate(
+                expect_error,
+                expression_chunk,
+                storage_layout,
+                contains_aggregations,
+                row_selection,
+            )
+
+            queries.append(query)
+
+        return queries
+
+    def _create_single_column_queries(
+        self, logger: ConsistencyTestLogger, expressions: List[Expression]
+    ) -> List[QueryTemplate]:
+        """Creates one query per expression"""
+
+        queries = []
+        for expression in expressions:
+            row_selection = self._select_rows(expression.storage_layout)
+
+            if self.ignore_filter.shall_ignore(expression, row_selection):
+                self._log_skipped_expression(logger, expression)
+                continue
+
+            queries.append(
+                QueryTemplate(
+                    expression.is_expect_error,
+                    [expression],
+                    expression.storage_layout,
+                    False,
+                    row_selection,
+                )
+            )
+
+        return queries
+
+    def _select_rows(self, storage_layout: ValueStorageLayout) -> DataRowSelection:
+        if storage_layout == ValueStorageLayout.HORIZONTAL:
+            return ALL_ROWS_SELECTION
+        elif storage_layout == ValueStorageLayout.VERTICAL:
+            if self.randomized_picker.random_boolean(0.8):
+                # In 80% of the cases, try to pick two or three rows
+                max_number_of_rows_to_select = self.randomized_picker.random_number(
+                    2, 3
+                )
+            else:
+                # In 20% of the cases, pick an arbitrary number of rows
+                max_number_of_rows_to_select = self.randomized_picker.random_number(
+                    0, self.vertical_storage_row_count
+                )
+
+            row_indices = self.randomized_picker.random_row_indices(
+                self.vertical_storage_row_count, max_number_of_rows_to_select
+            )
+            return DataRowSelection(row_indices)
+        else:
+            raise RuntimeError(f"Unknown storage layout: {storage_layout}")
+
+    def _remove_known_inconsistencies(
+        self,
+        logger: ConsistencyTestLogger,
+        expressions: List[Expression],
+        row_selection: DataRowSelection,
+    ) -> List[Expression]:
+        indices_to_remove = []
+
+        for index, expression in enumerate(expressions):
+            if self.ignore_filter.shall_ignore(expression, row_selection):
+                self._log_skipped_expression(logger, expression)
+                indices_to_remove.append(index)
+
+        for index_to_remove in sorted(indices_to_remove, reverse=True):
+            del expressions[index_to_remove]
+
+        return expressions
+
+    def _log_skipped_expression(
+        self, logger: ConsistencyTestLogger, expression: Expression
+    ) -> None:
+        if self.config.verbose_output:
+            logger.add_global_warning(
+                f"Skipping expression with known inconsistency: {expression}"
+            )
+
     def reset_state(self) -> None:
-        self.current_presumably_succeeding_expressions = []
-        self.current_presumably_failing_expressions = []
+        self.count_pending_expressions = 0
+        self.any_layout_presumably_failing_expressions = []
+        self.horizontal_layout_normal_expressions = []
+        self.horizontal_layout_aggregate_expressions = []
+        self.vertical_layout_normal_expressions = []
+        self.vertical_layout_aggregate_expressions = []

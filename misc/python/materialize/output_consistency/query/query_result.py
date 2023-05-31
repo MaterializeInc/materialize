@@ -14,15 +14,23 @@ from materialize.output_consistency.execution.evaluation_strategy import (
 )
 from materialize.output_consistency.query.query_format import QueryOutputFormat
 from materialize.output_consistency.query.query_template import QueryTemplate
+from materialize.output_consistency.selection.selection import (
+    ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+)
 
 
 class QueryExecution:
     """An executed query with the outcomes of the different evaluation strategies"""
 
     def __init__(self, query: QueryTemplate, query_id: str):
-        self.generic_sql = query.to_sql(DummyEvaluation(), QueryOutputFormat.MULTI_LINE)
+        self.generic_sql = query.to_sql(
+            DummyEvaluation(),
+            QueryOutputFormat.MULTI_LINE,
+            ALL_QUERY_COLUMNS_BY_INDEX_SELECTION,
+        )
         self.query_id = query_id
         self.outcomes: List[QueryOutcome] = []
+        self.query = query
 
     def __str__(self) -> str:
         return f"QueryExecution with {len(self.outcomes)} outcomes for template query: {self.generic_sql})"

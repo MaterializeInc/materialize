@@ -43,11 +43,13 @@ division by zero)
 ### Relevant Concepts
 
 A `DataType` specifies a SQL data type and belongs to a `DataTypeCategory` (e.g., `INT8` to `NUMERIC`).
-A `DataValue` specifies a SQL value (e.g., `100::INT8`) and is associated with a type.
-Values of a type are collected in `DataTypeWithValues` to avoid a circular dependency.
+A `DataValue` specifies a SQL value (e.g., `100::INT8`) and is associated with a type; each value represents a column
+and is used when accessing [horizontally stored data](#horizontal-storage).
+A `DataColumn` specifies the column of a type that is used when accessing [vertically stored data](#vertical-storage).
+Values of a type and the vertical-storage column are collected in `DataTypeWithValues` to avoid a circular dependency.
 
-A `DataValue` is one form of an `Expression`. Another form is the `ExpressionWithArgs`, which is derived from an
-operation or function; it specifies a return type category and usually has child expressions.
+`DataValue` and `DataColumn` are two forms of an `Expression`. Another form is the `ExpressionWithArgs`, which is
+derived from an operation or function; it specifies a return type category and usually has child expressions.
 An expression has `ExpressionCharacteristics`, which describe the content and allow specifying constraints or filters.
 Examples appropriate for numeric expression are `NULL`, `MAX_VALUE`, and `NEGATIVE`.
 While they are easy to define for values, they will need to be derived for expressions with arguments.
@@ -72,6 +74,28 @@ The `ConsistencyTestRunner` orchestrates the test run. To do so, it receives a `
 delegates to `ExpressionGenerator`, `QueryGenerator`, `SqlExecutor`, and `ResultComparator`, and produces a
 `ConsistencyTestSummary` as output.
 
+### Value Storage Layouts
+
+#### Horizontal storage
+
+The table or view contains a single row; a data type has a column for each value.
+
+| bool_null | bool_true | bool_false | int2_null | int2_zero | int2_one | int2_max | int2_neg_max | int4_null |
+|----------:|----------:|-----------:|----------:|----------:|---------:|---------:|-------------:|----------:|
+|      NULL |      true |      false |      NULL |         0 |        1 |    32767 |       -32768 |      NULL |
+
+#### Vertical storage
+
+The table or view contains multiple rows; one column per data type exists.
+
+| row_index | bool_val | int2_val |    int4_val |             int8_val | uint2_val | ... |
+|----------:|---------:|---------:|------------:|---------------------:|----------:|-----|
+|         1 |     true |        0 |           0 |                    0 |         0 | ... |
+|         2 |    false |        1 |           1 |                    1 |         1 | ... |
+|         3 |     true |    32767 |  2147483647 |  9223372036854775807 |     65535 | ... |
+|         4 |    false |   -32768 | -2147483648 | -9223372036854775808 |         0 | ... |
+|         5 |     true |        0 |           0 |                    0 |         0 | ... |
+|       ... |      ... |      ... |         ... |                  ... |       ... | ... |
 
 ### Package Structure
 
@@ -91,6 +115,7 @@ operations)
 * `known_inconsistencies` contains a filter to allow skipping certain expressions that produce known inconsistencies
 * `operation` defines the structure of operations, functions, and their parameters (actual operations are specified in
 `input-data/operations`)
+* `output` contains the output printer
 * `query` defines the query and result structure
 * `runner` contains the test runner orchestrating the logic
 * `selection` contains the random picker

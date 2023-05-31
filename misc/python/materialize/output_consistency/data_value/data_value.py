@@ -10,14 +10,18 @@ from typing import Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
-from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.execution.value_storage_layout import (
+    ValueStorageLayout,
+)
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.expression.leaf_expression import LeafExpression
+from materialize.output_consistency.selection.selection import DataRowSelection
 
 
-class DataValue(Expression):
-    """A simple value (in contrast to an `ExpressionWithArgs`)"""
+class DataValue(LeafExpression):
+    """A simple value (in contrast to an `ExpressionWithArgs`) for HORIZONTAL storage"""
 
     def __init__(
         self,
@@ -26,22 +30,23 @@ class DataValue(Expression):
         value_identifier: str,
         characteristics: Set[ExpressionCharacteristics],
     ):
-        super().__init__(characteristics, False)
+        column_name = f"{data_type.identifier.lower()}_{value_identifier.lower()}"
+        super().__init__(
+            column_name, characteristics, ValueStorageLayout.HORIZONTAL, False, False
+        )
         self.value = value
         self.data_type = data_type
-        self.column_name = f"{data_type.identifier.lower()}_{value_identifier.lower()}"
 
     def resolve_data_type_category(self) -> DataTypeCategory:
         return self.data_type.category
 
-    def to_sql(self) -> str:
-        return self.to_sql_as_column()
-
-    def to_sql_as_column(self) -> str:
-        return self.column_name
-
     def to_sql_as_value(self) -> str:
         return f"{self.value}::{self.data_type.type_name}"
+
+    def recursively_collect_involved_characteristics(
+        self, row_selection: DataRowSelection
+    ) -> Set[ExpressionCharacteristics]:
+        return self.own_characteristics
 
     def __str__(self) -> str:
         return f"{self.column_name} ({self.value})"

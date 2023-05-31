@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import List
+from typing import List, Set
 
 from materialize.output_consistency.common.configuration import (
     ConsistencyTestConfiguration,
@@ -28,6 +28,13 @@ class RandomizedPicker:
         self.config = config
         random.seed(self.config.random_seed)
 
+    def random_boolean(self, probability_for_true: float) -> bool:
+        if probability_for_true < 0 or probability_for_true > 1:
+            raise RuntimeError(f"Invalid probability: {probability_for_true}")
+
+        weights = [probability_for_true, 1 - probability_for_true]
+        return random.choices([True, False], k=1, weights=weights)[0]
+
     def random_number(self, min_value_incl: int, max_value_incl: int) -> int:
         return random.randint(min_value_incl, max_value_incl)
 
@@ -40,6 +47,14 @@ class RandomizedPicker:
         self, types_with_values: List[DataTypeWithValues]
     ) -> DataTypeWithValues:
         return random.choice(types_with_values)
+
+    def random_row_indices(
+        self, vertical_storage_row_count: int, max_number_of_rows_to_select: int
+    ) -> Set[int]:
+        selected_rows = random.choices(
+            range(0, vertical_storage_row_count), k=max_number_of_rows_to_select
+        )
+        return set(selected_rows)
 
     def random_value(self, values: List[DataValue]) -> DataValue:
         return random.choice(values)

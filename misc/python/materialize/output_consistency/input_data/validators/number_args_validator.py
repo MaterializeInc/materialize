@@ -45,8 +45,7 @@ class SingleParamValueGrowsArgsValidator(OperationArgsValidator):
     """To identify single-value expressions holding a large value (basic heuristic to predict numeric overflows)"""
 
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
-        return self.has_any_characteristic(
-            args[0],
+        return args[0].has_any_characteristic(
             {
                 ExpressionCharacteristics.LARGE_VALUE,
                 ExpressionCharacteristics.MAX_VALUE,
@@ -81,9 +80,8 @@ class MaxMinusNegMaxArgsValidator(OperationArgsValidator):
         if len(args) != 2:
             return False
 
-        return self.has_all_characteristics(
-            args[0], {ExpressionCharacteristics.MAX_VALUE}
-        ) and self.has_all_characteristics(
-            args[1],
+        return args[0].has_all_characteristics(
+            {ExpressionCharacteristics.MAX_VALUE}
+        ) and args[1].has_all_characteristics(
             {ExpressionCharacteristics.MAX_VALUE, ExpressionCharacteristics.NEGATIVE},
         )
