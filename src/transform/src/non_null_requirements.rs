@@ -51,10 +51,6 @@ impl CheckedRecursion for NonNullRequirements {
 }
 
 impl crate::Transform for NonNullRequirements {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -120,7 +116,7 @@ impl NonNullRequirements {
                     ids,
                     values,
                     body,
-                    max_iters: _,
+                    limits: _,
                 } => {
                     // Determine the recursive IDs in this LetRec binding.
                     let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;

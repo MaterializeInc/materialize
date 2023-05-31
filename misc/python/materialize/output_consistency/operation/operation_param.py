@@ -48,13 +48,7 @@ class OperationParam:
 
     def supports_arg(self, arg: Expression) -> bool:
         for incompatibility_combination in self.incompatibility_combinations:
-            overlapping_incompatibility_combination = (
-                incompatibility_combination & arg.characteristics
-            )
-
-            if len(overlapping_incompatibility_combination) == len(
-                incompatibility_combination
-            ):
+            if arg.has_all_characteristics(incompatibility_combination):
                 return False
 
         return True

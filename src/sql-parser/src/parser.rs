@@ -4679,12 +4679,30 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mut_rec_block_option(&mut self) -> Result<MutRecBlockOption<Raw>, ParserError> {
-        self.expect_keywords(&[ITERATION, LIMIT])?;
-        let name = MutRecBlockOptionName::IterLimit;
-        Ok(MutRecBlockOption {
-            name,
-            value: self.parse_optional_option_value()?,
-        })
+        match self.expect_one_of_keywords(&[RECURSION, RETURN, ERROR])? {
+            RECURSION => {
+                self.expect_keyword(LIMIT)?;
+                Ok(MutRecBlockOption {
+                    name: MutRecBlockOptionName::RecursionLimit,
+                    value: self.parse_optional_option_value()?,
+                })
+            }
+            RETURN => {
+                self.expect_keywords(&[AT, RECURSION, LIMIT])?;
+                Ok(MutRecBlockOption {
+                    name: MutRecBlockOptionName::ReturnAtRecursionLimit,
+                    value: self.parse_optional_option_value()?,
+                })
+            }
+            ERROR => {
+                self.expect_keywords(&[AT, RECURSION, LIMIT])?;
+                Ok(MutRecBlockOption {
+                    name: MutRecBlockOptionName::ErrorAtRecursionLimit,
+                    value: self.parse_optional_option_value()?,
+                })
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn parse_query_tail(

@@ -28,6 +28,6 @@ class DataTypeCategoryMatchesArgsValidator(OperationArgsValidator):
             return False
 
         return (
-            args[self.param_index1].resolve_data_type_category()
-            != args[self.param_index2].resolve_data_type_category()
+            args[self.param_index1].resolve_return_type_category()
+            != args[self.param_index2].resolve_return_type_category()
         )

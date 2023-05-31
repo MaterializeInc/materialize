@@ -615,11 +615,11 @@ Source materialize.public.t1
 
 EOF
 
-# Give up when reaching ITERATION LIMIT
-# Same as the previous query, but with ITERATION LIMIT 1.
+# Give up when reaching RECURSION LIMIT
+# Same as the previous query, but with RECURSION LIMIT 1.
 query T multiline
 EXPLAIN WITH(arity, types)
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT 1)
+WITH MUTUALLY RECURSIVE (RECURSION LIMIT 1)
   c0(f1 integer, f2 integer) AS (
     SELECT * FROM (
       SELECT * FROM t1
@@ -633,7 +633,7 @@ Explained Query:
   Return // { arity: 3, types: "(integer, integer, integer)" }
     Map ((#0 + #1)) // { arity: 3, types: "(integer, integer, integer)" }
       Get l0 // { arity: 2, types: "(integer, integer)" }
-  With Mutually Recursive [iteration_limit=1]
+  With Mutually Recursive [recursion_limit=1]
     cte l0 =
       Map (3, 5) // { arity: 2, types: "(integer, integer)" }
         Distinct // { arity: 0, types: "()" }

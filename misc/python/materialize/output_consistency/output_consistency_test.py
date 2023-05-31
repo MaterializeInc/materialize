@@ -25,14 +25,15 @@ from materialize.output_consistency.generators.expression_generator import (
     ExpressionGenerator,
 )
 from materialize.output_consistency.generators.query_generator import QueryGenerator
+from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
+    InconsistencyIgnoreFilter,
+)
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
 )
-from materialize.output_consistency.known_inconsistencies.known_deviation_filter import (
-    KnownOutputInconsistenciesFilter,
-)
 from materialize.output_consistency.output.output_printer import OutputPrinter
 from materialize.output_consistency.runner.test_runner import ConsistencyTestRunner
+from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
 
@@ -94,7 +95,9 @@ def _run_output_consistency_tests_internal(
     max_iterations: int,
     avoid_expressions_expecting_db_error: bool,
 ) -> ConsistencyTestSummary:
-    output_printer = OutputPrinter()
+    input_data = ConsistencyTestInputData()
+
+    output_printer = OutputPrinter(input_data)
 
     config = ConsistencyTestConfiguration(
         random_seed=random_seed,
@@ -106,8 +109,10 @@ def _run_output_consistency_tests_internal(
         max_iterations=max_iterations,
         avoid_expressions_expecting_db_error=avoid_expressions_expecting_db_error,
         queries_per_tx=20,
+        max_pending_expressions=100,
         use_autocommit=True,
         split_and_retry_on_db_error=True,
+        print_reproduction_code=True,
         skip_postgres_incompatible_types=False,
     )
 
@@ -119,14 +124,14 @@ def _run_output_consistency_tests_internal(
         ConstantFoldingEvaluation(),
     ]
 
-    known_inconsistencies_filter = KnownOutputInconsistenciesFilter()
+    randomized_picker = RandomizedPicker(config)
 
-    input_data = ConsistencyTestInputData()
+    ignore_filter = InconsistencyIgnoreFilter()
 
-    expression_generator = ExpressionGenerator(
-        config, input_data, known_inconsistencies_filter
+    expression_generator = ExpressionGenerator(config, randomized_picker, input_data)
+    query_generator = QueryGenerator(
+        config, randomized_picker, input_data, ignore_filter
     )
-    query_generator = QueryGenerator(config)
     output_comparator = ResultComparator()
     sql_executor = create_sql_executor(config, connection, output_printer)
 
@@ -153,7 +158,6 @@ def _run_output_consistency_tests_internal(
 
     test_summary = test_runner.start()
 
-    output_printer.print_separator()
     output_printer.print_test_summary(test_summary)
 
     return test_summary

@@ -7,13 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.output_consistency.expression.expression_with_args import (
-    ExpressionWithArgs,
-)
+from enum import Enum
 
 
-class KnownOutputInconsistenciesFilter:
-    """Allows specifying and excluding expressions with known output inconsistencies"""
+class ValueStorageLayout(Enum):
+    HORIZONTAL = 1
+    """Column per value: Each value has its own column, only one row exists"""
+    VERTICAL = 2
+    """Column per type: Each data type has its own column, rows contain the values"""
 
-    def matches(self, expression: ExpressionWithArgs) -> bool:
-        return False
+
+VERTICAL_LAYOUT_ROW_INDEX_COL_NAME = "row_index"

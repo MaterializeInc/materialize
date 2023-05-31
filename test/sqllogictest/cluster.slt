@@ -161,6 +161,12 @@ bar  mz_active_peeks_per_worker  mz_active_peeks_per_worker_u6_primary_idx  1  i
 bar  mz_active_peeks_per_worker  mz_active_peeks_per_worker_u6_primary_idx  2  worker_id  NULL  false
 bar  mz_arrangement_batches_raw  mz_arrangement_batches_raw_u6_primary_idx  1  operator_id  NULL  false
 bar  mz_arrangement_batches_raw  mz_arrangement_batches_raw_u6_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_heap_allocations_raw  mz_arrangement_heap_allocations_raw_u6_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_heap_allocations_raw  mz_arrangement_heap_allocations_raw_u6_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_heap_capacity_raw  mz_arrangement_heap_capacity_raw_u6_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_heap_capacity_raw  mz_arrangement_heap_capacity_raw_u6_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_heap_size_raw  mz_arrangement_heap_size_raw_u6_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_heap_size_raw  mz_arrangement_heap_size_raw_u6_primary_idx  2  worker_id  NULL  false
 bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u6_primary_idx  1  operator_id  NULL  false
 bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u6_primary_idx  2  worker_id  NULL  false
 bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u6_primary_idx  1  operator_id  NULL  false
@@ -358,7 +364,7 @@ DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id = 'u1';
 ----
-19
+22
 
 query I
 SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT LIKE 's%';
@@ -371,7 +377,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-98
+110
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -379,7 +385,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-79
+88
 
 statement error nvalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA default.size_1 SIZE;

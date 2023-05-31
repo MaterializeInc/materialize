@@ -23,6 +23,8 @@ I can imagine 3 use cases, of which the 2. seems urgent to me:
 
 ## What to do when we reach the limit? -- _hard limit_ and _soft limit_
 
+**Edit:** In the meantime, we are referring to these as "erroring limit" and "non-erroring limit" (internally), because "hard limit" suggests something that can't be changed.
+
 When a computation reaches the limit, we could either gracefully stop and simply output the current state of the WMR variables as the final result of the WMR clause, or we could error out. Interestingly, we have conflicting requirements for the different use cases mentioned above:
 - For use cases 2. and 3., we obviously need graceful stopping.
 - For use case 1., I'd argue that erroring out is important. This is because in use case 1., the query hits the limit _unexpectedly_. This means that if we didn't error out, the user might not notice that the limit was hit, and just keep working with the result under the incorrect assumption that it's a fixpoint.
@@ -32,7 +34,7 @@ a _hard limit_ and a _soft limit_ with different effects upon reaching the limit
 - For the _hard limit_, the query would error out, thus making a noise to the user.
 - For the _soft limit_, we just gracefully stop and output the current state as the final result.
 
-For now, I would propose to implement only the soft limit. [Later we can consider implementing also the hard limit.](https://github.com/MaterializeInc/materialize/issues/18832) Note that implementing the hard limit will be easy to do after having implemented the soft limit.
+**Edit:** We have implemented both the [soft](https://github.com/MaterializeInc/materialize/pull/18966) and the [hard limit](https://github.com/MaterializeInc/materialize/pull/19585). The hard limit will be the default when the user doesn't specify the kind of limit, because other systems also have hard limits.
 
 ## Syntax
 
@@ -56,7 +58,8 @@ The syntax follows [our SQL Design Principles](https://www.notion.so/materialize
 - We accept an optional `=` before the number.
 - We use the `generate_extracted_config!` macro to process the options.
 
-The exact keywords are not final yet, and will also depend on what the exact keywords will be for WITH MUTUALLY RECURSIVE. Some other possibilities: `RECURSION LIMIT`, `MAX RECURSION`, `MAX ITERATIONS`. An [observation](https://github.com/MaterializeInc/materialize/pull/18966#pullrequestreview-1405005051) from Nikhil was that if the main WMR keywords have the word `RECURSIVE`, then we might not want to say `ITERATION` here, because these are often opposing terms, so both being present might confuse users. An [observation](https://github.com/MaterializeInc/materialize/pull/18538#discussion_r1189689052) from Jan is that the word `LIMIT` might not be needed, because we can explain this to users as doing exactly this number of iterations, which is the same thing as stopping at either fixpoint or this number of iterations.
+**Edit:** We finalized the syntax to `[STOP AT | ERROR AT] RECURSION LIMIT`, see [very long discussion on Slack](https://materializeinc.slack.com/archives/C015RHB3LDR/p1685461209310739?thread_ts=1684855280.479629&cid=C015RHB3LDR).
+An [observation](https://github.com/MaterializeInc/materialize/pull/18966#pullrequestreview-1405005051) from Nikhil was that if the main WMR keywords have the word `RECURSIVE`, then we might not want to say `ITERATION` here, because these are often opposing terms, so both being present might confuse users. (An [observation](https://github.com/MaterializeInc/materialize/pull/18538#discussion_r1189689052) from Jan is that the word `LIMIT` might not be needed, because we can explain this to users as doing exactly this number of iterations, which is the same thing as stopping at either fixpoint or this number of iterations. Edit: I was afraid that users might not make this extra mental leap, and might get concerned that superfluous iterations are happening.)
 
 ## Rendering
 

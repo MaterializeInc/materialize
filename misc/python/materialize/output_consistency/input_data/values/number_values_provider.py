@@ -31,7 +31,6 @@ for num_data_type in NUMERIC_DATA_TYPES:
     values_of_type = DataTypeWithValues(num_data_type)
     VALUES_PER_NUMERIC_DATA_TYPE[num_data_type] = values_of_type
 
-    values_of_type.add_raw_value("NULL", "NULL", {ExpressionCharacteristics.NULL})
     values_of_type.add_raw_value("0", "ZERO", {ExpressionCharacteristics.ZERO})
     values_of_type.add_raw_value(
         "1",
@@ -89,8 +88,8 @@ for type_definition, values_of_type in VALUES_PER_NUMERIC_DATA_TYPE.items():
         )
 
     for value in values_of_type.raw_values:
-        if ExpressionCharacteristics.MAX_VALUE in value.characteristics:
-            value.characteristics.add(ExpressionCharacteristics.LARGE_VALUE)
+        if ExpressionCharacteristics.MAX_VALUE in value.own_characteristics:
+            value.own_characteristics.add(ExpressionCharacteristics.LARGE_VALUE)
 
 VALUES_PER_NUMERIC_DATA_TYPE[UINT4_TYPE].add_characteristic_to_all_values(
     ExpressionCharacteristics.TYPE_LARGER_INT4_SIZED

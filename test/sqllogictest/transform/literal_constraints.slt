@@ -1195,7 +1195,7 @@ statement ok
 INSERT INTO t5 VALUES (0), (2), (5);
 
 query I
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT = 3)
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 3)
   c0(f1 int) as (
     (SELECT * FROM t5)
     UNION
@@ -1215,7 +1215,7 @@ SELECT * FROM c0;
 
 query T multiline
 EXPLAIN
-WITH MUTUALLY RECURSIVE (ITERATION LIMIT = 3)
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 3)
   c0(f1 int) as (
     (SELECT * FROM t5)
     UNION
@@ -1228,7 +1228,7 @@ SELECT * FROM c0;
 Explained Query:
   Return
     Get l0
-  With Mutually Recursive [iteration_limit=3]
+  With Mutually Recursive [recursion_limit=3, return_at_limit]
     cte l0 =
       Distinct group_by=[#0]
         Union
