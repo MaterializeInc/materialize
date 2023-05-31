@@ -21,6 +21,7 @@ message ProtoStorageParameters {
     ProtoPgReplicationTimeouts pg_replication_timeouts = 3;
     uint64 keep_n_source_status_history_entries = 4;
     mz_rocksdb.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
+    optional uint64 storage_dataflow_max_inflight_bytes = 6;
 }
 
 

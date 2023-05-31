@@ -76,6 +76,7 @@ pub fn shard_source<T, K, V, D, F, G>(
     as_of: Option<Antichain<T>>,
     until: Antichain<T>,
     flow_control: Option<FlowControl<G>>,
+    granular_control: Option<GranularFlowControl<G>>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
     should_fetch_part: F,
@@ -126,17 +127,46 @@ where
         Arc::clone(&val_schema),
         should_fetch_part,
     );
+    let (descs, backpressure_token) = {
+        match granular_control {
+            Some(g) => granular_backpressure(scope, name, &descs, g),
+            None => {
+                // Just coercing to trait object
+                #[allow(clippy::as_conversions)]
+                {
+                    (descs, Rc::new(()) as Rc<dyn Any>)
+                }
+            }
+        }
+    };
+
     let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch(
         &descs, name, clients, location, shard_id, key_schema, val_schema,
     );
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
 
-    (parts, Rc::new((descs_token, fetch_token)))
+    (
+        parts,
+        Rc::new((descs_token, fetch_token, backpressure_token)),
+    )
 }
 
 /// Flow control configuration.
 #[derive(Debug)]
 pub struct FlowControl<G: Scope> {
+    /// Stream providing in-flight frontier updates.
+    ///
+    /// As implied by its type, this stream never emits data, only progress updates.
+    ///
+    /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
+    pub progress_stream: Stream<G, Infallible>,
+    /// Maximum number of in-flight bytes.
+    pub max_inflight_bytes: usize,
+}
+
+/// _Granular_ flow control configuration
+#[derive(Debug)]
+pub struct GranularFlowControl<G: Scope> {
     /// Stream providing in-flight frontier updates.
     ///
     /// As implied by its type, this stream never emits data, only progress updates.
@@ -446,6 +476,8 @@ where
                             batch_parts.append(&mut parts);
                         }
                         Some(ListenEvent::Progress(progress)) => {
+                            // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
+                            // operator will refine this further, if its enabled.
                             let session_cap = cap_set.delayed(&Refines::to_inner(current_ts));
 
                             let bytes_emitted = {
@@ -594,6 +626,126 @@ where
     (descs_stream, activate_on_drop)
 }
 
+pub(crate) fn granular_backpressure<T, G>(
+    scope: &G,
+    name: &str,
+    descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
+    flow_control: GranularFlowControl<G>,
+) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>)
+where
+    T: Timestamp + Lattice + Codec64,
+    G: Scope<Timestamp = Hybrid<T, u64>>,
+{
+    let (flow_control_stream, flow_control_max_bytes) = (
+        flow_control.progress_stream,
+        flow_control.max_inflight_bytes,
+    );
+
+    let mut builder = AsyncOperatorBuilder::new(
+        format!("shard_source_granular_backpressure({})", name),
+        scope.clone(),
+    );
+    let (mut descs_output, descs_stream) = builder.new_output();
+
+    let mut descs_input = builder.new_input(descs, Pipeline);
+    let mut flow_control_input =
+        builder.new_input_connection(&flow_control_stream, Pipeline, vec![Antichain::new()]);
+
+    let mut inflight_parts = Vec::new();
+
+    let descs_input = async_stream::stream!({
+        let mut part_number = 0;
+        let mut pending_parts = Vec::new();
+        loop {
+            for part in pending_parts.drain(..) {
+                yield part;
+            }
+
+            match descs_input.next_mut().await {
+                None => break,
+                Some(Event::Data(cap, data)) => {
+                    for d in data.drain(..) {
+                        // Refine the timestamp to the part number.
+                        let mut time = cap.time().clone();
+                        time.1 = part_number;
+                        pending_parts.push((cap.delayed(&time), d));
+                        part_number += 1;
+                    }
+                }
+                Some(Event::Progress(_)) => {}
+            }
+        }
+        for part in pending_parts.drain(..) {
+            yield part;
+        }
+    });
+    let shutdown_button = builder.build(move |_capabilities| async move {
+
+        tokio::pin!(descs_input);
+        'emitting_parts:
+        loop {
+            let inflight_bytes:usize = inflight_parts.iter().map(|(_ts, size)| size).sum();
+            // Notes on this select!:
+            //
+            // We have two mutually exclusive preconditions based on our flow
+            // control state to determine whether we emit new batch parts, vs
+            // applying flow control and waiting for downstream operators to
+            // complete their work.
+            tokio::select! {
+                // While we have budget left for forwarding parts, read from the
+                // input and pass them on.
+                //
+                // NB: StreamExt::next is cancel safe
+                part = descs_input.next(), if inflight_bytes < flow_control_max_bytes => {
+                    match part {
+                        Some((cap, part)) => {
+                            // Keep track of the size of each part we have emitted.
+                            inflight_parts.push((cap.time().clone(), part.1.encoded_size_bytes()));
+                            descs_output.give(&cap, part).await;
+                        }
+                        None => {
+                            break 'emitting_parts;
+                        }
+                    }
+                }
+                // We've exhausted our budget, listen for updates to the flow_control
+                // input's frontier until we free up new budget. Progress ChangeBatches
+                // are consumed even if you don't interact with the handle, so even if
+                // we never make it to this block (e.g. budget of usize::MAX), because
+                // the stream has no data, we don't cause unbounded buffering in timely.
+                //
+                // NB: AsyncInputHandle::next is cancel safe
+                flow_control_upper = flow_control_input.next(), if inflight_bytes >= flow_control_max_bytes => {
+                    let flow_control_upper = match flow_control_upper {
+                        Some(Event::Progress(frontier)) => frontier,
+                        Some(Event::Data(_, _)) => unreachable!("flow_control_input should not contain data"),
+                        None => Antichain::new(),
+                    };
+
+
+                    let retired_parts = inflight_parts.drain_filter_swapping(|(ts, _size)| {
+                        !flow_control_upper.less_equal(ts)
+                    });
+                    let (retired_size, retired_count): (usize, usize) = retired_parts.fold(
+                        (0, 0),
+                        |(accum_size, accum_count), (_ts, size)| (accum_size + size, accum_count + 1)
+                    );
+                    print!(
+                        "returning {} parts with {} bytes, frontier: {:?}",
+                        retired_count,
+                        retired_size,
+                        flow_control_upper,
+                    );
+                }
+                else => {
+                    break 'emitting_parts;
+                }
+            }
+        }
+    });
+    (descs_stream, Rc::new(shutdown_button.press_on_drop()))
+}
+
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
     name: &str,
@@ -716,6 +868,7 @@ mod tests {
                         None, // No explicit as_of!
                         until,
                         None,
+                        None,
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
@@ -780,6 +933,7 @@ mod tests {
                         shard_id,
                         Some(as_of), // We specify the as_of explicitly!
                         until,
+                        None,
                         None,
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),

@@ -241,14 +241,13 @@ steps:
           args: [--aws-region=us-east-1, --persistent-user-tables]
     skip: Persistence tests disabled
 
-  - id: upsert-compaction-disabled
-    label: Upsert (compaction disabled)
+  - id: upsert-compaction-enabled
+    label: Upsert (compaction enabled)
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: upsert
-          args: [--compaction-disabled]
     agents:
       queue: linux-x86_64
 

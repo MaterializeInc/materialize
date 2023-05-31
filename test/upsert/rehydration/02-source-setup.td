@@ -71,3 +71,14 @@ mammalmore    moose    2
   GROUP BY s.name
   ORDER BY s.name
 true 3
+
+# Write another part to test backpressure
+$ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
+{"key": "fish"} {"f1": "fish", "f2": 1001}
+
+> SELECT * from upsert
+key           f1       f2
+---------------------------
+fish          fish     1001
+birdmore      geese    56
+mammalmore    moose    2

@@ -31,6 +31,7 @@ pub struct StorageParameters {
     pub keep_n_source_status_history_entries: usize,
     /// A set of parameters used to tune RocksDB when used with `UPSERT` sources.
     pub upsert_rocksdb_tuning_config: mz_rocksdb::RocksDBTuningParameters,
+    pub storage_dataflow_max_inflight_bytes: Option<usize>,
 }
 
 impl StorageParameters {
@@ -42,12 +43,14 @@ impl StorageParameters {
             pg_replication_timeouts,
             keep_n_source_status_history_entries,
             upsert_rocksdb_tuning_config,
+            storage_dataflow_max_inflight_bytes,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
         self.pg_replication_timeouts = pg_replication_timeouts;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.upsert_rocksdb_tuning_config = upsert_rocksdb_tuning_config;
+        self.storage_dataflow_max_inflight_bytes = storage_dataflow_max_inflight_bytes;
     }
 }
 
@@ -60,6 +63,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 self.keep_n_source_status_history_entries,
             ),
             upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
+            storage_dataflow_max_inflight_bytes: self
+                .storage_dataflow_max_inflight_bytes
+                .map(u64::cast_from),
         }
     }
 
@@ -77,6 +83,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             upsert_rocksdb_tuning_config: proto
                 .upsert_rocksdb_tuning_config
                 .into_rust_if_some("ProtoStorageParameters::upsert_rocksdb_tuning_config")?,
+            storage_dataflow_max_inflight_bytes: proto
+                .storage_dataflow_max_inflight_bytes
+                .map(usize::cast_from),
         })
     }
 }

@@ -18,7 +18,7 @@ use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFun
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::operators::shard_source::shard_source;
-pub use mz_persist_client::operators::shard_source::FlowControl;
+pub use mz_persist_client::operators::shard_source::{FlowControl, GranularFlowControl};
 use mz_persist_client::stats::PartStats;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
@@ -101,6 +101,7 @@ where
                     progress_stream: fc.progress_stream.enter(scope),
                     max_inflight_bytes: fc.max_inflight_bytes,
                 }),
+                None,
                 yield_fn,
             );
             (stream.leave(), token)
@@ -129,6 +130,7 @@ pub fn persist_source_core<G, YFn>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<G>>,
+    granular_flow_control: Option<GranularFlowControl<G>>,
     yield_fn: YFn,
 ) -> (
     Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>,
@@ -161,6 +163,7 @@ where
         as_of,
         until.clone(),
         flow_control,
+        granular_flow_control,
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
         move |stats| {

@@ -7012,6 +7012,9 @@ impl Catalog {
                     }
                 }
             },
+            storage_dataflow_max_inflight_bytes: self
+                .system_config()
+                .storage_dataflow_max_inflight_bytes(),
         }
     }
 

@@ -168,14 +168,22 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/mzdata/source_data",
                 ],
                 additional_system_parameter_defaults={
-                    "upsert_source_disk_default": "true"
+                    "upsert_source_disk_default": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": "1",
                 },
                 environment_extra=materialized_environment_extra,
             ),
         ),
         (
             "without DISK",
-            Materialized(environment_extra=materialized_environment_extra),
+            Materialized(
+                additional_system_parameter_defaults={
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": "1",
+                },
+                environment_extra=materialized_environment_extra,
+            ),
         ),
     ]:
 
