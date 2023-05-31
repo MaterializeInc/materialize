@@ -27,7 +27,7 @@ use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
-use mz_sql_parser::parser::ParserError;
+use mz_sql_parser::parser::ParserStatementError;
 
 use crate::catalog::{CatalogError, CatalogItemType, ObjectType};
 use crate::names::{PartialItemName, ResolvedItemName};
@@ -99,7 +99,7 @@ pub enum PlanError {
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
-    Parser(ParserError),
+    Parser(ParserStatementError),
     DropViewOnMaterializedView(String),
     DropSubsource {
         subsource: String,
@@ -533,8 +533,8 @@ impl From<EvalError> for PlanError {
     }
 }
 
-impl From<ParserError> for PlanError {
-    fn from(e: ParserError) -> PlanError {
+impl From<ParserStatementError> for PlanError {
+    fn from(e: ParserStatementError) -> PlanError {
         PlanError::Parser(e)
     }
 }

@@ -16,6 +16,7 @@ use std::task::{Context, Poll};
 use async_trait::async_trait;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::netio::AsyncReady;
+use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
@@ -50,6 +51,10 @@ pub struct Config {
     pub internal: bool,
     /// Global connection limit and count
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    /// Segment analytics client.
+    pub segment_client: Option<mz_segment::Client>,
+    /// The environment with which the server is associated
+    pub environment_id: EnvironmentId,
 }
 
 /// Configures a server's TLS encryption and authentication.

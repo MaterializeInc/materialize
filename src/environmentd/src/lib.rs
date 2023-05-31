@@ -416,6 +416,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             metrics: metrics.clone(),
             internal: false,
             active_connection_count: Arc::clone(&active_connection_count),
+            segment_client: segment_client.clone(),
+            environment_id: config.environment_id.clone(),
         });
         server::serve(sql_conns, sql_server)
     });
@@ -438,6 +440,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             metrics,
             internal: true,
             active_connection_count: Arc::clone(&active_connection_count),
+            segment_client: None,
+            environment_id: config.environment_id.clone(),
         });
         server::serve(internal_sql_conns, internal_sql_server)
     });

@@ -145,7 +145,7 @@ fn datadriven() {
                     format!("{}\n=>\n{:?}\n", stmt, stmt)
                 }
             }
-            Err(e) => render_error(input, e),
+            Err(e) => render_error(input, e.error),
         }
     }
 

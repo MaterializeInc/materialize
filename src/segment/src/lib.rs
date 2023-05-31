@@ -104,6 +104,12 @@ pub struct Client {
     tx: Sender<BatchMessage>,
 }
 
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<segment client>")
+    }
+}
+
 impl Client {
     /// Creates a new client.
     pub fn new(api_key: String) -> Client {

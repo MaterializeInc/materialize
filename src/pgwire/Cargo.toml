@@ -21,9 +21,11 @@ mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
+mz-segment = { path = "../segment" }
 mz-sql = { path = "../sql" }
 openssl = { version = "0.10.48", features = ["vendored"] }
 postgres = { version = "0.19.5" }
+serde_json = "1.0.89"
 tokio = "1.24.2"
 tokio-openssl = "0.6.3"
 tokio-util = { version = "0.7.4", features = ["codec"] }

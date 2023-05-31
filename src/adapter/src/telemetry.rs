@@ -9,7 +9,10 @@
 
 //! Telemetry utilities.
 
+pub use mz_audit_log::ObjectType;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql_parser::{ast::StatementKind, parser::ParserError};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -73,4 +76,96 @@ impl SegmentClientExt for mz_segment::Client {
 
         self.track(user_id, event, properties, Some(context));
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StatementFailureType {
+    ParseFailure,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StatementFailureEvent {
+    pub event_type: StatementFailureType,
+    pub object_type: ObjectType,
+    pub statement_kind: StatementKind,
+    pub error: ParserError,
+}
+
+impl StatementFailureEvent {
+    pub fn new(
+        event_type: StatementFailureType,
+        object_type: ObjectType,
+        parser_error: ParserError,
+        statement_kind: StatementKind,
+    ) -> StatementFailureEvent {
+        StatementFailureEvent {
+            event_type,
+            object_type,
+            error: parser_error,
+            statement_kind,
+        }
+    }
+}
+
+impl StatementFailureType {
+    pub fn as_title_case(&self) -> &'static str {
+        match self {
+            StatementFailureType::ParseFailure => "Parse Failed",
+        }
+    }
+}
+
+serde_plain::derive_display_from_serialize!(StatementFailureType);
+
+#[derive(Serialize, Deserialize)]
+pub enum StatementAction {
+    Alter,
+    Create,
+}
+
+impl StatementAction {
+    pub fn as_title_case(&self) -> &'static str {
+        match self {
+            StatementAction::Alter => "Alter",
+            StatementAction::Create => "Create",
+        }
+    }
+}
+
+pub fn statement_object_type(
+    statement: Option<StatementKind>,
+) -> Option<(StatementAction, ObjectType)> {
+    statement
+        .map(|s| match s {
+            StatementKind::AlterConnection => {
+                Some((StatementAction::Alter, ObjectType::Connection))
+            }
+            StatementKind::AlterIndex => Some((StatementAction::Alter, ObjectType::Index)),
+            StatementKind::AlterRole => Some((StatementAction::Alter, ObjectType::Role)),
+            StatementKind::AlterSecret => Some((StatementAction::Alter, ObjectType::Secret)),
+            StatementKind::AlterSink => Some((StatementAction::Alter, ObjectType::Sink)),
+            StatementKind::AlterSource => Some((StatementAction::Alter, ObjectType::Source)),
+            StatementKind::CreateCluster => Some((StatementAction::Create, ObjectType::Cluster)),
+            StatementKind::CreateClusterReplica => {
+                Some((StatementAction::Create, ObjectType::ClusterReplica))
+            }
+            StatementKind::CreateConnection => {
+                Some((StatementAction::Create, ObjectType::Connection))
+            }
+            StatementKind::CreateDatabase => Some((StatementAction::Create, ObjectType::Database)),
+            StatementKind::CreateIndex => Some((StatementAction::Create, ObjectType::Index)),
+            StatementKind::CreateMaterializedView => {
+                Some((StatementAction::Create, ObjectType::MaterializedView))
+            }
+            StatementKind::CreateRole => Some((StatementAction::Create, ObjectType::Role)),
+            StatementKind::CreateSchema => Some((StatementAction::Create, ObjectType::Schema)),
+            StatementKind::CreateSecret => Some((StatementAction::Create, ObjectType::Secret)),
+            StatementKind::CreateSink => Some((StatementAction::Create, ObjectType::Sink)),
+            StatementKind::CreateSource => Some((StatementAction::Create, ObjectType::Source)),
+            StatementKind::CreateTable => Some((StatementAction::Create, ObjectType::Table)),
+            StatementKind::CreateView => Some((StatementAction::Create, ObjectType::View)),
+            _ => None,
+        })
+        .flatten()
 }

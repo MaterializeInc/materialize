@@ -19,6 +19,7 @@ use mz_sql_parser::ast::{
     ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
 };
+use mz_sql_parser::parser::ParserStatementErrorMapper;
 use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
@@ -697,7 +698,9 @@ impl<'a> StatementContext<'a> {
         if ty == "pg_catalog.json" {
             ty = "pg_catalog.jsonb".into();
         }
-        let data_type = mz_sql_parser::parser::parse_data_type(&ty)?;
+
+        let data_type =
+            mz_sql_parser::parser::parse_data_type(&ty).map_no_statement_parser_err()?;
         let (data_type, _) = names::resolve(self.catalog, data_type)?;
         Ok(data_type)
     }

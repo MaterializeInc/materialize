@@ -673,9 +673,12 @@ async fn execute_request<S: ResultSender>(
         Ok(())
     }
 
-    fn parse(query: &str) -> Result<Vec<Statement<Raw>>, anyhow::Error> {
-        match mz_sql::parse::parse_with_limit(query) {
-            Ok(result) => result.map_err(|e| anyhow!(e)),
+    fn parse(
+        client: &mut SessionClient,
+        query: &str,
+    ) -> Result<Vec<Statement<Raw>>, anyhow::Error> {
+        match client.parser().parse(query) {
+            Ok(result) => result.map_err(|e| anyhow!(e.error)),
             Err(e) => Err(anyhow!(e)),
         }
     }
@@ -684,7 +687,7 @@ async fn execute_request<S: ResultSender>(
 
     match request {
         SqlRequest::Simple { query } => {
-            let stmts = parse(&query)?;
+            let stmts = parse(client, &query)?;
             let mut stmt_group = Vec::with_capacity(stmts.len());
             for stmt in stmts {
                 check_prohibited_stmts(sender, &stmt)?;
@@ -694,7 +697,7 @@ async fn execute_request<S: ResultSender>(
         }
         SqlRequest::Extended { queries } => {
             for ExtendedRequest { query, params } in queries {
-                let mut stmts = parse(&query)?;
+                let mut stmts = parse(client, &query)?;
                 if stmts.len() != 1 {
                     anyhow::bail!(
                         "each query must contain exactly 1 statement, but \"{}\" contains {}",

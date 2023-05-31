@@ -24,8 +24,11 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_ore::thread::JoinOnDropHandle;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
+use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, INTROSPECTION_USER};
+use mz_sql_parser::parser::ParserStatementError;
+use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::error;
 use uuid::Uuid;
@@ -37,6 +40,9 @@ use crate::command::{
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
+use crate::telemetry::{
+    statement_object_type, SegmentClientExt, StatementFailureEvent, StatementFailureType,
+};
 use crate::PeekResponseUnary;
 
 /// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
@@ -88,6 +94,8 @@ pub struct Client {
     id_alloc: IdAllocator<ConnectionIdType>,
     now: NowFn,
     metrics: Metrics,
+    environment_id: EnvironmentId,
+    segment_client: Option<mz_segment::Client>,
 }
 
 impl Client {
@@ -96,6 +104,8 @@ impl Client {
         cmd_tx: mpsc::UnboundedSender<Command>,
         metrics: Metrics,
         now: NowFn,
+        environment_id: EnvironmentId,
+        segment_client: Option<mz_segment::Client>,
     ) -> Client {
         Client {
             build_info,
@@ -103,6 +113,8 @@ impl Client {
             id_alloc: IdAllocator::new(1, 1 << 16),
             now,
             metrics,
+            environment_id,
+            segment_client,
         }
     }
 
@@ -142,13 +154,15 @@ impl Client {
         // an in-progress statement.
         let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
         let cancel_tx = Arc::new(cancel_tx);
-        let mut client = SessionClient {
+        let mut client = SessionClient::new(SessionClientParams {
             inner: Some(self.clone()),
             session: Some(session),
             cancel_tx: Arc::clone(&cancel_tx),
             cancel_rx,
             timeouts: Timeout::new(),
-        };
+            environment_id: self.environment_id.clone(),
+            segment_client: self.segment_client.clone(),
+        });
         let response = client
             .send(|tx, session| Command::Startup {
                 session,
@@ -221,6 +235,79 @@ impl Client {
     }
 }
 
+/// Parse SQL with optional Segment telemetry
+pub struct TelemetrizedParser {
+    segment_client: Option<mz_segment::Client>,
+    environment_id: EnvironmentId,
+    application_name: Option<String>,
+    user_id: Option<Uuid>,
+}
+
+impl TelemetrizedParser {
+    /// Parse a SQL expression
+    pub fn parse(
+        &self,
+        sql: &str,
+    ) -> Result<Result<Vec<Statement<Raw>>, ParserStatementError>, String> {
+        mz_sql::parse::parse_with_limit(sql).map(|result| {
+            result.map_err(|parse_error| {
+                self.maybe_track_statement_failure(parse_error.clone());
+                parse_error
+            })
+        })
+    }
+
+    /// Emit a segment event for the error if certain criteria are met
+    fn maybe_track_statement_failure(&self, parse_error: ParserStatementError) {
+        if let (
+            Some(segment_client),
+            Some((action, object_type)),
+            Some(statement_kind),
+            Some(application_name),
+            Some(user_id),
+        ) = (
+            self.segment_client.clone(),
+            statement_object_type(parse_error.statement),
+            parse_error.statement,
+            self.application_name.as_ref(),
+            self.user_id,
+        ) {
+            let environment_id = self.environment_id.clone();
+            let event_type = format!(
+                "{} {} {}",
+                object_type.as_title_case(),
+                action.as_title_case(),
+                StatementFailureType::ParseFailure.as_title_case(),
+            );
+            let event = StatementFailureEvent::new(
+                StatementFailureType::ParseFailure,
+                object_type,
+                parse_error.error,
+                statement_kind,
+            );
+            segment_client.environment_track(
+                &environment_id,
+                application_name,
+                user_id,
+                event_type,
+                json!({ "details": serde_json::to_value(event).expect("must serialize") }),
+            );
+        }
+    }
+}
+
+pub struct SessionClientParams {
+    inner: Option<Client>,
+    // Invariant: session may only be `None` during a method call. Every public
+    // method must ensure that `Session` is `Some` before it returns.
+    session: Option<Session>,
+    cancel_tx: Arc<watch::Sender<Canceled>>,
+    cancel_rx: watch::Receiver<Canceled>,
+    timeouts: Timeout,
+    environment_id: EnvironmentId,
+    segment_client: Option<mz_segment::Client>,
+}
+
 /// A coordinator client that is bound to a connection.
 ///
 /// See also [`Client`].
@@ -235,9 +322,46 @@ pub struct SessionClient {
     cancel_tx: Arc<watch::Sender<Canceled>>,
     cancel_rx: watch::Receiver<Canceled>,
     timeouts: Timeout,
+    parser: TelemetrizedParser,
 }
 
 impl SessionClient {
+    pub fn new(
+        SessionClientParams {
+            inner,
+            session,
+            cancel_tx,
+            cancel_rx,
+            timeouts,
+            environment_id,
+            segment_client,
+        }: SessionClientParams,
+    ) -> Self {
+        let application_name = session.as_ref().map(|s| s.application_name().to_string());
+        let parser = TelemetrizedParser {
+            segment_client,
+            environment_id,
+            application_name,
+            user_id: session
+                .as_ref()
+                .map(|s| s.user().external_metadata.as_ref())
+                .flatten()
+                .map(|e| e.user_id),
+        };
+        SessionClient {
+            inner,
+            session,
+            cancel_tx,
+            cancel_rx,
+            timeouts,
+            parser,
+        }
+    }
+
+    pub fn parser(&self) -> &TelemetrizedParser {
+        &self.parser
+    }
+
     pub fn canceled(&self) -> impl Future<Output = ()> + Send {
         let mut cancel_rx = self.cancel_rx.clone();
         async move {
@@ -599,7 +723,7 @@ impl From<TimeoutType> for AdapterError {
     }
 }
 
-struct Timeout {
+pub struct Timeout {
     tx: mpsc::UnboundedSender<TimeoutType>,
     rx: mpsc::UnboundedReceiver<TimeoutType>,
     active_timeouts: BTreeMap<TimeoutType, AbortOnDropHandle<()>>,

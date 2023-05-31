@@ -1512,7 +1512,7 @@ pub async fn serve(
             unsafe_mode,
             all_features,
             build_info,
-            environment_id,
+            environment_id: environment_id.clone(),
             now: now.clone(),
             skip_migrations: false,
             metrics_registry: &metrics_registry,
@@ -1545,6 +1545,7 @@ pub async fn serve(
     let span = tracing::Span::current();
     let coord_now = now.clone();
     let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
+    let segment_client2 = segment_client.clone();
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
@@ -1626,7 +1627,14 @@ pub async fn serve(
                 start_instant,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client::new(build_info, cmd_tx.clone(), metrics_clone, now);
+            let client = Client::new(
+                build_info,
+                cmd_tx.clone(),
+                metrics_clone,
+                now,
+                environment_id,
+                segment_client2,
+            );
             Ok((handle, client))
         }
         Err(e) => Err(e),
