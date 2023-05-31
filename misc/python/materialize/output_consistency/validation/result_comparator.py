@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+import math
 import re
 from decimal import Decimal
 from typing import Any, cast
@@ -293,5 +293,8 @@ class ResultComparator:
 
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
             return value1.is_nan() and value2.is_nan()
+
+        if isinstance(value1, float) and isinstance(value2, float):
+            return math.isnan(value1) and math.isnan(value2)
 
         return False
