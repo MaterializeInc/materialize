@@ -139,11 +139,9 @@ The relatively short observation periods above are introduced based on the judgm
 # Unresolved questions
 [unresolved-questions]: #unresolved-questions
 
-- Should we go for the iterative, but less precise plan refinement [proposal](#improve-refine_single_time_dataflow-lir-based-refinement) or should we just bite the bullet and perform a recursive traversal while reanalyzing monotonicity for the single-time context as outlined in one of the alternatives?
-- Are we happy to adopt the [proposal](#running-tests-in-ci-with-both-monotonic-and-non-monotonic-plan-variants) to change `sqllogictest` to have an additional `--auto_index_selects` flag and add a CI workflow using that flag? Or should we follow one of the other alternatives?
+- Depending on the performance impact of running `sqllogictest` tests with `--auto-index-selects`, which SLT tests should we run with the flag under which CI pipeline?
 
 # Future work
 [future-work]: #future-work
 
-If we choose to adopt the [proposal](#improve-refine_single_time_dataflow-lir-based-refinement) of an iterative, but less precise plan refinement, then we could add an issue for future work to rethink the relationship between monotonicity analysis in MIR and a potential single-time physical monotonicity analysis pass in LIR. It feels odd to have two monotonicity analysis passes that achieve slightly different objectives with somewhat similar code, but at different IR levels of abstraction.
-This is why the iterative and less precise approach is proposed to make progress for now.
+We might want to rethink in future work the relationship between monotonicity analysis in MIR and the single-time monotonicity analysis that will facilitate refinement of consolidation in LIR. It feels odd to have two monotonicity analysis passes that achieve slightly different objectives with somewhat similar code, but at different IR levels of abstraction. But we might consider this acceptable as the analyses take place at different levels of abstraction.
