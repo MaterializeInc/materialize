@@ -64,9 +64,9 @@ pub struct Session<T = mz_repr::Timestamp> {
     portals: BTreeMap<String, Portal>,
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
-    /// The role ID of the current user.
+    /// The role metadata of the current session.
     ///
-    /// Invariant: role_id must be `Some` after the user has
+    /// Invariant: role_metadata must be `Some` after the user has
     /// successfully connected to and authenticated with Materialize.
     ///
     /// Prefer using this value over [`Self.user.name`].
