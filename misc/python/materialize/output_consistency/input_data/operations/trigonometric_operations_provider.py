@@ -9,12 +9,14 @@
 
 from typing import List
 
-from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
+)
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.validators.number_args_validator import (
     SingleParamValueGrowsArgsValidator,
@@ -32,7 +34,7 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "COS",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 # only for numbers [-1, +1]
@@ -46,14 +48,14 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "COSH",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {SingleParamValueGrowsArgsValidator()},
     )
 )
@@ -75,14 +77,14 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
                 ],
             )
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
-    DbFunction("COT", [NumericOperationParam()], DataTypeCategory.NUMERIC)
+    DbFunction("COT", [NumericOperationParam()], NumericReturnTypeSpec())
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
-    DbFunction("SIN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
+    DbFunction("SIN", [NumericOperationParam()], NumericReturnTypeSpec())
 )
 # only for numbers [-1, +1]
 TRIGONOMETRIC_OPERATION_TYPES.append(
@@ -95,14 +97,14 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "SINH",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
         {SingleParamValueGrowsArgsValidator()},
     )
 )
@@ -110,24 +112,24 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "ASINH",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
-    DbFunction("TAN", [NumericOperationParam()], DataTypeCategory.NUMERIC)
+    DbFunction("TAN", [NumericOperationParam()], NumericReturnTypeSpec())
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "ATAN",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "TANH",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 # only for numbers [-1, +1]
@@ -141,21 +143,21 @@ TRIGONOMETRIC_OPERATION_TYPES.append(
                 }
             )
         ],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "RADIANS",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 TRIGONOMETRIC_OPERATION_TYPES.append(
     DbFunction(
         "DEGREES",
         [NumericOperationParam()],
-        DataTypeCategory.NUMERIC,
+        NumericReturnTypeSpec(),
     )
 )
 

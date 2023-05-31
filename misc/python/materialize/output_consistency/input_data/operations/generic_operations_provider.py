@@ -8,9 +8,11 @@
 # by the Apache License, Version 2.0.
 from typing import List
 
-from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
+)
+from materialize.output_consistency.input_data.return_specs.dynamic_return_spec import (
+    DynamicReturnTypeSpec,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -27,7 +29,7 @@ GENERIC_OPERATION_TYPES.append(
             NumericOperationParam(optional=True),
             NumericOperationParam(optional=True),
         ],
-        DataTypeCategory.DYNAMIC,
+        DynamicReturnTypeSpec(),
     )
 )
 GENERIC_OPERATION_TYPES.append(
@@ -38,6 +40,6 @@ GENERIC_OPERATION_TYPES.append(
             NumericOperationParam(optional=True),
             NumericOperationParam(optional=True),
         ],
-        DataTypeCategory.DYNAMIC,
+        DynamicReturnTypeSpec(),
     )
 )

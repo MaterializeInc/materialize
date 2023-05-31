@@ -71,7 +71,7 @@ class ExpressionGenerator:
                 0 if operation.is_aggregation else self.operation_weights[index]
             )
 
-            category = operation.return_type_category
+            category = operation.return_type_spec.type_category
             operations_with_return_category = (
                 self.operations_by_return_type_category.get(category, [])
             )
