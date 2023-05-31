@@ -77,6 +77,9 @@ class PgCdc(Check):
                 true
                 """,
                 """
+                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                GRANT USAGE ON CONNECTION pg2 TO materialize
+
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table SELECT 'D', i, REPEAT('D', 1024 - i) FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table SET f2 = f2 + 100;
