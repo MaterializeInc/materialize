@@ -30,7 +30,7 @@ class InconsistencyIgnoreFilter:
     def shall_ignore(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> bool:
-        if isinstance(expression, LeafExpression):
+        if expression.is_leaf():
             return False
         elif isinstance(expression, ExpressionWithArgs):
             return self._shall_ignore_expression_with_args(expression, row_selection)
