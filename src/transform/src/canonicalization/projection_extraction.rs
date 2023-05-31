@@ -20,10 +20,6 @@ use crate::TransformArgs;
 pub struct ProjectionExtraction;
 
 impl crate::Transform for ProjectionExtraction {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

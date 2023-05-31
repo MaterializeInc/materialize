@@ -33,6 +33,7 @@ class ConsistencyTestInputData:
             DataTypeWithValues
         ] = ALL_DATA_TYPES_WITH_VALUES
         self.all_operation_types: List[DbOperationOrFunction] = ALL_OPERATION_TYPES
+        self.max_value_count = self._get_max_value_count_of_all_types()
 
     def remove_postgres_incompatible_types(self) -> None:
         self.all_data_types_with_values = [
@@ -40,3 +41,11 @@ class ConsistencyTestInputData:
             for x in self.all_data_types_with_values
             if x.data_type not in UNSIGNED_INT_TYPES
         ]
+
+        self.max_value_count = self._get_max_value_count_of_all_types()
+
+    def _get_max_value_count_of_all_types(self) -> int:
+        return max(
+            len(type_with_values.raw_values)
+            for type_with_values in self.all_data_types_with_values
+        )

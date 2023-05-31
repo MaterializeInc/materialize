@@ -64,7 +64,7 @@ class ConsistencyTestRunner:
 
     def setup(self) -> None:
         self.execution_manager.setup_database_objects(
-            self.input_data.all_data_types_with_values, self.evaluation_strategies
+            self.input_data, self.evaluation_strategies
         )
 
     def start(self) -> ConsistencyTestSummary:
@@ -80,13 +80,11 @@ class ConsistencyTestRunner:
                     f"Status: Expression {expression_count}..."
                 )
 
-            operation = self.expression_generator.pick_random_operation()
+            operation = self.expression_generator.pick_random_operation(True)
 
             shall_abort_after_iteration = self._shall_abort(expression_count, end_time)
 
-            expression = self.expression_generator.generate_expression(
-                operation, test_summary
-            )
+            expression = self.expression_generator.generate_expression(operation)
 
             if expression is None:
                 test_summary.global_warnings.append(
@@ -117,7 +115,7 @@ class ConsistencyTestRunner:
     def _consume_and_process_queries(
         self, test_summary: ConsistencyTestSummary
     ) -> bool:
-        queries = self.query_generator.consume_queries()
+        queries = self.query_generator.consume_queries(test_summary)
 
         for query in queries:
             success = self.execution_manager.execute_query(query, test_summary)

@@ -284,9 +284,6 @@ ALTER SYSTEM RESET ALL
 > DROP TABLE t3;
 > DROP TABLE t4;
 
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_sources = 2
-
 # Insert Postgres data
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
@@ -315,6 +312,19 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
     USER postgres,
     PASSWORD SECRET pgpass
   )
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_sources = 2
+
+# Creating 3 subsources is equivalent to 3 shards
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
+contains:creating source would violate max_sources limit (desired: 3, limit: 2, current: 0)
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_sources = 3
+
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
@@ -336,12 +346,28 @@ ALTER TABLE t4 REPLICA IDENTITY FULL;
 INSERT INTO t4 VALUES (4);
 CREATE PUBLICATION mz_source2 FOR TABLE t4;
 
+# Show that we're at limit
+! CREATE SOURCE mz_source2
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
+  FOR ALL TABLES;
+contains:creating source would violate max_sources limit (desired: 4, limit: 3, current: 3)
+
+# Show that dropping source does proper accounting
+> DROP SOURCE mz_source
+
 > CREATE SOURCE mz_source2
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
   FOR ALL TABLES;
 
+! CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR ALL TABLES;
+contains:creating source would violate max_sources limit (desired: 5, limit: 3, current: 1)
+
 > SELECT * FROM t4
 4
+
+> DROP SOURCE mz_source2
 
 > SHOW max_aws_privatelink_connections
 0
@@ -351,10 +377,6 @@ ALTER SYSTEM SET max_aws_privatelink_connections = 42
 
 > SHOW max_aws_privatelink_connections
 42
-
-> DROP SOURCE mz_source
-
-> DROP SOURCE mz_source2
 
 $ postgres-execute connection=mz_system
 DROP CLUSTER default CASCADE

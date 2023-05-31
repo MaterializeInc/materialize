@@ -13,10 +13,13 @@ from enum import Enum
 class DataTypeCategory(Enum):
     """Data type category for the input parameters and return type of operation / function"""
 
-    ANY = 1
+    ANY = 10
     """Suitable for all type (e.g., `NULLIF`). Allowed as input parameters but not as return type"""
-    DYNAMIC = 2
+    DYNAMIC = 20
     """Dynamic type, only allowed as return type. The actual type will be resolved based on the first input arg"""
-    NUMERIC = 3
-    BOOLEAN = 4
-    TEXT = 5
+    DYNAMIC_ARRAY = 21
+    """Dynamic type, only allowed as return type. The actual type of the array will be resolved based on the first
+    input arg"""
+    NUMERIC = 101
+    BOOLEAN = 102
+    TEXT = 103

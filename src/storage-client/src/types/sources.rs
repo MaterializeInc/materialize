@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Add, AddAssign, Deref, DerefMut};
-use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,7 +45,6 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::Antichain;
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
-use timely::scheduling::ActivateOnDrop;
 use uuid::Uuid;
 
 use crate::controller::{CollectionMetadata, ResumptionFrontierCalculator};
@@ -2692,13 +2690,6 @@ impl Schema<SourceData> for RelationDesc {
         let wrapped = Schema::<Row>::encoder(&RelationDescHack::new(self).0, cols)?;
         Ok(SourceDataEncoder { wrapped })
     }
-}
-
-/// A `SourceToken` manages interest in a source.
-///
-/// When the `SourceToken` is dropped the associated source will be stopped.
-pub struct SourceToken {
-    pub(crate) _activator: Rc<ActivateOnDrop<()>>,
 }
 
 #[cfg(test)]

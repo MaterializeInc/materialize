@@ -18,10 +18,6 @@ use crate::{TransformArgs, TransformError};
 pub struct Reduce;
 
 impl crate::Transform for Reduce {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

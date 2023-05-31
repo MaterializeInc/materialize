@@ -220,6 +220,9 @@ pub enum ComputeLog {
     PeekDuration,
     FrontierDelay,
     ImportFrontierCurrent,
+    ArrangementHeapSize,
+    ArrangementHeapCapacity,
+    ArrangementHeapAllocations,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -234,6 +237,9 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::PeekDuration => PeekDuration(()),
                 ComputeLog::FrontierDelay => FrontierDelay(()),
                 ComputeLog::ImportFrontierCurrent => ImportFrontierCurrent(()),
+                ComputeLog::ArrangementHeapSize => ArrangementHeapSize(()),
+                ComputeLog::ArrangementHeapCapacity => ArrangementHeapCapacity(()),
+                ComputeLog::ArrangementHeapAllocations => ArrangementHeapAllocations(()),
             }),
         }
     }
@@ -248,6 +254,9 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(PeekDuration(())) => Ok(ComputeLog::PeekDuration),
             Some(FrontierDelay(())) => Ok(ComputeLog::FrontierDelay),
             Some(ImportFrontierCurrent(())) => Ok(ComputeLog::ImportFrontierCurrent),
+            Some(ArrangementHeapSize(())) => Ok(ComputeLog::ArrangementHeapSize),
+            Some(ArrangementHeapCapacity(())) => Ok(ComputeLog::ArrangementHeapCapacity),
+            Some(ArrangementHeapAllocations(())) => Ok(ComputeLog::ArrangementHeapAllocations),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -365,7 +374,10 @@ impl LogVariant {
 
             LogVariant::Differential(DifferentialLog::ArrangementBatches)
             | LogVariant::Differential(DifferentialLog::ArrangementRecords)
-            | LogVariant::Differential(DifferentialLog::Sharing) => RelationDesc::empty()
+            | LogVariant::Differential(DifferentialLog::Sharing)
+            | LogVariant::Compute(ComputeLog::ArrangementHeapSize)
+            | LogVariant::Compute(ComputeLog::ArrangementHeapCapacity)
+            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => RelationDesc::empty()
                 .with_column("operator_id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false)),
 
@@ -445,7 +457,10 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Reachability) => vec![],
             LogVariant::Differential(DifferentialLog::ArrangementBatches)
             | LogVariant::Differential(DifferentialLog::ArrangementRecords)
-            | LogVariant::Differential(DifferentialLog::Sharing) => vec![(
+            | LogVariant::Differential(DifferentialLog::Sharing)
+            | LogVariant::Compute(ComputeLog::ArrangementHeapSize)
+            | LogVariant::Compute(ComputeLog::ArrangementHeapCapacity)
+            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => vec![(
                 LogVariant::Timely(TimelyLog::Operates),
                 vec![(0, 0), (1, 1)],
             )],

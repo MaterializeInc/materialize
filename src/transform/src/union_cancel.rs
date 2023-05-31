@@ -29,10 +29,6 @@ use crate::{TransformArgs, TransformError};
 pub struct UnionBranchCancellation;
 
 impl crate::Transform for UnionBranchCancellation {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

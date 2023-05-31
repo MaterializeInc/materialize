@@ -15,15 +15,19 @@ mod initialize;
 mod reachability;
 mod timely;
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
 use ::timely::logging::WorkerIdentifier;
 use ::timely::progress::Timestamp as TimelyTimestamp;
+use ::timely::scheduling::Activator;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_repr::Timestamp;
 use mz_timely_util::activator::RcActivator;
+
+use crate::logging::compute::Logger as ComputeLogger;
 
 pub use crate::logging::initialize::initialize;
 
@@ -141,4 +145,13 @@ impl<E> EventQueue<E> {
             activator: RcActivator::new(activator_name, activate_after),
         }
     }
+}
+
+/// State shared between different logging dataflows.
+#[derive(Default)]
+struct SharedLoggingState {
+    /// Activators for arrangement heap size operators.
+    arrangement_size_activators: BTreeMap<usize, Activator>,
+    /// Shared compute logger.
+    compute_logger: Option<ComputeLogger>,
 }

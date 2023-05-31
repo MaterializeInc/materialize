@@ -112,7 +112,7 @@ impl Client {
             build_info: self.build_info,
             conn_id: self
                 .id_alloc
-                .alloc_owned()
+                .alloc()
                 .ok_or(AdapterError::IdExhaustionError)?,
             inner: self.clone(),
         })
@@ -391,11 +391,6 @@ impl SessionClient {
         result
     }
 
-    /// Cancels the query currently running on another connection.
-    pub fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
-        self.inner_mut().cancel_request(conn_id.val(), secret_key)
-    }
-
     /// Ends a transaction.
     pub async fn end_transaction(
         &mut self,
@@ -557,7 +552,7 @@ impl SessionClient {
                 },
                 _err = &mut cancel_future, if !cancelled => {
                     cancelled = true;
-                    self.inner_mut().cancel_request(conn_id.val(), secret_key);
+                    self.inner_mut().cancel_request(*conn_id, secret_key);
                 }
             };
         }

@@ -803,7 +803,7 @@ fn eval_unmaterializable_func(
             pack(Datum::Int32(state.config().build_info.version_num()))
         }
         UnmaterializableFunc::PgBackendPid => {
-            pack(Datum::Int32(i32::reinterpret_cast(session.conn_id().val())))
+            pack(Datum::Int32(i32::reinterpret_cast(**session.conn_id())))
         }
         UnmaterializableFunc::PgPostmasterStartTime => {
             let t: Datum = state.config().start_time.try_into()?;

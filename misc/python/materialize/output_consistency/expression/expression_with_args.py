@@ -6,14 +6,21 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
+from typing import List, Optional, Set
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.execution.value_storage_layout import (
+    ValueStorageLayout,
+)
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.operation.operation import (
     EXPRESSION_PLACEHOLDER,
     DbOperationOrFunction,
 )
+from materialize.output_consistency.selection.selection import DataRowSelection
 
 
 class ExpressionWithArgs(Expression):
@@ -23,9 +30,16 @@ class ExpressionWithArgs(Expression):
         self,
         operation: DbOperationOrFunction,
         args: List[Expression],
+        is_aggregate: bool,
         is_expect_error: bool,
     ):
-        super().__init__(operation.derive_characteristics(args), is_expect_error)
+        super().__init__(
+            operation.derive_characteristics(args),
+            _determine_storage_layout(args),
+            is_aggregate,
+            is_expect_error,
+        )
+        self.operation = operation
         self.pattern = operation.to_pattern(len(args))
         self.return_type_category = operation.return_type_category
         self.args = args
@@ -43,7 +57,7 @@ class ExpressionWithArgs(Expression):
 
         return sql
 
-    def resolve_data_type_category(self) -> DataTypeCategory:
+    def resolve_return_type_category(self) -> DataTypeCategory:
         if self.return_type_category == DataTypeCategory.DYNAMIC:
             if len(self.args) == 0:
                 raise RuntimeError(
@@ -57,10 +71,66 @@ class ExpressionWithArgs(Expression):
                     "arguments"
                 )
             else:
-                return self.args[0].resolve_data_type_category()
+                return self.args[0].resolve_return_type_category()
 
         return self.return_type_category
 
     def __str__(self) -> str:
         args_desc = ", ".join(arg.__str__() for arg in self.args)
         return f"ExpressionWithArgs with pattern {self.pattern} and args {args_desc}"
+
+    def recursively_collect_involved_characteristics(
+        self, row_selection: DataRowSelection
+    ) -> Set[ExpressionCharacteristics]:
+        involved_characteristics: Set[ExpressionCharacteristics] = set()
+        involved_characteristics = involved_characteristics.union(
+            self.own_characteristics
+        )
+
+        for arg in self.args:
+            involved_characteristics = involved_characteristics.union(
+                arg.recursively_collect_involved_characteristics(row_selection)
+            )
+
+        return involved_characteristics
+
+    def collect_leaves(self) -> List[Expression]:
+        leaves = []
+
+        for arg in self.args:
+            leaves.extend(arg.collect_leaves())
+
+        return leaves
+
+    def is_leaf(self) -> bool:
+        return False
+
+    def contains_leaf_not_directly_consumed_by_aggregation(self) -> bool:
+        for arg in self.args:
+            if arg.is_leaf() and not self.is_aggregate:
+                return True
+            elif (
+                not arg.is_leaf()
+                and arg.contains_leaf_not_directly_consumed_by_aggregation()
+            ):
+                return True
+
+        return False
+
+
+def _determine_storage_layout(args: List[Expression]) -> ValueStorageLayout:
+    storage_layout: Optional[ValueStorageLayout] = None
+
+    for arg in args:
+        if storage_layout is None:
+            storage_layout = arg.storage_layout
+        elif storage_layout != arg.storage_layout:
+            raise RuntimeError(
+                "It is not allowed to mix storage layouts in an expression"
+            )
+
+    if storage_layout is None:
+        # use this as default (but it should not matter as expressions are expected to always have at least one arg)
+        return ValueStorageLayout.HORIZONTAL
+
+    return storage_layout

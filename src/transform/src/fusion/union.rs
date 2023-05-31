@@ -17,10 +17,6 @@ use mz_expr::MirRelationExpr;
 pub struct Union;
 
 impl crate::Transform for Union {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

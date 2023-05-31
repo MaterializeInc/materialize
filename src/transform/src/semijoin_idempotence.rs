@@ -55,10 +55,6 @@ impl CheckedRecursion for SemijoinIdempotence {
 }
 
 impl crate::Transform for SemijoinIdempotence {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",
@@ -109,7 +105,7 @@ impl SemijoinIdempotence {
                 MirRelationExpr::LetRec {
                     ids,
                     values,
-                    max_iters: _,
+                    limits: _,
                     body,
                 } => {
                     // Expirations. See comments on `collect_expirations` and `do_expirations`.

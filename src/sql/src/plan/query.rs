@@ -40,7 +40,7 @@ use std::{iter, mem};
 
 use itertools::Itertools;
 use mz_expr::virtual_syntax::AlgExcept;
-use mz_expr::{func as expr_func, Id, LocalId, MirScalarExpr, RowSetFinishing};
+use mz_expr::{func as expr_func, Id, LetRecLimit, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::FallibleMapExt;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -80,7 +80,7 @@ use crate::plan::scope::{Scope, ScopeItem};
 use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::PlanError::InvalidIterationLimit;
+use crate::plan::PlanError::InvalidWmrRecursionLimit;
 use crate::plan::{transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan};
 use crate::session::vars::{self, FeatureFlag};
 
@@ -1116,9 +1116,24 @@ fn plan_query_inner(
         }
         CteBlock::MutuallyRecursive(MutRecBlock { options, ctes: _ }) => {
             let MutRecBlockOptionExtracted {
-                iter_limit,
+                recursion_limit,
+                return_at_recursion_limit,
+                error_at_recursion_limit,
                 seen: _,
             } = MutRecBlockOptionExtracted::try_from(options.clone())?;
+            let limit = match (recursion_limit, return_at_recursion_limit, error_at_recursion_limit) {
+                (None, None, None) => None,
+                (Some(max_iters), None, None) => Some((max_iters, LetRecLimit::RETURN_AT_LIMIT_DEFAULT)),
+                (None, Some(max_iters), None) => Some((max_iters, true)),
+                (None, None, Some(max_iters)) => Some((max_iters, false)),
+                _ => {
+                    return Err(InvalidWmrRecursionLimit("More than one recursion limit given. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT.".to_owned()));
+                }
+            }.try_map(|(max_iters, return_at_limit)| Ok::<LetRecLimit, PlanError>(LetRecLimit {
+                max_iters: NonZeroU64::new(*max_iters).ok_or(InvalidWmrRecursionLimit("Recursion limit has to be greater than 0.".to_owned()))?,
+                return_at_limit: *return_at_limit,
+            }))?;
+
             let mut bindings = Vec::new();
             for (id, value, shadowed_val) in cte_bindings.into_iter() {
                 if let Some(cte) = qcx.ctes.remove(&id) {
@@ -1130,9 +1145,7 @@ fn plan_query_inner(
             }
             if !bindings.is_empty() {
                 result = HirRelationExpr::LetRec {
-                    max_iter: iter_limit.try_map(|iter_limit| {
-                        NonZeroU64::new(*iter_limit).ok_or(InvalidIterationLimit)
-                    })?,
+                    limit,
                     bindings,
                     body: Box::new(result),
                 }
@@ -1143,7 +1156,12 @@ fn plan_query_inner(
     Ok((result, scope, finishing, expected_group_size))
 }
 
-generate_extracted_config!(MutRecBlockOption, (IterLimit, u64));
+generate_extracted_config!(
+    MutRecBlockOption,
+    (RecursionLimit, u64),
+    (ReturnAtRecursionLimit, u64),
+    (ErrorAtRecursionLimit, u64)
+);
 
 /// Creates plans for CTEs and introduces them to `qcx.ctes`.
 ///

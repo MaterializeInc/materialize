@@ -19,10 +19,6 @@ use crate::TransformArgs;
 pub struct Negate;
 
 impl crate::Transform for Negate {
-    fn recursion_safe(&self) -> bool {
-        true
-    }
-
     #[tracing::instrument(
         target = "optimizer"
         level = "trace",

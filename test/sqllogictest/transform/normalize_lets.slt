@@ -270,12 +270,12 @@ Explained Query:
 
 EOF
 
-#### Tests for ITERATION LIMIT
+#### Tests for RECURSION LIMIT
 
-## ITERATION LIMIT -- Simple test
+## RECURSION LIMIT -- Simple test
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (ITERATION LIMIT 10)
+EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 10)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -285,7 +285,7 @@ SELECT * FROM cnt;
 Explained Query:
   Return
     Get l0
-  With Mutually Recursive [iteration_limit=10]
+  With Mutually Recursive [recursion_limit=10]
     cte l0 =
       Distinct group_by=[#0] monotonic
         Union
@@ -297,17 +297,67 @@ Explained Query:
 
 EOF
 
-## ITERATION LIMIT -- consolidation of independent recursive query blocks with different ITERATION LIMIT
+## RECURSION LIMIT -- RETURN AT RECURSION LIMIT
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive [recursion_limit=10, return_at_limit]
+    cte l0 =
+      Distinct group_by=[#0] monotonic
+        Union
+          Project (#1)
+            Map ((#0 + 1))
+              Get l0
+          Constant
+            - (1)
+
+EOF
+
+## RECURSION LIMIT -- ERROR AT RECURSION LIMIT
+
+query T multiline
+EXPLAIN WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 10)
+  cnt (i int) AS (
+    SELECT 1 AS i
+    UNION
+    SELECT i+1 FROM cnt)
+SELECT * FROM cnt;
+----
+Explained Query:
+  Return
+    Get l0
+  With Mutually Recursive [recursion_limit=10]
+    cte l0 =
+      Distinct group_by=[#0] monotonic
+        Union
+          Project (#1)
+            Map ((#0 + 1))
+              Get l0
+          Constant
+            - (1)
+
+EOF
+
+## RECURSION LIMIT -- consolidation of independent recursive query blocks with different RECURSION LIMIT
 
 query T multiline
 EXPLAIN SELECT * FROM (
-    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 5)
+    WITH MUTUALLY RECURSIVE (RECURSION LIMIT 5)
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
     SELECT * FROM foo
 )
 UNION ALL
 SELECT * FROM (
-    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 7)
+    WITH MUTUALLY RECURSIVE (RECURSION LIMIT 7)
         bar (a int8) AS (SELECT DISTINCT a - 2 FROM bar)
     SELECT * FROM bar
 );
@@ -318,27 +368,27 @@ Explained Query:
       Get l0
       Get l1
   With Mutually Recursive
-    cte [iteration_limit=7] l1 =
+    cte [recursion_limit=7] l1 =
       Distinct group_by=[(#0 - 2)] monotonic
         Get l1
-    cte [iteration_limit=5] l0 =
+    cte [recursion_limit=5] l0 =
       Distinct group_by=[#0] monotonic
         Get l0
 
 EOF
 
-## ITERATION LIMIT -- consolidation of independent recursive query blocks with equal ITERATION LIMIT.
-## We want to see ITERATION LIMIT printed at the block level rather than on each cte.
+## RECURSION LIMIT -- consolidation of independent recursive query blocks with equal RECURSION LIMIT.
+## We want to see RECURSION LIMIT printed at the block level rather than on each cte.
 
 query T multiline
 EXPLAIN SELECT * FROM (
-    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 27)
+    WITH MUTUALLY RECURSIVE (RECURSION LIMIT 27)
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
     SELECT * FROM foo
 )
 UNION ALL
 SELECT * FROM (
-    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 27)
+    WITH MUTUALLY RECURSIVE (RECURSION LIMIT 27)
         bar (a int8) AS (SELECT DISTINCT a - 2 FROM bar)
     SELECT * FROM bar
 );
@@ -348,7 +398,7 @@ Explained Query:
     Union
       Get l0
       Get l1
-  With Mutually Recursive [iteration_limit=27]
+  With Mutually Recursive [recursion_limit=27]
     cte l1 =
       Distinct group_by=[(#0 - 2)] monotonic
         Get l1
@@ -358,12 +408,12 @@ Explained Query:
 
 EOF
 
-## ITERATION LIMIT -- consolidation of not-really nested recursive query.
-## Here, the ITERATION LIMIT of the inner WMR is irrelevant, because it's not recursive.
+## ITERATION RECURSION -- consolidation of not-really nested recursive query.
+## Here, the ITERATION RECURSION of the inner WMR is irrelevant, because it's not recursive.
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (ITERATION LIMIT 9)
+EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 9)
     foo (a int8) AS (
-        WITH MUTUALLY RECURSIVE (ITERATION LIMIT 3)
+        WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3)
             bar (b int8) AS (
                 SELECT * FROM foo
             )
@@ -374,7 +424,7 @@ SELECT * FROM foo;
 Explained Query:
   Return
     Get l0
-  With Mutually Recursive [iteration_limit=9]
+  With Mutually Recursive [recursion_limit=9]
     cte l0 =
       Union
         Get l0
@@ -382,11 +432,11 @@ Explained Query:
 
 EOF
 
-# ITERATION LIMIT -- a nested recursive query.
+# ITERATION RECURSION -- a nested recursive query.
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (ITERATION LIMIT 17)
+EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 17)
     foo (a int8) AS (
-        WITH MUTUALLY RECURSIVE (ITERATION LIMIT 11)
+        WITH MUTUALLY RECURSIVE (RECURSION LIMIT 11)
             bar (b int8) AS (
                 SELECT * FROM (SELECT * FROM foo UNION ALL SELECT * FROM bar)
             )
@@ -397,7 +447,7 @@ SELECT * FROM foo;
 Explained Query:
   Return
     Get l1
-  With Mutually Recursive [iteration_limit=17]
+  With Mutually Recursive [recursion_limit=17]
     cte l1 =
       Return
         Threshold
@@ -405,7 +455,7 @@ Explained Query:
             Get l1
             Negate
               Get l0
-      With Mutually Recursive [iteration_limit=11]
+      With Mutually Recursive [recursion_limit=11]
         cte l0 =
           Union
             Get l1
@@ -413,10 +463,10 @@ Explained Query:
 
 EOF
 
-## ITERATION LIMIT -- Complex inlining and other things.
+## ITERATION RECURSION -- Complex inlining and other things.
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (ITERATION LIMIT 21)
+EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 21)
     label (node int, comp int) AS (
         SELECT dst, MIN(comp)
         FROM (
@@ -429,7 +479,7 @@ EXPLAIN WITH MUTUALLY RECURSIVE (ITERATION LIMIT 21)
         GROUP BY dst
     )
 SELECT round, COUNT(*) FROM (
-    WITH MUTUALLY RECURSIVE (ITERATION LIMIT 23)
+    WITH MUTUALLY RECURSIVE (RECURSION LIMIT 23)
         relabel (node int, comp int, round int) AS (
             SELECT DISTINCT ON(node) node, comp, round
             FROM (
@@ -451,7 +501,7 @@ Explained Query:
       Reduce group_by=[#0] aggregates=[count(*)]
         Project (#2)
           Get l1
-    With Mutually Recursive [iteration_limit=23]
+    With Mutually Recursive [recursion_limit=23]
       cte l1 =
         TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1
           Union
@@ -466,7 +516,7 @@ Explained Query:
                   ArrangeBy keys=[[#0]]
                     Filter (#0) IS NOT NULL
                       Get l1
-  With Mutually Recursive [iteration_limit=21]
+  With Mutually Recursive [recursion_limit=21]
     cte l0 =
       Reduce group_by=[#0] aggregates=[min(#1)]
         Union

@@ -607,7 +607,7 @@ impl Coordinator {
                 matches!(pending_write_txn, PendingWriteTxn::User {
                     pending_txn: PendingTxn { session, .. },
                     ..
-                } if session.conn_id().val() == conn_id)
+                } if **session.conn_id() == conn_id)
             }) {
                 if let PendingWriteTxn::User {
                     pending_txn:
@@ -627,7 +627,7 @@ impl Coordinator {
             if let Some(idx) = self
                 .write_lock_wait_group
                 .iter()
-                .position(|ready| matches!(ready, Deferred::Plan(ready) if ready.session.conn_id().val() == conn_id))
+                .position(|ready| matches!(ready, Deferred::Plan(ready) if **ready.session.conn_id() == conn_id))
             {
                 let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
                 if let Deferred::Plan(ready) = ready {
@@ -685,7 +685,7 @@ impl Coordinator {
             .with_label_values(&[session_type])
             .dec();
         self.active_conns.remove(session.conn_id());
-        self.cancel_pending_peeks(session.conn_id().val());
+        self.cancel_pending_peeks(**session.conn_id());
         let update = self.catalog().state().pack_session_update(session, -1);
         self.send_builtin_table_updates(vec![update]).await;
     }

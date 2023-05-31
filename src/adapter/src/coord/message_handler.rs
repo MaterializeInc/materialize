@@ -18,7 +18,7 @@ use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
-use mz_persist_client::usage::ShardsUsage;
+use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_client::controller::CollectionMetadata;
@@ -72,7 +72,7 @@ impl Coordinator {
             // in any situation where you use it, you must also have a code
             // path that responds to the client (e.g. reporting an error).
             Message::RemovePendingPeeks { conn_id } => {
-                self.cancel_pending_peeks(conn_id.val());
+                self.cancel_pending_peeks(*conn_id);
             }
             Message::LinearizeReads(pending_read_txns) => {
                 self.message_linearize_reads(pending_read_txns).await;
@@ -136,16 +136,7 @@ impl Coordinator {
         // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
             let collection_metric_timer = collection_metric.start_timer();
-            let mut shard_sizes = client.shards_usage().await;
-
-            // Don't record usage for shards that are no longer live.
-            // Technically the storage is in use, but we never free it, and
-            // we don't want to bill the customer for it.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/8185
-            shard_sizes
-                .by_shard
-                .retain(|shard_id, _| live_shards.contains(shard_id));
+            let shard_sizes = client.shards_usage_referenced(live_shards).await;
             collection_metric_timer.observe_duration();
 
             // It is not an error for shard sizes to become ready after
@@ -157,7 +148,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self, shards_usage: ShardsUsage) {
+    async fn storage_usage_update(&mut self, shards_usage: ShardsUsageReferenced) {
         // Similar to audit events, use the oracle ts so this is guaranteed to
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
@@ -168,14 +159,7 @@ impl Coordinator {
         for (shard_id, shard_usage) in shards_usage.by_shard {
             ops.push(catalog::Op::UpdateStorageUsage {
                 shard_id: Some(shard_id.to_string()),
-                size_bytes: shard_usage.referenced_bytes(),
-                collection_timestamp,
-            });
-        }
-        if shards_usage.unattributable_bytes > 0 {
-            ops.push(catalog::Op::UpdateStorageUsage {
-                shard_id: None,
-                size_bytes: shards_usage.unattributable_bytes,
+                size_bytes: shard_usage.size_bytes(),
                 collection_timestamp,
             });
         }
