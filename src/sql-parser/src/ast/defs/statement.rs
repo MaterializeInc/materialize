@@ -2945,17 +2945,47 @@ impl AstDisplay for PrivilegeSpecification {
 }
 impl_display!(PrivilegeSpecification);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GrantObjectSpecification<T: AstInfo> {
+    /// The type of object.
+    ///
+    /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
+    pub object_type: ObjectType,
+    pub object_spec_inner: GrantObjectSpecificationInner<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GrantObjectSpecificationInner<T: AstInfo> {
+    All { schemas: Vec<T::SchemaName> },
+    Objects { names: Vec<T::ObjectName> },
+}
+
+impl<T: AstInfo> AstDisplay for GrantObjectSpecification<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match &self.object_spec_inner {
+            GrantObjectSpecificationInner::All { schemas } => {
+                f.write_str("ALL ");
+                f.write_node(&self.object_type);
+                f.write_str("S IN SCHEMA ");
+                f.write_node(&display::comma_separated(schemas));
+            }
+            GrantObjectSpecificationInner::Objects { names } => {
+                f.write_node(&self.object_type);
+                f.write_str(" ");
+                f.write_node(&display::comma_separated(names));
+            }
+        }
+    }
+}
+impl_display_t!(GrantObjectSpecification);
+
 /// `GRANT ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GrantPrivilegesStatement<T: AstInfo> {
     /// The privileges being granted on an object.
     pub privileges: PrivilegeSpecification,
-    /// The type of object.
-    ///
-    /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
-    pub object_type: ObjectType,
-    /// The names of the objects.
-    pub names: Vec<T::ObjectName>,
+    /// The objects that are affected by the GRANT.
+    pub objects: GrantObjectSpecification<T>,
     /// The roles that will granted the privileges.
     pub roles: Vec<T::RoleName>,
 }
@@ -2965,9 +2995,7 @@ impl<T: AstInfo> AstDisplay for GrantPrivilegesStatement<T> {
         f.write_str("GRANT ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
-        f.write_node(&self.object_type);
-        f.write_str(" ");
-        f.write_node(&display::comma_separated(&self.names));
+        f.write_node(&self.objects);
         f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.roles));
     }
@@ -2979,12 +3007,8 @@ impl_display_t!(GrantPrivilegesStatement);
 pub struct RevokePrivilegesStatement<T: AstInfo> {
     /// The privileges being revoked.
     pub privileges: PrivilegeSpecification,
-    /// The type of object.
-    ///
-    /// Note: For views, materialized views, and sources this will be [`ObjectType::Table`].
-    pub object_type: ObjectType,
-    /// The names of the objects.
-    pub names: Vec<T::ObjectName>,
+    /// The objects that are affected by the REVOKE.
+    pub objects: GrantObjectSpecification<T>,
     /// The roles that will have privileges revoked.
     pub roles: Vec<T::RoleName>,
 }
@@ -2994,9 +3018,7 @@ impl<T: AstInfo> AstDisplay for RevokePrivilegesStatement<T> {
         f.write_str("REVOKE ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
-        f.write_node(&self.object_type);
-        f.write_str(" ");
-        f.write_node(&display::comma_separated(&self.names));
+        f.write_node(&self.objects);
         f.write_str(" FROM ");
         f.write_node(&display::comma_separated(&self.roles));
     }

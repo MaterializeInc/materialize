@@ -451,6 +451,16 @@ pub enum ResolvedSchemaName {
 
 impl ResolvedSchemaName {
     /// Panics if this is `Self::Error`.
+    pub fn database_spec(&self) -> &ResolvedDatabaseSpecifier {
+        match self {
+            ResolvedSchemaName::Schema { database_spec, .. } => database_spec,
+            ResolvedSchemaName::Error => {
+                unreachable!("should have been handled by name resolution")
+            }
+        }
+    }
+
+    /// Panics if this is `Self::Error`.
     pub fn schema_spec(&self) -> &SchemaSpecifier {
         match self {
             ResolvedSchemaName::Schema { schema_spec, .. } => schema_spec,

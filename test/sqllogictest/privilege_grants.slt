@@ -1892,6 +1892,391 @@ SELECT has_table_privilege('t2', 'SELECT')
 ----
 false
 
+# Test ALL object GRANT/REVOKE
+
+simple conn=mz_system,user=mz_system
+CREATE DATABASE d1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SCHEMA s1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SCHEMA d1.s2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE s1.t3 ();
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE s1.t4 ();
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE d1.s2.t5 ();
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE d1.s2.t6 ();
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TYPE s1.ty1 AS LIST (ELEMENT TYPE=bool);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TYPE s1.ty2 AS LIST (ELEMENT TYPE=bool);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TYPE d1.s2.ty3 AS LIST (ELEMENT TYPE=bool);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TYPE d1.s2.ty4 AS LIST (ELEMENT TYPE=bool);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SECRET s1.se1 AS decode('c2VjcmV0Cg==', 'base64');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SECRET s1.se2 AS decode('c2VjcmV0Cg==', 'base64');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SECRET d1.s2.se3 AS decode('c2VjcmV0Cg==', 'base64');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE SECRET d1.s2.se4 AS decode('c2VjcmV0Cg==', 'base64');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION s1.conn1 TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION s1.conn2 TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION d1.s2.conn3 TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION d1.s2.conn4 TO KAFKA (BROKER 'localhost:9092');
+----
+COMPLETE 0
+
+## Tables
+
+query B
+SELECT has_table_privilege('t3', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('t4', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('t5', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('t6', 'SELECT')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON ALL TABLES IN SCHEMA s1, d1.s2 TO materialize;
+----
+COMPLETE 0
+
+query B
+SELECT has_table_privilege('t3', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('t4', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('t5', 'SELECT')
+----
+true
+
+query B
+SELECT has_table_privilege('t6', 'SELECT')
+----
+true
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON ALL TABLES IN SCHEMA s1, d1.s2 FROM materialize;
+----
+COMPLETE 0
+
+query B
+SELECT has_table_privilege('t3', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('t4', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('t5', 'SELECT')
+----
+false
+
+query B
+SELECT has_table_privilege('t6', 'SELECT')
+----
+false
+
+## Types
+
+query B
+SELECT has_type_privilege('ty1', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('ty2', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('ty3', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('ty4', 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON ALL TYPES IN SCHEMA s1, d1.s2 TO materialize;
+----
+COMPLETE 0
+
+query B
+SELECT has_type_privilege('ty1', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege('ty2', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege('ty3', 'USAGE')
+----
+true
+
+query B
+SELECT has_type_privilege('ty4', 'USAGE')
+----
+true
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON ALL TYPES IN SCHEMA s1, d1.s2 FROM materialize;
+----
+COMPLETE 0
+
+query B
+SELECT has_type_privilege('ty1', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('ty2', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('ty3', 'USAGE')
+----
+false
+
+query B
+SELECT has_type_privilege('ty4', 'USAGE')
+----
+false
+
+## Secrets
+
+query B
+SELECT has_secret_privilege('se1', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('se2', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('se3', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('se4', 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON ALL SECRETS IN SCHEMA s1, d1.s2 TO materialize;
+----
+COMPLETE 0
+
+query B
+SELECT has_secret_privilege('se1', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege('se2', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege('se3', 'USAGE')
+----
+true
+
+query B
+SELECT has_secret_privilege('se4', 'USAGE')
+----
+true
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON ALL SECRETS IN SCHEMA s1, d1.s2 FROM materialize;
+----
+COMPLETE 0
+
+query B
+SELECT has_secret_privilege('se1', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('se2', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('se3', 'USAGE')
+----
+false
+
+query B
+SELECT has_secret_privilege('se4', 'USAGE')
+----
+false
+
+## Connections
+
+query B
+SELECT has_connection_privilege('conn1', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('conn2', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('conn3', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('conn4', 'USAGE')
+----
+false
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON ALL CONNECTIONS IN SCHEMA s1, d1.s2 TO materialize;
+----
+COMPLETE 0
+
+query B
+SELECT has_connection_privilege('conn1', 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege('conn2', 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege('conn3', 'USAGE')
+----
+true
+
+query B
+SELECT has_connection_privilege('conn4', 'USAGE')
+----
+true
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON ALL CONNECTIONS IN SCHEMA s1, d1.s2 FROM materialize;
+----
+COMPLETE 0
+
+query B
+SELECT has_connection_privilege('conn1', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('conn2', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('conn3', 'USAGE')
+----
+false
+
+query B
+SELECT has_connection_privilege('conn4', 'USAGE')
+----
+false
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system
