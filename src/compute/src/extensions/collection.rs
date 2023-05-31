@@ -60,7 +60,26 @@ where
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         if must_consolidate {
-            self.mz_consolidate::<Tr>(name)
+            // We employ AHash below instead of the default hasher in DD to obtain
+            // a better distribution of data to workers. AHash claims empirically
+            // both speed and high quality, according to
+            // https://github.com/tkaitchuck/aHash/blob/master/compare/readme.md.
+            // TODO(vmarcos): Consider here if it is worth it to spend the time to
+            // implement twisted tabulation hashing as proposed in Mihai Patrascu,
+            // Mikkel Thorup: Twisted Tabulation Hashing. SODA 2013: 209-228, available
+            // at https://epubs.siam.org/doi/epdf/10.1137/1.9781611973105.16. The latter
+            // would provide good bounds for balls-into-bins problems when the number of
+            // bins is small (as is our case), so we'd have a theoretical guarantee.
+            let random_state = ahash::RandomState::new();
+            let mut h = random_state.build_hasher();
+            let exchange = Exchange::new(move |update: &((D1, _), G::Timestamp, R)| {
+                let data = &(update.0).0;
+                data.hash(&mut h);
+                h.finish()
+            });
+            self.map(|k| (k, ()))
+                .mz_arrange_core::<_, Tr>(exchange, name)
+                .as_collection(|d: &D1, _| d.clone())
         } else {
             self.clone()
         }
@@ -72,25 +91,8 @@ where
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        // We employ AHash below instead of the default hasher in DD to obtain
-        // a better distribution of data to workers. AHash claims empirically
-        // both speed and high quality, according to
-        // https://github.com/tkaitchuck/aHash/blob/master/compare/readme.md.
-        // TODO(vmarcos): Consider here if it is worth it to spend the time to
-        // implement twisted tabulation hashing as proposed in Mihai Patrascu,
-        // Mikkel Thorup: Twisted Tabulation Hashing. SODA 2013: 209-228, available
-        // at https://epubs.siam.org/doi/epdf/10.1137/1.9781611973105.16. The latter
-        // would provide good bounds for balls-into-bins problems when the number of
-        // bins is small (as is our case), so we'd have a theoretical guarantee.
-        let random_state = ahash::RandomState::new();
-        let mut h = random_state.build_hasher();
-        let exchange = Exchange::new(move |update: &((D1, _), G::Timestamp, R)| {
-            let data = &(update.0).0;
-            data.hash(&mut h);
-            h.finish()
-        });
         self.map(|k| (k, ()))
-            .mz_arrange_core::<_, Tr>(exchange, name)
+            .mz_arrange::<Tr>(name)
             .as_collection(|d: &D1, _| d.clone())
     }
 }
