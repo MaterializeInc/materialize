@@ -124,10 +124,14 @@ class ExpressionGenerator:
         self, operation: DbOperationOrFunction
     ) -> ValueStorageLayout:
         if not operation.is_aggregation:
-            # Non-aggregate expressions can unfortunately only use horizontal layout because the processing order does
-            # not seem to be consistent between data-flow rendering and constant folding such that error messages will
-            # differ
-            return ValueStorageLayout.HORIZONTAL
+            # Prefer the horizontal row format for non-aggregate expressions. (It makes it less likely that a query
+            # results in (an unexpected) error. Furthermore, in case of an error, error messages of non-aggregate
+            # expressions can only be compared in HORIZONTAL layout (because the row processing order of an
+            # evaluation strategy is not defined).)
+            if self.randomized_picker.random_boolean(0.9):
+                return ValueStorageLayout.HORIZONTAL
+            else:
+                return ValueStorageLayout.VERTICAL
 
         # strongly prefer vertical storage for aggregations but allow some variance
 
