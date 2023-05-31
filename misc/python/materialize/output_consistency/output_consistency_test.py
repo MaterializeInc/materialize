@@ -114,7 +114,6 @@ def _run_output_consistency_tests_internal(
         split_and_retry_on_db_error=True,
         print_reproduction_code=True,
         skip_postgres_incompatible_types=False,
-        generate_nested_expressions=True,
     )
 
     output_printer.print_config(config)

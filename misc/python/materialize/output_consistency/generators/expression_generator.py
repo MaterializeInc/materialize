@@ -202,9 +202,7 @@ class ExpressionGenerator:
         must_use_aggregation: bool,
         nesting_level: int,
     ) -> Expression:
-        if self.config.generate_nested_expressions and (
-            must_use_aggregation or self.randomized_picker.random_boolean(0.2)
-        ):
+        if must_use_aggregation or self.randomized_picker.random_boolean(0.2):
             if must_use_aggregation:
                 allow_aggregation_in_arg = True
             else:

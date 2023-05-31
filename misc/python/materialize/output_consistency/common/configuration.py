@@ -25,7 +25,6 @@ class ConsistencyTestConfiguration:
         max_iterations: int,
         avoid_expressions_expecting_db_error: bool,
         skip_postgres_incompatible_types: bool,
-        generate_nested_expressions: bool,
     ):
         self.queries_per_tx = queries_per_tx
         self.use_autocommit = use_autocommit
@@ -41,7 +40,6 @@ class ConsistencyTestConfiguration:
         self.max_iterations = max_iterations
         self.avoid_expressions_expecting_db_error = avoid_expressions_expecting_db_error
         self.skip_postgres_incompatible_types = skip_postgres_incompatible_types
-        self.generate_nested_expressions = generate_nested_expressions
 
     def validate(self) -> None:
         if self.max_runtime_in_sec == 0 and self.max_iterations == 0:
