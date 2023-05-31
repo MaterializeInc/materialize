@@ -920,6 +920,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::ListConcat { .. }
         | AggregateFunc::StringAgg { .. }
         | AggregateFunc::RowNumber { .. }
+        | AggregateFunc::Rank { .. }
         | AggregateFunc::DenseRank { .. }
         | AggregateFunc::LagLead { .. }
         | AggregateFunc::FirstValue { .. }
