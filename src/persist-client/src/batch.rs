@@ -34,7 +34,7 @@ use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::CpuHeavyRuntime;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey};
@@ -665,7 +665,7 @@ pub(crate) struct BatchParts<T> {
     lower: Antichain<T>,
     blob: Arc<dyn Blob + Send + Sync>,
     cpu_heavy_runtime: Arc<CpuHeavyRuntime>,
-    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<Arc<PartStats>>)>)>,
+    writing_parts: VecDeque<(PartialBatchKey, JoinHandle<(usize, Option<LazyPartStats>)>)>,
     finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
 }
@@ -744,7 +744,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             match PartStats::legacy_part_format(&schemas, &batch.updates) {
                                 Ok(mut x) => {
                                     x.key.trim_to_budget(stats_budget, force_keep_stats_col);
-                                    Some((Arc::new(x), stats_start.elapsed()))
+                                    let x = LazyPartStats::from(&x);
+                                    Some((x, stats_start.elapsed()))
                                 }
                                 Err(err) => {
                                     error!("failed to construct part stats: {}", err);

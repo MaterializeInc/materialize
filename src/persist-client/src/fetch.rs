@@ -28,12 +28,11 @@ use timely::PartialOrder;
 use tracing::{debug_span, trace_span, Instrument};
 
 use crate::error::InvalidUsage;
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::PartialBatchKey;
 use crate::read::{LeasedReaderId, ReadHandle};
-use crate::stats::PartStats;
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
@@ -225,7 +224,11 @@ where
         ts_filter,
         part: encoded_part,
         schemas,
-        filter_pushdown_audit: part.filter_pushdown_audit.then(|| part.key.0.clone()),
+        filter_pushdown_audit: if part.filter_pushdown_audit {
+            part.stats.clone()
+        } else {
+            None
+        },
         _phantom: PhantomData,
     };
 
@@ -349,12 +352,12 @@ where
     pub(crate) metadata: SerdeLeasedBatchPartMetadata,
     pub(crate) desc: Description<T>,
     pub(crate) key: PartialBatchKey,
-    pub(crate) stats: Option<Arc<PartStats>>,
     pub(crate) encoded_size_bytes: usize,
     /// The `SeqNo` from which this part originated; we track this value as
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
     pub(crate) leased_seqno: Option<SeqNo>,
+    pub(crate) stats: Option<LazyPartStats>,
     pub(crate) filter_pushdown_audit: bool,
 }
 
@@ -382,6 +385,7 @@ where
             encoded_size_bytes: self.encoded_size_bytes,
             leased_seqno: self.leased_seqno,
             reader_id: self.reader_id.clone(),
+            stats: self.stats.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
@@ -438,7 +442,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     ts_filter: FetchBatchFilter<T>,
     part: EncodedPart<T>,
     schemas: Schemas<K, V>,
-    filter_pushdown_audit: Option<String>,
+    filter_pushdown_audit: Option<LazyPartStats>,
 
     _phantom: PhantomData<fn() -> (K, V, D)>,
 }
@@ -460,10 +464,10 @@ impl<K: Codec, V: Codec, T, D> FetchedPart<K, V, T, D> {
     /// Returns Some if this part was only fetched as part of a filter pushdown
     /// audit. See [LeasedBatchPart::request_filter_pushdown_audit].
     ///
-    /// If set, the String is for debugging and should be included in any error
-    /// messages.
-    pub fn is_filter_pushdown_audit(&self) -> Option<&String> {
-        self.filter_pushdown_audit.as_ref()
+    /// If set, the value in the Option is for debugging and should be included
+    /// in any error messages.
+    pub fn is_filter_pushdown_audit(&self) -> Option<impl std::fmt::Debug> {
+        self.filter_pushdown_audit.clone()
     }
 }
 
@@ -627,6 +631,7 @@ pub struct SerdeLeasedBatchPart {
     encoded_size_bytes: usize,
     leased_seqno: Option<SeqNo>,
     reader_id: LeasedReaderId,
+    stats: Option<LazyPartStats>,
     filter_pushdown_audit: bool,
 }
 
@@ -652,12 +657,9 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
             ),
             key: x.key,
             encoded_size_bytes: x.encoded_size_bytes,
-            // TODO(mfp): We don't need stats after the batch is Exchanged into
-            // the fetch operator. This is unfortunately non-obvious, so perhaps
-            // better would be to lift stats off LeasedBatchPart.
-            stats: None,
             leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,
+            stats: x.stats,
             filter_pushdown_audit: x.filter_pushdown_audit,
         }
     }
