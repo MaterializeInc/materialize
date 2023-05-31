@@ -5104,7 +5104,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let variable = self.parse_identifier()?;
+        let mut variable = self.parse_identifier()?;
+        if variable.as_str().parse() == Ok(SCHEMA) {
+            variable = Ident::new("search_path");
+        }
         Ok(Statement::ResetVariable(ResetVariableStatement {
             variable,
         }))

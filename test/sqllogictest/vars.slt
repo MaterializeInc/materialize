@@ -328,3 +328,22 @@ public
 
 statement error Expected end of statement, found comma
 SET SCHEMA TO public, private, playground
+
+statement ok
+CREATE SCHEMA s
+
+statement ok
+SET SCHEMA TO s
+
+query T
+SHOW SCHEMA
+----
+s
+
+statement ok
+RESET SCHEMA
+
+query T
+SHOW SCHEMA
+----
+public
