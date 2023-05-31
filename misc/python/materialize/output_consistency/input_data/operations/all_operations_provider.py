@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import itertools
 from typing import List
 
 from materialize.output_consistency.input_data.operations.aggregate_operations_provider import (
@@ -26,9 +27,12 @@ from materialize.output_consistency.input_data.operations.trigonometric_operatio
 )
 from materialize.output_consistency.operation.operation import DbOperationOrFunction
 
-ALL_OPERATION_TYPES: List[DbOperationOrFunction] = []
-ALL_OPERATION_TYPES.extend(GENERIC_OPERATION_TYPES)
-ALL_OPERATION_TYPES.extend(AGGREGATE_OPERATION_TYPES)
-ALL_OPERATION_TYPES.extend(BOOLEAN_OPERATION_TYPES)
-ALL_OPERATION_TYPES.extend(NUMERIC_OPERATION_TYPES)
-ALL_OPERATION_TYPES.extend(TRIGONOMETRIC_OPERATION_TYPES)
+ALL_OPERATION_TYPES: List[DbOperationOrFunction] = list(
+    itertools.chain(
+        GENERIC_OPERATION_TYPES,
+        AGGREGATE_OPERATION_TYPES,
+        BOOLEAN_OPERATION_TYPES,
+        NUMERIC_OPERATION_TYPES,
+        TRIGONOMETRIC_OPERATION_TYPES,
+    )
+)
