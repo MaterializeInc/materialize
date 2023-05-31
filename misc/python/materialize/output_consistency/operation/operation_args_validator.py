@@ -19,7 +19,7 @@ class OperationArgsValidator:
     """Validator that performs heuristic checks to determine if a database error is to be expected"""
 
     def is_expected_to_cause_error(self, args: List[Expression]) -> bool:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def index_of(
         self,

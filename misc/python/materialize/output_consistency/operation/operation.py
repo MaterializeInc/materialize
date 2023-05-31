@@ -55,7 +55,7 @@ class DbOperationOrFunction:
         self.relevance = relevance
 
     def to_pattern(self, args_count: int) -> str:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def validate_args_count_in_range(self, args_count: int) -> None:
         if args_count < self.min_param_count:
@@ -74,7 +74,7 @@ class DbOperationOrFunction:
         return set()
 
     def __str__(self) -> str:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def try_resolve_exact_data_type(self, args: List[Expression]) -> Optional[DataType]:
         return None
