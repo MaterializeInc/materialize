@@ -2223,6 +2223,8 @@ pub enum EvalError {
     InvalidRoleId(String),
     InvalidPrivileges(String),
     LetRecLimitExceeded(String),
+    MultiDimensionalArraySearch,
+    MustNotBeNull(String),
 }
 
 impl fmt::Display for EvalError {
@@ -2380,6 +2382,11 @@ impl fmt::Display for EvalError {
                 write!(f, "Recursive query exceeded the recursion limit {}. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)",
                        max_iters)
             }
+            EvalError::MultiDimensionalArraySearch => write!(
+                f,
+                "searching for elements in multidimensional arrays is not supported"
+            ),
+            EvalError::MustNotBeNull(v) => write!(f, "{v} must not be null"),
         }
     }
 }
@@ -2584,6 +2591,8 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidRoleId(v) => InvalidRoleId(v.clone()),
             EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.clone()),
             EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.clone()),
+            EvalError::MultiDimensionalArraySearch => MultiDimensionalArraySearch(()),
+            EvalError::MustNotBeNull(v) => MustNotBeNull(v.clone()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2683,6 +2692,8 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v)),
                 InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v)),
                 WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v)),
+                MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
+                MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

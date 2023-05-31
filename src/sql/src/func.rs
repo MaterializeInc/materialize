@@ -1690,6 +1690,10 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "array_lower" => Scalar {
             params!(ArrayAny, Int64) => BinaryFunc::ArrayLower => Int32, 2091;
         },
+        "array_position" => Scalar {
+            params!(ArrayAnyCompatible, AnyCompatible) => VariadicFunc::ArrayPosition => Int32, 3277;
+            params!(ArrayAnyCompatible, AnyCompatible, Int32) => VariadicFunc::ArrayPosition => Int32, 3278;
+        },
         "array_remove" => Scalar {
             params!(ArrayAnyCompatible, AnyCompatible) => BinaryFunc::ArrayRemove => ArrayAnyCompatible, 3167;
         },
