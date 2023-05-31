@@ -87,6 +87,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
             query_template.storage_layout,
             query_template.row_selection,
             table_column_selection,
+            override_db_object_name=evaluation_strategy.simple_db_object_name,
         )
 
         for line in setup_code_lines:
@@ -106,6 +107,7 @@ class ReproductionCodePrinter(BaseOutputPrinter):
                 evaluation_strategy,
                 QueryOutputFormat.MULTI_LINE,
                 query_column_selection,
+                override_db_object_name=evaluation_strategy.simple_db_object_name,
             )
         )
 

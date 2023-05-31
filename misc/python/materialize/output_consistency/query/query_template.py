@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
+from typing import List, Optional
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -52,7 +52,13 @@ class QueryTemplate:
         strategy: EvaluationStrategy,
         output_format: QueryOutputFormat,
         query_column_selection: QueryColumnByIndexSelection,
+        override_db_object_name: Optional[str] = None,
     ) -> str:
+        if override_db_object_name is not None:
+            db_object_name = override_db_object_name
+        else:
+            db_object_name = strategy.get_db_object_name(self.storage_layout)
+
         space_separator = self._get_space_separator(output_format)
 
         column_sql = self._create_column_sql(query_column_selection, space_separator)
@@ -61,7 +67,7 @@ class QueryTemplate:
 
         sql = f"""
 SELECT{space_separator}{column_sql}
-FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
+FROM{space_separator}{db_object_name}
 {where_clause}
 {order_by_clause};""".strip()
 
