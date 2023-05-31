@@ -49,7 +49,7 @@ impl PartStats {
         // on the old part format. We don't intend to make this fast, rather we
         // intend to compute stats on the new part format.
         let mut new_format = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref());
-        let builder = new_format.get_mut();
+        let mut builder = new_format.get_mut();
         let mut key = schemas.key.encoder(builder.key)?;
         let mut val = schemas.val.encoder(builder.val)?;
         for x in part {

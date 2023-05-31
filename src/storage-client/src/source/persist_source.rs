@@ -611,10 +611,10 @@ mod tests {
 
             let mut part = PartBuilder::new::<SourceData, _, _, _>(&schema, &UnitSchema);
             {
-                let part_mut = part.get_mut();
+                let mut part_mut = part.get_mut();
                 <RelationDesc as Schema<SourceData>>::encoder(&schema, part_mut.key)?.encode(&row);
-                part_mut.ts.push(1);
-                part_mut.diff.push(1);
+                part_mut.ts.push(1u64);
+                part_mut.diff.push(1i64);
             }
             let part = part.finish()?;
             let stats = part.key_stats::<SourceData, _>(&schema)?;
