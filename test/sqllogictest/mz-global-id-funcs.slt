@@ -142,3 +142,15 @@ query T
 SELECT mz_internal.mz_name_to_global_id(null, ARRAY['pg_catalog'], 'int4')
 ----
 s20
+
+# Tables have no subsources
+
+statement ok
+CREATE INDEX t_idx ON t(a);
+
+statement ok
+CREATE MATERIALIZED VIEW t_mv AS SELECT * FROM t;
+
+query TTT
+SELECT * FROM mz_internal.mz_get_subsources('t');
+----
