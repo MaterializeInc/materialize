@@ -9,7 +9,7 @@
 
 //! Types to build async operators with general shapes.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::mem::ManuallyDrop;
 use std::pin::Pin;
@@ -18,12 +18,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use differential_dataflow::operators::arrange::agent::ShutdownButton;
 use futures_util::task::ArcWake;
 use futures_util::FutureExt;
 use polonius_the_crab::{polonius, WithLifetime};
 use timely::communication::message::RefOrMut;
-use timely::communication::{Pull, Push};
+use timely::communication::{Message, Pull, Push};
 use timely::dataflow::channels::pact::ParallelizationContractCore;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::counter::CounterCore as PushCounter;
@@ -57,6 +56,10 @@ pub struct OperatorBuilder<G: Scope> {
     /// Holds type erased closures that flush an output handle when called. These handles will be
     /// automatically drained when the operator is scheduled after the logic future has been polled
     output_flushes: Vec<Box<dyn FnMut()>>,
+    /// A handle to check whether all workers have pressed the shutdown button.
+    shutdown_handle: ButtonHandle,
+    /// A button to coordinate shutdown of this operator among workers.
+    shutdown_button: Button,
 }
 
 /// An async Waker that activates a specific operator when woken and marks the task as ready
@@ -330,7 +333,7 @@ impl<T: Timestamp, D: Container, P: Push<BundleCore<T, D>> + 'static> Clone
 
 impl<G: Scope> OperatorBuilder<G> {
     /// Allocates a new generic async operator builder from its containing scope.
-    pub fn new(name: String, scope: G) -> Self {
+    pub fn new(name: String, mut scope: G) -> Self {
         let builder = OperatorBuilderRc::new(name, scope.clone());
         let info = builder.operator_info();
         let activator = scope.activator_for(&info.address);
@@ -340,6 +343,7 @@ impl<G: Scope> OperatorBuilder<G> {
             active: AtomicBool::new(false),
             task_ready: AtomicBool::new(true),
         };
+        let (shutdown_handle, shutdown_button) = button(&mut scope, &info.address);
 
         OperatorBuilder {
             builder,
@@ -349,6 +353,8 @@ impl<G: Scope> OperatorBuilder<G> {
             operator_waker: Arc::new(operator_waker),
             drain_pipe: Default::default(),
             output_flushes: Default::default(),
+            shutdown_handle,
+            shutdown_button,
         }
     }
 
@@ -447,8 +453,8 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Creates an operator implementation from supplied logic constructor. It returns a shutdown
     /// button that when pressed it will cause the logic future to be dropped and input handles to
     /// be drained. The button can be converted into a token by using
-    /// [`ShutdownButton::press_on_drop`]
-    pub fn build<B, L>(self, constructor: B) -> ShutdownButton<()>
+    /// [`Button::press_on_drop`]
+    pub fn build<B, L>(self, constructor: B) -> Button
     where
         B: FnOnce(Vec<Capability<G::Timestamp>>) -> L,
         L: Future + 'static,
@@ -458,8 +464,7 @@ impl<G: Scope> OperatorBuilder<G> {
         let shared_frontiers = self.shared_frontiers;
         let drain_pipe = self.drain_pipe;
         let mut output_flushes = self.output_flushes;
-        let token = Rc::new(RefCell::new(Some(())));
-        let button = ShutdownButton::new(Rc::clone(&token), self.activator);
+        let mut shutdown_handle = self.shutdown_handle;
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             move |new_frontiers| {
@@ -473,56 +478,70 @@ impl<G: Scope> OperatorBuilder<G> {
                         }
                     }
                 }
-                // Then, wake up any registered Wakers for the input streams while taking care to
-                // not reactivate the timely operator since that would lead to an infinite loop.
-                // This ensures that the input handles wake up properly when managed by other
-                // executors, e.g a `select!` that provides its own Waker implementation.
-                {
-                    operator_waker.active.store(true, Ordering::SeqCst);
-                    let mut registered_wakers = registered_wakers.borrow_mut();
-                    for waker in registered_wakers.drain(..) {
-                        waker.wake();
-                    }
-                    operator_waker.active.store(false, Ordering::SeqCst);
-                }
 
-                // If the shutdown button got pressed we should immediately drop the logic future
-                // which will also register all the handles for drainage
-                if token.borrow().is_none() {
-                    logic_fut = None;
-                }
-
-                // Schedule the logic future if any of the wakers above marked the task as ready
-                if let Some(fut) = logic_fut.as_mut() {
-                    if operator_waker.task_ready.load(Ordering::SeqCst) {
-                        let waker = futures_util::task::waker_ref(&operator_waker);
-                        let mut cx = Context::from_waker(&waker);
-                        operator_waker.task_ready.store(false, Ordering::SeqCst);
-                        if Pin::new(fut).poll(&mut cx).is_ready() {
-                            // We're done with logic so deallocate the task
-                            logic_fut = None;
+                // If our worker pressed the button we stop scheduling the logic future and/or
+                // draining the input handles to stop producing data and frontier updates
+                // downstream.
+                if shutdown_handle.local_pressed() {
+                    // When all workers press their buttons we drop the logic future which will
+                    // also register all the handles for drainage
+                    if shutdown_handle.all_pressed() {
+                        logic_fut = None;
+                        let mut drains = drain_pipe.borrow_mut();
+                        for drain in drains.iter_mut() {
+                            (drain)()
                         }
-                        // Flush all the outputs before exiting
-                        for flush in output_flushes.iter_mut() {
-                            (flush)();
-                        }
+                        false
+                    } else {
+                        true
                     }
-                }
-                // The timely operator needs to be kept alive if the task is pending
-                if logic_fut.is_some() {
-                    true
                 } else {
-                    // Othewise we should drain any dropped handles
-                    let mut drains = drain_pipe.borrow_mut();
-                    for drain in drains.iter_mut() {
-                        (drain)()
+                    // Wake up any registered Wakers for the input streams while taking care to not
+                    // reactivate the timely operator since that would lead to an infinite loop.
+                    // This ensures that the input handles wake up properly when managed by other
+                    // executors, e.g a `select!` that provides its own Waker implementation.
+                    {
+                        operator_waker.active.store(true, Ordering::SeqCst);
+                        let mut registered_wakers = registered_wakers.borrow_mut();
+                        for waker in registered_wakers.drain(..) {
+                            waker.wake();
+                        }
+                        operator_waker.active.store(false, Ordering::SeqCst);
                     }
-                    false
+
+                    // Schedule the logic future if any of the wakers above marked the task as ready
+                    if let Some(fut) = logic_fut.as_mut() {
+                        if operator_waker.task_ready.load(Ordering::SeqCst) {
+                            let waker = futures_util::task::waker_ref(&operator_waker);
+                            let mut cx = Context::from_waker(&waker);
+                            operator_waker.task_ready.store(false, Ordering::SeqCst);
+                            if Pin::new(fut).poll(&mut cx).is_ready() {
+                                // We're done with logic so deallocate the task
+                                logic_fut = None;
+                            }
+                            // Flush all the outputs before exiting
+                            for flush in output_flushes.iter_mut() {
+                                (flush)();
+                            }
+                        }
+                    }
+
+                    // The timely operator needs to be kept alive if the task is pending
+                    if logic_fut.is_some() {
+                        true
+                    } else {
+                        // Othewise we should drain any dropped handles
+                        let mut drains = drain_pipe.borrow_mut();
+                        for drain in drains.iter_mut() {
+                            (drain)()
+                        }
+                        false
+                    }
                 }
             }
         });
 
-        button
+        self.shutdown_button
     }
 
     /// Creates operator info for the operator.
@@ -536,6 +555,81 @@ impl<G: Scope> OperatorBuilder<G> {
     }
 }
 
+/// Creates a new coordinated button the worker configuration described by `scope`.
+pub fn button<G: Scope>(scope: &mut G, addr: &[usize]) -> (ButtonHandle, Button) {
+    let index = scope.new_identifier();
+    let (pushers, puller) = scope.allocate(index, addr);
+
+    let local_pressed = Rc::new(Cell::new(false));
+
+    let handle = ButtonHandle {
+        buttons_remaining: scope.peers(),
+        local_pressed: Rc::clone(&local_pressed),
+        puller,
+    };
+
+    let token = Button {
+        pushers,
+        local_pressed,
+    };
+
+    (handle, token)
+}
+
+/// A button that can be used to coordinate an action after all workers have pressed it.
+pub struct ButtonHandle {
+    /// The number of buttons still unpressed among workers.
+    buttons_remaining: usize,
+    /// A flag indicating whether this worker has pressed its button.
+    local_pressed: Rc<Cell<bool>>,
+    puller: Box<dyn Pull<Message<bool>>>,
+}
+
+impl ButtonHandle {
+    /// Returns whether this worker has pressed its button.
+    pub fn local_pressed(&mut self) -> bool {
+        self.local_pressed.get()
+    }
+
+    /// Returns whether all workers have pressed their buttons.
+    pub fn all_pressed(&mut self) -> bool {
+        while self.puller.recv().is_some() {
+            self.buttons_remaining -= 1;
+        }
+        self.buttons_remaining == 0
+    }
+}
+
+pub struct Button {
+    pushers: Vec<Box<dyn Push<Message<bool>>>>,
+    local_pressed: Rc<Cell<bool>>,
+}
+
+impl Button {
+    /// Presses the button. It is safe to call this function multiple times.
+    pub fn press(&mut self) {
+        for mut pusher in self.pushers.drain(..) {
+            pusher.send(Message::from_typed(true));
+            pusher.done();
+        }
+        self.local_pressed.set(true);
+    }
+
+    /// Converts this button into a deadman's switch that will automatically press the button when
+    /// dropped.
+    pub fn press_on_drop(self) -> PressOnDropButton {
+        PressOnDropButton(self)
+    }
+}
+
+pub struct PressOnDropButton(Button);
+
+impl Drop for PressOnDropButton {
+    fn drop(&mut self) {
+        self.0.press();
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::time::Duration;
@@ -543,6 +637,7 @@ mod test {
     use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, ToStream};
+    use timely::WorkerConfig;
 
     use super::*;
 
@@ -583,5 +678,57 @@ mod test {
         .expect("timely panicked");
 
         assert_eq!(extracted, vec![(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9])]);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    fn gh_18837() {
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), |worker| {
+            let index = worker.index();
+            let tokens = worker.dataflow::<u64, _, _>(move |scope| {
+                let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
+                let (_output, output_stream) = producer.new_output::<Vec<usize>>();
+                let producer_button = producer.build(move |mut capabilities| async move {
+                    let mut cap = capabilities.pop().unwrap();
+                    if index != 0 {
+                        return;
+                    }
+                    // Worker 0 downgrades to 1 and keeps the capability around forever
+                    cap.downgrade(&1);
+                    std::future::pending().await
+                });
+
+                let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
+                let mut input_handle = consumer.new_input(&output_stream, Pipeline);
+                let consumer_button = consumer.build(move |_| async move {
+                    while let Some(event) = input_handle.next().await {
+                        if let Event::Progress(frontier) = event {
+                            // We should never observe a frontier greater than [1]
+                            assert!(frontier.less_equal(&1));
+                        }
+                    }
+                });
+
+                (
+                    producer_button.press_on_drop(),
+                    consumer_button.press_on_drop(),
+                )
+            });
+
+            // Run dataflow until only worker 0 holds the frontier to [1]
+            for _ in 0..100 {
+                worker.step();
+            }
+            // Then drop the tokens of worker 0
+            if index == 0 {
+                drop(tokens)
+            }
+            // And step the dataflow some more to ensure consumers don't observe frontiers advancing.
+            for _ in 0..100 {
+                worker.step();
+            }
+        })
+        .expect("timely panicked");
     }
 }
