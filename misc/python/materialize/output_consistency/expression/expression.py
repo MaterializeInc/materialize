@@ -39,7 +39,7 @@ class Expression:
     def to_sql(self) -> str:
         raise RuntimeError("Not implemented")
 
-    def resolve_data_type_category(self) -> DataTypeCategory:
+    def resolve_return_type_category(self) -> DataTypeCategory:
         raise RuntimeError("Not implemented")
 
     def recursively_collect_involved_characteristics(

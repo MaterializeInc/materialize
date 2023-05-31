@@ -31,7 +31,7 @@ class DataColumn(LeafExpression):
         self.data_type = data_type
         self.values = row_values_of_column
 
-    def resolve_data_type_category(self) -> DataTypeCategory:
+    def resolve_return_type_category(self) -> DataTypeCategory:
         return self.data_type.category
 
     def recursively_collect_involved_characteristics(

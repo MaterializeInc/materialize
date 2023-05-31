@@ -37,7 +37,7 @@ class DataValue(LeafExpression):
         self.value = value
         self.data_type = data_type
 
-    def resolve_data_type_category(self) -> DataTypeCategory:
+    def resolve_return_type_category(self) -> DataTypeCategory:
         return self.data_type.category
 
     def to_sql_as_value(self) -> str:
