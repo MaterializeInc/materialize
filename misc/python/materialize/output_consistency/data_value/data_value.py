@@ -32,10 +32,14 @@ class DataValue(LeafExpression):
     ):
         column_name = f"{data_type.identifier.lower()}_{value_identifier.lower()}"
         super().__init__(
-            column_name, characteristics, ValueStorageLayout.HORIZONTAL, False, False
+            column_name,
+            data_type,
+            characteristics,
+            ValueStorageLayout.HORIZONTAL,
+            False,
+            False,
         )
         self.value = value
-        self.data_type = data_type
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         return self.data_type.category

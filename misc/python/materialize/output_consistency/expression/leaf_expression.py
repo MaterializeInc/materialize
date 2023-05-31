@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 from typing import List, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -21,6 +23,7 @@ class LeafExpression(Expression):
     def __init__(
         self,
         column_name: str,
+        data_type: DataType,
         characteristics: Set[ExpressionCharacteristics],
         storage_layout: ValueStorageLayout,
         is_aggregate: bool,
@@ -28,6 +31,10 @@ class LeafExpression(Expression):
     ):
         super().__init__(characteristics, storage_layout, is_aggregate, is_expect_error)
         self.column_name = column_name
+        self.data_type = data_type
+
+    def resolve_data_type_category(self) -> DataTypeCategory:
+        return self.data_type.category
 
     def to_sql(self) -> str:
         return self.to_sql_as_column()
