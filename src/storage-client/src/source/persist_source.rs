@@ -29,11 +29,13 @@ use mz_repr::{
     Row, RowArena, ScalarType, Timestamp,
 };
 use mz_timely_util::buffer::ConsolidateBuffer;
+use mz_timely_util::order::hybrid::Hybrid;
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Capability, OkErr};
+use timely::dataflow::operators::{Enter, Leave};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::scheduling::Activator;
@@ -66,7 +68,7 @@ use crate::types::sources::{RelationDescHack, SourceData};
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 pub fn persist_source<G, YFn>(
-    scope: &G,
+    scope: &mut G,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
@@ -84,20 +86,29 @@ where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
-    let (stream, token) = persist_source_core(
-        scope,
-        source_id,
-        persist_clients,
-        metadata,
-        as_of,
-        until,
-        map_filter_project,
-        flow_control,
-        yield_fn,
+    let (stream, token) = scope.scoped(
+        &format!("skip_granular_backpressure({})", source_id),
+        |scope| {
+            let (stream, token) = persist_source_core(
+                scope,
+                source_id,
+                persist_clients,
+                metadata,
+                as_of,
+                until,
+                map_filter_project,
+                flow_control.map(|fc| FlowControl {
+                    progress_stream: fc.progress_stream.enter(scope),
+                    max_inflight_bytes: fc.max_inflight_bytes,
+                }),
+                yield_fn,
+            );
+            (stream.leave(), token)
+        },
     );
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
-        Ok(row) => Ok((row, t, r)),
-        Err(err) => Err((err, t, r)),
+        Ok(row) => Ok((row, t.0, r)),
+        Err(err) => Err((err, t.0, r)),
     });
     (ok_stream, err_stream, token)
 }
@@ -120,11 +131,11 @@ pub fn persist_source_core<G, YFn>(
     flow_control: Option<FlowControl<G>>,
     yield_fn: YFn,
 ) -> (
-    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
+    Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    G: Scope<Timestamp = Hybrid<mz_repr::Timestamp, u64>>,
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let name = source_id.to_string();
@@ -217,9 +228,9 @@ pub fn decode_and_mfp<G, YFn>(
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
     yield_fn: YFn,
-) -> Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>
+) -> Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    G: Scope<Timestamp = Hybrid<mz_repr::Timestamp, u64>>,
     YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let scope = fetched.scope();
@@ -292,7 +303,7 @@ where
 /// Pending work to read from fetched parts
 struct PendingWork {
     /// The time at which the work should happen.
-    capability: Capability<Timestamp>,
+    capability: Capability<Hybrid<mz_repr::Timestamp, u64>>,
     /// Pending fetched part.
     fetched_part: FetchedPart<SourceData, (), Timestamp, Diff>,
 }
@@ -310,10 +321,24 @@ impl PendingWork {
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
-        output: &mut ConsolidateBuffer<Timestamp, Result<Row, DataflowError>, Diff, P>,
+        output: &mut ConsolidateBuffer<
+            Hybrid<mz_repr::Timestamp, u64>,
+            Result<Row, DataflowError>,
+            Diff,
+            P,
+        >,
     ) -> bool
     where
-        P: Push<Bundle<Timestamp, (Result<Row, DataflowError>, Timestamp, Diff)>>,
+        P: Push<
+            Bundle<
+                Hybrid<mz_repr::Timestamp, u64>,
+                (
+                    Result<Row, DataflowError>,
+                    Hybrid<mz_repr::Timestamp, u64>,
+                    Diff,
+                ),
+            >,
+        >,
         YFn: Fn(Instant, usize) -> bool,
     {
         let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit();
@@ -341,26 +366,36 @@ impl PendingWork {
                                 Ok((row, time, diff)) => {
                                     // Additional `until` filtering due to temporal filters.
                                     if !until.less_equal(&time) {
-                                        output.give_at(&self.capability, (Ok(row), time, diff));
+                                        let mut emit_time = *self.capability.time();
+                                        emit_time.0 = time;
+                                        output
+                                            .give_at(&self.capability, (Ok(row), emit_time, diff));
                                         *work += 1;
                                     }
                                 }
                                 Err((err, time, diff)) => {
                                     // Additional `until` filtering due to temporal filters.
                                     if !until.less_equal(&time) {
-                                        output.give_at(&self.capability, (Err(err), time, diff));
+                                        let mut emit_time = *self.capability.time();
+                                        emit_time.0 = time;
+                                        output
+                                            .give_at(&self.capability, (Err(err), emit_time, diff));
                                         *work += 1;
                                     }
                                 }
                             }
                         }
                     } else {
-                        output.give_at(&self.capability, (Ok(row), time, diff));
+                        let mut emit_time = *self.capability.time();
+                        emit_time.0 = time;
+                        output.give_at(&self.capability, (Ok(row), emit_time, diff));
                         *work += 1;
                     }
                 }
                 (Ok(SourceData(Err(err))), Ok(())) => {
-                    output.give_at(&self.capability, (Err(err), time, diff));
+                    let mut emit_time = *self.capability.time();
+                    emit_time.0 = time;
+                    output.give_at(&self.capability, (Err(err), emit_time, diff));
                     *work += 1;
                 }
                 // TODO(petrosagg): error handling

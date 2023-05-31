@@ -22,6 +22,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
+use timely::progress::Antichain;
 use timely::PartialOrder;
 
 /// A partially ordered timestamp that is partitioned by an arbitrary number of partitions
@@ -732,6 +733,15 @@ pub mod hybrid {
             });
         }
     }
+}
+
+/// Refine an `Antichain<T>` into a `Antichain<Inner>`, using a `Refines`
+/// implementation (in the case of tuple-style timestamps, this usually
+/// means appending a minimum time).
+pub fn refine_antichain<T: Timestamp + Copy, Inner: Timestamp + Refines<T>>(
+    frontier: &Antichain<T>,
+) -> Antichain<Inner> {
+    Antichain::from_iter(frontier.iter().map(|t| Refines::to_inner(*t)))
 }
 
 pub use hybrid::Hybrid;

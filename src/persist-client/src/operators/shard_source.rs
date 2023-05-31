@@ -28,7 +28,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-use mz_timely_util::order::hybrid::Hybrid;
+use mz_timely_util::order::{hybrid::Hybrid, refine_antichain};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, ScopeParent, Stream};
@@ -158,15 +158,6 @@ impl Drop for ActivateOnDrop {
         self.token_rx.close();
         self.activator.activate();
     }
-}
-
-/// Refine an `Antichain<T>` into a `Antichain<Inner>`, using a `Refines`
-/// implementation (in the case of tuple-style timestamps, this usually
-/// means appending a minimum time).
-fn refine_antichain<T: Timestamp + Copy, Inner: Timestamp + Refines<T>>(
-    frontier: &Antichain<T>,
-) -> Antichain<Inner> {
-    Antichain::from_iter(frontier.iter().map(|t| Refines::to_inner(*t)))
 }
 
 pub(crate) fn shard_source_descs<T, K, V, D, F, G>(
@@ -303,7 +294,7 @@ where
                 // The token dropped before we finished creating our `ReadHandle.
                 // We can return immediately, as we could not have emitted any
                 // parts to fetch.
-                cap_set.downgrade([]);
+                cap_set.downgrade::<G::Timestamp, _>([]);
                 return;
             }
             Either::Right((read, _)) => {
@@ -356,7 +347,7 @@ where
                 // the token dropped before we finished creating our Subscribe.
                 // we can return immediately, as we could not have emitted any
                 // parts to fetch.
-                cap_set.downgrade([]);
+                cap_set.downgrade::<G::Timestamp, _>([]);
                 return;
             }
             Either::Right((subscription, _)) => {
@@ -419,7 +410,7 @@ where
                 //
                 // NB: Reading from a channel is cancel safe.
                 _ = token_tx.closed() => {
-                    cap_set.downgrade(&[]);
+                    cap_set.downgrade::<G::Timestamp, _>([]);
                     break 'emitting_parts;
                 }
                 // Return the leases of any parts that the following stage,
@@ -524,7 +515,7 @@ where
                                     current_ts = ts;
                                 }
                                 None => {
-                                    cap_set.downgrade(&[]);
+                                    cap_set.downgrade::<G::Timestamp, _>([]);
                                     break 'emitting_parts;
                                 }
                             }
@@ -532,7 +523,7 @@ where
                         // We never expect any further output from our subscribe,
                         // so propagate that information downstream.
                         None => {
-                            cap_set.downgrade([]);
+                            cap_set.downgrade::<G::Timestamp, _>([]);
                             break 'emitting_parts;
                         }
                     }

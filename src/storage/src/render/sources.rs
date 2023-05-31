@@ -25,9 +25,10 @@ use mz_storage_client::types::errors::{
 use mz_storage_client::types::sources::encoding::*;
 use mz_storage_client::types::sources::*;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, Exchange, Leave, OkErr};
+use timely::dataflow::operators::{Concat, Exchange, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
@@ -366,37 +367,46 @@ where
                         .as_option()
                         .expect("resuming an already finished ingestion")
                         .clone();
-                    let (previous, previous_token) = if Timestamp::minimum() < upper_ts {
-                        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+                    let (upsert, health_update) = scope.scoped(
+                        &format!("upsert_rehydration_backpressure({})", id),
+                        |scope| {
+                            let (previous, previous_token) = if Timestamp::minimum() < upper_ts {
+                                let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
-                        let (stream, tok) = persist_source::persist_source_core(
-                            scope,
-                            id,
-                            persist_clients,
-                            description.ingestion_metadata,
-                            Some(as_of),
-                            Antichain::new(),
-                            None,
-                            None,
-                            // Copy the logic in DeltaJoin/Get/Join to start.
-                            |_timer, count| count > 1_000_000,
-                        );
-                        (stream.as_collection(), Some(tok))
-                    } else {
-                        (Collection::new(empty(scope)), None)
-                    };
-                    let (upsert, health_update) = crate::render::upsert::upsert(
-                        &upsert_input,
-                        upsert_envelope.clone(),
-                        resume_upper,
-                        previous,
-                        previous_token,
-                        base_source_config,
-                        &storage_state.instance_context,
-                        &storage_state.dataflow_parameters,
+                                let (stream, tok) = persist_source::persist_source_core(
+                                    scope,
+                                    id,
+                                    persist_clients,
+                                    description.ingestion_metadata,
+                                    Some(as_of),
+                                    Antichain::new(),
+                                    None,
+                                    None,
+                                    // Copy the logic in DeltaJoin/Get/Join to start.
+                                    |_timer, count| count > 1_000_000,
+                                );
+                                (stream.as_collection(), Some(tok))
+                            } else {
+                                (Collection::new(empty(scope)), None)
+                            };
+                            let (upsert, health_update) = crate::render::upsert::upsert(
+                                &upsert_input.enter(scope),
+                                upsert_envelope.clone(),
+                                refine_antichain(&resume_upper),
+                                previous,
+                                previous_token,
+                                base_source_config,
+                                &storage_state.instance_context,
+                                &storage_state.dataflow_parameters,
+                            );
+                            (
+                                upsert.inner.leave().map(|(d, t, r)| (d, t.0, r)),
+                                health_update.leave(),
+                            )
+                        },
                     );
 
-                    let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
+                    let (upsert_ok, upsert_err) = upsert.ok_err(split_ok_err);
 
                     (
                         upsert_ok.as_collection(),
