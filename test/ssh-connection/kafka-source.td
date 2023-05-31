@@ -40,6 +40,9 @@ one
   FORMAT TEXT
   ENVELOPE NONE
 
+> SELECT source, subsource, type FROM mz_internal.mz_get_subsources('mz_source');
+materialize.public.mz_source materialize.public.mz_source_progress progress
+
 > SELECT * FROM mz_source
 text
 ----
