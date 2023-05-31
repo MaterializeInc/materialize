@@ -16,7 +16,6 @@ from materialize.output_consistency.expression.expression_characteristics import
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
-from materialize.output_consistency.expression.leaf_expression import LeafExpression
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperationOrFunction,
@@ -30,7 +29,7 @@ class InconsistencyIgnoreFilter:
     def shall_ignore(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> bool:
-        if isinstance(expression, LeafExpression):
+        if expression.is_leaf():
             return False
         elif isinstance(expression, ExpressionWithArgs):
             return self._shall_ignore_expression_with_args(expression, row_selection)
@@ -92,7 +91,7 @@ class InconsistencyIgnoreFilter:
         if operation.is_aggregation:
             for arg in expression.args:
                 if (
-                    not isinstance(arg, LeafExpression)
+                    not arg.is_leaf()
                     and arg.resolve_return_type_category() == DataTypeCategory.NUMERIC
                 ):
                     # tracked with https://github.com/MaterializeInc/materialize/issues/19592

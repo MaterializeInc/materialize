@@ -37,3 +37,10 @@ class LeafExpression(Expression):
 
     def collect_leaves(self) -> List[Expression]:
         return [self]
+
+    def is_leaf(self) -> bool:
+        return True
+
+    def contains_leaf_not_directly_consumed_by_aggregation(self) -> bool:
+        # This is not decided at leaf level.
+        return False

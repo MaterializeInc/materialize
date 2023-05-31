@@ -69,3 +69,13 @@ class Expression:
         """True if this expression itself exhibits any of the characteristics. Child expressions are not considered."""
         overlap = self.own_characteristics & characteristics
         return len(overlap) > 0
+
+    def is_leaf(self) -> bool:
+        raise NotImplementedError
+
+    def contains_leaf_not_directly_consumed_by_aggregation(self) -> bool:
+        """
+        True if any leaf is not directly consumed by an aggregation,
+        hence false if all leaves of this expression are directly consumed by an aggregation.
+        This is relevant because when using non-aggregate functions on multiple rows, different evaluation strategies may yield different error messages due to a different row processing order."""
+        raise NotImplementedError
