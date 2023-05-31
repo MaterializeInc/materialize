@@ -622,10 +622,10 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     )?);
 
     if let Some(shard_id) = shard_id {
-        let usage = usage.shard_usage(shard_id).await;
+        let usage = usage.shard_usage_audit(shard_id).await;
         println!("{}\n{}", shard_id, usage);
     } else {
-        let usage = usage.shards_usage().await;
+        let usage = usage.shards_usage_audit().await;
         let mut by_shard = usage.by_shard.iter().collect::<Vec<_>>();
         by_shard.sort_by_key(|(_, x)| x.total_bytes());
         by_shard.reverse();
