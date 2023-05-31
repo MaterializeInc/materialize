@@ -50,9 +50,6 @@ pub trait ColumnStats<T: Data>: DynStats {
 }
 
 /// Type-erased aggregate statistics about a column of data.
-///
-/// TODO(mfp): It feels like we haven't hit a global maximum here, both with
-/// this `DynStats` trait and also with ProtoOptionStats.
 pub trait DynStats: StatsCost + std::fmt::Debug + Send + Sync + 'static {
     /// Returns self as a `dyn Any` for downcasting.
     fn as_any(&self) -> &dyn Any;
@@ -416,8 +413,9 @@ mod impls {
         proto_bytes_stats, proto_dyn_stats, proto_json_stats, proto_primitive_stats,
         truncate_bytes, truncate_string, AtomicBytesStats, BytesStats, ColumnStats, DynStats,
         JsonStats, OptionStats, PrimitiveStats, ProtoAtomicBytesStats, ProtoBytesStats,
-        ProtoDynStats, ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats, ProtoPrimitiveStats,
-        ProtoStructStats, StructStats, TruncateBound, TRUNCATE_LEN,
+        ProtoDynStats, ProtoJsonMapStats, ProtoJsonStats, ProtoOptionStats,
+        ProtoPrimitiveBytesStats, ProtoPrimitiveStats, ProtoStructStats, StructStats,
+        TruncateBound, TRUNCATE_LEN,
     };
 
     impl<T: StatsCost> StatsCost for OptionStats<T> {
@@ -578,6 +576,22 @@ mod impls {
             ProtoDynStats {
                 option: None,
                 kind: Some(proto_dyn_stats::Kind::Primitive(RustType::into_proto(self))),
+            }
+        }
+    }
+
+    impl DynStats for PrimitiveStats<Vec<u8>> {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn into_proto(&self) -> ProtoDynStats {
+            ProtoDynStats {
+                option: None,
+                kind: Some(proto_dyn_stats::Kind::Bytes(ProtoBytesStats {
+                    kind: Some(proto_bytes_stats::Kind::Primitive(RustType::into_proto(
+                        self,
+                    ))),
+                })),
             }
         }
     }
@@ -1035,9 +1049,6 @@ mod impls {
                 Some(proto_primitive_stats::Lower::LowerF64(_)) => {
                     f.call(PrimitiveStats::<f64>::from_proto(x)?)
                 }
-                Some(proto_primitive_stats::Lower::LowerBytes(_)) => {
-                    f.call(PrimitiveStats::<Vec<u8>>::from_proto(x)?)
-                }
                 Some(proto_primitive_stats::Lower::LowerString(_)) => {
                     f.call(PrimitiveStats::<String>::from_proto(x)?)
                 }
@@ -1102,8 +1113,22 @@ mod impls {
     primitive_stats_rust_type!(i64, LowerI64, UpperI64);
     primitive_stats_rust_type!(f32, LowerF32, UpperF32);
     primitive_stats_rust_type!(f64, LowerF64, UpperF64);
-    primitive_stats_rust_type!(Vec<u8>, LowerBytes, UpperBytes);
     primitive_stats_rust_type!(String, LowerString, UpperString);
+
+    impl RustType<ProtoPrimitiveBytesStats> for PrimitiveStats<Vec<u8>> {
+        fn into_proto(&self) -> ProtoPrimitiveBytesStats {
+            ProtoPrimitiveBytesStats {
+                lower: self.lower.into_proto(),
+                upper: self.upper.into_proto(),
+            }
+        }
+
+        fn from_proto(proto: ProtoPrimitiveBytesStats) -> Result<Self, TryFromProtoError> {
+            let lower = proto.lower.into_rust()?;
+            let upper = proto.upper.into_rust()?;
+            Ok(PrimitiveStats { lower, upper })
+        }
+    }
 
     #[allow(unused_parens)]
     impl Arbitrary for StructStats {
