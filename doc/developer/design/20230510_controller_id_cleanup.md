@@ -6,68 +6,89 @@
 
 ## Context & Scope
 
-On `main`, the storage controller does not clean up state related to sources or sinks until we
-receive a `StorageResponse::DroppedIds` from `clusterd`/rehydration clients. This cleanup work
-includes:
+The "storage" component of Materialize currently has an architecture with a number of clients
+mediating interactions between the user's request and the workers actually performing the work. A
+sketch of  the clients are:
 
-- Tombstone-ing the sources' shards (advancing the `since` and `upper` to `[]`)
-- Removing the in-memory representation of a collections
-- Removing the in-memory read and write handles to sources' shards
-- Removing the collection from the on-disk stash (`COLLECTION_METADATA`)
+1. Coordinator
+1. Storage controller
+1. RehydratingStorageClient
+1. PartitionedClient/StorageGrpcClient
+1. Workers
 
-However, we make no guarantee that we will ever receive a `DroppedIds` response and, in practice,
-rarely receive them. This means we rarely succeed in completing the cleanup steps for a collection,
-and as such:
+Each of the clients receives commands from the level immediately above it (we'll call this the
+Upper-Level Client or ULC), and responses from the level immediately below it (the Lower-Level
+Client, a.k.a. LLC). (The coordinator receives commands from users, who answer to their own higher
+power, and the worker receives responses from its threads of execution).
 
-- We never drop the state persisted for the collection in S3.
-- We allow reference to collections that we know have been dropped by the coordinator. This has
-  odd/worrying semantics, though is more abstract.
-
-We have mitigated the effects of this to some degree by reconciling state after the coordinator is
-done booting from its catalog. However, the way that reconciliation works, we don't perform the work
-of actually tombstone-ing a shard until we receive some `DroppedIds` command.
-
-Without an effective or repeatable means of cleaning up persist state, we will retain all data in
-the persist shard indefinitely, incurring the cost of the S3 buckets indefinitely.
+The _protocol_ that connects these clients is "call and response": ULCs heavily rely on responses
+from LLCs before doing work--this dependence is so intense that, in some cases, the ULC may never
+perform work without receiving a response from the LLC.
 
 ## Goals
 
-- Deterministically free data from S3 once a collection is dropped.
-- Make the semantics of dropping sources and sinks less byzantine.
+- Reconsider the storage clients' protocol to "embrace the distributed nature" of the system and
+  relax the dependence on receiving responses from lower levels.
+- Allow the self-healing nature of the architecture to play a more active role in the protocol, i.e.
+  ensure we converge to a healthy state, rather than avoiding "unhealthy" states at all costs.
+
+Maybe these are the same goal.
 
 ## Non-Goals
 
-- Retain the exact semantics we currently have in the face of protocol violations.
+- Revisit the architecture of the system.
+- Avoid panics.
 
 ## Overview
 
-Rather than cleaning up state in response to `DroppedIds` responses, we should proactively clean up
-state when processing `drop_sources` and `drop_sinks` commands from the adapter.
+Each layer should be able to act independently of its LLC, and should instead try to take actions
+based on globally available state (e.g. through persist), rather than waiting to be informed of the
+LLC's state.
 
-This weakens our ability to make assertions about our protocol, but one could argue that we are
-already failing our own protocol in our lack of ability to reliably generate `DroppedIds` responses.
+For example, when dropping a collection from the storage controller, we can immediately enqueue that
+this is a collection whose shards we want to drop/state we want to clean up. We can then monitor the
+global state of the shard (its since and upper) to detect when all running dataflows have ceased
+using this shard--i.e. we move toward relying on persist for information (which we believe to be
+reliable), instead of simply relying on lower-level clients (which might be arbitrarily slow or fail
+to respond entirely).
 
 ## Detailed description
 
-Dropping a source or a sink proceeds through some byzantine machinery that results in:
+We should undergo a process of analyzing the "protocol flow" for all
+`StorageCommand`/`StorageResponse` sets, such that:
 
-- The `since` of the collection getting advanced to `[]`.
-- If the collection has no read holds on it or when the read holds released (i.e. the controller
-  believes the since to be `[]`), a tuple of `(id, [])` gets placed in
-  `pending_compaction_commands`.
+- We emphasize initiating action based off of `StorageCommand`s (or the equivalent API call in the
+  storage controller), under the assumption that ULC are more responsive than LLC.
+- When making decisions about which actions to perform, we aim to use consistent global state
+  whenever possible, and rely on LLC responses only when the information is available in no other
+  way.
+- We err on the side of expedience and allow lower levels of the system to panic--as long as we take
+  measures to ensure that the system will automatically correct itself eventually (i.e. not enter a
+  crash loop).
 
-This proposal is that:
+### Example
 
-- When we see values in `pending_compaction_commands` with empty frontiers that we perform the
-  cleanup of the ID's state, i.e. the code that currently runs in response to `DroppedIds`, which
-  we've outlined at the beginning of this document.
-- We, in essence, remove `StorageResponse::DroppedIds`. There is more discussion of how to handle
-  this below.
+In response to dropping a collection:
+- The storage controller can immediately release all read holds for the collection, mark its shards
+  for finalization, and remove the associated GlobalIds from its persisted collections.
 
-This proactive approach guarantees that we will tombstone persist shards effectively and
-deterministically.
+  From here, the storage controller can monitor the retired shards' global state through persist and
+  seal the shards from further reads and writes once it detects that there are no further read holds
+  against the shards.
 
-Of note, this design is akin to how compute manages a similar problem, [according to
+- The layers between the storage controller remove their local state for a source in response to an
+  `AllowCompaction` command to the empty antichain. There is no global state available to make a
+  better decision from and the responses from the LLC are unnecessary.
+
+  Note that if there were some worry here, we could also reconfigure this to have the storage
+  controller send along a `StorageCommand:DropIds`.
+
+- Workers now just cleans up its local state, but doesn't bother sending a `DroppedIds` response
+  back to its ULC, which cannot do anything with the message.
+
+This design means we can refactor away the `DroppedIds` responses.
+
+This design is akin to how compute manages a similar problem, [according to
 Jan](https://materializeinc.slack.com/archives/C01CFKM1QRF/p1678785227462869?thread_ts=1678708964.047089&cid=C01CFKM1QRF):
 
 > When a replica is removed, the compute controller [immediately releases the read
@@ -85,13 +106,25 @@ it had no other read holds from the controller's POV, we remove its state.
 
 ### Concerns + mitigation
 
-#### Created and immediately dropped resources will panic or halt
+#### This can create cause more panics
 
-If we create and immediately drop a source, it is possible that the source will panic or halt when
-it attempts to use its shard, which we've already closed.
+For example, created and immediately dropping resources can panic or halt: when the dataflow
+attempts to use its shard, which we've already closed.
 
-One contention is that this is fine; periodic panics from resources in race conditions are
-acceptable as long as the system naturally converges to a steady state.
+We contend that this is actually fine. Race conditions are acceptable as long as the system
+naturally converges to a steady state; in this case, the dataflow will eventually find that its
+write handle's upper is empty and the dataflow itself will not be scheduled.
+
+#### What if we wait forever on global state?
+
+If we want to make a decision based on global state (e.g. persist since handles), we need to ensure
+they are elements of the system that are also built using distributed principles. In the case of
+sealing shards, we know that dataflows only have leased read handles: if a dataflow gets partitioned
+away from the rest of the cluster, its read handle will time out, and we will see the since advance
+to `[]`.
+
+If we get partitioned away from persist, a new environmentd will take over, and if we ever
+re-connect, we'll receive an epoch error.
 
 #### We lose fidelity in making assertions about our protocol
 
@@ -102,15 +135,13 @@ intermediate states.
 If we eagerly remove state from the storage controller, we lose the ability to ensure that the lower
 portions of the system (e.g. the workers) are behaving in a way that aligns with our expectations.
 
-One contention is that we are already failing our own protocol by failing to yield `DroppedIds`
-responses. Guaranteeing delivery of these messages from workers in the process of spinning down is
-non-trivial.
+However, this design fails to acknowledge the reality of our protocol: we're already failing the
+protcol because we seldom yield `DroppedIds` responses. Guaranteeing delivery of these messages from
+workers in the process of spinning down is non-trivial.
 
-However, if there are more ardent concerns, we could also continue making the same assertions by
-providing "bizarro versions of this state" that are used solely for assertions, i.e. we remove the
-collection information from code paths accessible to user control flows, and into another parallel
-struct that exists solely to let us ensure the correctness of the protocol's behavior while still
-letting us eagerly clean up the state we want to.
+However, if there are more ardent concerns, we could mitigate these by having a "limbo state," where
+we clean up state internally, but place the state we've cleaned up in "limbo" where it awaits the
+LLC response.
 
 This approach seems brittle and convoluted, but if there are a small number of call sites that we
 want to maintain this for, it might be tractable.
@@ -125,8 +156,9 @@ heard back from them?
 
 [Petros had an alternative
 design](https://materializeinc.slack.com/archives/C01CFKM1QRF/p1678753425337379?thread_ts=1678708964.047089&cid=C01CFKM1QRF)
-that instead of using `StorageResponse::DroppedIds` introduces `StorageResponse::FrontierSinces`
-that is the parallel response to `StorageCommand::AllowCompaction`.
+for handling dropping shards that instead of using `StorageResponse::DroppedIds` introduces
+`StorageResponse::FrontierSinces` that is the parallel response to
+`StorageCommand::AllowCompaction`.
 
 However, the implementation for that suffers from the same faults as the current system in that, in
 my read of the proposal, does not address the shortcoming that we never receive
