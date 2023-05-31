@@ -1197,9 +1197,8 @@ mod tests {
     }
 
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn seqno_leases() {
-        mz_ore::test::init_logging();
         let mut data = vec![];
         for i in 0..20 {
             data.push(((i.to_string(), i.to_string()), i, 1))
@@ -1390,9 +1389,8 @@ mod tests {
     // Verifies performance optimizations where a Listener doesn't fetch the
     // latest Consensus state if the one it currently has can serve the next
     // request.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn skip_consensus_fetch_optimization() {
-        mz_ore::test::init_logging();
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
             (("1".to_owned(), "one".to_owned()), 1, 1),

@@ -359,6 +359,12 @@ rules by setting the following options:
 * `imports.granularity.group` = `module`
 * `imports.prefix` = `crate`
 
+### Tests
+
+Use the `mz_test::test` macro instead of `test`, since it automatically
+initializes logging. For tokio tests you can use
+`#[mz_test::test(tokio::test)]`.
+
 
 [Clippy]: https://github.com/rust-lang/rust-clippy
 [rustfmt]: https://github.com/rust-lang/rustfmt

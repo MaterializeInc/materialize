@@ -995,11 +995,9 @@ mod tests {
     // A regression test for a bug caught during development of #13160 (never
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_minimum_since() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
             (("0".to_owned(), "zero".to_owned()), 1, -1),
@@ -1065,11 +1063,9 @@ mod tests {
         assert_eq!(updates, all_ok(&data, 10));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn compaction_partial_order() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (
                 ("0".to_owned(), "zero".to_owned()),

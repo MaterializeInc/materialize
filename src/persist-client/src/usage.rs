@@ -730,10 +730,8 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn size() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -830,10 +828,8 @@ mod tests {
 
     /// This is just a sanity check for the overall flow of computing ShardUsage.
     /// The edge cases are exercised in separate tests.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn usage_sanity() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1210,9 +1206,8 @@ mod tests {
     /// This also tests a (hypothesized) race that's possible in prod where an
     /// initial rollup is written for a shard, but the initial CaS hasn't yet
     /// succeeded.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn usage_regression_shard_in_blob_not_consensus() {
-        mz_ore::test::init_logging();
         let client = new_test_client().await;
         let shard_id = ShardId::new();
 

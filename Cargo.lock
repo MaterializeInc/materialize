@@ -4259,6 +4259,7 @@ dependencies = [
  "http",
  "hyper",
  "hyper-tls",
+ "mz-test-macro",
  "native-tls",
  "once_cell",
  "openssl",
@@ -5075,6 +5076,17 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-test-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.107",
+ "tokio",
  "workspace-hack",
 ]
 

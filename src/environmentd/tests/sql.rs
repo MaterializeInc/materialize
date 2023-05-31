@@ -239,10 +239,9 @@ fn test_no_block() {
 
 /// Test that dropping a connection while a source is undergoing purification
 /// does not crash the server.
-#[test]
+#[mz_ore::test]
 fn test_drop_connection_race() {
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
-    mz_ore::test::init_logging();
     info!("test_drop_connection_race: server started");
 
     server.runtime.block_on(async {

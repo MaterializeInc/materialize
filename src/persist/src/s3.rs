@@ -924,11 +924,10 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn s3_blob() -> Result<(), ExternalError> {
-        mz_ore::test::init_logging();
         let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
             None => {

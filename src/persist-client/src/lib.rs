@@ -853,11 +853,9 @@ mod tests {
         (part, updates)
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn sanity_check() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -903,10 +901,8 @@ mod tests {
     }
 
     // Sanity check that the open_reader and open_writer calls work.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn open_reader_writer() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -961,10 +957,8 @@ mod tests {
         assert_eq!(read1.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn invalid_usage() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1217,10 +1211,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn multiple_shards() {
-        mz_ore::test::init_logging();
-
         let data1 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1259,10 +1251,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn fetch_upper() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1292,10 +1282,8 @@ mod tests {
         assert_eq!(write2.upper(), &Antichain::from_elem(3));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn append_with_invalid_upper() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1357,10 +1345,8 @@ mod tests {
         assert!(is_send_sync(read));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn compare_and_append() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1466,10 +1452,8 @@ mod tests {
 
     // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
     // be in advance of the current shard upper.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn contiguous_append() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1515,10 +1499,8 @@ mod tests {
 
     // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
     // combined are contiguous.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn noncontiguous_append_per_writer() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1559,10 +1541,8 @@ mod tests {
 
     // Compare_and_appends need to be contiguous for a shard, meaning the lower of an appended
     // batch needs to match the current shard upper.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn contiguous_compare_and_append() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1607,10 +1587,8 @@ mod tests {
 
     // Per-writer compare_and_appends can be non-contiguous, as long as appends to the shard from
     // all writers combined are contiguous.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn noncontiguous_compare_and_append_per_writer() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1641,10 +1619,8 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(5).await, all_ok(&data, 5));
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     async fn writer_heartbeat() {
-        mz_ore::test::init_logging();
-
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
             (("2".to_owned(), "two".to_owned()), 2, 1),
@@ -1810,11 +1786,9 @@ mod tests {
         assert_eq!(container.shard_id, id);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn concurrency() {
-        mz_ore::test::init_logging();
-
         let data = DataGenerator::small();
 
         const NUM_WRITERS: usize = 2;
@@ -1910,10 +1884,9 @@ mod tests {
     // Regression test for #12131. Snapshot with as_of >= upper would
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
     async fn regression_blocking_reads() {
-        mz_ore::test::init_logging();
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 

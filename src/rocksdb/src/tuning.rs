@@ -466,10 +466,9 @@ mod tests {
         assert_eq!(r, RocksDBTuningParameters::default());
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn rocksdb_tuning_roundtrip() {
-        mz_ore::test::init_logging();
         proptest!(|(expect in any::<RocksDBTuningParameters>())| {
             let actual = protobuf_roundtrip::<_, ProtoRocksDbTuningParameters>(&expect);
             assert!(actual.is_ok());

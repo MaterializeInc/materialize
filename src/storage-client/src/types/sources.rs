@@ -2737,10 +2737,9 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_columnar_roundtrip() {
-        mz_ore::test::init_logging();
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_columnar_roundtrip(scalar_type)

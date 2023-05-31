@@ -546,21 +546,19 @@ fn test_closing_connection_cancels_dataflows(query: String) {
     );
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_long_select() {
-    mz_ore::test::init_logging();
     test_closing_connection_cancels_dataflows("WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_closing_connection_for_insert_select() {
-    mz_ore::test::init_logging();
     test_closing_connection_cancels_dataflows("CREATE TABLE t1 (a int); INSERT INTO t1 WITH MUTUALLY RECURSIVE flip(x INTEGER) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip) SELECT * FROM flip;".to_string())
 }
 
-#[test]
+#[mz_ore::test]
 fn test_storage_usage_collection_interval() {
     /// Waits for the next storage collection to occur, then returns the
     /// timestamp at which the collection occurred. The timestamp of the last
@@ -624,8 +622,6 @@ fn test_storage_usage_collection_interval() {
             .unwrap();
         row.get::<_, UInt8>("size").0
     }
-
-    mz_ore::test::init_logging();
 
     let config =
         util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
@@ -814,10 +810,8 @@ fn test_storage_usage_collection_interval_timestamps() {
     }).unwrap();
 }
 
-#[test]
+#[mz_ore::test]
 fn test_old_storage_usage_records_are_reaped_on_restart() {
-    mz_ore::test::init_logging();
-
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
         let timestamp = Arc::clone(&now);
@@ -1265,10 +1259,9 @@ fn test_http_options_param() {
         .contains(r#"startup setting not_a_session_var not set"#));
 }
 
-#[test]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_max_connections_on_all_interfaces() {
-    mz_ore::test::init_logging();
     let query = "SELECT 1";
     let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
 
