@@ -59,11 +59,10 @@ class ExpressionWithArgs(Expression):
         return sql
 
     def resolve_return_type_category(self) -> DataTypeCategory:
-        if self.return_type_category == DataTypeCategory.DYNAMIC:
-            if len(self.args) == 0:
-                raise RuntimeError(
-                    f"Expression {self.pattern} uses {DataTypeCategory.ANY} as return type, which is not allowed"
-                )
+        if self.return_type_category == DataTypeCategory.ANY:
+            raise RuntimeError(
+                f"Expression {self.pattern} uses {DataTypeCategory.ANY} as return type, which is not allowed"
+            )
 
         if self.return_type_category == DataTypeCategory.DYNAMIC:
             if len(self.args) == 0:
