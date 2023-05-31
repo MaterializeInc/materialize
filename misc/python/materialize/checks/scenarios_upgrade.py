@@ -19,9 +19,9 @@ from materialize.checks.mzcompose_actions import (
 )
 from materialize.checks.scenarios import Scenario
 from materialize.util import MzVersion
-from materialize.version_list import VersionsFromDocs
+from materialize.version_list import VersionsFromGit
 
-version_list = VersionsFromDocs()
+version_list = VersionsFromGit()
 released_versions = version_list.all_versions()
 previous_version, last_version = version_list.minor_versions()[-2:]
 
