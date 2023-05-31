@@ -225,11 +225,15 @@ class ResultComparator:
         query_execution: QueryExecution,
         validation_outcome: ValidationOutcome,
     ) -> None:
-        # each outcome is known to contain at least one row
+        # each outcome is known to have the same number of rows
         # each row is supposed to have the same number of columns
 
         outcomes = query_execution.outcomes
         result1 = cast(QueryResult, outcomes[0])
+
+        if len(result1.result_rows) == 0:
+            # this is a valid case; all outcomes have the same number of rows
+            return
 
         for index in range(1, len(outcomes)):
             other_result = cast(QueryResult, outcomes[index])
