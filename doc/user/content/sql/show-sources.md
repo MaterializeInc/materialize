@@ -31,7 +31,7 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to first resolv
 Field | Meaning
 ------|--------
 **name** | The name of the source.
-**type** | The type of the source: `kafka`, `postgres`, `load-generator`, or `subsource`.
+**type** | The type of the source: `kafka`, `postgres`, `load-generator`, `progress`, or `subsource`.
 **size** | The [size](/sql/create-source/#sizing-a-source) of the source. Null if the source is created using the `IN CLUSTER` clause.
 
 ## Examples

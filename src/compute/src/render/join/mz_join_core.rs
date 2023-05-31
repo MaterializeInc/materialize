@@ -39,6 +39,7 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -378,7 +379,7 @@ where
     batch_storage: C2::Storage,
     capability: Capability<T>,
     done: bool,
-    temp: Vec<((D, T), Diff)>,
+    temp: Vec<(D, T, Diff)>,
 }
 
 impl<T, C1, C2, D> Deferred<T, C1, C2, D>
@@ -447,9 +448,7 @@ where
                                 let time1 = time1.join(meet);
                                 batch.map_times(batch_storage, |time2, diff2| {
                                     let time = time1.join(time2);
-                                    for (d, t, r) in logic(key, val1, val2, &time, diff1, diff2) {
-                                        temp.push(((d, t), r));
-                                    }
+                                    temp.extend(logic(key, val1, val2, &time, diff1, diff2))
                                 });
                             });
                             batch.step_val(batch_storage);
@@ -460,12 +459,10 @@ where
                         // TODO: This consolidation is optional, and it may not be very
                         //       helpful. We might try harder to understand whether we
                         //       should do this work here, or downstream at consumers.
-                        differential_dataflow::consolidation::consolidate(temp);
+                        consolidate_updates(temp);
 
                         *fuel = fuel.saturating_sub(temp.len());
-                        for ((d, t), r) in temp.drain(..) {
-                            session.give((d, t, r));
-                        }
+                        session.give_container(temp);
 
                         if *fuel == 0 {
                             // The fuel is exhausted, so we should yield. Returning here is only
