@@ -150,6 +150,8 @@ def _run_output_consistency_tests_internal(
     )
     test_runner.setup()
 
+    output_printer.start_section("Test execution")
+
     if not config.verbose_output:
         output_printer.print_info(
             "Printing only queries with inconsistencies or warnings in non-verbose mode."
