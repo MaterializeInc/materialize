@@ -21,6 +21,7 @@ from materialize.output_consistency.operation.operation import (
     EXPRESSION_PLACEHOLDER,
     DbOperationOrFunction,
 )
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -45,6 +46,9 @@ class ExpressionWithArgs(Expression):
         self.return_type_spec = operation.return_type_spec
         self.args = args
 
+    def has_args(self) -> bool:
+        return len(self.args) > 0
+
     def to_sql(self) -> str:
         sql: str = self.pattern
 
@@ -57,6 +61,9 @@ class ExpressionWithArgs(Expression):
             )
 
         return sql
+
+    def resolve_return_type_spec(self) -> ReturnTypeSpec:
+        return self.return_type_spec
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         first_arg_type_category_hint = None

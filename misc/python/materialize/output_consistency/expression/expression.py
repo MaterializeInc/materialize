@@ -18,6 +18,7 @@ from materialize.output_consistency.execution.value_storage_layout import (
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -39,6 +40,9 @@ class Expression:
 
     def to_sql(self) -> str:
         raise RuntimeError("Not implemented")
+
+    def resolve_return_type_spec(self) -> ReturnTypeSpec:
+        raise NotImplementedError
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         raise RuntimeError("Not implemented")

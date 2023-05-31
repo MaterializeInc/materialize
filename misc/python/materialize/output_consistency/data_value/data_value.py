@@ -17,6 +17,7 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.expression.leaf_expression import LeafExpression
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -40,6 +41,9 @@ class DataValue(LeafExpression):
             False,
         )
         self.value = value
+
+    def resolve_return_type_spec(self) -> ReturnTypeSpec:
+        return self.data_type.resolve_return_type_spec(self.own_characteristics)
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         return self.data_type.category
