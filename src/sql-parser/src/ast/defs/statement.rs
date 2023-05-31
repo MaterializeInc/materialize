@@ -25,6 +25,7 @@
 use std::fmt;
 
 use enum_kinds::EnumKind;
+use serde::{Deserialize, Serialize};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
@@ -38,7 +39,7 @@ use crate::ast::{
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
-#[enum_kind(StatementKind)]
+#[enum_kind(StatementKind, derive(Serialize, Deserialize))]
 pub enum Statement<T: AstInfo> {
     Select(SelectStatement<T>),
     Insert(InsertStatement<T>),

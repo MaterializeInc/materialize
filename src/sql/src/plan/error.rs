@@ -27,7 +27,7 @@ use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
 use mz_repr::{strconv, ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
-use mz_sql_parser::parser::ParserError;
+use mz_sql_parser::parser::{ParserError, ParserStatementError};
 
 use crate::catalog::{
     CatalogError, CatalogItemType, ErrorMessageObjectDescription, SystemObjectType,
@@ -101,6 +101,7 @@ pub enum PlanError {
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
+    ParserStatement(ParserStatementError),
     Parser(ParserError),
     DropViewOnMaterializedView(String),
     DropSubsource {
@@ -387,6 +388,7 @@ impl fmt::Display for PlanError {
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Parser(e) => e.fmt(f),
+            Self::ParserStatement(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
             Self::InvalidId(id) => write!(f, "invalid id {}", id),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),
@@ -562,6 +564,12 @@ impl From<EvalError> for PlanError {
 impl From<ParserError> for PlanError {
     fn from(e: ParserError) -> PlanError {
         PlanError::Parser(e)
+    }
+}
+
+impl From<ParserStatementError> for PlanError {
+    fn from(e: ParserStatementError) -> PlanError {
+        PlanError::ParserStatement(e)
     }
 }
 
