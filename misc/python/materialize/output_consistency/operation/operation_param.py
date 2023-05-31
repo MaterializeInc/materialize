@@ -48,7 +48,7 @@ class OperationParam:
                 self.incompatibility_combinations.append({incompatibility})
 
     def supports_type(self, data_type: DataType) -> bool:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def supports_expression(self, arg: Expression) -> bool:
         for incompatibility_combination in self.incompatibility_combinations:

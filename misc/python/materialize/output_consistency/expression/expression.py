@@ -44,7 +44,7 @@ class Expression:
         raise RuntimeError("Not implemented")
 
     def try_resolve_exact_data_type(self) -> Optional[DataType]:
-        raise RuntimeError("Not implemented")
+        raise NotImplementedError
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
