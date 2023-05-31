@@ -596,6 +596,10 @@
   functions:
   - signature: 'array_cat(a1: arrayany, a2: arrayany) -> arrayany'
     description: 'Concatenates `a1` and `a2`.'
+  - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible) -> int'
+    description: 'Returns the subscript of `needle` in `haystack`. Returns `null` if not found.'
+  - signature: 'array_position(haystack: anycompatiblearray, needle: anycompatible, skip: int) -> int'
+    description: 'Returns the subscript of `needle` in `haystack`, skipping the first `skip` elements. Returns `null` if not found.'
   - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
     description: >-
       Concatenates the elements of `array` together separated by `sep`.
