@@ -34,6 +34,21 @@ this case)
 division by zero)
 * `--max-cols-per-query`: maximum number of columns per query
 
+## Features
+
+### Basic Functionality
+* Generate and setup data structures
+* Generate queries with random expressions
+* Execute queries and collect results
+* Validate outcomes of different computation modes of a query template
+* Ignore known inconsistencies
+* Generate minimal reproducible code snippets
+* Split and retry multi-column queries when receiving a database error
+
+### Advanced Features
+* Generate expressions with aggregation functions
+* Generate nested expressions
+
 ## Implementation
 
 ### UML Overview

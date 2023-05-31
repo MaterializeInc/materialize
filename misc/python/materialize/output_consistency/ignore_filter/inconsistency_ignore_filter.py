@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 from typing import Set
 
+from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -16,7 +17,10 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.expression.leaf_expression import LeafExpression
-from materialize.output_consistency.operation.operation import DbFunction
+from materialize.output_consistency.operation.operation import (
+    DbFunction,
+    DbOperationOrFunction,
+)
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -39,9 +43,7 @@ class InconsistencyIgnoreFilter:
         row_selection: DataRowSelection,
     ) -> bool:
         # check expression itself
-        if self._shall_ignore_expression_with_args_no_recursion(
-            expression, row_selection
-        ):
+        if self._visit_expression_with_args(expression, row_selection):
             return True
 
         # recursively check arguments
@@ -51,26 +53,50 @@ class InconsistencyIgnoreFilter:
 
         return False
 
-    def _shall_ignore_expression_with_args_no_recursion(
+    def _visit_expression_with_args(
         self,
         expression: ExpressionWithArgs,
         row_selection: DataRowSelection,
     ) -> bool:
+        """True if the expression shall be ignored."""
         if not expression.operation.is_aggregation:
             # currently no issues without aggregation are known
             return False
 
+        expression_characteristics = (
+            expression.recursively_collect_involved_characteristics(row_selection)
+        )
+
+        if self._matches_problematic_operation_or_function_invocation(
+            expression, expression.operation, expression_characteristics
+        ):
+            return True
+
         if isinstance(expression.operation, DbFunction):
             # currently only issues with functions are known, therefore ignore operations
             db_function = expression.operation
-            expression_characteristics = (
-                expression.recursively_collect_involved_characteristics(row_selection)
-            )
 
             if self._matches_problematic_function_invocation(
                 db_function, expression_characteristics
             ):
                 return True
+
+        return False
+
+    def _matches_problematic_operation_or_function_invocation(
+        self,
+        expression: ExpressionWithArgs,
+        operation: DbOperationOrFunction,
+        _all_involved_characteristics: Set[ExpressionCharacteristics],
+    ) -> bool:
+        if operation.is_aggregation:
+            for arg in expression.args:
+                if (
+                    not isinstance(arg, LeafExpression)
+                    and arg.resolve_return_type_category() == DataTypeCategory.NUMERIC
+                ):
+                    # tracked with https://github.com/MaterializeInc/materialize/issues/19592
+                    return True
 
         return False
 

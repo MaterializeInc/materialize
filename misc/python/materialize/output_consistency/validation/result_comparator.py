@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+import math
 import re
 from decimal import Decimal
 from typing import Any, cast
@@ -40,7 +40,7 @@ class ResultComparator:
         if len(query_execution.outcomes) == 1:
             raise RuntimeError("Contains only one outcome, nothing to compare against!")
 
-        if query_execution.query.expect_error:
+        if query_execution.query_template.expect_error:
             validation_outcome.add_remark(ValidationRemark("DB error is possible"))
 
         self.validate_outcomes_metadata(query_execution, validation_outcome)
@@ -81,7 +81,7 @@ class ResultComparator:
         if outcome1.successful != outcome2.successful:
             validation_outcome.add_error(
                 ValidationError(
-                    query_execution.query,
+                    query_execution.query_template,
                     ValidationErrorType.SUCCESS_MISMATCH,
                     "Outcome differs",
                     value1=outcome1.__class__.__name__,
@@ -143,7 +143,7 @@ class ResultComparator:
         if num_rows1 != num_rows2:
             validation_outcome.add_error(
                 ValidationError(
-                    query_execution.query,
+                    query_execution.query_template,
                     ValidationErrorType.ROW_COUNT_MISMATCH,
                     "Row count differs",
                     value1=str(num_rows1),
@@ -168,7 +168,7 @@ class ResultComparator:
         if norm_error_message_1 != norm_error_message_2:
             validation_outcome.add_error(
                 ValidationError(
-                    query_execution.query,
+                    query_execution.query_template,
                     ValidationErrorType.ERROR_MISMATCH,
                     "Error message differs",
                     value1=norm_error_message_1,
@@ -273,7 +273,7 @@ class ResultComparator:
             if not self.is_value_equal(result_value1, result_value2):
                 validation_outcome.add_error(
                     ValidationError(
-                        query_execution.query,
+                        query_execution.query_template,
                         ValidationErrorType.CONTENT_MISMATCH,
                         "Value differs",
                         value1=result_value1,
@@ -293,5 +293,8 @@ class ResultComparator:
 
         if isinstance(value1, Decimal) and isinstance(value2, Decimal):
             return value1.is_nan() and value2.is_nan()
+
+        if isinstance(value1, float) and isinstance(value2, float):
+            return math.isnan(value1) and math.isnan(value2)
 
         return False
