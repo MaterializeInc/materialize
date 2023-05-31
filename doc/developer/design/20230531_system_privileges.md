@@ -83,4 +83,4 @@ the preferred approach.
 
 - Where in the catalog should system privileges be stored? One option is in `mz_roles`. Another
   option is in a new table with a single column for system privileges.
-- Should we use the existing `mz_acl_item` for system privileges or create a new type? 
+- Should we use the existing `mz_acl_item` for system privileges or create a new type?
