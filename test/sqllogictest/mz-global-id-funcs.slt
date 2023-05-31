@@ -1,0 +1,144 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# We want stability of GlobalIDs
+reset-server
+
+statement ok
+CREATE DATABASE d;
+
+statement ok
+CREATE SCHEMA s;
+
+statement ok
+CREATE SCHEMA d.s;
+
+statement ok
+CREATE TABLE t (a int);
+
+statement ok
+CREATE TABLE s.t (a int);
+
+statement ok
+CREATE TABLE d.s.t (a int);
+
+query T
+SELECT mz_internal.mz_name_to_global_id('t');
+----
+u1
+
+query T
+SELECT mz_internal.mz_global_id_to_name('u1');
+----
+materialize.public.t
+
+query T
+SELECT mz_internal.mz_name_to_global_id('s', 't');
+----
+u2
+
+query T
+SELECT mz_internal.mz_global_id_to_name('u2');
+----
+materialize.s.t
+
+query T
+SELECT mz_internal.mz_name_to_global_id('d', ARRAY['s'], 't');
+----
+u3
+
+query T
+SELECT mz_internal.mz_global_id_to_name('u3');
+----
+d.s.t
+
+query T
+SELECT mz_internal.mz_name_to_global_id(ARRAY['public', 's'], 't');
+----
+u1
+u2
+
+query TT
+SELECT id, mz_internal.mz_global_id_to_name(id)
+    FROM
+        mz_internal.mz_name_to_global_id(ARRAY['public', 's'], 't') AS t (id)
+    ORDER BY id;
+----
+u1
+materialize.public.t
+u2
+materialize.s.t
+
+# Check ambient schemas
+
+query T
+SELECT mz_internal.mz_name_to_global_id('int4');
+----
+s20
+
+query T
+SELECT mz_internal.mz_global_id_to_name('s20');
+----
+pg_catalog.int4
+
+# Values that do not exist
+query T
+SELECT mz_internal.mz_name_to_global_id('dne')
+----
+
+query T
+SELECT mz_internal.mz_name_to_global_id('dne', 't')
+----
+
+query T
+SELECT mz_internal.mz_name_to_global_id(ARRAY[]::text[], 't')
+----
+
+query T
+SELECT mz_internal.mz_name_to_global_id('public', 'dne')
+----
+
+query T
+SELECT mz_internal.mz_name_to_global_id('dne', ARRAY['public'], 't')
+----
+
+query T
+SELECT mz_internal.mz_name_to_global_id('d', ARRAY[]::text[], 't');
+----
+
+query error global ID dne does not exist
+SELECT mz_internal.mz_global_id_to_name('dne');
+
+# Null input
+query T
+SELECT mz_internal.mz_name_to_global_id(null)
+----
+
+query T
+SELECT mz_internal.mz_name_to_global_id(null, 't')
+----
+
+query T
+SELECT mz_internal.mz_name_to_global_id('public', null)
+----
+
+query T
+SELECT mz_internal.mz_name_to_global_id(null, ARRAY['public'], 't')
+----
+
+query T
+SELECT mz_internal.mz_global_id_to_name(null)
+----
+NULL
+
+# Null input is valid for database when looking up items in ambient mz_schemas
+query T
+SELECT mz_internal.mz_name_to_global_id(null, ARRAY['pg_catalog'], 'int4')
+----
+s20
