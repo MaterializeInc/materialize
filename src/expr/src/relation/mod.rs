@@ -2382,84 +2382,13 @@ impl AggregateExpr {
                 .clone()
                 .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
 
-            // RowNumber takes a list of records and outputs a list containing exactly 1 element
+            // RowNumber, Rank, DenseRank take a list of records and output a list containing exactly 1 element
             AggregateFunc::RowNumber { .. } => {
-                let list = self
-                    .expr
-                    .clone()
-                    // extract the list within the record
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-
-                // extract the expression within the list
-                let record = MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListIndex,
-                    exprs: vec![
-                        list,
-                        MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                    ],
-                };
-
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: self
-                            .typ(input_type)
-                            .scalar_type
-                            .unwrap_list_element_type()
-                            .clone(),
-                    },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from("?row_number?"),
-                                ColumnName::from("?record?"),
-                            ],
-                        },
-                        exprs: vec![
-                            MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                            record,
-                        ],
-                    }],
-                }
+                self.on_unique_ranking_window_funcs(input_type, "?row_number?")
             }
-
-            // DenseRank takes a list of records and outputs a list containing exactly 1 element
+            AggregateFunc::Rank { .. } => self.on_unique_ranking_window_funcs(input_type, "?rank?"),
             AggregateFunc::DenseRank { .. } => {
-                let list = self
-                    .expr
-                    .clone()
-                    // extract the list within the record
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-
-                // extract the expression within the list
-                let record = MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListIndex,
-                    exprs: vec![
-                        list,
-                        MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                    ],
-                };
-
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: self
-                            .typ(input_type)
-                            .scalar_type
-                            .unwrap_list_element_type()
-                            .clone(),
-                    },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from("?dense_rank?"),
-                                ColumnName::from("?record?"),
-                            ],
-                        },
-                        exprs: vec![
-                            MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                            record,
-                        ],
-                    }],
-                }
+                self.on_unique_ranking_window_funcs(input_type, "?dense_rank?")
             }
 
             // The input type for LagLead is a ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
@@ -2657,6 +2586,47 @@ impl AggregateExpr {
             | AggregateFunc::Any
             | AggregateFunc::All
             | AggregateFunc::Dummy => self.expr.clone(),
+        }
+    }
+
+    /// `on_unique` for ROW_NUMBER, RANK, DENSE_RANK
+    pub fn on_unique_ranking_window_funcs(
+        &self,
+        input_type: &[ColumnType],
+        col_name: &str,
+    ) -> MirScalarExpr {
+        let list = self
+            .expr
+            .clone()
+            // extract the list within the record
+            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+        // extract the expression within the list
+        let record = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::ListIndex,
+            exprs: vec![
+                list,
+                MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+            ],
+        };
+
+        MirScalarExpr::CallVariadic {
+            func: VariadicFunc::ListCreate {
+                elem_type: self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone(),
+            },
+            exprs: vec![MirScalarExpr::CallVariadic {
+                func: VariadicFunc::RecordCreate {
+                    field_names: vec![ColumnName::from(col_name), ColumnName::from("?record?")],
+                },
+                exprs: vec![
+                    MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+                    record,
+                ],
+            }],
         }
     }
 

@@ -658,7 +658,9 @@
   description: Window functions compute values across sets of rows related to the current query.
   functions:
   - signature: 'dense_rank() -> int'
-    description: Returns the rank of the current row within its partition without gaps, counting from 1.
+    description: >-
+      Returns the rank of the current row within its partition without gaps, counting from 1.
+      Rows that compare equal will have the same rank.
   - signature: 'first_value(value anycompatible) -> anyelement'
     description: >-
       Returns `value` evaluated at the first row of the window frame. The default window frame is
@@ -681,8 +683,15 @@
       If `offset` is `NULL`, `NULL` is returned instead.
       Both `offset` and `default` are evaluated with respect to the current row.
       If omitted, `offset` defaults to 1 and `default` to `NULL`.
+  - signature: 'rank() -> int'
+    description: >-
+      Returns the rank of the current row within its partition with gaps (counting from 1):
+      rows that compare equal will have the same rank, and then the rank is incremented by the number of rows that
+      compared equal.
   - signature: 'row_number() -> int'
-    description: Returns the number of the current row within its partition, counting from 1.
+    description: >-
+      Returns the number of the current row within its partition, counting from 1.
+      Rows that compare equal will be ordered in an unspecified way.
 
 - type: System information
   description: Functions that return information about the system.

@@ -2791,6 +2791,9 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         "row_number" => ScalarWindow {
             params!() => ScalarWindowFunc::RowNumber => Int64, 3100;
         },
+        "rank" => ScalarWindow {
+            params!() => ScalarWindowFunc::Rank => Int64, 3101;
+        },
         "dense_rank" => ScalarWindow {
             params!() => ScalarWindowFunc::DenseRank => Int64, 3102;
         },
