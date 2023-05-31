@@ -324,11 +324,17 @@ The `mz_arrangement_sharing` view describes how many times each [arrangement] in
 
 The `mz_arrangement_sizes` view describes the size of each [arrangement] in the system.
 
-| Field          | Type         | Meaning                                                                                                                   |
-| -------------- | ------------ | --------                                                                                                                  |
-| `operator_id`  | [`bigint`]   | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `records`      | [`bigint`]   | The number of records in the arrangement.                                                                                 |
-| `batches`      | [`bigint`]   | The number of batches in the arrangement.                                                                                 |
+The size, capacity, and allocations are an approximation, which may underestimate the actual size in memory.
+Specifically, reductions can use more memory than we show here.
+
+| Field         | Type       | Meaning                                                                                                                   |
+|---------------|------------|---------------------------------------------------------------------------------------------------------------------------|
+| `operator_id` | [`bigint`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
+| `records`     | [`bigint`] | The number of records in the arrangement.                                                                                 |
+| `batches`     | [`bigint`] | The number of batches in the arrangement.                                                                                 |
+| `size`        | [`bigint`] | The utilized size in bytes of the arrangement.                                                                            |
+| `capacity`    | [`bigint`] | The capacity in bytes of the arrangement. Can be larger than the size.                                                    |
+| `allocations` | [`bigint`] | The number of separate memory allocations backing the arrangement.                                                        |
 
 ### `mz_compute_delays_histogram`
 
@@ -468,12 +474,15 @@ The `mz_dataflow_operator_parents` view describes how [dataflow] operators are n
 The `mz_dataflow_arrangement_sizes` view describes how many records and batches
 are contained in operators under each dataflow.
 
-| Field     | Type       | Meaning                                                                      |
-|-----------|------------|------------------------------------------------------------------------------|
-| `id`      | [`bigint`] | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`    | [`bigint`] | The name of the object (e.g., index) maintained by the dataflow.             |
-| `records` | [`bigint`] | The number of records in all arrangements in the dataflow.                   |
-| `batches` | [`bigint`] | The number of batches in all arrangements in the dataflow.                   |
+| Field         | Type       | Meaning                                                                      |
+|---------------|------------|------------------------------------------------------------------------------|
+| `id`          | [`bigint`] | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
+| `name`        | [`bigint`] | The name of the object (e.g., index) maintained by the dataflow.             |
+| `records`     | [`bigint`] | The number of records in all arrangements in the dataflow.                   |
+| `batches`     | [`bigint`] | The number of batches in all arrangements in the dataflow.                   |
+| `size`        | [`bigint`] | The utilized size in bytes of the arrangements.                              |
+| `capacity`    | [`bigint`] | The capacity in bytes of the arrangements. Can be larger than the size.      |
+| `allocations` | [`bigint`] | The number of separate memory allocations backing the arrangements.          |
 
 ### `mz_message_counts`
 
@@ -498,22 +507,29 @@ The `mz_peek_durations_histogram` view describes a histogram of the duration in 
 
 The `mz_records_per_dataflow` view describes the number of records in each [dataflow].
 
-| Field        | Type          | Meaning                                                                    |
-| ------------ | ------------- | --------                                                                   |
-| `id`         | [`bigint`]    | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`       | [`text`]      | The internal name of the dataflow.                                         |
-| `records`    | [`numeric`]   | The number of records in the dataflow.                                     |
+| Field         | Type        | Meaning                                                                    |
+|---------------|-------------|----------------------------------------------------------------------------|
+| `id`          | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
+| `name`        | [`text`]    | The internal name of the dataflow.                                         |
+| `records`     | [`numeric`] | The number of records in the dataflow.                                     |
+| `size`        | [`bigint`]  | The utilized size in bytes of the arrangements.                            |
+| `capacity`    | [`bigint`]  | The capacity in bytes of the arrangements. Can be larger than the size.    |
+| `allocations` | [`bigint`]  | The number of separate memory allocations backing the arrangements.        |
+
 
 ### `mz_records_per_dataflow_operator`
 
 The `mz_records_per_dataflow_operator` view describes the number of records in each [dataflow] operator in the system.
 
-| Field          | Type          | Meaning                                                                                      |
-| -------------- | ------------- | --------                                                                                     |
-| `id`           | [`bigint`]    | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `name`         | [`text`]      | The internal name of the operator.                                                           |
-| `dataflow_id`  | [`bigint`]    | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                   |
-| `records`      | [`numeric`]   | The number of records in the operator.                                                       |
+| Field         | Type        | Meaning                                                                                      |
+|---------------|-------------|----------------------------------------------------------------------------------------------|
+| `id`          | [`bigint`]  | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
+| `name`        | [`text`]    | The internal name of the operator.                                                           |
+| `dataflow_id` | [`bigint`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                   |
+| `records`     | [`numeric`] | The number of records in the operator.                                                       |
+| `size`        | [`bigint`]  | The utilized size in bytes of the arrangement.                                               |
+| `capacity`    | [`bigint`]  | The capacity in bytes of the arrangement. Can be larger than the size.                       |
+| `allocations` | [`bigint`]  | The number of separate memory allocations backing the arrangement.                           |
 
 ### `mz_scheduling_elapsed`
 
