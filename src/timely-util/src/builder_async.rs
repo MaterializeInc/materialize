@@ -543,6 +543,7 @@ mod test {
     use timely::dataflow::channels::pact::Pipeline;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, ToStream};
+    use timely::WorkerConfig;
 
     use super::*;
 
@@ -583,5 +584,57 @@ mod test {
         .expect("timely panicked");
 
         assert_eq!(extracted, vec![(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9])]);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    fn gh_18837() {
+        let (builders, other) = timely::CommunicationConfig::Process(2).try_build().unwrap();
+        timely::execute::execute_from(builders, other, WorkerConfig::default(), |worker| {
+            let index = worker.index();
+            let tokens = worker.dataflow::<u64, _, _>(move |scope| {
+                let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
+                let (_output, output_stream) = producer.new_output::<Vec<usize>>();
+                let producer_button = producer.build(move |mut capabilities| async move {
+                    let mut cap = capabilities.pop().unwrap();
+                    if index != 0 {
+                        return;
+                    }
+                    // Worker 0 downgrades to 1 and keeps the capability around forever
+                    cap.downgrade(&1);
+                    std::future::pending().await
+                });
+
+                let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
+                let mut input_handle = consumer.new_input(&output_stream, Pipeline);
+                let consumer_button = consumer.build(move |_| async move {
+                    while let Some(event) = input_handle.next().await {
+                        if let Event::Progress(frontier) = event {
+                            // We should never observe a frontier greater than [1]
+                            assert!(frontier.less_equal(&1));
+                        }
+                    }
+                });
+
+                (
+                    producer_button.press_on_drop(),
+                    consumer_button.press_on_drop(),
+                )
+            });
+
+            // Run dataflow until only worker 0 holds the frontier to [1]
+            for _ in 0..100 {
+                worker.step();
+            }
+            // Then drop the tokens of worker 0
+            if index == 0 {
+                drop(tokens)
+            }
+            // And step the dataflow some more to ensure consumers don't observe frontiers advancing.
+            for _ in 0..100 {
+                worker.step();
+            }
+        })
+        .expect("timely panicked");
     }
 }
