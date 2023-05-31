@@ -108,7 +108,10 @@ class ResultComparator:
             # this needs will no longer be sensible when more than two evaluation strategies are used
             self.remark_on_success_with_single_column(outcome1, validation_outcome)
 
-        if both_failed:
+        if (
+            both_failed
+            and not query_execution.query_template.disable_error_message_validation
+        ):
             failure1 = cast(QueryFailure, outcome1)
             self.validate_error_messages(
                 query_execution,

@@ -39,6 +39,7 @@ class QueryTemplate:
         self.storage_layout = storage_layout
         self.contains_aggregations = contains_aggregations
         self.row_selection = row_selection
+        self.disable_error_message_validation = not self.__can_compare_error_messages()
 
     def add_select_expression(self, expression: Expression) -> None:
         self.select_expressions.append(expression)
@@ -111,3 +112,17 @@ FROM{space_separator}{strategy.get_db_object_name(self.storage_layout)}
 
     def column_count(self) -> int:
         return len(self.select_expressions)
+
+    def __can_compare_error_messages(self) -> bool:
+        if self.storage_layout == ValueStorageLayout.HORIZONTAL:
+            return True
+
+        for expression in self.select_expressions:
+            if expression.contains_leaf_not_directly_consumed_by_aggregation():
+                # The query operates on multiple rows and contains at least one non-aggregate function directly
+                # operating on the value. Since the row processing order is not fixed, different evaluation
+                # strategies may yield different error messages (depending on the first invalid value they
+                # encounter). Therefore, error messages shall not be compared in case of a query failure.
+                return False
+
+        return True

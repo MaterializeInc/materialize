@@ -102,6 +102,21 @@ class ExpressionWithArgs(Expression):
 
         return leaves
 
+    def is_leaf(self) -> bool:
+        return False
+
+    def contains_leaf_not_directly_consumed_by_aggregation(self) -> bool:
+        for arg in self.args:
+            if arg.is_leaf() and not self.is_aggregate:
+                return True
+            elif (
+                not arg.is_leaf()
+                and arg.contains_leaf_not_directly_consumed_by_aggregation()
+            ):
+                return True
+
+        return False
+
 
 def _determine_storage_layout(args: List[Expression]) -> ValueStorageLayout:
     storage_layout: Optional[ValueStorageLayout] = None
