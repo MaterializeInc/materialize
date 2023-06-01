@@ -24,6 +24,7 @@ use md5::{Digest, Md5};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::fmt::FormatBuffer;
+use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
 use mz_ore::{cast, soft_assert};
@@ -1841,6 +1842,104 @@ fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'s
     Ok(contains.into())
 }
 
+// transliteration from postgres/src/backend/utils/adt/misc.c
+fn parse_ident<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    fn is_ident_start(c: char) -> bool {
+        matches!(c, 'A'..='Z' | 'a'..='z' | '_' | '\u{80}'..=char::MAX)
+    }
+
+    fn is_ident_cont(c: char) -> bool {
+        matches!(c, '0'..='9' | '$') || is_ident_start(c)
+    }
+
+    let ident = a.unwrap_str();
+    let strict = b.unwrap_bool();
+
+    let mut elems = vec![];
+    let buf = &mut LexBuf::new(ident);
+
+    let mut after_dot = false;
+
+    buf.take_while(|ch| ch.is_ascii_whitespace());
+
+    loop {
+        let mut missing_ident = true;
+
+        let c = buf.next();
+
+        if c == Some('"') {
+            let s = buf.take_while(|ch| !matches!(ch, '"'));
+
+            if buf.next() != Some('"') {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: Some("String has unclosed double quotes.".to_string()),
+                });
+            }
+            elems.push(Datum::String(s));
+            missing_ident = false;
+        } else if c.map(is_ident_start).unwrap_or(false) {
+            buf.prev();
+            let s = buf.take_while(is_ident_cont);
+            let s = temp_storage.push_string(s.to_ascii_lowercase());
+            elems.push(Datum::String(s));
+            missing_ident = false;
+        }
+
+        if missing_ident {
+            if c == Some('.') {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: Some("No valid identifier before \".\".".to_string()),
+                });
+            } else if after_dot {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: Some("No valid identifier after \".\".".to_string()),
+                });
+            } else {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: None,
+                });
+            }
+        }
+
+        buf.take_while(|ch| ch.is_ascii_whitespace());
+
+        match buf.next() {
+            Some('.') => {
+                after_dot = true;
+
+                buf.take_while(|ch| ch.is_ascii_whitespace());
+            }
+            Some(_) if strict => {
+                return Err(EvalError::InvalidIdentifier {
+                    ident: ident.to_string(),
+                    detail: None,
+                })
+            }
+            _ => break,
+        }
+    }
+
+    Ok(temp_storage.make_datum(|packer| {
+        packer
+            .push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: elems.len(),
+                }],
+                elems,
+            )
+            .unwrap()
+    }))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
     AddInt16,
@@ -2024,6 +2123,7 @@ pub enum BinaryFunc {
     RangeDifference,
     UuidGenerateV5,
     MzAclItemContainsPrivilege,
+    ParseIdent,
 }
 
 impl BinaryFunc {
@@ -2284,6 +2384,7 @@ impl BinaryFunc {
             BinaryFunc::RangeDifference => range_difference(a, b, temp_storage),
             BinaryFunc::UuidGenerateV5 => Ok(uuid_generate_v5(a, b)),
             BinaryFunc::MzAclItemContainsPrivilege => mz_acl_item_contains_privilege(a, b),
+            BinaryFunc::ParseIdent => parse_ident(a, b, temp_storage),
         }
     }
 
@@ -2458,7 +2559,9 @@ impl BinaryFunc {
                 input1_type.scalar_type.without_modifiers().nullable(true)
             }
 
-            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable)
+            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable),
+
+            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
         }
     }
 
@@ -2653,7 +2756,8 @@ impl BinaryFunc {
             | RangeIntersection
             | RangeDifference
             | UuidGenerateV5
-            | MzAclItemContainsPrivilege => false,
+            | MzAclItemContainsPrivilege
+            | ParseIdent => false,
             // can produce nulls inside the resulting array for missing keys, but always produces an outer array
             MapGetValues => false,
 
@@ -2854,7 +2958,8 @@ impl BinaryFunc {
             | LikeEscape
             | UuidGenerateV5
             | GetByte
-            | MzAclItemContainsPrivilege => false,
+            | MzAclItemContainsPrivilege
+            | ParseIdent => false,
         }
     }
 
@@ -3075,6 +3180,7 @@ impl BinaryFunc {
             | BinaryFunc::RangeDifference => (false, false),
             BinaryFunc::UuidGenerateV5 => (false, false),
             BinaryFunc::MzAclItemContainsPrivilege => (false, false),
+            BinaryFunc::ParseIdent => (false, false),
         }
     }
 }
@@ -3276,6 +3382,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeDifference => f.write_str("-"),
             BinaryFunc::UuidGenerateV5 => f.write_str("uuid_generate_v5"),
             BinaryFunc::MzAclItemContainsPrivilege => f.write_str("mz_aclitem_contains_privilege"),
+            BinaryFunc::ParseIdent => f.write_str("parse_ident"),
         }
     }
 }
@@ -3489,6 +3596,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::RangeUnion).boxed(),
             Just(BinaryFunc::RangeIntersection).boxed(),
             Just(BinaryFunc::RangeDifference).boxed(),
+            Just(BinaryFunc::ParseIdent).boxed(),
         ])
     }
 }
@@ -3683,6 +3791,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::RangeDifference => RangeDifference(()),
             BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
             BinaryFunc::MzAclItemContainsPrivilege => MzAclItemContainsPrivilege(()),
+            BinaryFunc::ParseIdent => ParseIdent(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3883,6 +3992,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 RangeDifference(()) => Ok(BinaryFunc::RangeDifference),
                 UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
                 MzAclItemContainsPrivilege(()) => Ok(BinaryFunc::MzAclItemContainsPrivilege),
+                ParseIdent(()) => Ok(BinaryFunc::ParseIdent),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))
