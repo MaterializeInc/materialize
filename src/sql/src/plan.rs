@@ -120,7 +120,7 @@ pub enum Plan {
     StartTransaction(StartTransactionPlan),
     CommitTransaction(CommitTransactionPlan),
     AbortTransaction(AbortTransactionPlan),
-    Peek(PeekPlan),
+    Select(SelectPlan),
     Subscribe(SubscribePlan),
     CopyFrom(CopyFromPlan),
     CopyRows(CopyRowsPlan),
@@ -196,7 +196,7 @@ impl Plan {
             StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Peek, PlanKind::Subscribe],
+            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
@@ -232,11 +232,11 @@ impl Plan {
             StatementKind::RevokePrivileges => vec![PlanKind::RevokePrivileges],
             StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
             StatementKind::Rollback => vec![PlanKind::AbortTransaction],
-            StatementKind::Select => vec![PlanKind::Peek, PlanKind::SideEffectingFunc],
+            StatementKind::Select => vec![PlanKind::Select, PlanKind::SideEffectingFunc],
             StatementKind::SetTransaction => vec![PlanKind::SetTransaction],
             StatementKind::SetVariable => vec![PlanKind::SetVariable],
             StatementKind::Show => vec![
-                PlanKind::Peek,
+                PlanKind::Select,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
                 PlanKind::ShowAllVariables,
@@ -297,7 +297,7 @@ impl Plan {
             Plan::StartTransaction(_) => "start transaction",
             Plan::CommitTransaction(_) => "commit",
             Plan::AbortTransaction(_) => "abort",
-            Plan::Peek(_) => "select",
+            Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
             Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
@@ -682,7 +682,7 @@ pub struct SetTransactionPlan {
 }
 
 #[derive(Clone, Debug)]
-pub struct PeekPlan {
+pub struct SelectPlan {
     pub source: MirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,

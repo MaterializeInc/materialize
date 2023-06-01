@@ -253,7 +253,7 @@ impl Coordinator {
                 }
                 self.sequence_end_transaction(ctx, action);
             }
-            Plan::Peek(plan) => {
+            Plan::Select(plan) => {
                 self.sequence_peek(ctx, plan, target_cluster).await;
             }
             Plan::Subscribe(plan) => {

@@ -41,8 +41,8 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{self, side_effecting_func};
 use crate::plan::{
-    query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
-    PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
+    query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, Plan,
+    PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
 };
 use crate::session::vars;
 
@@ -193,7 +193,7 @@ pub fn plan_select(
         QueryLifetime::OneShot(scx.pcx()?),
     )?;
     let when = query::plan_as_of(scx, select.as_of)?;
-    Ok(Plan::Peek(PeekPlan {
+    Ok(Plan::Select(SelectPlan {
         source: expr,
         when,
         finishing,

@@ -31,11 +31,11 @@ use mz_sql::plan::{
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateSourcePlans, CreateTablePlan,
     CreateTypePlan, CreateViewPlan, DeallocatePlan, DeclarePlan, DropObjectsPlan, DropOwnedPlan,
     ExecutePlan, ExplainPlan, FetchPlan, GrantPrivilegesPlan, GrantRolePlan, InsertPlan,
-    InspectShardPlan, MutationKind, PeekPlan, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan,
+    InspectShardPlan, MutationKind, Plan, PlannedRoleAttributes, PreparePlan, RaisePlan,
     ReadThenWritePlan, ReassignOwnedPlan, ResetVariablePlan, RevokePrivilegesPlan, RevokeRolePlan,
-    RotateKeysPlan, SetTransactionPlan, SetVariablePlan, ShowCreatePlan, ShowVariablePlan,
-    SideEffectingFunc, SourceSinkClusterConfig, StartTransactionPlan, SubscribePlan,
-    UpdatePrivilege,
+    RotateKeysPlan, SelectPlan, SetTransactionPlan, SetVariablePlan, ShowCreatePlan,
+    ShowVariablePlan, SideEffectingFunc, SourceSinkClusterConfig, StartTransactionPlan,
+    SubscribePlan, UpdatePrivilege,
 };
 use mz_sql::session::user::{INTROSPECTION_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
@@ -335,7 +335,7 @@ pub fn generate_required_role_membership(
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
-        | Plan::Peek(_)
+        | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::CopyFrom(_)
         | Plan::CopyRows(_)
@@ -439,7 +439,7 @@ fn generate_required_plan_attribute(plan: &Plan) -> Vec<Attribute> {
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
-        | Plan::Peek(_)
+        | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::CopyRows(_)
         | Plan::CopyFrom(_)
@@ -599,7 +599,7 @@ fn generate_required_ownership(plan: &Plan) -> Vec<ObjectId> {
         | Plan::StartTransaction(_)
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
-        | Plan::Peek(_)
+        | Plan::Select(_)
         | Plan::Subscribe(_)
         | Plan::ShowCreate(_)
         | Plan::CopyFrom(_)
@@ -918,7 +918,7 @@ fn generate_required_privileges(
             )]
         }
 
-        Plan::Peek(PeekPlan {
+        Plan::Select(SelectPlan {
             source,
             when: _,
             finishing: _,
