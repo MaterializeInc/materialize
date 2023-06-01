@@ -155,6 +155,22 @@ query T multiline
 EXPLAIN WITH(mfp_pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
+WHERE COALESCE(delete_ms, insert_ms) < mz_now();
+----
+Explained Query:
+  Filter (numeric_to_mz_timestamp(coalesce(#2, #1)) < mz_now())
+    Get materialize.public.events
+
+Source materialize.public.events
+  filter=((numeric_to_mz_timestamp(coalesce(#2, #1)) < mz_now()))
+  pushdown=((numeric_to_mz_timestamp(coalesce(#2, #1)) < mz_now()))
+
+EOF
+
+query T multiline
+EXPLAIN WITH(mfp_pushdown)
+SELECT content, insert_ms, delete_ms
+FROM events
 WHERE mz_now() < delete_ms + 10000
   AND mz_now() < delete_ms + 20000
   AND mz_now() < delete_ms + 30000
