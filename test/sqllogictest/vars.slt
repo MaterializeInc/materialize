@@ -347,3 +347,19 @@ query T
 SHOW SCHEMA
 ----
 public
+
+statement ok
+SET SCHEMA TO s
+
+query T
+SHOW SCHEMA
+----
+s
+
+statement ok
+SET SCHEMA TO DEFAULT
+
+query T
+SHOW SCHEMA
+----
+public
