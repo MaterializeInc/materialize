@@ -63,6 +63,13 @@ class ExpressionWithArgs(Expression):
                 f"Not enough arguments to fill all placeholders in pattern {self.pattern}"
             )
 
+        if (
+            is_root_level
+            and self.resolve_return_type_category() == DataTypeCategory.DATE_TIME
+        ):
+            # workaround because the max date type in python is smaller than values supported by mz
+            sql = f"({sql})::TEXT"
+
         return sql
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
