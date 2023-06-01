@@ -176,7 +176,7 @@ pub fn check_plan(
     }
 
     // Obtain all roles that the current session is a member of.
-    let role_membership = catalog.collect_role_membership(session_role_id);
+    let role_membership = catalog.collect_role_membership(current_role_id);
 
     // Validate that the current session has the required role membership to execute the provided
     // plan.
@@ -199,7 +199,7 @@ pub fn check_plan(
     let required_attributes = generate_required_plan_attribute(plan);
     let unheld_attributes: Vec<_> = required_attributes
         .into_iter()
-        .filter(|attribute| !attribute.check_role(session_role_id, catalog))
+        .filter(|attribute| !attribute.check_role(current_role_id, catalog))
         .collect();
     attribute_err(unheld_attributes, plan)?;
 
@@ -217,10 +217,10 @@ pub fn check_plan(
         plan,
         target_cluster_id,
         depends_on,
-        *session_role_id,
+        *current_role_id,
     );
     let mut role_memberships = BTreeMap::new();
-    role_memberships.insert(*session_role_id, role_membership);
+    role_memberships.insert(*current_role_id, role_membership);
     check_object_privileges(catalog, required_privileges, role_memberships)?;
 
     Ok(())
