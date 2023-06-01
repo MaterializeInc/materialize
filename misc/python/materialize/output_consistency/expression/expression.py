@@ -8,8 +8,9 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from typing import List, Set
+from typing import List, Optional, Set
 
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
@@ -17,6 +18,7 @@ from materialize.output_consistency.execution.value_storage_layout import (
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 from materialize.output_consistency.selection.selection import DataRowSelection
 
 
@@ -39,8 +41,14 @@ class Expression:
     def to_sql(self) -> str:
         raise RuntimeError("Not implemented")
 
+    def resolve_return_type_spec(self) -> ReturnTypeSpec:
+        raise NotImplementedError
+
     def resolve_return_type_category(self) -> DataTypeCategory:
         raise RuntimeError("Not implemented")
+
+    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+        raise NotImplementedError
 
     def recursively_collect_involved_characteristics(
         self, row_selection: DataRowSelection
@@ -48,8 +56,7 @@ class Expression:
         """Get all involved characteristics through recursion"""
         raise RuntimeError("Not implemented")
 
-    def collect_leaves(self) -> List[Expression]:
-        # the return type should actually be LeafExpression but can't be to avoid cycles
+    def collect_leaves(self) -> List[LeafExpression]:
         raise RuntimeError("Not implemented")
 
     def __str__(self) -> str:
@@ -79,3 +86,40 @@ class Expression:
         hence false if all leaves of this expression are directly consumed by an aggregation.
         This is relevant because when using non-aggregate functions on multiple rows, different evaluation strategies may yield different error messages due to a different row processing order."""
         raise NotImplementedError
+
+
+class LeafExpression(Expression):
+    def __init__(
+        self,
+        column_name: str,
+        data_type: DataType,
+        characteristics: Set[ExpressionCharacteristics],
+        storage_layout: ValueStorageLayout,
+        is_aggregate: bool,
+        is_expect_error: bool,
+    ):
+        super().__init__(characteristics, storage_layout, is_aggregate, is_expect_error)
+        self.column_name = column_name
+        self.data_type = data_type
+
+    def resolve_data_type_category(self) -> DataTypeCategory:
+        return self.data_type.category
+
+    def try_resolve_exact_data_type(self) -> Optional[DataType]:
+        return self.data_type
+
+    def to_sql(self) -> str:
+        return self.to_sql_as_column()
+
+    def to_sql_as_column(self) -> str:
+        return self.column_name
+
+    def collect_leaves(self) -> List[LeafExpression]:
+        return [self]
+
+    def is_leaf(self) -> bool:
+        return True
+
+    def contains_leaf_not_directly_consumed_by_aggregation(self) -> bool:
+        # This is not decided at leaf level.
+        return False

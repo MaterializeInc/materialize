@@ -10,7 +10,7 @@
 from enum import Enum
 from typing import List, Optional, Set
 
-from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -19,6 +19,7 @@ from materialize.output_consistency.operation.operation_args_validator import (
     OperationArgsValidator,
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 EXPRESSION_PLACEHOLDER = "$"
 
@@ -37,7 +38,7 @@ class DbOperationOrFunction:
         params: List[OperationParam],
         min_param_count: int,
         max_param_count: int,
-        return_type_category: DataTypeCategory,
+        return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
@@ -48,7 +49,7 @@ class DbOperationOrFunction:
         self.params = params
         self.min_param_count = min_param_count
         self.max_param_count = max_param_count
-        self.return_type_category = return_type_category
+        self.return_type_spec = return_type_spec
         self.args_validators: Set[OperationArgsValidator] = args_validators
         self.is_aggregation = is_aggregation
         self.relevance = relevance
@@ -75,6 +76,9 @@ class DbOperationOrFunction:
     def __str__(self) -> str:
         raise RuntimeError("Not implemented")
 
+    def try_resolve_exact_data_type(self, args: List[Expression]) -> Optional[DataType]:
+        return None
+
     def is_expected_to_cause_db_error(self, args: List[Expression]) -> bool:
         """checks incompatibilities (e.g., division by zero) and potential error scenarios (e.g., addition of two max
         data_type)
@@ -89,7 +93,7 @@ class DbOperationOrFunction:
         for arg_index, arg in enumerate(args):
             param = self.params[arg_index]
 
-            if not param.supports_arg(arg):
+            if not param.supports_expression(arg):
                 return True
 
         return False
@@ -102,7 +106,7 @@ class DbOperation(DbOperationOrFunction):
         self,
         pattern: str,
         params: List[OperationParam],
-        return_type_category: DataTypeCategory,
+        return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
     ):
@@ -111,7 +115,7 @@ class DbOperation(DbOperationOrFunction):
             params,
             min_param_count=param_count,
             max_param_count=param_count,
-            return_type_category=return_type_category,
+            return_type_spec=return_type_spec,
             args_validators=args_validators,
             is_aggregation=False,
             relevance=relevance,
@@ -138,7 +142,7 @@ class DbFunction(DbOperationOrFunction):
         self,
         function_name: str,
         params: List[OperationParam],
-        return_type_category: DataTypeCategory,
+        return_type_spec: ReturnTypeSpec,
         args_validators: Optional[Set[OperationArgsValidator]] = None,
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
@@ -149,7 +153,7 @@ class DbFunction(DbOperationOrFunction):
             params,
             min_param_count=self.get_min_param_count(params),
             max_param_count=len(params),
-            return_type_category=return_type_category,
+            return_type_spec=return_type_spec,
             args_validators=args_validators,
             is_aggregation=is_aggregation,
             relevance=relevance,

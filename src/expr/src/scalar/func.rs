@@ -6327,6 +6327,37 @@ fn create_range<'a>(
     }))
 }
 
+fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
+    let array = match datums[0] {
+        Datum::Null => return Ok(Datum::Null),
+        o => o.unwrap_array(),
+    };
+
+    if array.dims().len() > 1 {
+        return Err(EvalError::MultiDimensionalArraySearch);
+    }
+
+    let search = datums[1];
+    if search == Datum::Null {
+        return Ok(Datum::Null);
+    }
+
+    let skip: usize = match datums.get(2) {
+        Some(Datum::Null) => return Err(EvalError::MustNotBeNull("initial position".to_string())),
+        None => 0,
+        Some(o) => usize::try_from(o.unwrap_int32())
+            .unwrap_or(0)
+            .saturating_sub(1),
+    };
+
+    let r = array.elements().iter().skip(skip).position(|d| d == search);
+
+    Ok(Datum::from(r.map(|p| {
+        // Adjust count for the amount we skipped, plus 1 for adjustng to PG indexing scheme.
+        i32::try_from(p + skip + 1).expect("fewer than i32::MAX elements in array")
+    })))
+}
+
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
@@ -6867,6 +6898,7 @@ pub enum VariadicFunc {
     },
     MakeMzAclItem,
     Translate,
+    ArrayPosition,
 }
 
 impl VariadicFunc {
@@ -6933,6 +6965,7 @@ impl VariadicFunc {
             VariadicFunc::Or => or(datums, temp_storage, exprs),
             VariadicFunc::RangeCreate { .. } => eager!(create_range, temp_storage),
             VariadicFunc::MakeMzAclItem => eager!(make_mz_acl_item),
+            VariadicFunc::ArrayPosition => eager!(array_position),
         }
     }
 
@@ -6967,7 +7000,8 @@ impl VariadicFunc {
             | VariadicFunc::DateBinTimestamp
             | VariadicFunc::DateBinTimestampTz
             | VariadicFunc::RangeCreate { .. }
-            | VariadicFunc::MakeMzAclItem => false,
+            | VariadicFunc::MakeMzAclItem
+            | VariadicFunc::ArrayPosition => false,
         }
     }
 
@@ -7042,6 +7076,7 @@ impl VariadicFunc {
             }
             .nullable(false),
             MakeMzAclItem => ScalarType::MzAclItem.nullable(true),
+            ArrayPosition => ScalarType::Int32.nullable(true),
         }
     }
 
@@ -7065,6 +7100,7 @@ impl VariadicFunc {
                 | VariadicFunc::ArrayToString { .. }
                 | VariadicFunc::ErrorIfNull
                 | VariadicFunc::RangeCreate { .. }
+                | VariadicFunc::ArrayPosition
         )
     }
 
@@ -7097,7 +7133,8 @@ impl VariadicFunc {
             | RangeCreate { .. }
             | And
             | Or
-            | MakeMzAclItem => false,
+            | MakeMzAclItem
+            | ArrayPosition => false,
             Coalesce
             | Greatest
             | Least
@@ -7194,7 +7231,8 @@ impl VariadicFunc {
             | VariadicFunc::DateBinTimestampTz
             | VariadicFunc::RangeCreate { .. }
             | VariadicFunc::MakeMzAclItem
-            | VariadicFunc::Translate => false,
+            | VariadicFunc::Translate
+            | VariadicFunc::ArrayPosition => false,
         }
     }
 }
@@ -7240,6 +7278,7 @@ impl fmt::Display for VariadicFunc {
                 _ => unreachable!(),
             }),
             VariadicFunc::MakeMzAclItem => f.write_str("make_mz_aclitem"),
+            VariadicFunc::ArrayPosition => f.write_str("array_position"),
         }
     }
 }
@@ -7297,6 +7336,7 @@ impl Arbitrary for VariadicFunc {
             mz_repr::arb_range_type()
                 .prop_map(|elem_type| VariadicFunc::RangeCreate { elem_type })
                 .boxed(),
+            Just(VariadicFunc::ArrayPosition).boxed(),
         ])
     }
 }
@@ -7337,6 +7377,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::Or => Or(()),
             VariadicFunc::RangeCreate { elem_type } => RangeCreate(elem_type.into_proto()),
             VariadicFunc::MakeMzAclItem => MakeMzAclItem(()),
+            VariadicFunc::ArrayPosition => ArrayPosition(()),
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
@@ -7387,6 +7428,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                     elem_type: elem_type.into_rust()?,
                 }),
                 MakeMzAclItem(()) => Ok(VariadicFunc::MakeMzAclItem),
+                ArrayPosition(()) => Ok(VariadicFunc::ArrayPosition),
             }
         } else {
             Err(TryFromProtoError::missing_field(
