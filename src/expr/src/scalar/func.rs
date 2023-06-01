@@ -814,6 +814,48 @@ fn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
+fn age_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_ts = a.unwrap_timestamp();
+    let b_ts = b.unwrap_timestamp();
+    let age = a_ts.age(&b_ts)?;
+
+    Ok(Datum::from(age))
+}
+
+fn age_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_ts = a.unwrap_timestamptz();
+    let b_ts = b.unwrap_timestamptz();
+    let age = a_ts.age(&b_ts)?;
+
+    Ok(Datum::from(age))
+}
+
+fn age_current<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    // The function to get the current time always returns a timestamp with a timezone.
+    let a_ts = a.unwrap_timestamptz();
+
+    // Note: We truncate a_ts to the current day to match Postgres semantics, which takes the age
+    // from the current day, at midnight.
+
+    let age = match b {
+        Datum::Timestamp(b_ts) => {
+            let date = a_ts.to_naive().truncate_day();
+            let date = CheckedTimestamp::try_from(date)?;
+            let age = date.age(&b_ts)?;
+            age
+        }
+        Datum::TimestampTz(b_ts) => {
+            let date = a_ts.truncate_day();
+            let date = CheckedTimestamp::try_from(date)?;
+            let age = date.age(&b_ts)?;
+            age
+        }
+        d => panic!("Expected Timestamp or TimestampTz, got {d:?}"),
+    };
+
+    Ok(Datum::from(age))
+}
+
 fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
 }
@@ -1957,6 +1999,9 @@ pub enum BinaryFunc {
     AddDateTime,
     AddTimeInterval,
     AddNumeric,
+    AgeCurrent,
+    AgeTimestamp,
+    AgeTimestampTz,
     BitAndInt16,
     BitAndInt32,
     BitAndInt64,
@@ -2159,6 +2204,9 @@ impl BinaryFunc {
             BinaryFunc::AddTimeInterval => Ok(add_time_interval(a, b)),
             BinaryFunc::AddNumeric => add_numeric(a, b),
             BinaryFunc::AddInterval => add_interval(a, b),
+            BinaryFunc::AgeCurrent => age_current(a, b),
+            BinaryFunc::AgeTimestamp => age_timestamp(a, b),
+            BinaryFunc::AgeTimestampTz => age_timestamptz(a, b),
             BinaryFunc::BitAndInt16 => Ok(bit_and_int16(a, b)),
             BinaryFunc::BitAndInt32 => Ok(bit_and_int32(a, b)),
             BinaryFunc::BitAndInt64 => Ok(bit_and_int64(a, b)),
@@ -2455,6 +2503,8 @@ impl BinaryFunc {
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
+            AgeCurrent | AgeTimestamp | AgeTimestampTz => ScalarType::Interval.nullable(in_nullable),
+
             AddTimestampInterval
             | SubTimestampInterval
             | AddTimestampTzInterval
@@ -2603,6 +2653,9 @@ impl BinaryFunc {
             | AddDateTime
             | AddTimeInterval
             | AddNumeric
+            | AgeCurrent
+            | AgeTimestamp
+            | AgeTimestampTz
             | BitAndInt16
             | BitAndInt32
             | BitAndInt64
@@ -2914,6 +2967,9 @@ impl BinaryFunc {
             | RangeDifference => true,
             ToCharTimestamp
             | ToCharTimestampTz
+            | AgeCurrent
+            | AgeTimestamp
+            | AgeTimestampTz
             | DateBinTimestamp
             | DateBinTimestampTz
             | ExtractInterval
@@ -3104,6 +3160,9 @@ impl BinaryFunc {
             | BinaryFunc::IsRegexpMatch { .. } => (false, false),
             BinaryFunc::ToCharTimestamp | BinaryFunc::ToCharTimestampTz => (false, false),
             BinaryFunc::DateBinTimestamp | BinaryFunc::DateBinTimestampTz => (true, true),
+            BinaryFunc::AgeTimestamp | BinaryFunc::AgeTimestampTz | BinaryFunc::AgeCurrent => {
+                (true, true)
+            }
             // TODO: can these ever be treated as monotone? It's safe to treat the unary versions
             // as monotone in some cases, but only when extracting specific parts.
             BinaryFunc::ExtractInterval
@@ -3203,6 +3262,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddDateTime => f.write_str("+"),
             BinaryFunc::AddDateInterval => f.write_str("+"),
             BinaryFunc::AddTimeInterval => f.write_str("+"),
+            BinaryFunc::AgeCurrent => f.write_str("age"),
+            BinaryFunc::AgeTimestamp => f.write_str("age"),
+            BinaryFunc::AgeTimestampTz => f.write_str("age"),
             BinaryFunc::BitAndInt16 => f.write_str("&"),
             BinaryFunc::BitAndInt32 => f.write_str("&"),
             BinaryFunc::BitAndInt64 => f.write_str("&"),
@@ -3415,6 +3477,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::AddDateTime).boxed(),
             Just(BinaryFunc::AddTimeInterval).boxed(),
             Just(BinaryFunc::AddNumeric).boxed(),
+            Just(BinaryFunc::AgeCurrent).boxed(),
+            Just(BinaryFunc::AgeTimestamp).boxed(),
+            Just(BinaryFunc::AgeTimestampTz).boxed(),
             Just(BinaryFunc::BitAndInt16).boxed(),
             Just(BinaryFunc::BitAndInt32).boxed(),
             Just(BinaryFunc::BitAndInt64).boxed(),
@@ -3620,6 +3685,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::AddDateTime => AddDateTime(()),
             BinaryFunc::AddTimeInterval => AddTimeInterval(()),
             BinaryFunc::AddNumeric => AddNumeric(()),
+            BinaryFunc::AgeCurrent => AgeCurrent(()),
+            BinaryFunc::AgeTimestamp => AgeTimestamp(()),
+            BinaryFunc::AgeTimestampTz => AgeTimestampTz(()),
             BinaryFunc::BitAndInt16 => BitAndInt16(()),
             BinaryFunc::BitAndInt32 => BitAndInt32(()),
             BinaryFunc::BitAndInt64 => BitAndInt64(()),
@@ -3815,6 +3883,9 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 AddDateTime(()) => Ok(BinaryFunc::AddDateTime),
                 AddTimeInterval(()) => Ok(BinaryFunc::AddTimeInterval),
                 AddNumeric(()) => Ok(BinaryFunc::AddNumeric),
+                AgeCurrent(()) => Ok(BinaryFunc::AgeCurrent),
+                AgeTimestamp(()) => Ok(BinaryFunc::AgeTimestamp),
+                AgeTimestampTz(()) => Ok(BinaryFunc::AgeTimestampTz),
                 BitAndInt16(()) => Ok(BinaryFunc::BitAndInt16),
                 BitAndInt32(()) => Ok(BinaryFunc::BitAndInt32),
                 BitAndInt64(()) => Ok(BinaryFunc::BitAndInt64),
@@ -7556,6 +7627,54 @@ mod test {
             .unwrap()
             .try_into()
             .unwrap()
+    }
+
+    #[test]
+    fn age_current_truncates() {
+        let now = NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(2023, 06, 01).unwrap(),
+            NaiveTime::from_hms_opt(1, 25, 12).unwrap(),
+        );
+        let now: DateTime<Utc> = DateTime::from_utc(now, Utc);
+        let now_ts = Datum::TimestampTz(CheckedTimestamp::from_timestamplike(now).unwrap());
+
+        // The user specified timestamp is only precise to the day, so we should truncate.
+        let day_prec = NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(2022, 05, 30).unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+        );
+        let day_prec_ts = Datum::Timestamp(CheckedTimestamp::from_timestamplike(day_prec).unwrap());
+        let day_age = age_current(now_ts.clone(), day_prec_ts)
+            .unwrap()
+            .unwrap_interval();
+
+        assert_eq!(day_age, Interval::new(12, 2, 0));
+
+        // The user specified timestamp is only precise to the hour, so we should truncate.
+        let hour_prec = NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(2022, 05, 30).unwrap(),
+            NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+        );
+        let hour_prec_ts =
+            Datum::Timestamp(CheckedTimestamp::from_timestamplike(hour_prec).unwrap());
+        let hour_age = age_current(now_ts.clone(), hour_prec_ts)
+            .unwrap()
+            .unwrap_interval();
+
+        assert_eq!(hour_age, Interval::new(12, 1, 43_200_000_000));
+
+        // The user specified timestamp is only precise to the minute, so we should truncate.
+        let minute_prec = NaiveDateTime::new(
+            NaiveDate::from_ymd_opt(2022, 05, 30).unwrap(),
+            NaiveTime::from_hms_opt(12, 15, 0).unwrap(),
+        );
+        let minute_prec_ts =
+            Datum::Timestamp(CheckedTimestamp::from_timestamplike(minute_prec).unwrap());
+        let minute_age = age_current(now_ts.clone(), minute_prec_ts)
+            .unwrap()
+            .unwrap_interval();
+
+        assert_eq!(minute_age, Interval::new(12, 1, 45_840_000_000));
     }
 
     // Tests that `UnaryFunc::output_type` are consistent with

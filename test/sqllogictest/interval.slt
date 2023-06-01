@@ -1397,3 +1397,25 @@ SELECT justify_interval(interval '2147483647 months -30 days 1440 hrs');
 
 query error interval out of range
 SELECT justify_interval(interval '-2147483648 months 30 days -1440 hrs');
+
+# TIMESTAMP/DATE builtins.
+
+query T
+SELECT age('2001-04-10 22:06:45', '1957-06-13')
+----
+43 years 9 months 27 days 22:06:45
+
+query B
+SELECT age('1957-06-13') - age(now(), '1957-06-13') = interval '0s'
+----
+true
+
+query T
+select age('2017-12-10'::timestamptz, '2017-12-01'::timestamptz)
+----
+9 days
+
+query T
+SELECT age('2017-12-10 04:05:01.555'::timestamp, '2017-12-10 04:05:01.550'::timestamp);
+----
+00:00:00.005

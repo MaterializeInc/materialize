@@ -12,18 +12,30 @@
 use std::fmt::Display;
 use std::ops::Sub;
 
-use ::chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use ::chrono::{
+    DateTime, Datelike, Days, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc,
+};
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use serde::{Serialize, Serializer};
 use thiserror::Error;
 
+use crate::adt::interval::Interval;
 use crate::adt::numeric::DecimalLike;
 use crate::chrono::ProtoNaiveDateTime;
 use crate::Datum;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.date.rs"));
+
+const MONTHS_PER_YEAR: i64 = 12;
+const HOURS_PER_DAY: i64 = 24;
+const MINUTES_PER_HOUR: i64 = 60;
+const SECONDS_PER_MINUTE: i64 = 60;
+
+const NANOSECONDS_PER_HOUR: i64 = NANOSECONDS_PER_MINUTE * MINUTES_PER_HOUR;
+const NANOSECONDS_PER_MINUTE: i64 = NANOSECONDS_PER_SECOND * SECONDS_PER_MINUTE;
+const NANOSECONDS_PER_SECOND: i64 = 10i64.pow(9);
 
 /// Common set of methods for time component.
 pub trait TimeLike: chrono::Timelike {
@@ -493,6 +505,106 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
 
     pub fn checked_sub_signed(self, rhs: Duration) -> Option<T> {
         self.t.checked_sub_signed(rhs)
+    }
+
+    /// Implementation was roughly ported from Postgres's `timestamp.c`.
+    ///
+    /// <https://github.com/postgres/postgres/blob/REL_15_3/src/backend/utils/adt/timestamp.c#L3631>
+    pub fn age(&self, other: &Self) -> Result<Interval, TimestampError> {
+        /// Returns the number of days in the month for which the [`CheckedTimestamp`] is in.
+        fn num_days_in_month<T: TimestampLike>(
+            dt: &CheckedTimestamp<T>,
+        ) -> Result<i64, TimestampError> {
+            // Creates a new Date in the same month and year as our original timestamp. Adds one
+            // month then subtracts one day, to get the last day of our original month.
+            let last_day = NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
+                .ok_or(TimestampError::OutOfRange)?
+                .checked_add_months(Months::new(1))
+                .ok_or(TimestampError::OutOfRange)?
+                .checked_sub_days(Days::new(1))
+                .ok_or(TimestampError::OutOfRange)?
+                .day();
+
+            Ok(CastFrom::cast_from(last_day))
+        }
+
+        let mut nanos = i64::cast_from(self.nanosecond()) - i64::cast_from(other.nanosecond());
+        let mut seconds = i64::cast_from(self.second()) - i64::cast_from(other.second());
+        let mut minutes = i64::cast_from(self.minute()) - i64::cast_from(other.minute());
+        let mut hours = i64::cast_from(self.hour()) - i64::cast_from(other.hour());
+        let mut days = i64::cast_from(self.day()) - i64::cast_from(other.day());
+        let mut months = i64::cast_from(self.month()) - i64::cast_from(other.month());
+        let mut years = i64::cast_from(self.year()) - i64::cast_from(other.year());
+
+        // Flip sign if necessary.
+        if self < other {
+            nanos = -nanos;
+            seconds = -seconds;
+            minutes = -minutes;
+            hours = -hours;
+            days = -days;
+            months = -months;
+            years = -years;
+        }
+
+        // Carry negative fields into the next higher field.
+        while nanos < 0 {
+            nanos += NANOSECONDS_PER_SECOND;
+            seconds -= 1;
+        }
+        while seconds < 0 {
+            seconds += SECONDS_PER_MINUTE;
+            minutes -= 1;
+        }
+        while minutes < 0 {
+            minutes += MINUTES_PER_HOUR;
+            minutes -= 1;
+        }
+        while hours < 0 {
+            hours += HOURS_PER_DAY;
+            days -= 1;
+        }
+        while days < 0 {
+            if self < other {
+                days += num_days_in_month(self)?;
+            } else {
+                days += num_days_in_month(other)?;
+            }
+            months -= 1;
+        }
+        while months < 0 {
+            months += MONTHS_PER_YEAR;
+            years -= 1;
+        }
+
+        // Revert the sign back, if we flipped it originally.
+        if self < other {
+            nanos = -nanos;
+            seconds = -seconds;
+            minutes = -minutes;
+            hours = -hours;
+            days = -days;
+            months = -months;
+            years = -years;
+        }
+
+        let months = i32::try_from(years * MONTHS_PER_YEAR + months)
+            .map_err(|_| TimestampError::OutOfRange)?;
+        let days = i32::try_from(days).map_err(|_| TimestampError::OutOfRange)?;
+        let micros = Duration::nanoseconds(
+            nanos
+                + (seconds * NANOSECONDS_PER_SECOND)
+                + (minutes * NANOSECONDS_PER_MINUTE)
+                + (hours * NANOSECONDS_PER_HOUR),
+        )
+        .num_microseconds()
+        .ok_or(TimestampError::OutOfRange)?;
+
+        Ok(Interval {
+            months,
+            days,
+            micros,
+        })
     }
 }
 
