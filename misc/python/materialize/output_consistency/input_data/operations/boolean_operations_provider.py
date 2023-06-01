@@ -11,14 +11,8 @@ from typing import List
 from materialize.output_consistency.input_data.params.any_operation_param import (
     AnyOperationParam,
 )
-from materialize.output_consistency.input_data.params.boolean_operation_param import (
-    BooleanOperationParam,
-)
 from materialize.output_consistency.input_data.return_specs.boolean_return_spec import (
     BooleanReturnTypeSpec,
-)
-from materialize.output_consistency.input_data.return_specs.dynamic_return_spec import (
-    DynamicReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.validators.generic_args_validator import (
     DataTypeCategoryMatchesArgsValidator,
@@ -36,14 +30,5 @@ BOOLEAN_OPERATION_TYPES.append(
         [AnyOperationParam(), AnyOperationParam()],
         BooleanReturnTypeSpec(),
         {DataTypeCategoryMatchesArgsValidator(0, 1)},
-    )
-)
-
-BOOLEAN_OPERATION_TYPES.append(
-    DbOperation(
-        "CASE WHEN $ THEN $ ELSE $ END",
-        [BooleanOperationParam(), AnyOperationParam(), AnyOperationParam()],
-        DynamicReturnTypeSpec(),
-        {DataTypeCategoryMatchesArgsValidator(1, 2)},
     )
 )

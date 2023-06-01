@@ -8,14 +8,24 @@
 # by the Apache License, Version 2.0.
 from typing import List
 
+from materialize.output_consistency.input_data.params.any_operation_param import (
+    AnyOperationParam,
+)
+from materialize.output_consistency.input_data.params.boolean_operation_param import (
+    BooleanOperationParam,
+)
 from materialize.output_consistency.input_data.params.number_operation_param import (
     NumericOperationParam,
 )
 from materialize.output_consistency.input_data.return_specs.dynamic_return_spec import (
     DynamicReturnTypeSpec,
 )
+from materialize.output_consistency.input_data.validators.generic_args_validator import (
+    DataTypeCategoryMatchesArgsValidator,
+)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
+    DbOperation,
     DbOperationOrFunction,
 )
 
@@ -41,5 +51,13 @@ GENERIC_OPERATION_TYPES.append(
             NumericOperationParam(optional=True),
         ],
         DynamicReturnTypeSpec(),
+    )
+)
+GENERIC_OPERATION_TYPES.append(
+    DbOperation(
+        "CASE WHEN $ THEN $ ELSE $ END",
+        [BooleanOperationParam(), AnyOperationParam(), AnyOperationParam()],
+        DynamicReturnTypeSpec(),
+        {DataTypeCategoryMatchesArgsValidator(1, 2)},
     )
 )
