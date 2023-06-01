@@ -584,7 +584,7 @@ mod tests {
     use tracing::Level;
     use tracing_subscriber::filter::{LevelFilter, Targets};
 
-    #[test]
+    #[mz_test_macro::test]
     fn overriding_targets() {
         let user_defined = Targets::new().with_target("my_crate", Level::INFO);
 

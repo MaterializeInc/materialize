@@ -264,7 +264,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_id_alloc() {
         let ida = IdAllocator::new(3, 5);
         let id3 = ida.alloc().unwrap();
@@ -291,7 +291,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_static_id_sorting() {
         let ida = IdAllocator::new(0, 0);
         let id0 = ida.alloc().unwrap();
@@ -304,7 +304,7 @@ mod tests {
         assert!(id0 < id1);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_id_reuse() {
         let allocator = IdAllocator::new(10, 13);
 
@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(*id_c, 10);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_display() {
         let allocator = IdAllocator::<u32>::new(65_000, 65_101);
 
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(id_display, val_display);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_map_lookup() {
         let allocator = IdAllocator::<u32>::new(99, 101);
 
@@ -360,7 +360,7 @@ mod tests {
     }
 
     #[cfg(feature = "serde")]
-    #[test]
+    #[mz_test_macro::test]
     fn test_serialization() {
         let allocator = IdAllocator::<u32>::new(42, 43);
 

@@ -48,10 +48,20 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn expand_logging_init() -> Tokens {
-    quote! {
-      {
-        let _ = ::mz_ore::test::init_logging();
-      }
+    let crate_name = std::env::var("CARGO_PKG_NAME").unwrap();
+    if crate_name == "mz-ore" {
+        quote! {
+          {
+            use crate::test;
+            let _ = test::init_logging();
+          }
+        }
+    } else {
+        quote! {
+          {
+            let _ = ::mz_ore::test::init_logging();
+          }
+        }
     }
 }
 

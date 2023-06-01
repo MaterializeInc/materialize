@@ -510,7 +510,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_parse() {
         for (input, expected) in [
             ("/valid/path", Ok(SocketAddr::Unix(UnixSocketAddr::from_pathname("/valid/path").unwrap()))),
