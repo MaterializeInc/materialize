@@ -544,68 +544,6 @@ impl<G: Scope> OperatorBuilder<G> {
         self.shutdown_button
     }
 
-    /// Creates a fallible operator implementation from supplied logic constructor. If the `Future`
-    /// resolves to an error it will be emitted in the returned error stream and then the operator
-    /// will wait indefinitely until the shutdown button is pressed.
-    ///
-    /// # Capability handling
-    ///
-    /// Unlike [`OperatorBuilder::build`], this method does not give owned capabilities to the
-    /// constructor. All initial capabilities are wrapped in an `Option` and a mutable reference to
-    /// them is given instead. This is done to avoid storing owned capabilities in the state of the
-    /// logic future which would make using the `?` operator unsafe, since the frontiers would
-    /// incorrectly advance, potentially causing incorrect actions downstream.
-    ///
-    /// ```ignore
-    /// builder.build_fallible(|caps| Box::pin(async move {
-    ///     // Assert that we have the number of capabilities we expect
-    ///     // `cap` will be a `&mut Option<Capability<T>>`:
-    ///     let [cap]: &mut [_; 1] = caps.try_into().unwrap();
-    ///
-    ///     // Using cap to send data:
-    ///     output.give(cap.as_ref().unwrap(), 42);
-    ///
-    ///     // Using cap to downgrade it:
-    ///     cap.as_mut().unwrap().downgrade();
-    ///
-    ///     // Explicitly dropping the capability:
-    ///     // Simply running `drop(cap)` will only drop the reference and not the capability itself!
-    ///     *cap = None;
-    ///
-    ///     // !! BIG WARNING !!:
-    ///     // It is tempting to `take` the capability out of the option for convenience. This will
-    ///     // move the capability into the future state, tying its lifetime to it, which will get
-    ///     // dropped when an error is hit, causing incorrect progress statements.
-    ///     let cap = cap.take().unwrap(); // DO NOT DO THIS
-    /// }));
-    /// ```
-    pub fn build_fallible<E: 'static, F>(
-        mut self,
-        constructor: F,
-    ) -> (Button, StreamCore<G, Vec<Rc<E>>>)
-    where
-        F: for<'a> FnOnce(
-                &'a mut [Option<Capability<G::Timestamp>>],
-            ) -> Pin<Box<dyn Future<Output = Result<(), E>> + 'a>>
-            + 'static,
-    {
-        // Create a new completely disconnected output
-        let disconnected = vec![Antichain::new(); self.builder.shape().inputs()];
-        let (mut error_output, error_stream) = self.new_output_connection(disconnected);
-        let button = self.build(|mut caps| async move {
-            let error_cap = caps.pop().unwrap();
-            let mut caps = caps.into_iter().map(Some).collect::<Vec<_>>();
-            if let Err(err) = constructor(&mut *caps).await {
-                error_output.give(&error_cap, Rc::new(err)).await;
-                drop(error_cap);
-                // IMPORTANT: wedge this operator until the button is pressed. Returning would drop
-                // the capabilities and could produce incorrect progress statements.
-                std::future::pending().await
-            }
-        });
-        (button, error_stream)
-    }
-
     /// Creates operator info for the operator.
     pub fn operator_info(&self) -> OperatorInfo {
         self.builder.operator_info()
