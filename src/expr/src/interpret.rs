@@ -965,6 +965,7 @@ mod tests {
         ScalarType::Bool,
         ScalarType::Jsonb,
         NUM_TYPE,
+        ScalarType::Date,
         ScalarType::Timestamp,
         ScalarType::MzTimestamp,
         ScalarType::String,
@@ -979,6 +980,7 @@ mod tests {
             UnaryFunc::CastJsonbToString(CastJsonbToString),
             UnaryFunc::DateTruncTimestamp(DateTruncTimestamp(DateTimeUnits::Epoch)),
             UnaryFunc::ExtractTimestamp(ExtractTimestamp(DateTimeUnits::Epoch)),
+            UnaryFunc::ExtractDate(ExtractDate(DateTimeUnits::Epoch)),
             UnaryFunc::Not(Not),
             UnaryFunc::IsNull(IsNull),
             UnaryFunc::IsFalse(IsFalse),
@@ -995,6 +997,7 @@ mod tests {
             ExtractTimestamp(_) | DateTruncTimestamp(_) => {
                 arg.scalar_type.base_eq(&ScalarType::Timestamp)
             }
+            ExtractDate(_) => arg.scalar_type.base_eq(&ScalarType::Date),
             Not(_) => arg.scalar_type.base_eq(&ScalarType::Bool),
             IsNull(_) => true,
             _ => false,
