@@ -334,7 +334,7 @@ struct DemuxState {
     /// Maps channel IDs to vectors counting the messages received from each source worker.
     messages_received: BTreeMap<usize, Vec<i64>>,
     /// Stores for scheduled operators the time when they were scheduled.
-    schedule_starts: BTreeMap<usize, u128>,
+    schedule_starts: BTreeMap<usize, Duration>,
     /// Maps operator IDs to a vector recording the (count, elapsed_ns) values in each histogram
     /// bucket.
     schedules_data: BTreeMap<usize, Vec<(isize, i64)>>,
@@ -342,7 +342,7 @@ struct DemuxState {
 
 struct Park {
     /// Time when the park occurred.
-    time_ns: u128,
+    time: Duration,
     /// Requested park time.
     requested: Option<Duration>,
 }
@@ -579,10 +579,12 @@ impl DemuxHandler<'_, '_, '_> {
     }
 
     fn handle_park(&mut self, event: ParkEvent) {
-        let time_ns = self.time.as_nanos();
         match event {
             ParkEvent::Park(requested) => {
-                let park = Park { time_ns, requested };
+                let park = Park {
+                    time: self.time,
+                    requested,
+                };
                 let existing = self.state.last_park.replace(park);
                 if existing.is_some() {
                     error!("park without a succeeding unpark");
@@ -594,7 +596,7 @@ impl DemuxHandler<'_, '_, '_> {
                     return;
                 };
 
-                let duration_ns = time_ns - park.time_ns;
+                let duration_ns = self.time.saturating_sub(park.time).as_nanos();
                 let duration_pow = duration_ns.next_power_of_two();
                 let requested_pow = park.requested.map(|r| r.as_nanos().next_power_of_two());
 
@@ -646,11 +648,9 @@ impl DemuxHandler<'_, '_, '_> {
     }
 
     fn handle_schedule(&mut self, event: ScheduleEvent) {
-        let time_ns = self.time.as_nanos();
-
         match event.start_stop {
             timely::logging::StartStop::Start => {
-                let existing = self.state.schedule_starts.insert(event.id, time_ns);
+                let existing = self.state.schedule_starts.insert(event.id, self.time);
                 if existing.is_some() {
                     error!(operator_id = ?event.id, "schedule start without succeeding stop");
                 }
@@ -661,7 +661,7 @@ impl DemuxHandler<'_, '_, '_> {
                     return;
                 };
 
-                let elapsed_ns = time_ns - start_time;
+                let elapsed_ns = self.time.saturating_sub(start_time).as_nanos();
                 let elapsed_diff = Diff::try_from(elapsed_ns).expect("must fit");
                 let elapsed_pow = elapsed_ns.next_power_of_two();
 

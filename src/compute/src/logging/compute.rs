@@ -378,12 +378,12 @@ struct DemuxState<A: Allocate> {
     export_imports: BTreeMap<GlobalId, BTreeMap<GlobalId, FrontierDelayState>>,
     /// Maps live dataflows to counts of their exports.
     dataflow_export_counts: BTreeMap<usize, u32>,
-    /// Maps dropped dataflows to their drop time (in ns).
-    dataflow_drop_times: BTreeMap<usize, u128>,
+    /// Maps dropped dataflows to their drop time.
+    dataflow_drop_times: BTreeMap<usize, Duration>,
     /// Contains dataflows that have shut down but not yet been dropped.
     shutdown_dataflows: BTreeSet<usize>,
-    /// Maps pending peeks to their installation time (in ns).
-    peek_stash: BTreeMap<Uuid, u128>,
+    /// Maps pending peeks to their installation time.
+    peek_stash: BTreeMap<Uuid, Duration>,
     /// Arrangement size stash
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
 }
@@ -409,7 +409,7 @@ struct FrontierDelayState {
     /// A list of input timestamps that have appeared on the input
     /// frontier, but that the output frontier has not yet advanced beyond,
     /// and the time at which we were informed of their availability.
-    time_deque: VecDeque<(Timestamp, u128)>,
+    time_deque: VecDeque<(Timestamp, Duration)>,
     /// A histogram of emitted delays (bucket size to bucket_count).
     delay_map: BTreeMap<u128, i64>,
 }
@@ -615,10 +615,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             self.output.shutdown_duration.give((0, self.ts(), 1));
         } else {
             // Dataflow has not yet shut down.
-            let existing = self
-                .state
-                .dataflow_drop_times
-                .insert(id, self.time.as_nanos());
+            let existing = self.state.dataflow_drop_times.insert(id, self.time);
             if existing.is_some() {
                 error!(dataflow = ?id, "dataflow already dropped");
             }
@@ -628,7 +625,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     fn handle_dataflow_shutdown(&mut self, id: usize) {
         if let Some(start) = self.state.dataflow_drop_times.remove(&id) {
             // Dataflow has alredy been dropped.
-            let elapsed_ns = self.time.as_nanos() - start;
+            let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let elapsed_pow = elapsed_ns.next_power_of_two();
             self.output
                 .shutdown_duration
@@ -665,7 +662,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         self.output.peek.give((peek, ts, 1));
 
-        let existing = self.state.peek_stash.insert(uuid, self.time.as_nanos());
+        let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
             error!(
                 uuid = ?uuid,
@@ -680,7 +677,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         self.output.peek.give((peek, ts, -1));
 
         if let Some(start) = self.state.peek_stash.remove(&uuid) {
-            let elapsed_ns = self.time.as_nanos() - start;
+            let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let elapsed_pow = elapsed_ns.next_power_of_two();
             self.output.peek_duration.give((elapsed_pow, ts, 1));
         } else {
@@ -715,7 +712,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 while let Some(current_front) = time_deque.pop_front() {
                     let (import_frontier, update_time) = current_front;
                     if frontier >= import_frontier {
-                        let elapsed_ns = self.time.as_nanos() - update_time;
+                        let elapsed_ns = self.time.saturating_sub(update_time).as_nanos();
                         let elapsed_pow = elapsed_ns.next_power_of_two();
                         let datum = FrontierDelayDatum {
                             export_id,
@@ -761,9 +758,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         // sink recording in the current `ComputeState` until Timely eventually drops it.
         if let Some(import_map) = self.state.export_imports.get_mut(&export_id) {
             if let Some(delay_state) = import_map.get_mut(&import_id) {
-                delay_state
-                    .time_deque
-                    .push_back((frontier, self.time.as_nanos()));
+                delay_state.time_deque.push_back((frontier, self.time));
             } else {
                 error!(
                     export = ?export_id, import = ?import_id,
